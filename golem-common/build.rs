@@ -37,10 +37,10 @@ fn append_write_git_describe_tags(mut file: &File) -> SdResult<()> {
         if !output.status.success() {
             println!("cargo::warning=git describe failed, using fallback version 0.0.0");
             for line in String::from_utf8_lossy(&output.stdout).lines() {
-                println!("cargo::warning=git stdout: {}", line);
+                println!("cargo::warning=git stdout: {line}");
             }
             for line in String::from_utf8_lossy(&output.stderr).lines() {
-                println!("cargo::warning=git stderr: {}", line);
+                println!("cargo::warning=git stderr: {line}");
             }
 
             "0.0.0".to_string()
@@ -50,15 +50,14 @@ fn append_write_git_describe_tags(mut file: &File) -> SdResult<()> {
                 .strip_prefix("v")
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| version);
-            println!("cargo::warning=git describe result: {}", version);
+            println!("cargo::warning=git describe result: {version}");
             version
         }
     };
 
     let git_describe_tags = format!(
         r#"#[allow(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
-pub const GIT_DESCRIBE_TAGS: &str = "{}";"#,
-        version
+pub const GIT_DESCRIBE_TAGS: &str = "{version}";"#
     );
     writeln!(file, "{git_describe_tags}")?;
 

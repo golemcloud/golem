@@ -717,14 +717,14 @@ impl Default for ProjectServiceGrpcConfig {
 }
 
 fn build_url(name: &str, host: &str, port: u16) -> Url {
-    Url::parse(&format!("http://{}:{}", host, port))
+    Url::parse(&format!("http://{host}:{port}"))
         .unwrap_or_else(|_| panic!("Failed to parse {name} service URL"))
 }
 
 fn build_uri(name: &str, host: &str, port: u16) -> Uri {
     Uri::builder()
         .scheme("http")
-        .authority(format!("{}:{}", host, port).as_str())
+        .authority(format!("{host}:{port}").as_str())
         .path_and_query("/")
         .build()
         .unwrap_or_else(|_| panic!("Failed to build {name} service URI"))

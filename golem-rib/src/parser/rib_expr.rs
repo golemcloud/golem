@@ -339,8 +339,7 @@ fn build_selection(base: Expr, next: Expr) -> Result<Expr, RibParseError> {
             })
         }
         expr => Err(RibParseError::Message(format!(
-            "unable to select field from expression: {:?}",
-            expr
+            "unable to select field from expression: {expr:?}"
         ))),
     }
 }
@@ -395,8 +394,8 @@ impl Fraction {
     pub fn combine_with_integer(&self, big: BigDecimal) -> Result<BigDecimal, String> {
         let left = big.to_string();
         let right = self.0.to_string();
-        let result = format!("{}.{}", left, right);
-        BigDecimal::from_str(&result).map_err(|e| format!("unable to parse number. {}", e))
+        let result = format!("{left}.{right}");
+        BigDecimal::from_str(&result).map_err(|e| format!("unable to parse number. {e}"))
     }
 }
 

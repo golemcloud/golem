@@ -81,7 +81,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let error = self
                     .as_wasi_view()
                     .table()
-                    .push(ErrorEntry::new(format!("{:?}", e)))?;
+                    .push(ErrorEntry::new(format!("{e:?}")))?;
                 Ok(Err(error))
             }
         }
@@ -179,7 +179,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let error = self
                     .as_wasi_view()
                     .table()
-                    .push(ErrorEntry::new(format!("{:?}", e)))?;
+                    .push(ErrorEntry::new(format!("{e:?}")))?;
                 Ok(Err(error))
             }
         }
@@ -224,7 +224,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let error = self
                     .as_wasi_view()
                     .table()
-                    .push(ErrorEntry::new(format!("{:?}", e)))?;
+                    .push(ErrorEntry::new(format!("{e:?}")))?;
                 Ok(Err(error))
             }
         }

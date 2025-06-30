@@ -153,9 +153,9 @@ impl CallType {
 impl Display for CallType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CallType::Function { function_name, .. } => write!(f, "{}", function_name),
-            CallType::VariantConstructor(name) => write!(f, "{}", name),
-            CallType::EnumConstructor(name) => write!(f, "{}", name),
+            CallType::Function { function_name, .. } => write!(f, "{function_name}"),
+            CallType::VariantConstructor(name) => write!(f, "{name}"),
+            CallType::EnumConstructor(name) => write!(f, "{name}"),
             CallType::InstanceCreation(instance_creation_type) => match instance_creation_type {
                 InstanceCreationType::WitWorker { .. } => {
                     write!(f, "instance")

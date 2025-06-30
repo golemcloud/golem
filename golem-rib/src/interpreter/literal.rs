@@ -369,9 +369,9 @@ impl PartialEq for CoercedNumericValue {
 impl Display for CoercedNumericValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CoercedNumericValue::PosInt(value) => write!(f, "{}", value),
-            CoercedNumericValue::NegInt(value) => write!(f, "{}", value),
-            CoercedNumericValue::Float(value) => write!(f, "{}", value),
+            CoercedNumericValue::PosInt(value) => write!(f, "{value}"),
+            CoercedNumericValue::NegInt(value) => write!(f, "{value}"),
+            CoercedNumericValue::Float(value) => write!(f, "{value}"),
         }
     }
 }
@@ -379,9 +379,9 @@ impl Display for CoercedNumericValue {
 impl Display for LiteralValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LiteralValue::Num(number) => write!(f, "{}", number),
-            LiteralValue::String(value) => write!(f, "{}", value),
-            LiteralValue::Bool(value) => write!(f, "{}", value),
+            LiteralValue::Num(number) => write!(f, "{number}"),
+            LiteralValue::String(value) => write!(f, "{value}"),
+            LiteralValue::Bool(value) => write!(f, "{value}"),
         }
     }
 }

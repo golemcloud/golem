@@ -55,7 +55,7 @@ where
         })
         .and_then(|ident: String| {
             if RESERVED_KEYWORDS.contains(&ident.as_str()) {
-                Err(RibParseError::Message(format!("{} is a keyword", ident)))
+                Err(RibParseError::Message(format!("{ident} is a keyword")))
             } else {
                 Ok(ident)
             }

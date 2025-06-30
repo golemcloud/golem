@@ -60,8 +60,7 @@ impl ParseFromJSON for OpenApiHttpApiDefinition {
             Some(value) => match serde_json::from_value::<openapiv3::OpenAPI>(value) {
                 Ok(openapi) => Ok(OpenApiHttpApiDefinition(openapi)),
                 Err(e) => Err(ParseError::<Self>::custom(format!(
-                    "Failed to parse OpenAPI: {}",
-                    e
+                    "Failed to parse OpenAPI: {e}"
                 ))),
             },
 
@@ -78,8 +77,7 @@ impl ParseFromYAML for OpenApiHttpApiDefinition {
             Some(value) => match serde_json::from_value::<openapiv3::OpenAPI>(value) {
                 Ok(openapi) => Ok(OpenApiHttpApiDefinition(openapi)),
                 Err(e) => Err(ParseError::<Self>::custom(format!(
-                    "Failed to parse OpenAPI: {}",
-                    e
+                    "Failed to parse OpenAPI: {e}"
                 ))),
             },
 
@@ -150,9 +148,9 @@ mod internal {
         key_name: &str,
     ) -> Result<String, String> {
         get_root_extension_value(open_api, key_name)
-            .ok_or(format!("{} not found in the open API spec", key_name))?
+            .ok_or(format!("{key_name} not found in the open API spec"))?
             .as_str()
-            .ok_or(format!("Invalid value for {}", key_name))
+            .ok_or(format!("Invalid value for {key_name}"))
             .map(|x| x.to_string())
     }
 
@@ -280,7 +278,7 @@ mod internal {
                         })
                     }
                     (GatewayBindingType::CorsPreflight, method) => {
-                        Err(format!("cors-preflight binding type is supported only for 'options' method, but found method '{}'", method))
+                        Err(format!("cors-preflight binding type is supported only for 'options' method, but found method '{method}'"))
                     }
                 }
             }
@@ -297,8 +295,7 @@ mod internal {
                     })
                 } else {
                     Err(format!(
-                        "No {} extension found",
-                        GOLEM_WORKER_GATEWAY_EXTENSION_LEGACY
+                        "No {GOLEM_WORKER_GATEWAY_EXTENSION_LEGACY} extension found"
                     ))
                 }
             }
@@ -404,7 +401,7 @@ mod internal {
             .get("binding-type")
             .map(|value| serde_json::from_value(value.clone()))
             .transpose()
-            .map_err(|err| format!("Invalid schema for binding-type. {}", err))?;
+            .map_err(|err| format!("Invalid schema for binding-type. {err}"))?;
 
         Ok(binding_type_optional.unwrap_or(GatewayBindingType::Default))
     }

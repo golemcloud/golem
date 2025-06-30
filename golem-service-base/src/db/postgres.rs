@@ -46,7 +46,7 @@ impl PostgresPool {
             .after_connect(move |conn, _meta| {
                 let s = schema.clone();
                 Box::pin(async move {
-                    let sql = format!("SET SCHEMA '{}';", s);
+                    let sql = format!("SET SCHEMA '{s}';");
                     conn.execute(sqlx::query(&sql)).await?;
                     Ok(())
                 })
@@ -367,16 +367,15 @@ pub async fn migrate(
     );
     let options = config.connect_options();
     let mut conn = PgConnection::connect_with(&options).await?;
-    let sql = format!("CREATE SCHEMA IF NOT EXISTS {};", schema);
+    let sql = format!("CREATE SCHEMA IF NOT EXISTS {schema};");
     conn.execute(sqlx::query(&sql)).await?;
-    let sql = format!("SET SCHEMA '{}';", schema);
+    let sql = format!("SET SCHEMA '{schema}';");
     conn.execute(sqlx::query(&sql)).await?;
 
     // TODO: why? do we not trust the code above?
     // check if schema exists
     let sql = format!(
-        "SELECT schema_name FROM information_schema.schemata WHERE schema_name = '{}';",
-        schema
+        "SELECT schema_name FROM information_schema.schemata WHERE schema_name = '{schema}';"
     );
     let result = conn.execute(sqlx::query(&sql)).await?;
     if result.rows_affected() == 0 {

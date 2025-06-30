@@ -450,7 +450,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 }),
                 _ => Err(GolemError::unexpected_oplog_entry(
                     "ImportedFunctionInvoked",
-                    format!("{:?}", oplog_entry),
+                    format!("{oplog_entry:?}"),
                 )),
             }
         }

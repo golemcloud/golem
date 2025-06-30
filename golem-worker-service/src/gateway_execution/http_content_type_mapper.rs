@@ -160,7 +160,7 @@ impl Display for ContentTypeMapError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ContentTypeMapError::InternalError(message) => {
-                write!(f, "{}", message)
+                write!(f, "{message}")
             }
             ContentTypeMapError::IllegalMapping {
                 input_type,
@@ -168,8 +168,7 @@ impl Display for ContentTypeMapError {
             } => {
                 write!(
                     f,
-                    "Failed to map input type {:?} to any of the expected content types: {:?}",
-                    input_type, expected_content_types
+                    "Failed to map input type {input_type:?} to any of the expected content types: {expected_content_types:?}"
                 )
             }
         }
@@ -398,7 +397,7 @@ mod internal {
         a: A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         let json = serde_json::to_value(&a).map_err(|_| {
-            ContentTypeMapError::internal(format!("Failed to serialise {} to json", a))
+            ContentTypeMapError::internal(format!("Failed to serialise {a} to json"))
         })?;
         let body = Body::from_json(json)
             .map_err(|_| ContentTypeMapError::internal("Failed to create body from JSON"))?;
@@ -462,7 +461,7 @@ mod internal {
                 .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))?;
 
             let body = Body::from_json(json).map_err(|_| {
-                ContentTypeMapError::internal(format!("Failed to convert {} to json body", input))
+                ContentTypeMapError::internal(format!("Failed to convert {input} to json body"))
             })?;
 
             Ok(body.with_content_type(ContentType::json().to_string()))
@@ -496,7 +495,7 @@ mod internal {
         let response_content_type = content_type.response_content_type()?;
 
         let body = if content_type.has_application_json() {
-            bytes::Bytes::from(format!("\"{}\"", string))
+            bytes::Bytes::from(format!("\"{string}\""))
         } else {
             bytes::Bytes::from(string.to_string())
         };

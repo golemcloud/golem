@@ -36,7 +36,9 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
-    let component_id = deps
+    let admin = deps.admin();
+
+    let component_id = admin
         .component("shopping-cart-resource")
         .unique()
         .store()
@@ -84,13 +86,19 @@ async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
         )),
     };
 
+    let project = admin.default_project().await;
+
     let response = deps
         .worker_service()
-        .create_api_definition(CreateApiDefinitionRequest {
-            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                request.clone(),
-            )),
-        })
+        .create_api_definition(
+            &admin.token,
+            &project,
+            CreateApiDefinitionRequest {
+                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                    request.clone(),
+                )),
+            },
+        )
         .await
         .unwrap();
 
@@ -98,10 +106,14 @@ async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
 
     let response = deps
         .worker_service()
-        .get_api_definition(GetApiDefinitionRequest {
-            api_definition_id: request.id.clone(),
-            version: response.version.clone(),
-        })
+        .get_api_definition(
+            &admin.token,
+            &project,
+            GetApiDefinitionRequest {
+                api_definition_id: request.id.clone(),
+                version: response.version.clone(),
+            },
+        )
         .await
         .unwrap();
 
@@ -109,10 +121,14 @@ async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
 
     let response = deps
         .worker_service()
-        .get_api_definition(GetApiDefinitionRequest {
-            api_definition_id: request.id.clone(),
-            version: "not-exists".to_string(),
-        })
+        .get_api_definition(
+            &admin.token,
+            &project,
+            GetApiDefinitionRequest {
+                api_definition_id: request.id.clone(),
+                version: "not-exists".to_string(),
+            },
+        )
         .await;
 
     assert!(response.is_err());
@@ -122,7 +138,9 @@ async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
-    let component_id = deps
+    let admin = deps.admin();
+
+    let component_id = admin
         .component("shopping-cart-resource")
         .unique()
         .store()
@@ -242,22 +260,32 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
         )),
     };
 
+    let project = admin.default_project().await;
+
     let response_1 = deps
         .worker_service()
-        .create_api_definition(CreateApiDefinitionRequest {
-            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                request_1.clone(),
-            )),
-        })
+        .create_api_definition(
+            &admin.token,
+            &project,
+            CreateApiDefinitionRequest {
+                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                    request_1.clone(),
+                )),
+            },
+        )
         .await
         .unwrap();
     check_equal_api_definition_request_and_response(&request_1, &response_1);
 
     let versions = deps
         .worker_service()
-        .get_api_definition_versions(GetApiDefinitionVersionsRequest {
-            api_definition_id: request_1.id.clone(),
-        })
+        .get_api_definition_versions(
+            &admin.token,
+            &project,
+            GetApiDefinitionVersionsRequest {
+                api_definition_id: request_1.id.clone(),
+            },
+        )
         .await
         .unwrap();
     assert!(versions.len() == 1);
@@ -270,11 +298,15 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
 
     let updated_1 = deps
         .worker_service()
-        .update_api_definition(UpdateApiDefinitionRequest {
-            api_definition: Some(update_api_definition_request::ApiDefinition::Definition(
-                request_1.clone(),
-            )),
-        })
+        .update_api_definition(
+            &admin.token,
+            &project,
+            UpdateApiDefinitionRequest {
+                api_definition: Some(update_api_definition_request::ApiDefinition::Definition(
+                    request_1.clone(),
+                )),
+            },
+        )
         .await
         .unwrap();
 
@@ -282,9 +314,13 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
 
     let versions = deps
         .worker_service()
-        .get_api_definition_versions(GetApiDefinitionVersionsRequest {
-            api_definition_id: request_1.id.clone(),
-        })
+        .get_api_definition_versions(
+            &admin.token,
+            &project,
+            GetApiDefinitionVersionsRequest {
+                api_definition_id: request_1.id.clone(),
+            },
+        )
         .await
         .unwrap();
     assert!(versions.len() == 1);
@@ -292,20 +328,28 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
 
     let response_2 = deps
         .worker_service()
-        .create_api_definition(CreateApiDefinitionRequest {
-            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                request_2.clone(),
-            )),
-        })
+        .create_api_definition(
+            &admin.token,
+            &project,
+            CreateApiDefinitionRequest {
+                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                    request_2.clone(),
+                )),
+            },
+        )
         .await
         .unwrap();
     check_equal_api_definition_request_and_response(&request_2, &response_2);
 
     let versions = deps
         .worker_service()
-        .get_api_definition_versions(GetApiDefinitionVersionsRequest {
-            api_definition_id: request_1.id.clone(),
-        })
+        .get_api_definition_versions(
+            &admin.token,
+            &project,
+            GetApiDefinitionVersionsRequest {
+                api_definition_id: request_1.id.clone(),
+            },
+        )
         .await
         .unwrap();
     assert!(versions.len() == 2);
@@ -313,18 +357,26 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
     check_equal_api_definition_request_and_response(&request_2, &versions[1]);
 
     deps.worker_service()
-        .delete_api_definition(DeleteApiDefinitionRequest {
-            api_definition_id: request_1.id.clone(),
-            version: "1".to_string(),
-        })
+        .delete_api_definition(
+            &admin.token,
+            &project,
+            DeleteApiDefinitionRequest {
+                api_definition_id: request_1.id.clone(),
+                version: "1".to_string(),
+            },
+        )
         .await
         .unwrap();
 
     let versions = deps
         .worker_service()
-        .get_api_definition_versions(GetApiDefinitionVersionsRequest {
-            api_definition_id: request_1.id.clone(),
-        })
+        .get_api_definition_versions(
+            &admin.token,
+            &project,
+            GetApiDefinitionVersionsRequest {
+                api_definition_id: request_1.id.clone(),
+            },
+        )
         .await
         .unwrap();
     assert!(versions.len() == 1);
@@ -334,12 +386,15 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
-    let component_id_1 = deps
+    let admin = deps.admin();
+
+    let component_id_1 = admin
         .component("shopping-cart-resource")
         .unique()
         .store()
         .await;
-    let component_id_2 = deps
+
+    let component_id_2 = admin
         .component("shopping-cart-resource")
         .unique()
         .store()
@@ -444,6 +499,8 @@ async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
         ..request_2_1.clone()
     };
 
+    let project = admin.default_project().await;
+
     for request in [
         &request_1_1,
         &request_1_2,
@@ -452,18 +509,22 @@ async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
         &request_2_3,
     ] {
         deps.worker_service()
-            .create_api_definition(CreateApiDefinitionRequest {
-                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                    request.clone(),
-                )),
-            })
+            .create_api_definition(
+                &admin.token,
+                &project,
+                CreateApiDefinitionRequest {
+                    api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                        request.clone(),
+                    )),
+                },
+            )
             .await
             .unwrap();
     }
 
     let result = deps
         .worker_service()
-        .get_all_api_definitions()
+        .get_all_api_definitions(&admin.token, &project)
         .await
         .unwrap();
     assert!(result.len() >= 5);
@@ -523,7 +584,9 @@ fn check_equal_api_definition_request_and_response(
 #[test]
 #[tracing::instrument]
 async fn create_openapi_yaml_definition(deps: &EnvBasedTestDependencies) {
-    let (_component_id, component_name) = deps
+    let admin = deps.admin();
+
+    let (_component_id, component_name) = admin
         .component("shopping-cart")
         .unique()
         .store_and_get_name()
@@ -582,17 +645,22 @@ paths:
           }}
 x-golem-api-definition-id: shopping-cart
 x-golem-api-definition-version: 0.0.1
-"#,
-        unique_component_name = unique_component_name
+"#
     );
+
+    let project = admin.default_project().await;
 
     let result = deps
         .worker_service()
-        .create_api_definition(CreateApiDefinitionRequest {
-            api_definition: Some(create_api_definition_request::ApiDefinition::Openapi(
-                openapi_yaml,
-            )),
-        })
+        .create_api_definition(
+            &admin.token,
+            &project,
+            CreateApiDefinitionRequest {
+                api_definition: Some(create_api_definition_request::ApiDefinition::Openapi(
+                    openapi_yaml,
+                )),
+            },
+        )
         .await;
 
     let response = result.unwrap();
@@ -656,7 +724,9 @@ x-golem-api-definition-version: 0.0.1
 #[test]
 #[tracing::instrument]
 async fn create_openapi_json_definition(deps: &EnvBasedTestDependencies) {
-    let (_component_id, component_name) = deps
+    let admin = deps.admin();
+
+    let (_component_id, component_name) = admin
         .component("shopping-cart")
         .unique()
         .store_and_get_name()
@@ -716,17 +786,22 @@ async fn create_openapi_json_definition(deps: &EnvBasedTestDependencies) {
   "x-golem-api-definition-id": "shopping-cart-openapi-json",
   "x-golem-api-definition-version": "0.0.1"
 }}
-"#,
-        unique_component_name = unique_component_name
+"#
     );
+
+    let project = admin.default_project().await;
 
     let result = deps
         .worker_service()
-        .create_api_definition(CreateApiDefinitionRequest {
-            api_definition: Some(create_api_definition_request::ApiDefinition::Openapi(
-                openapi_json,
-            )),
-        })
+        .create_api_definition(
+            &admin.token,
+            &project,
+            CreateApiDefinitionRequest {
+                api_definition: Some(create_api_definition_request::ApiDefinition::Openapi(
+                    openapi_json,
+                )),
+            },
+        )
         .await;
 
     let response = result.unwrap();

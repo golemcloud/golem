@@ -99,7 +99,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     .push(IncomingValueEntry::new(get_data))?;
                 Ok(Ok(incoming_value))
             }
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 
@@ -145,7 +145,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(_) => Ok(Ok(())),
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 
@@ -187,7 +187,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     .push(StreamObjectNamesEntry::new(list_objects))?;
                 Ok(Ok(stream_object_names))
             }
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 
@@ -226,7 +226,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(_) => Ok(Ok(())),
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 
@@ -265,7 +265,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(_) => Ok(Ok(())),
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 
@@ -304,7 +304,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(has_object) => Ok(Ok(has_object)),
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 
@@ -352,7 +352,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 };
                 Ok(Ok(object_info))
             }
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 

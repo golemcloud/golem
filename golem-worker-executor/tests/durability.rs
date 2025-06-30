@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use axum::extract::Query;
 use axum::response::Response;
 use axum::routing::get;
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures_util::{stream, StreamExt};
+use golem_test_framework::config::TestDependencies;
+use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use http::StatusCode;
 use serde::Deserialize;
@@ -27,10 +31,6 @@ use std::sync::Arc;
 use test_r::{inherit_test_dep, test};
 use tokio::sync::Mutex;
 use tracing::Instrument;
-
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use golem_test_framework::dsl::TestDslUnsafe;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -44,7 +44,7 @@ async fn custom_durability_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let response = Arc::new(AtomicU32::new(0));
     let response_clone = response.clone();
@@ -99,7 +99,7 @@ async fn custom_durability_1(
 
     drop(executor);
 
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let result2 = executor
         .invoke_and_await(
@@ -127,7 +127,7 @@ async fn lazy_pollable(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
@@ -154,7 +154,7 @@ async fn lazy_pollable(
                         async move {
                             tracing::info!("fetch awaiting signal");
                             signal_rx.lock().await.recv().await;
-                            let fragment_str = format!("chunk-{}-{}\n", idx, i);
+                            let fragment_str = format!("chunk-{idx}-{i}\n");
                             tracing::info!("emitting response fragment: {fragment_str}");
                             let fragment = Bytes::from(fragment_str);
                             Ok::<Bytes, BoxError>(fragment)
@@ -217,7 +217,7 @@ async fn lazy_pollable(
     signal_tx.send(()).unwrap();
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     signal_tx.send(()).unwrap();
 

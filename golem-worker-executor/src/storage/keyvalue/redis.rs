@@ -303,7 +303,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         let key = match Self::use_hash(&namespace) {
-            Some(ns) => format!("{}:{}", ns, key),
+            Some(ns) => format!("{ns}:{key}"),
             None => key.to_string(),
         };
         self.redis
@@ -325,7 +325,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         let key = match Self::use_hash(&namespace) {
-            Some(ns) => format!("{}:{}", ns, key),
+            Some(ns) => format!("{ns}:{key}"),
             None => key.to_string(),
         };
         self.redis
@@ -344,7 +344,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         key: &str,
     ) -> Result<Vec<Bytes>, String> {
         let key = match Self::use_hash(&namespace) {
-            Some(ns) => format!("{}:{}", ns, key),
+            Some(ns) => format!("{ns}:{key}"),
             None => key.to_string(),
         };
         let members: Vec<Bytes> = self
@@ -374,7 +374,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         let key = match Self::use_hash(&namespace) {
-            Some(ns) => format!("{}:{}", ns, key),
+            Some(ns) => format!("{ns}:{key}"),
             None => key.to_string(),
         };
         self.redis
@@ -396,7 +396,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         let key = match Self::use_hash(&namespace) {
-            Some(ns) => format!("{}:{}", ns, key),
+            Some(ns) => format!("{ns}:{key}"),
             None => key.to_string(),
         };
         self.redis
@@ -415,7 +415,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         key: &str,
     ) -> Result<Vec<(f64, Bytes)>, String> {
         let key = match Self::use_hash(&namespace) {
-            Some(ns) => format!("{}:{}", ns, key),
+            Some(ns) => format!("{ns}:{key}"),
             None => key.to_string(),
         };
         let pairs: Vec<(Bytes, f64)> = self
@@ -446,7 +446,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         max: f64,
     ) -> Result<Vec<(f64, Bytes)>, String> {
         let key = match Self::use_hash(&namespace) {
-            Some(ns) => format!("{}:{}", ns, key),
+            Some(ns) => format!("{ns}:{key}"),
             None => key.to_string(),
         };
         let pairs: Vec<(Bytes, f64)> = self

@@ -73,7 +73,7 @@ pub fn authorised_request<T>(request: T, access_token: &Uuid) -> tonic::Request<
     let mut req = tonic::Request::new(request);
     req.metadata_mut().insert(
         "authorization",
-        format!("Bearer {}", access_token).parse().unwrap(),
+        format!("Bearer {access_token}").parse().unwrap(),
     );
     req
 }

@@ -28,10 +28,6 @@ impl AccountAuthorisation {
         Self { token, roles }
     }
 
-    pub fn admin() -> Self {
-        AccountAuthorisation::new(Token::admin(), vec![Role::Admin])
-    }
-
     pub fn has_account(&self, account_id: &AccountId) -> bool {
         self.token.account_id == *account_id
     }

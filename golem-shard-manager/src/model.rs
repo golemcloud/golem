@@ -118,7 +118,7 @@ impl From<Pod> for golem::shardmanager::Pod {
 impl Display for Pod {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match &self.pod_name {
-            Some(name) => write!(f, "{}", name),
+            Some(name) => write!(f, "{name}"),
             None => write!(f, "{}:{} ({})", self.host, self.port, self.ip),
         }
     }

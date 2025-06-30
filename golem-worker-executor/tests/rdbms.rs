@@ -12,13 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::fmt::Display;
-use std::time::Duration;
-use test_r::{inherit_test_dep, test, test_dep};
-use tracing::Instrument;
-
-use crate::common::{start, TestContext, TestWorkerExecutor};
+use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
@@ -29,6 +23,7 @@ use golem_common::model::public_oplog::{
 use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -36,7 +31,12 @@ use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::RdbmsType;
 use serde_json::json;
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::time::Duration;
+use test_r::{inherit_test_dep, test, test_dep};
 use tokio::task::JoinSet;
+use tracing::Instrument;
 use try_match::try_match;
 use uuid::Uuid;
 
@@ -188,7 +188,7 @@ async fn rdbms_postgres_crud(
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids1 = start_workers::<PostgresType>(&executor, &component_id, &db_address, 1).await;
@@ -329,7 +329,7 @@ async fn rdbms_postgres_idempotency(
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids = start_workers::<PostgresType>(&executor, &component_id, &db_address, 1).await;
@@ -455,7 +455,7 @@ fn postgres_get_values(count: usize) -> Vec<(Uuid, String, String)> {
     for i in 0..count {
         let user_id = Uuid::new_v4();
         let name = format!("name-{}", Uuid::new_v4());
-        let vs: Vec<String> = (0..5).map(|v| format!("tag-{}-{}", v, i)).collect();
+        let vs: Vec<String> = (0..5).map(|v| format!("tag-{v}-{i}")).collect();
         let tags = format!("[{}]", vs.join(", "));
 
         values.push((user_id, name, tags));
@@ -574,7 +574,7 @@ async fn rdbms_mysql_crud(
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids1 = start_workers::<MysqlType>(&executor, &component_id, &db_address, 1).await;
@@ -717,7 +717,7 @@ async fn rdbms_mysql_idempotency(
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, 1).await;
@@ -838,7 +838,7 @@ fn mysql_get_values(count: usize) -> Vec<(String, String)> {
     let mut values: Vec<(String, String)> = Vec::with_capacity(count);
 
     for i in 0..count {
-        let user_id = format!("{:03}", i);
+        let user_id = format!("{i:03}");
         let name = format!("name-{}", Uuid::new_v4());
 
         values.push((user_id, name));
@@ -941,7 +941,7 @@ async fn rdbms_component_test<T: RdbmsType>(
     n_workers: u8,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("rdbms-service").store().await;
     let worker_ids = start_workers::<T>(&executor, &component_id, db_address, n_workers).await;
 
@@ -949,7 +949,7 @@ async fn rdbms_component_test<T: RdbmsType>(
 }
 
 async fn rdbms_workers_test<T: RdbmsType>(
-    executor: &TestWorkerExecutor,
+    executor: &(impl TestDslUnsafe + Clone + Send + Sync + 'static),
     worker_ids: Vec<WorkerId>,
     test: RdbmsTest,
 ) {
@@ -992,7 +992,7 @@ async fn rdbms_workers_test<T: RdbmsType>(
 }
 
 async fn execute_worker_test<T: RdbmsType>(
-    executor: &TestWorkerExecutor,
+    executor: &impl TestDslUnsafe,
     worker_id: &WorkerId,
     idempotency_key: &IdempotencyKey,
     test: RdbmsTest,
@@ -1095,7 +1095,7 @@ fn check_test_result(
 }
 
 async fn start_workers<T: RdbmsType>(
-    executor: &TestWorkerExecutor,
+    executor: &impl TestDslUnsafe,
     component_id: &ComponentId,
     db_address: &str,
     n_workers: u8,
@@ -1121,7 +1121,10 @@ async fn start_workers<T: RdbmsType>(
     worker_ids
 }
 
-async fn workers_resume_test(executor: &TestWorkerExecutor, worker_ids: Vec<WorkerId>) {
+async fn workers_resume_test(
+    executor: &(impl TestDslUnsafe + Clone + Send + 'static),
+    worker_ids: Vec<WorkerId>,
+) {
     let mut workers_results: HashMap<WorkerId, WorkerStatus> = HashMap::new();
 
     let mut fibers = JoinSet::new();

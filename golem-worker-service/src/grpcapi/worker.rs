@@ -1430,7 +1430,7 @@ impl WorkerGrpcApi {
             .target
             .ok_or_else(|| bad_request_error("Missing target"))?
             .try_into()
-            .map_err(|err| bad_request_error(format!("Invalid target {}", err)))?;
+            .map_err(|err| bad_request_error(format!("Invalid target {err}")))?;
 
         let namespace = self
             .auth_service

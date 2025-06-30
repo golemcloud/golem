@@ -39,7 +39,7 @@ impl InMemoryIndexedStorage {
     }
 
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
-        format!("{:?}/{}", namespace, key)
+        format!("{namespace:?}/{key}")
     }
 }
 

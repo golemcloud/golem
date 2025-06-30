@@ -300,16 +300,16 @@ impl Display for ScheduledAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ScheduledAction::CompletePromise { promise_id, .. } => {
-                write!(f, "complete[{}]", promise_id)
+                write!(f, "complete[{promise_id}]")
             }
             ScheduledAction::ArchiveOplog {
                 owned_worker_id, ..
             } => {
-                write!(f, "archive[{}]", owned_worker_id)
+                write!(f, "archive[{owned_worker_id}]")
             }
             ScheduledAction::Invoke {
                 owned_worker_id, ..
-            } => write!(f, "invoke[{}]", owned_worker_id),
+            } => write!(f, "invoke[{owned_worker_id}]"),
         }
     }
 }
@@ -469,7 +469,7 @@ impl IdempotencyKey {
         } else {
             Uuid::new_v5(&Self::ROOT_NS, base.value.as_bytes())
         };
-        let name = format!("oplog-index-{}", oplog_index);
+        let name = format!("oplog-index-{oplog_index}");
         Self::from_uuid(Uuid::new_v5(&namespace, name.as_bytes()))
     }
 }
@@ -732,7 +732,7 @@ impl FromStr for WorkerStatus {
             "retrying" => Ok(WorkerStatus::Retrying),
             "failed" => Ok(WorkerStatus::Failed),
             "exited" => Ok(WorkerStatus::Exited),
-            _ => Err(format!("Unknown worker status: {}", s)),
+            _ => Err(format!("Unknown worker status: {s}")),
         }
     }
 }
@@ -763,7 +763,7 @@ impl TryFrom<i32> for WorkerStatus {
             4 => Ok(WorkerStatus::Retrying),
             5 => Ok(WorkerStatus::Failed),
             6 => Ok(WorkerStatus::Exited),
-            _ => Err(format!("Unknown worker status: {}", value)),
+            _ => Err(format!("Unknown worker status: {value}")),
         }
     }
 }
@@ -946,12 +946,6 @@ pub struct AccountId {
 }
 
 impl AccountId {
-    pub fn placeholder() -> Self {
-        Self {
-            value: "-1".to_string(),
-        }
-    }
-
     pub fn generate() -> Self {
         Self {
             value: Uuid::new_v4().to_string(),
@@ -1302,28 +1296,28 @@ impl Display for WorkerFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             WorkerFilter::Name(filter) => {
-                write!(f, "{}", filter)
+                write!(f, "{filter}")
             }
             WorkerFilter::Version(filter) => {
-                write!(f, "{}", filter)
+                write!(f, "{filter}")
             }
             WorkerFilter::Status(filter) => {
-                write!(f, "{}", filter)
+                write!(f, "{filter}")
             }
             WorkerFilter::CreatedAt(filter) => {
-                write!(f, "{}", filter)
+                write!(f, "{filter}")
             }
             WorkerFilter::Env(filter) => {
-                write!(f, "{}", filter)
+                write!(f, "{filter}")
             }
             WorkerFilter::Not(filter) => {
-                write!(f, "{}", filter)
+                write!(f, "{filter}")
             }
             WorkerFilter::And(filter) => {
-                write!(f, "{}", filter)
+                write!(f, "{filter}")
             }
             WorkerFilter::Or(filter) => {
-                write!(f, "{}", filter)
+                write!(f, "{filter}")
             }
         }
     }
@@ -1348,7 +1342,7 @@ impl FromStr for WorkerFilter {
                     comparator.parse()?,
                     value
                         .parse()
-                        .map_err(|e| format!("Invalid filter value: {}", e))?,
+                        .map_err(|e| format!("Invalid filter value: {e}"))?,
                 )),
                 "status" => Ok(WorkerFilter::new_status(
                     comparator.parse()?,
@@ -1366,10 +1360,10 @@ impl FromStr for WorkerFilter {
                         value.to_string(),
                     ))
                 }
-                _ => Err(format!("Invalid filter: {}", s)),
+                _ => Err(format!("Invalid filter: {s}")),
             }
         } else {
-            Err(format!("Invalid filter: {}", s))
+            Err(format!("Invalid filter: {s}"))
         }
     }
 }
@@ -1407,7 +1401,7 @@ impl FromStr for StringFilterComparator {
             "!=" | "notequal" | "ne" => Ok(StringFilterComparator::NotEqual),
             "like" => Ok(StringFilterComparator::Like),
             "notlike" => Ok(StringFilterComparator::NotLike),
-            _ => Err(format!("Unknown String Filter Comparator: {}", s)),
+            _ => Err(format!("Unknown String Filter Comparator: {s}")),
         }
     }
 }
@@ -1421,7 +1415,7 @@ impl TryFrom<i32> for StringFilterComparator {
             1 => Ok(StringFilterComparator::NotEqual),
             2 => Ok(StringFilterComparator::Like),
             3 => Ok(StringFilterComparator::NotLike),
-            _ => Err(format!("Unknown String Filter Comparator: {}", value)),
+            _ => Err(format!("Unknown String Filter Comparator: {value}")),
         }
     }
 }
@@ -1445,7 +1439,7 @@ impl Display for StringFilterComparator {
             StringFilterComparator::Like => "like",
             StringFilterComparator::NotLike => "notlike",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -1470,7 +1464,7 @@ impl Display for FilterComparator {
             FilterComparator::LessEqual => "<=",
             FilterComparator::Less => "<",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -1497,7 +1491,7 @@ impl FromStr for FilterComparator {
             ">" | "greater" | "gt" => Ok(FilterComparator::Greater),
             "<=" | "lessequal" | "le" => Ok(FilterComparator::LessEqual),
             "<" | "less" | "lt" => Ok(FilterComparator::Less),
-            _ => Err(format!("Unknown Filter Comparator: {}", s)),
+            _ => Err(format!("Unknown Filter Comparator: {s}")),
         }
     }
 }
@@ -1513,7 +1507,7 @@ impl TryFrom<i32> for FilterComparator {
             3 => Ok(FilterComparator::LessEqual),
             4 => Ok(FilterComparator::Greater),
             5 => Ok(FilterComparator::GreaterEqual),
-            _ => Err(format!("Unknown Filter Comparator: {}", value)),
+            _ => Err(format!("Unknown Filter Comparator: {value}")),
         }
     }
 }
@@ -1573,10 +1567,10 @@ impl FromStr for ScanCursor {
             Ok(ScanCursor {
                 layer: parts[0]
                     .parse()
-                    .map_err(|e| format!("Invalid layer part: {}", e))?,
+                    .map_err(|e| format!("Invalid layer part: {e}"))?,
                 cursor: parts[1]
                     .parse()
-                    .map_err(|e| format!("Invalid cursor part: {}", e))?,
+                    .map_err(|e| format!("Invalid cursor part: {e}"))?,
             })
         } else {
             Err("Invalid cursor, must have 'layer/cursor' format".to_string())
@@ -1725,21 +1719,21 @@ impl Display for WorkerEvent {
                 message,
                 ..
             } => {
-                write!(f, "<log> {:?} {} {}", level, context, message)
+                write!(f, "<log> {level:?} {context} {message}")
             }
             WorkerEvent::InvocationStart {
                 function,
                 idempotency_key,
                 ..
             } => {
-                write!(f, "<invocation-start> {} {}", function, idempotency_key)
+                write!(f, "<invocation-start> {function} {idempotency_key}")
             }
             WorkerEvent::InvocationFinished {
                 function,
                 idempotency_key,
                 ..
             } => {
-                write!(f, "<invocation-finished> {} {}", function, idempotency_key)
+                write!(f, "<invocation-finished> {function} {idempotency_key}")
             }
             WorkerEvent::Close => {
                 write!(f, "<close>")
@@ -1763,7 +1757,7 @@ impl TryFrom<i32> for ComponentType {
         match value {
             0 => Ok(ComponentType::Durable),
             1 => Ok(ComponentType::Ephemeral),
-            _ => Err(format!("Unknown Component Type: {}", value)),
+            _ => Err(format!("Unknown Component Type: {value}")),
         }
     }
 }
@@ -1774,7 +1768,7 @@ impl Display for ComponentType {
             ComponentType::Durable => "Durable",
             ComponentType::Ephemeral => "Ephemeral",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -1785,7 +1779,7 @@ impl FromStr for ComponentType {
         match s {
             "Durable" => Ok(ComponentType::Durable),
             "Ephemeral" => Ok(ComponentType::Ephemeral),
-            _ => Err(format!("Unknown Component Type: {}", s)),
+            _ => Err(format!("Unknown Component Type: {s}")),
         }
     }
 }
@@ -1827,7 +1821,7 @@ impl ComponentFilePath {
     }
 
     pub fn from_rel_str(s: &str) -> Result<Self, String> {
-        Self::from_abs_str(&format!("/{}", s))
+        Self::from_abs_str(&format!("/{s}"))
     }
 
     pub fn from_either_str(s: &str) -> Result<Self, String> {
@@ -1903,7 +1897,7 @@ impl ComponentFilePermissions {
         match s {
             "ro" => Ok(ComponentFilePermissions::ReadOnly),
             "rw" => Ok(ComponentFilePermissions::ReadWrite),
-            _ => Err(format!("Unknown permissions: {}", s)),
+            _ => Err(format!("Unknown permissions: {s}")),
         }
     }
 }
@@ -2026,7 +2020,7 @@ impl TryFrom<String> for GatewayBindingType {
         match value.as_str() {
             "default" => Ok(GatewayBindingType::Default),
             "file-server" => Ok(GatewayBindingType::FileServer),
-            _ => Err(format!("Invalid WorkerBindingType: {}", value)),
+            _ => Err(format!("Invalid WorkerBindingType: {value}")),
         }
     }
 }

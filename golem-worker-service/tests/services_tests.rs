@@ -1383,19 +1383,18 @@ async fn get_api_definition(
 ) -> HttpApiDefinitionRequest {
     let yaml_string = format!(
         r#"
-          id: {}
-          version: {}
-          draft: {}
+          id: {id}
+          version: {version}
+          draft: {draft}
           routes:
           - method: Get
-            path: {}
+            path: {path_pattern}
             binding:
               component:
                 name: test-component
                 version: 0
-              response: '{}'
-        "#,
-        id, version, draft, path_pattern, response_mapping
+              response: '{response_mapping}'
+        "#
     );
 
     struct TestConversionContext;

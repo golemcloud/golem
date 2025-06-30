@@ -90,11 +90,11 @@ pub enum RpcError {
 impl Display for RpcError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            RpcError::ProtocolError { details } => write!(f, "Protocol error: {}", details),
-            RpcError::Denied { details } => write!(f, "Denied: {}", details),
-            RpcError::NotFound { details } => write!(f, "Not found: {}", details),
+            RpcError::ProtocolError { details } => write!(f, "Protocol error: {details}"),
+            RpcError::Denied { details } => write!(f, "Denied: {details}"),
+            RpcError::NotFound { details } => write!(f, "Not found: {details}"),
             RpcError::RemoteInternalError { details } => {
-                write!(f, "Remote internal error: {}", details)
+                write!(f, "Remote internal error: {details}")
             }
         }
     }
@@ -105,7 +105,7 @@ impl std::error::Error for RpcError {}
 impl From<tonic::transport::Error> for RpcError {
     fn from(value: tonic::transport::Error) -> Self {
         Self::ProtocolError {
-            details: format!("gRPC Transport error: {}", value),
+            details: format!("gRPC Transport error: {value}"),
         }
     }
 }
@@ -113,7 +113,7 @@ impl From<tonic::transport::Error> for RpcError {
 impl From<tonic::Status> for RpcError {
     fn from(value: tonic::Status) -> Self {
         Self::ProtocolError {
-            details: format!("gRPC error: {}", value),
+            details: format!("gRPC error: {value}"),
         }
     }
 }
@@ -187,7 +187,7 @@ struct LoggingDemand {
 
 impl LoggingDemand {
     pub fn new(worker_id: WorkerId) -> Self {
-        log::debug!("Initializing RPC connection for worker {}", worker_id);
+        log::debug!("Initializing RPC connection for worker {worker_id}");
         Self { worker_id }
     }
 }

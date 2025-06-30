@@ -33,10 +33,10 @@ pub struct DockerWorkerExecutorCluster {
 impl DockerWorkerExecutorCluster {
     async fn make_worker_executor(
         prefix: &str,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + 'static>,
+        redis: Arc<dyn Redis>,
+        component_service: Arc<dyn ComponentService>,
+        shard_manager: Arc<dyn ShardManager>,
+        worker_service: Arc<dyn WorkerService>,
         verbosity: Level,
         shared_client: bool,
         cloud_service: Arc<dyn CloudService>,
@@ -59,10 +59,10 @@ impl DockerWorkerExecutorCluster {
     pub async fn new(
         size: usize,
         unique_network_id: &str,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + 'static>,
+        redis: Arc<dyn Redis>,
+        component_service: Arc<dyn ComponentService>,
+        shard_manager: Arc<dyn ShardManager>,
+        worker_service: Arc<dyn WorkerService>,
         verbosity: Level,
         shared_client: bool,
         cloud_service: Arc<dyn CloudService>,
@@ -146,10 +146,10 @@ impl WorkerExecutorCluster for DockerWorkerExecutorCluster {
         }
     }
 
-    fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>> {
+    fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor>> {
         self.worker_executors
             .iter()
-            .map(|we| we.clone() as Arc<dyn WorkerExecutor + Send + Sync + 'static>)
+            .map(|we| we.clone() as Arc<dyn WorkerExecutor>)
             .collect()
     }
 

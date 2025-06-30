@@ -215,13 +215,11 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             "{{ account-id: {{ value: \"{}\" }} }}",
             worker_metadata.account_id.value
         );
-        let wave_component_id = format!(
-            "{{ uuid: {{ high-bits: {}, low-bits: {} }} }}",
-            component_id_hi, component_id_lo
-        );
+        let wave_component_id =
+            format!("{{ uuid: {{ high-bits: {component_id_hi}, low-bits: {component_id_lo} }} }}");
         let mut wave_config = "[".to_string();
         for (idx, (key, value)) in running_plugin.configuration.iter().enumerate() {
-            wave_config.push_str(&format!("( \"{}\", \"{}\")", key, value));
+            wave_config.push_str(&format!("( \"{key}\", \"{value}\")"));
             if idx != running_plugin.configuration.len() - 1 {
                 wave_config.push_str(", ");
             }
@@ -712,7 +710,7 @@ impl ForwardingOplogState {
                 .try_send_entries(metadata, initial_oplog_index, &entries)
                 .await
             {
-                log::error!("Failed to send oplog entries: {}", err);
+                log::error!("Failed to send oplog entries: {err}");
                 // In case of an error we keep the unsent entries in the buffer.
                 // This does not guarantee that we don't double-send entries (in case the error happened
                 // only for one of the `send` calls, for example) - this is going to be handled

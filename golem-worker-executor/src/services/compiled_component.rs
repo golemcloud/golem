@@ -84,7 +84,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                         GolemError::component_download_failed(
                             component_id.clone(),
                             component_version,
-                            format!("Could not deserialize compiled component: {}", err),
+                            format!("Could not deserialize compiled component: {err}"),
                         )
                     })?
                 };

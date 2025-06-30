@@ -415,6 +415,14 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), anyhow::Error>;
+
+    /// Called when an update attempt has failed before the worker context has been created
+    async fn on_worker_update_failed_to_start<T: HasAll<Ctx> + Send + Sync>(
+        this: &T,
+        owned_worker_id: &OwnedWorkerId,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    ) -> Result<(), GolemError>;
 }
 
 /// A required interface to be implemented by the worker context's public state.

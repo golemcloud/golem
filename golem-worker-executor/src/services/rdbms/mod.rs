@@ -445,11 +445,11 @@ impl Error {
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::ConnectionFailure(msg) => write!(f, "ConnectionFailure: {}", msg),
-            Error::QueryParameterFailure(msg) => write!(f, "QueryParameterFailure: {}", msg),
-            Error::QueryExecutionFailure(msg) => write!(f, "QueryExecutionFailure: {}", msg),
-            Error::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {}", msg),
-            Error::Other(msg) => write!(f, "Other: {}", msg),
+            Error::ConnectionFailure(msg) => write!(f, "ConnectionFailure: {msg}"),
+            Error::QueryParameterFailure(msg) => write!(f, "QueryParameterFailure: {msg}"),
+            Error::QueryExecutionFailure(msg) => write!(f, "QueryExecutionFailure: {msg}"),
+            Error::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {msg}"),
+            Error::Other(msg) => write!(f, "Other: {msg}"),
         }
     }
 }

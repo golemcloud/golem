@@ -39,6 +39,6 @@ impl RdbmsType for PostgresType {
 
 impl Display for PostgresType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", POSTGRES)
+        write!(f, "{POSTGRES}")
     }
 }

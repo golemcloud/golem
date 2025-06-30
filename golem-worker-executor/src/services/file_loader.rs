@@ -228,7 +228,7 @@ impl FileLoader {
                     }
                     Err(e) => {
                         // we failed to set the file to read-only, we need to fail the entry, remove it from the cache and return the error
-                        *prelocked_entry = Err(format!("Other thread failed to download: {}", e));
+                        *prelocked_entry = Err(format!("Other thread failed to download: {e}"));
                         self.cache.lock().await.remove(key);
 
                         return Err(e);

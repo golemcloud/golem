@@ -17,6 +17,7 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_common::model::OplogIndex;
 use golem_service_base::model::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValue, IntoValueAndType};
 use log::info;
@@ -35,7 +36,7 @@ async fn revert_successful_invocations(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("counters").store().await;
     let worker_id = executor
@@ -130,7 +131,7 @@ async fn revert_failed_worker(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("failing-component").store().await;
     let worker_id = executor
@@ -188,7 +189,7 @@ async fn revert_auto_update(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -224,7 +225,7 @@ async fn revert_auto_update(
         .await
         .unwrap();
 
-    info!("result: {:?}", result1);
+    info!("result: {result1:?}");
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.check_oplog_is_queryable(&worker_id).await;
@@ -248,7 +249,7 @@ async fn revert_manual_update(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let http_server = crate::hot_update::TestHttpServer::start().await;
     let mut env = HashMap::new();

@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::WorkerServiceGrpcClient;
 use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::WorkerExecutor;
-use crate::components::worker_service::{
-    ApiDefinitionServiceClient, ApiDeploymentServiceClient, ApiSecurityServiceClient,
-    WorkerLogEventStream, WorkerService, WorkerServiceClient,
-};
+use crate::components::worker_service::{WorkerLogEventStream, WorkerService};
 use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -29,6 +27,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
     ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
     GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
     InvokeAndAwaitJsonResponse, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse,
     InvokeJsonRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
@@ -43,22 +42,21 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
-use golem_common::model::AccountId;
 use golem_wasm_rpc::ValueAndType;
 use std::sync::Arc;
+use tonic::transport::Channel;
 use tonic::Streaming;
-
-use super::WorkerServiceInternal;
+use uuid::Uuid;
 
 pub struct ForwardingWorkerService {
-    worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
+    worker_executor: Arc<dyn WorkerExecutor>,
     component_service: Arc<dyn ComponentService>,
     cloud_service: Arc<dyn CloudService>,
 }
 
 impl ForwardingWorkerService {
     pub fn new(
-        worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
+        worker_executor: Arc<dyn WorkerExecutor>,
         component_service: Arc<dyn ComponentService>,
         cloud_service: Arc<dyn CloudService>,
     ) -> Self {
@@ -82,42 +80,31 @@ impl ForwardingWorkerService {
     const RETRY_COUNT: usize = 5;
 }
 
-impl WorkerServiceInternal for ForwardingWorkerService {
-    fn client_protocol(&self) -> GolemClientProtocol {
-        panic!("There is no worker-service, cannot get client protocol")
-    }
-
-    fn worker_client(&self) -> WorkerServiceClient {
-        panic!("There is no worker-service, cannot create worker client")
-    }
-
-    fn api_definition_client(&self) -> ApiDefinitionServiceClient {
-        panic!("There is no worker-service, cannot create api-definition client")
-    }
-
-    fn api_deployment_client(&self) -> ApiDeploymentServiceClient {
-        panic!("There is no worker-service, cannot create api-deployment client")
-    }
-
-    fn api_security_client(&self) -> ApiSecurityServiceClient {
-        panic!("There is no worker-service, cannot create api-security client")
-    }
-
+#[async_trait]
+impl WorkerService for ForwardingWorkerService {
     fn component_service(&self) -> &Arc<dyn ComponentService> {
         &self.component_service
     }
 
-    fn cloud_service(&self) -> &Arc<dyn CloudService> {
-        &self.cloud_service
+    fn client_protocol(&self) -> GolemClientProtocol {
+        panic!("There is no worker-service, cannot get client protocol")
     }
-}
 
-#[async_trait]
-impl WorkerService for ForwardingWorkerService {
+    async fn base_http_client(&self) -> reqwest::Client {
+        panic!("There is no worker-service, cannot get http client")
+    }
+
+    async fn worker_grpc_client(&self) -> WorkerServiceGrpcClient<Channel> {
+        panic!("There is no worker-service, cannot get grpc client")
+    }
+
     async fn create_worker(
         &self,
+        token: &Uuid,
         request: LaunchNewWorkerRequest,
     ) -> crate::Result<LaunchNewWorkerResponse> {
+        let account_id = self.cloud_service.get_account_id(token).await?;
+
         let component_id = (*request
             .component_id
             .as_ref()
@@ -130,11 +117,12 @@ impl WorkerService for ForwardingWorkerService {
         };
         let latest_component_version = self
             .component_service
-            .get_latest_version(&component_id)
+            .get_latest_version(token, &component_id)
             .await;
 
         let mut retry_count = Self::RETRY_COUNT;
         let response = loop {
+            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
@@ -144,12 +132,7 @@ impl WorkerService for ForwardingWorkerService {
                     component_version: latest_component_version,
                     args: request.args.clone(),
                     env: request.env.clone(),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                     account_limits: Some(ResourceLimits {
                         available_fuel: i64::MAX,
                         max_memory_per_worker: i64::MAX,
@@ -194,22 +177,20 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn delete_worker(
         &self,
+        token: &Uuid,
         request: DeleteWorkerRequest,
     ) -> crate::Result<DeleteWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = loop {
+            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
                 .await?
                 .delete_worker(workerexecutor::v1::DeleteWorkerRequest {
                     worker_id: request.worker_id.clone(),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                 })
                 .await;
 
@@ -247,10 +228,13 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn get_worker_metadata(
         &self,
+        token: &Uuid,
         request: GetWorkerMetadataRequest,
     ) -> crate::Result<GetWorkerMetadataResponse> {
         let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = loop {
+            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
@@ -262,12 +246,7 @@ impl WorkerService for ForwardingWorkerService {
                             .clone()
                             .ok_or(anyhow!("Worker ID is required"))?,
                     ),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                 })
                 .await;
 
@@ -303,8 +282,67 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
+    async fn get_workers_metadata(
+        &self,
+        token: &Uuid,
+        request: GetWorkersMetadataRequest,
+    ) -> crate::Result<GetWorkersMetadataResponse> {
+        let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
+        let result = loop {
+            let account_id = account_id.clone();
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .get_workers_metadata(workerexecutor::v1::GetWorkersMetadataRequest {
+                    component_id: request.component_id,
+                    filter: request.filter.clone().clone(),
+                    cursor: request.cursor,
+                    count: request.count,
+                    precise: request.precise,
+                    account_id: Some(account_id.into()),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor get-worker-metadata call"
+            )),
+            Some(workerexecutor::v1::get_workers_metadata_response::Result::Success(metadata)) => {
+                Ok(GetWorkersMetadataResponse {
+                    result: Some(worker::v1::get_workers_metadata_response::Result::Success(
+                        GetWorkersMetadataSuccessResponse {
+                            workers: metadata.workers,
+                            cursor: metadata.cursor,
+                        },
+                    )),
+                })
+            }
+            Some(workerexecutor::v1::get_workers_metadata_response::Result::Failure(error)) => {
+                Ok(GetWorkersMetadataResponse {
+                    result: Some(worker::v1::get_workers_metadata_response::Result::Error(
+                        WorkerError {
+                            error: Some(worker::v1::worker_error::Error::InternalError(error)),
+                        },
+                    )),
+                })
+            }
+        }
+    }
+
     async fn invoke(
         &self,
+        token: &Uuid,
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
@@ -312,7 +350,10 @@ impl WorkerService for ForwardingWorkerService {
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeResponse> {
         let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = loop {
+            let account_id = account_id.clone();
+
             let result = self
                 .worker_executor
                 .client()
@@ -326,12 +367,7 @@ impl WorkerService for ForwardingWorkerService {
                         .into_iter()
                         .map(|param| param.value.into())
                         .collect(),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                     account_limits: Some(ResourceLimits {
                         available_fuel: i64::MAX,
                         max_memory_per_worker: i64::MAX,
@@ -368,12 +404,17 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
-    async fn invoke_json(&self, _request: InvokeJsonRequest) -> crate::Result<InvokeResponse> {
+    async fn invoke_json(
+        &self,
+        _token: &Uuid,
+        _request: InvokeJsonRequest,
+    ) -> crate::Result<InvokeResponse> {
         panic!("invoke_json can only be used through worker service");
     }
 
     async fn invoke_and_await(
         &self,
+        token: &Uuid,
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
@@ -381,7 +422,9 @@ impl WorkerService for ForwardingWorkerService {
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitResponse> {
         let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = loop {
+            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
@@ -395,12 +438,7 @@ impl WorkerService for ForwardingWorkerService {
                         .into_iter()
                         .map(|param| param.value.into())
                         .collect(),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                     account_limits: Some(ResourceLimits {
                         available_fuel: i64::MAX,
                         max_memory_per_worker: i64::MAX,
@@ -445,6 +483,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn invoke_and_await_typed(
         &self,
+        token: &Uuid,
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
@@ -452,7 +491,9 @@ impl WorkerService for ForwardingWorkerService {
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitTypedResponse> {
         let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = loop {
+            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
@@ -466,12 +507,7 @@ impl WorkerService for ForwardingWorkerService {
                         .into_iter()
                         .map(|param| param.value.into())
                         .collect(),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                     account_limits: Some(ResourceLimits {
                         available_fuel: i64::MAX,
                         max_memory_per_worker: i64::MAX,
@@ -518,6 +554,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn invoke_and_await_json(
         &self,
+        _token: &Uuid,
         _request: InvokeAndAwaitJsonRequest,
     ) -> crate::Result<InvokeAndAwaitJsonResponse> {
         panic!("invoke_and_await_json can only be used through worker service");
@@ -525,22 +562,20 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn connect_worker(
         &self,
+        token: &Uuid,
         request: ConnectWorkerRequest,
     ) -> crate::Result<Box<dyn WorkerLogEventStream>> {
         let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = loop {
+            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
                 .await?
                 .connect_worker(workerexecutor::v1::ConnectWorkerRequest {
                     worker_id: request.worker_id.clone(),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                     account_limits: Some(ResourceLimits {
                         available_fuel: i64::MAX,
                         max_memory_per_worker: i64::MAX,
@@ -564,22 +599,20 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn resume_worker(
         &self,
+        token: &Uuid,
         request: ResumeWorkerRequest,
     ) -> crate::Result<ResumeWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = loop {
+            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
                 .await?
                 .resume_worker(workerexecutor::v1::ResumeWorkerRequest {
                     worker_id: request.worker_id.clone(),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                     force: request.force,
                 })
                 .await;
@@ -618,10 +651,13 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn interrupt_worker(
         &self,
+        token: &Uuid,
         request: InterruptWorkerRequest,
     ) -> crate::Result<InterruptWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = loop {
+            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
@@ -629,12 +665,7 @@ impl WorkerService for ForwardingWorkerService {
                 .interrupt_worker(workerexecutor::v1::InterruptWorkerRequest {
                     worker_id: request.worker_id.clone(),
                     recover_immediately: request.recover_immediately,
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                 })
                 .await;
 
@@ -672,10 +703,13 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn update_worker(
         &self,
+        token: &Uuid,
         request: UpdateWorkerRequest,
     ) -> crate::Result<UpdateWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = loop {
+            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
@@ -684,12 +718,7 @@ impl WorkerService for ForwardingWorkerService {
                     worker_id: request.worker_id.clone(),
                     target_version: request.target_version,
                     mode: request.mode,
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                 })
                 .await;
 
@@ -725,21 +754,22 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
-    async fn get_oplog(&self, request: GetOplogRequest) -> crate::Result<GetOplogResponse> {
+    async fn get_oplog(
+        &self,
+        token: &Uuid,
+        request: GetOplogRequest,
+    ) -> crate::Result<GetOplogResponse> {
         let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = loop {
+            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
                 .await?
                 .get_oplog(workerexecutor::v1::GetOplogRequest {
                     worker_id: request.worker_id.clone(),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                     from_oplog_index: request.from_oplog_index,
                     cursor: request.cursor,
                     count: request.count,
@@ -783,20 +813,17 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn search_oplog(
         &self,
+        token: &Uuid,
         request: SearchOplogRequest,
     ) -> crate::Result<SearchOplogResponse> {
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = self
             .worker_executor
             .client()
             .await?
             .search_oplog(workerexecutor::v1::SearchOplogRequest {
                 worker_id: request.worker_id,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
+                account_id: Some(account_id.into()),
                 query: request.query,
                 cursor: request.cursor,
                 count: request.count,
@@ -833,20 +860,17 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn list_directory(
         &self,
+        token: &Uuid,
         request: ListDirectoryRequest,
     ) -> crate::Result<ListDirectoryResponse> {
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = self
             .worker_executor
             .client()
             .await?
             .list_directory(workerexecutor::v1::ListDirectoryRequest {
                 worker_id: request.worker_id,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
+                account_id: Some(account_id.into()),
                 account_limits: Some(ResourceLimits {
                     available_fuel: i64::MAX,
                     max_memory_per_worker: i64::MAX,
@@ -882,19 +906,19 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
-    async fn get_file_contents(&self, request: GetFileContentsRequest) -> crate::Result<Bytes> {
+    async fn get_file_contents(
+        &self,
+        token: &Uuid,
+        request: GetFileContentsRequest,
+    ) -> crate::Result<Bytes> {
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let mut stream = self
             .worker_executor
             .client()
             .await?
             .get_file_contents(workerexecutor::v1::GetFileContentsRequest {
                 worker_id: request.worker_id,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
+                account_id: Some(account_id.into()),
                 account_limits: Some(ResourceLimits {
                     available_fuel: i64::MAX,
                     max_memory_per_worker: i64::MAX,
@@ -935,10 +959,13 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn fork_worker(
         &self,
+        token: &Uuid,
         fork_worker_request: ForkWorkerRequest,
     ) -> crate::Result<ForkWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = loop {
+            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
@@ -946,12 +973,7 @@ impl WorkerService for ForwardingWorkerService {
                 .fork_worker(workerexecutor::v1::ForkWorkerRequest {
                     source_worker_id: fork_worker_request.source_worker_id.clone(),
                     target_worker_id: fork_worker_request.target_worker_id.clone(),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
+                    account_id: Some(account_id.into()),
                     oplog_index_cutoff: fork_worker_request.oplog_index_cutoff,
                 })
                 .await;
@@ -988,20 +1010,17 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn revert_worker(
         &self,
+        token: &Uuid,
         request: RevertWorkerRequest,
     ) -> crate::Result<RevertWorkerResponse> {
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = self
             .worker_executor
             .client()
             .await?
             .revert_worker(workerexecutor::v1::RevertWorkerRequest {
                 worker_id: request.worker_id.clone(),
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
+                account_id: Some(account_id.into()),
                 target: request.target,
             })
             .await;
@@ -1029,8 +1048,10 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn cancel_invocation(
         &self,
+        token: &Uuid,
         request: CancelInvocationRequest,
     ) -> crate::Result<CancelInvocationResponse> {
+        let account_id = self.cloud_service.get_account_id(token).await?;
         let result = self
             .worker_executor
             .client()
@@ -1038,12 +1059,7 @@ impl WorkerService for ForwardingWorkerService {
             .cancel_invocation(workerexecutor::v1::CancelInvocationRequest {
                 worker_id: request.worker_id.clone(),
                 idempotency_key: request.idempotency_key.clone(),
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
+                account_id: Some(account_id.into()),
             })
             .await;
 

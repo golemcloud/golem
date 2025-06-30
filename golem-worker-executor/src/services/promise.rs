@@ -142,10 +142,7 @@ impl PromiseService for DefaultPromiseService {
                     self.insert_if_empty(promise_id.clone(), pending);
 
                     let entry = self.promises.get(&promise_id).unwrap_or_else(|| {
-                        panic!(
-                            "Promise {:?} not found after inserting it into the map!",
-                            promise_id
-                        )
+                        panic!("Promise {promise_id:?} not found after inserting it into the map!")
                     });
 
                     let promise_state = entry.value();

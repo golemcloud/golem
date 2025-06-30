@@ -3821,6 +3821,7 @@ dependencies = [
  "async-trait",
  "async_zip",
  "bytes 1.10.1",
+ "chrono",
  "clap",
  "cli-table",
  "colored",

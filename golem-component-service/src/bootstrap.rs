@@ -64,7 +64,7 @@ impl Services {
             BlobStorageConfig::Sqlite(sqlite) => {
                 let pool = SqlitePool::configured(sqlite)
                     .await
-                    .map_err(|e| format!("Failed to create sqlite pool: {}", e))?;
+                    .map_err(|e| format!("Failed to create sqlite pool: {e}"))?;
                 Arc::new(SqliteBlobStorage::new(pool.clone()).await?)
             }
             BlobStorageConfig::InMemory(_) => {

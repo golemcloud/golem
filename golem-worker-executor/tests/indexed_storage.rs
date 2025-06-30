@@ -19,7 +19,6 @@ use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::config::TestDependencies;
 use golem_worker_executor::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
@@ -96,8 +95,8 @@ impl GetIndexedStorage for RedisIndexedStorageWrapper {
 async fn redis_storage(
     deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetIndexedStorage + Send + Sync> {
-    let redis = deps.redis();
-    let redis_monitor = deps.redis_monitor();
+    let redis = deps.redis.clone();
+    let redis_monitor = deps.redis_monitor.clone();
     redis.assert_valid();
     redis_monitor.assert_valid();
     Arc::new(RedisIndexedStorageWrapper { redis })

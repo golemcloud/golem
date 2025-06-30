@@ -145,8 +145,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
             let (_, exported_instance_idx) = instance
                 .get_export(&mut store, None, interface_name)
                 .ok_or(GolemError::invalid_request(format!(
-                    "could not load exports for interface {}",
-                    interface_name
+                    "could not load exports for interface {interface_name}"
                 )))?;
 
             let func = instance
@@ -202,7 +201,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
 
     let parsed = ParsedFunctionName::parse(&full_function_name)
-        .map_err(|err| GolemError::invalid_request(format!("Invalid function name: {}", err)))?;
+        .map_err(|err| GolemError::invalid_request(format!("Invalid function name: {err}")))?;
 
     let function = find_function(&mut store, instance, &parsed)?;
 
@@ -365,8 +364,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
         func
     } else {
         Err(GolemError::invalid_request(format!(
-            "could not find resource constructor for resource {}",
-            resource_name
+            "could not find resource constructor for resource {resource_name}"
         )))?
     };
 

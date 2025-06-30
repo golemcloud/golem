@@ -195,9 +195,6 @@ impl From<AccountError> for ApiError {
 impl From<TokenServiceError> for ApiError {
     fn from(value: TokenServiceError) -> Self {
         match value {
-            TokenServiceError::Unauthorized(_) => ApiError::Unauthorized(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
             TokenServiceError::InternalRepoError(_)
             | TokenServiceError::InternalSecretAlreadyExists { .. } => {
                 ApiError::InternalError(Json(ErrorBody {

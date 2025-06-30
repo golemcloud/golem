@@ -55,7 +55,7 @@ impl TryFrom<Version> for SerializedHttpVersion {
         } else if value == Version::HTTP_3 {
             Ok(SerializedHttpVersion::Http3)
         } else {
-            Err(format!("Unknown HTTP version: {:?}", value))
+            Err(format!("Unknown HTTP version: {value:?}"))
         }
     }
 }
@@ -435,7 +435,7 @@ impl Display for SerializableHttpMethod {
             SerializableHttpMethod::Options => write!(f, "OPTIONS"),
             SerializableHttpMethod::Trace => write!(f, "TRACE"),
             SerializableHttpMethod::Patch => write!(f, "PATCH"),
-            SerializableHttpMethod::Other(method) => write!(f, "{}", method),
+            SerializableHttpMethod::Other(method) => write!(f, "{method}"),
         }
     }
 }

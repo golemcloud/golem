@@ -52,6 +52,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[timeout(120000)]
 #[allow(clippy::await_holding_lock)]
 async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
+    let admin = deps.admin();
     let host_http_port = 8588;
 
     let contexts = Arc::new(Mutex::new(Vec::new()));
@@ -82,7 +83,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
             );
 
             let listener = tokio::net::TcpListener::bind(
-                format!("0.0.0.0:{}", host_http_port)
+                format!("0.0.0.0:{host_http_port}")
                     .parse::<SocketAddr>()
                     .unwrap(),
             )
@@ -96,7 +97,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let component_id = deps
+    let component_id = admin
         .component("golem_ictest")
         .with_dynamic_linking(&[(
             "golem:ictest-client/golem-ictest-client",
@@ -113,7 +114,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
         )])
         .store()
         .await;
-    let _worker_id = deps
+    let _worker_id = admin
         .start_worker_with(&component_id, "w1", vec![], env.clone())
         .await;
 
@@ -164,17 +165,21 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
         )),
     };
 
+    let project_id = admin.default_project().await;
+
     let _ = deps
         .worker_service()
-        .create_api_definition(CreateApiDefinitionRequest {
-            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                request.clone(),
-            )),
-        })
+        .create_api_definition(
+            &admin.token,
+            &project_id,
+            CreateApiDefinitionRequest {
+                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                    request.clone(),
+                )),
+            },
+        )
         .await
         .unwrap();
-
-    let project_id = deps.cloud_service().get_default_project().await.unwrap();
 
     let request = ApiDeploymentRequest {
         project_id: project_id.0,
@@ -193,7 +198,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
 
     let _ = deps
         .worker_service()
-        .create_or_update_api_deployment(request.clone())
+        .create_or_update_api_deployment(&admin.token, request.clone())
         .await
         .unwrap();
 

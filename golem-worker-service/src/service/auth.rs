@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn test_uuid_aut() {
         let uuid = Uuid::new_v4();
-        let metadata = vec![("authorization".to_string(), format!("Bearer {}", uuid))];
+        let metadata = vec![("authorization".to_string(), format!("Bearer {uuid}"))];
 
         let result = with_metadata((), metadata);
         assert_eq!(1, result.metadata().len())

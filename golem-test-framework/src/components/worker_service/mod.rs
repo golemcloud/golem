@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod docker;
+pub mod forwarding;
+pub mod k8s;
+pub mod provided;
+pub mod spawned;
+
+use super::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
-use crate::components::{
-    new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder,
-};
+use crate::components::{wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder};
 use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -41,7 +46,7 @@ use golem_api_grpc::proto::golem::common::{
 use golem_api_grpc::proto::golem::component as grpc_components;
 use golem_api_grpc::proto::golem::component::ComponentFilePermissions;
 use golem_api_grpc::proto::golem::rib::Expr;
-use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient as WorkerServiceGrpcClient;
+pub use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient as WorkerServiceGrpcClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     cancel_invocation_response, delete_worker_response, get_file_contents_response,
     get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
@@ -82,6 +87,7 @@ use golem_client::model::{
     ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, SecuritySchemeData,
 };
 use golem_client::{Context, Security};
+use golem_common::model::ProjectId;
 use golem_common::model::WorkerEvent;
 use golem_service_base::clients::authorised_request;
 use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
@@ -102,65 +108,76 @@ use tracing::Level;
 use url::Url;
 use uuid::Uuid;
 
-use super::cloud_service::CloudService;
-
-pub mod docker;
-pub mod forwarding;
-pub mod k8s;
-pub mod provided;
-pub mod spawned;
-
-#[derive(Clone)]
-pub enum WorkerServiceClient {
-    Grpc(WorkerServiceGrpcClient<Channel>),
-    Http(Arc<WorkerServiceHttpClientLive>),
-}
-
-#[derive(Clone)]
-pub enum ApiDefinitionServiceClient {
-    Grpc,
-    Http(Arc<ApiDefinitionServiceHttpClientLive>),
-}
-
-#[derive(Clone)]
-pub enum ApiDeploymentServiceClient {
-    Grpc, // no GRPC API
-    Http(Arc<ApiDeploymentServiceHttpClientLive>),
-}
-
-#[derive(Clone)]
-pub enum ApiSecurityServiceClient {
-    Grpc, // no GRPC API
-    Http(Arc<ApiSecurityServiceHttpClientLive>),
-}
-
-pub trait WorkerServiceInternal: Send + Sync {
-    fn client_protocol(&self) -> GolemClientProtocol;
-    fn worker_client(&self) -> WorkerServiceClient;
-    fn api_definition_client(&self) -> ApiDefinitionServiceClient;
-    fn api_deployment_client(&self) -> ApiDeploymentServiceClient;
-    fn api_security_client(&self) -> ApiSecurityServiceClient;
-    fn component_service(&self) -> &Arc<dyn ComponentService>;
-    fn cloud_service(&self) -> &Arc<dyn CloudService>;
-}
-
 #[async_trait]
-pub trait WorkerService: WorkerServiceInternal {
+pub trait WorkerService: Send + Sync {
+    fn component_service(&self) -> &Arc<dyn ComponentService>;
+
+    fn client_protocol(&self) -> GolemClientProtocol;
+    async fn base_http_client(&self) -> reqwest::Client;
+
+    async fn worker_http_client(&self, token: &Uuid) -> WorkerServiceHttpClientLive {
+        let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
+        WorkerServiceHttpClientLive {
+            context: Context {
+                client: self.base_http_client().await,
+                base_url: Url::parse(&url).expect("Failed to parse url"),
+                security_token: Security::Bearer(token.to_string()),
+            },
+        }
+    }
+    async fn worker_grpc_client(&self) -> WorkerServiceGrpcClient<Channel>;
+
+    async fn api_definition_http_client(&self, token: &Uuid) -> ApiDefinitionServiceHttpClientLive {
+        let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
+        ApiDefinitionServiceHttpClientLive {
+            context: Context {
+                client: self.base_http_client().await,
+                base_url: Url::parse(&url).expect("Failed to parse url"),
+                security_token: Security::Bearer(token.to_string()),
+            },
+        }
+    }
+
+    async fn api_deployment_http_client(&self, token: &Uuid) -> ApiDeploymentServiceHttpClientLive {
+        let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
+        ApiDeploymentServiceHttpClientLive {
+            context: Context {
+                client: self.base_http_client().await,
+                base_url: Url::parse(&url).expect("Failed to parse url"),
+                security_token: Security::Bearer(token.to_string()),
+            },
+        }
+    }
+
+    async fn api_security_http_client(&self, token: &Uuid) -> ApiSecurityServiceHttpClientLive {
+        let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
+        ApiSecurityServiceHttpClientLive {
+            context: Context {
+                client: self.base_http_client().await,
+                base_url: Url::parse(&url).expect("Failed to parse url"),
+                security_token: Security::Bearer(token.to_string()),
+            },
+        }
+    }
+
     // Overridable client functions - using these instead of client() allows
     // testing worker executors directly without the need to start a worker service,
     // when the `WorkerService` implementation is `ForwardingWorkerService`.
     async fn create_worker(
         &self,
+        token: &Uuid,
         request: LaunchNewWorkerRequest,
     ) -> crate::Result<LaunchNewWorkerResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
 
                 Ok(client.launch_new_worker(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+                let result = client
                     .launch_new_worker(
                         &request.component_id.unwrap().value.unwrap().into(),
                         &golem_client::model::WorkerCreationRequest {
@@ -169,33 +186,35 @@ pub trait WorkerService: WorkerServiceInternal {
                             env: request.env,
                         },
                     )
-                    .await
-                {
-                    Ok(result) => Ok(LaunchNewWorkerResponse {
-                        result: Some(launch_new_worker_response::Result::Success(
-                            LaunchNewWorkerSuccessResponse {
-                                worker_id: Some(result.worker_id.into()),
-                                component_version: result.component_version,
-                            },
-                        )),
-                    }),
-                    Err(err) => Err(anyhow!("{err:?}")),
-                }
+                    .await?;
+
+                Ok(LaunchNewWorkerResponse {
+                    result: Some(launch_new_worker_response::Result::Success(
+                        LaunchNewWorkerSuccessResponse {
+                            worker_id: Some(result.worker_id.into()),
+                            component_version: result.component_version,
+                        },
+                    )),
+                })
             }
         }
     }
 
     async fn delete_worker(
         &self,
+        token: &Uuid,
         request: DeleteWorkerRequest,
     ) -> crate::Result<DeleteWorkerResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.delete_worker(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+
+                client
                     .delete_worker(
                         &request
                             .worker_id
@@ -208,28 +227,30 @@ pub trait WorkerService: WorkerServiceInternal {
                             .into(),
                         &request.worker_id.unwrap().name,
                     )
-                    .await
-                {
-                    Ok(_) => Ok(DeleteWorkerResponse {
-                        result: Some(delete_worker_response::Result::Success(Empty {})),
-                    }),
-                    Err(err) => Err(anyhow!("{err:?}")),
-                }
+                    .await?;
+
+                Ok(DeleteWorkerResponse {
+                    result: Some(delete_worker_response::Result::Success(Empty {})),
+                })
             }
         }
     }
 
     async fn get_worker_metadata(
         &self,
+        token: &Uuid,
         request: GetWorkerMetadataRequest,
     ) -> crate::Result<GetWorkerMetadataResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.get_worker_metadata(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+
+                let result = client
                     .get_worker_metadata(
                         &request
                             .worker_id
@@ -242,30 +263,31 @@ pub trait WorkerService: WorkerServiceInternal {
                             .into(),
                         &request.worker_id.unwrap().name,
                     )
-                    .await
-                {
-                    Ok(result) => Ok(GetWorkerMetadataResponse {
-                        result: Some(get_worker_metadata_response::Result::Success(
-                            http_worker_metadata_to_grpc(result),
-                        )),
-                    }),
-                    Err(err) => Err(anyhow!("{err:?}")),
-                }
+                    .await?;
+
+                Ok(GetWorkerMetadataResponse {
+                    result: Some(get_worker_metadata_response::Result::Success(
+                        http_worker_metadata_to_grpc(result),
+                    )),
+                })
             }
         }
     }
 
     async fn get_workers_metadata(
         &self,
+        token: &Uuid,
         request: GetWorkersMetadataRequest,
     ) -> crate::Result<GetWorkersMetadataResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.get_workers_metadata(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+                let result = client
                     .get_workers_metadata(
                         &request.component_id.unwrap().value.unwrap().into(),
                         request
@@ -280,39 +302,39 @@ pub trait WorkerService: WorkerServiceInternal {
                         Some(request.count),
                         Some(request.precise),
                     )
-                    .await
-                {
-                    Ok(result) => Ok(GetWorkersMetadataResponse {
-                        result: Some(get_workers_metadata_response::Result::Success(
-                            GetWorkersMetadataSuccessResponse {
-                                workers: result
-                                    .workers
-                                    .into_iter()
-                                    .map(http_worker_metadata_to_grpc)
-                                    .collect(),
-                                cursor: result.cursor.map(|cursor| Cursor {
-                                    layer: cursor.layer,
-                                    cursor: cursor.cursor,
-                                }),
-                            },
-                        )),
-                    }),
-                    Err(err) => Err(anyhow!("{err:?}")),
-                }
+                    .await?;
+
+                Ok(GetWorkersMetadataResponse {
+                    result: Some(get_workers_metadata_response::Result::Success(
+                        GetWorkersMetadataSuccessResponse {
+                            workers: result
+                                .workers
+                                .into_iter()
+                                .map(http_worker_metadata_to_grpc)
+                                .collect(),
+                            cursor: result.cursor.map(|cursor| Cursor {
+                                layer: cursor.layer,
+                                cursor: cursor.cursor,
+                            }),
+                        },
+                    )),
+                })
             }
         }
     }
 
     async fn invoke(
         &self,
+        token: &Uuid,
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
                 let request = authorised_request(
                     InvokeRequest {
                         worker_id: Some(worker_id),
@@ -321,14 +343,16 @@ pub trait WorkerService: WorkerServiceInternal {
                         invoke_parameters: invoke_parameters_to_grpc(invoke_parameters),
                         context,
                     },
-                    &self.cloud_service().admin_token(),
+                    token,
                 );
 
                 let response = client.invoke(request).await?.into_inner();
                 Ok(response)
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+
+                client
                     .invoke_function(
                         &worker_id.component_id.unwrap().value.unwrap().into(),
                         &worker_id.name.unwrap(),
@@ -336,25 +360,29 @@ pub trait WorkerService: WorkerServiceInternal {
                         &function,
                         &invoke_parameters_to_http(invoke_parameters),
                     )
-                    .await
-                {
-                    Ok(_) => Ok(InvokeResponse {
-                        result: Some(invoke_response::Result::Success(Empty {})),
-                    }),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+
+                Ok(InvokeResponse {
+                    result: Some(invoke_response::Result::Success(Empty {})),
+                })
             }
         }
     }
 
-    async fn invoke_json(&self, request: InvokeJsonRequest) -> crate::Result<InvokeResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+    async fn invoke_json(
+        &self,
+        token: &Uuid,
+        request: InvokeJsonRequest,
+    ) -> crate::Result<InvokeResponse> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.invoke_json(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+                client
                     .invoke_function(
                         &request
                             .worker_id
@@ -370,27 +398,26 @@ pub trait WorkerService: WorkerServiceInternal {
                         &request.function,
                         &invoke_json_parameters_to_http(request.invoke_parameters),
                     )
-                    .await
-                {
-                    Ok(_) => Ok(InvokeResponse {
-                        result: Some(invoke_response::Result::Success(Empty {})),
-                    }),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+                Ok(InvokeResponse {
+                    result: Some(invoke_response::Result::Success(Empty {})),
+                })
             }
         }
     }
 
     async fn invoke_and_await(
         &self,
+        token: &Uuid,
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
                 let request = authorised_request(
                     InvokeAndAwaitRequest {
                         worker_id: Some(worker_id),
@@ -399,15 +426,15 @@ pub trait WorkerService: WorkerServiceInternal {
                         invoke_parameters: invoke_parameters_to_grpc(invoke_parameters),
                         context,
                     },
-                    &self.cloud_service().admin_token(),
+                    token,
                 );
 
                 let response = client.invoke_and_await(request).await?.into_inner();
-
                 Ok(response)
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+                let result = client
                     .invoke_and_await_function(
                         &worker_id.component_id.unwrap().value.unwrap().into(),
                         &worker_id.name.unwrap(),
@@ -415,32 +442,32 @@ pub trait WorkerService: WorkerServiceInternal {
                         &function,
                         &invoke_parameters_to_http(invoke_parameters),
                     )
-                    .await
-                {
-                    Ok(result) => Ok(InvokeAndAwaitResponse {
-                        result: Some(invoke_and_await_response::Result::Success(InvokeResult {
-                            result: result.result.map(|result| {
-                                let value: Value = result.try_into().unwrap();
-                                value.into()
-                            }),
-                        })),
-                    }),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+
+                Ok(InvokeAndAwaitResponse {
+                    result: Some(invoke_and_await_response::Result::Success(InvokeResult {
+                        result: result.result.map(|result| {
+                            let value: Value = result.try_into().unwrap();
+                            value.into()
+                        }),
+                    })),
+                })
             }
         }
     }
 
     async fn invoke_and_await_typed(
         &self,
+        token: &Uuid,
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         invoke_parameters: Vec<ValueAndType>,
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitTypedResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
                 let request = authorised_request(
                     InvokeAndAwaitRequest {
                         worker_id: Some(worker_id),
@@ -449,13 +476,14 @@ pub trait WorkerService: WorkerServiceInternal {
                         invoke_parameters: invoke_parameters_to_grpc(invoke_parameters),
                         context,
                     },
-                    &self.cloud_service().admin_token(),
+                    token,
                 );
 
                 Ok(client.invoke_and_await_typed(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+                let result = client
                     .invoke_and_await_function(
                         &worker_id.component_id.unwrap().value.unwrap().into(),
                         &worker_id.name.unwrap(),
@@ -463,35 +491,35 @@ pub trait WorkerService: WorkerServiceInternal {
                         &function,
                         &invoke_parameters_to_http(invoke_parameters),
                     )
-                    .await
-                {
-                    Ok(result) => Ok(InvokeAndAwaitTypedResponse {
-                        result: Some(invoke_and_await_typed_response::Result::Success(
-                            InvokeResultTyped {
-                                result: Some(TypeAnnotatedValue {
-                                    type_annotated_value: result.result,
-                                }),
-                            },
-                        )),
-                    }),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+
+                Ok(InvokeAndAwaitTypedResponse {
+                    result: Some(invoke_and_await_typed_response::Result::Success(
+                        InvokeResultTyped {
+                            result: Some(TypeAnnotatedValue {
+                                type_annotated_value: result.result,
+                            }),
+                        },
+                    )),
+                })
             }
         }
     }
 
     async fn invoke_and_await_json(
         &self,
+        token: &Uuid,
         request: InvokeAndAwaitJsonRequest,
     ) -> crate::Result<InvokeAndAwaitJsonResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
-
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.invoke_and_await_json(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+                let result = client
                     .invoke_and_await_function(
                         &request
                             .worker_id
@@ -507,176 +535,193 @@ pub trait WorkerService: WorkerServiceInternal {
                         &request.function,
                         &invoke_json_parameters_to_http(request.invoke_parameters),
                     )
-                    .await
-                {
-                    Ok(result) => Ok(InvokeAndAwaitJsonResponse {
-                        result: Some(invoke_and_await_json_response::Result::Success(
-                            serde_json::to_string(&result.result)?,
-                        )),
-                    }),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+                Ok(InvokeAndAwaitJsonResponse {
+                    result: Some(invoke_and_await_json_response::Result::Success(
+                        serde_json::to_string(&result.result)?,
+                    )),
+                })
             }
         }
     }
 
     async fn connect_worker(
         &self,
+        token: &Uuid,
         request: ConnectWorkerRequest,
     ) -> crate::Result<Box<dyn WorkerLogEventStream>> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
 
                 Ok(Box::new(
                     GrpcWorkerLogEventStream::new(client, request).await?,
                 ))
             }
-            WorkerServiceClient::Http(client) => Ok(Box::new(
-                HttpWorkerLogEventStream::new(client, request).await?,
-            )),
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+                Ok(Box::new(
+                    HttpWorkerLogEventStream::new(Arc::new(client), request).await?,
+                ))
+            }
         }
     }
 
     async fn resume_worker(
         &self,
+        token: &Uuid,
         request: ResumeWorkerRequest,
     ) -> crate::Result<ResumeWorkerResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.resume_worker(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => match client
-                .resume_worker(
-                    &request
-                        .worker_id
-                        .as_ref()
-                        .unwrap()
-                        .component_id
-                        .unwrap()
-                        .value
-                        .unwrap()
-                        .into(),
-                    &request.worker_id.unwrap().name,
-                )
-                .await
-            {
-                Ok(_) => Ok(ResumeWorkerResponse {
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+                client
+                    .resume_worker(
+                        &request
+                            .worker_id
+                            .as_ref()
+                            .unwrap()
+                            .component_id
+                            .unwrap()
+                            .value
+                            .unwrap()
+                            .into(),
+                        &request.worker_id.unwrap().name,
+                    )
+                    .await?;
+
+                Ok(ResumeWorkerResponse {
                     result: Some(resume_worker_response::Result::Success(Empty {})),
-                }),
-                Err(error) => Err(anyhow!("{error:?}")),
-            },
+                })
+            }
         }
     }
 
     async fn interrupt_worker(
         &self,
+        token: &Uuid,
         request: InterruptWorkerRequest,
     ) -> crate::Result<InterruptWorkerResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
-
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.interrupt_worker(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => match client
-                .interrupt_worker(
-                    &request
-                        .worker_id
-                        .as_ref()
-                        .unwrap()
-                        .component_id
-                        .unwrap()
-                        .value
-                        .unwrap()
-                        .into(),
-                    &request.worker_id.unwrap().name,
-                    Some(request.recover_immediately),
-                )
-                .await
-            {
-                Ok(_) => Ok(InterruptWorkerResponse {
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+                client
+                    .interrupt_worker(
+                        &request
+                            .worker_id
+                            .as_ref()
+                            .unwrap()
+                            .component_id
+                            .unwrap()
+                            .value
+                            .unwrap()
+                            .into(),
+                        &request.worker_id.unwrap().name,
+                        Some(request.recover_immediately),
+                    )
+                    .await?;
+
+                Ok(InterruptWorkerResponse {
                     result: Some(interrupt_worker_response::Result::Success(Empty {})),
-                }),
-                Err(error) => Err(anyhow!("{error:?}")),
-            },
+                })
+            }
         }
     }
 
     async fn update_worker(
         &self,
+        token: &Uuid,
         request: UpdateWorkerRequest,
     ) -> crate::Result<UpdateWorkerResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.update_worker(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => match client
-                .update_worker(
-                    &request
-                        .worker_id
-                        .as_ref()
-                        .unwrap()
-                        .component_id
-                        .unwrap()
-                        .value
-                        .unwrap()
-                        .into(),
-                    &request.worker_id.unwrap().name,
-                    &golem_client::model::UpdateWorkerRequest {
-                        mode: match UpdateMode::try_from(request.mode)? {
-                            UpdateMode::Automatic => {
-                                golem_client::model::WorkerUpdateMode::Automatic
-                            }
-                            UpdateMode::Manual => golem_client::model::WorkerUpdateMode::Manual,
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+                client
+                    .update_worker(
+                        &request
+                            .worker_id
+                            .as_ref()
+                            .unwrap()
+                            .component_id
+                            .unwrap()
+                            .value
+                            .unwrap()
+                            .into(),
+                        &request.worker_id.unwrap().name,
+                        &golem_client::model::UpdateWorkerRequest {
+                            mode: match UpdateMode::try_from(request.mode)? {
+                                UpdateMode::Automatic => {
+                                    golem_client::model::WorkerUpdateMode::Automatic
+                                }
+                                UpdateMode::Manual => golem_client::model::WorkerUpdateMode::Manual,
+                            },
+                            target_version: request.target_version,
                         },
-                        target_version: request.target_version,
-                    },
-                )
-                .await
-            {
-                Ok(_) => Ok(UpdateWorkerResponse {
+                    )
+                    .await?;
+                Ok(UpdateWorkerResponse {
                     result: Some(update_worker_response::Result::Success(Empty {})),
-                }),
-                Err(error) => Err(anyhow!("{error:?}")),
-            },
+                })
+            }
         }
     }
 
-    async fn get_oplog(&self, request: GetOplogRequest) -> crate::Result<GetOplogResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+    async fn get_oplog(
+        &self,
+        token: &Uuid,
+        request: GetOplogRequest,
+    ) -> crate::Result<GetOplogResponse> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.get_oplog(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => match client
-                .get_oplog(
-                    &request
-                        .worker_id
-                        .as_ref()
-                        .unwrap()
-                        .component_id
-                        .unwrap()
-                        .value
-                        .unwrap()
-                        .into(),
-                    &request.worker_id.unwrap().name,
-                    Some(request.from_oplog_index),
-                    request.count,
-                    request
-                        .cursor
-                        .map(|cursor| golem_client::model::OplogCursor {
-                            current_component_version: cursor.current_component_version,
-                            next_oplog_index: cursor.next_oplog_index,
-                        })
-                        .as_ref(),
-                    None,
-                )
-                .await
-            {
-                Ok(result) => Ok(GetOplogResponse {
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+
+                let result = client
+                    .get_oplog(
+                        &request
+                            .worker_id
+                            .as_ref()
+                            .unwrap()
+                            .component_id
+                            .unwrap()
+                            .value
+                            .unwrap()
+                            .into(),
+                        &request.worker_id.unwrap().name,
+                        Some(request.from_oplog_index),
+                        request.count,
+                        request
+                            .cursor
+                            .map(|cursor| golem_client::model::OplogCursor {
+                                current_component_version: cursor.current_component_version,
+                                next_oplog_index: cursor.next_oplog_index,
+                            })
+                            .as_ref(),
+                        None,
+                    )
+                    .await?;
+
+                Ok(GetOplogResponse {
                     result: Some(get_oplog_response::Result::Success(
                         GetOplogSuccessResponse {
                             entries: result
@@ -692,23 +737,26 @@ pub trait WorkerService: WorkerServiceInternal {
                             last_index: result.last_index,
                         },
                     )),
-                }),
-                Err(error) => Err(anyhow!("{error:?}")),
-            },
+                })
+            }
         }
     }
 
     async fn search_oplog(
         &self,
+        token: &Uuid,
         request: SearchOplogRequest,
     ) -> crate::Result<SearchOplogResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.search_oplog(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+
+                let result = client
                     .get_oplog(
                         &request
                             .worker_id
@@ -731,44 +779,46 @@ pub trait WorkerService: WorkerServiceInternal {
                             .as_ref(),
                         Some(request.query).as_deref(),
                     )
-                    .await
-                {
-                    Ok(result) => Ok(SearchOplogResponse {
-                        result: Some(search_oplog_response::Result::Success(
-                            SearchOplogSuccessResponse {
-                                entries: result
-                                    .entries
-                                    .into_iter()
-                                    .map(|entry| OplogEntryWithIndex {
-                                        oplog_index: entry.oplog_index,
-                                        entry: Some(OplogEntry::try_from(entry.entry).unwrap()),
-                                    })
-                                    .collect(),
-                                next: result.next.map(|cursor| OplogCursor {
-                                    next_oplog_index: cursor.next_oplog_index,
-                                    current_component_version: cursor.current_component_version,
-                                }),
-                                last_index: result.last_index,
-                            },
-                        )),
-                    }),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+
+                Ok(SearchOplogResponse {
+                    result: Some(search_oplog_response::Result::Success(
+                        SearchOplogSuccessResponse {
+                            entries: result
+                                .entries
+                                .into_iter()
+                                .map(|entry| OplogEntryWithIndex {
+                                    oplog_index: entry.oplog_index,
+                                    entry: Some(OplogEntry::try_from(entry.entry).unwrap()),
+                                })
+                                .collect(),
+                            next: result.next.map(|cursor| OplogCursor {
+                                next_oplog_index: cursor.next_oplog_index,
+                                current_component_version: cursor.current_component_version,
+                            }),
+                            last_index: result.last_index,
+                        },
+                    )),
+                })
             }
         }
     }
 
     async fn list_directory(
         &self,
+        token: &Uuid,
         request: ListDirectoryRequest,
     ) -> crate::Result<ListDirectoryResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.list_directory(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+
+                let result = client
                     .get_files(
                         &request
                             .worker_id
@@ -782,53 +832,56 @@ pub trait WorkerService: WorkerServiceInternal {
                         &request.worker_id.unwrap().name.unwrap(),
                         &request.path,
                     )
-                    .await
-                {
-                    Ok(result) => Ok(ListDirectoryResponse {
-                        result: Some(list_directory_response::Result::Success(
-                            ListDirectorySuccessResponse {
-                                nodes: result.nodes.into_iter().map(|node|
-                                    FileSystemNode {
-                                        value: Some(
-                                            match node.kind {
-                                                golem_client::model::FlatComponentFileSystemNodeKind::Directory => {
-                                                    file_system_node::Value::File(FileFileSystemNode {
-                                                        name: node.name,
-                                                        last_modified: node.last_modified,
-                                                        size: node.size.unwrap(),
-                                                        permissions: match node.permissions.unwrap() {
-                                                            golem_client::model::ComponentFilePermissions::ReadOnly => {
-                                                                ComponentFilePermissions::ReadOnly.into()
-                                                            }
-                                                            golem_client::model::ComponentFilePermissions::ReadWrite => {
-                                                                ComponentFilePermissions::ReadWrite.into()
-                                                            }
-                                                        },
-                                                    })
-                                                }
-                                                golem_client::model::FlatComponentFileSystemNodeKind::File => {
-                                                    file_system_node::Value::Directory(DirectoryFileSystemNode {
-                                                        name: node.name,
-                                                        last_modified: node.last_modified,
-                                                    })
-                                                }
+                    .await?;
+
+                Ok(ListDirectoryResponse {
+                    result: Some(list_directory_response::Result::Success(
+                        ListDirectorySuccessResponse {
+                            nodes: result.nodes.into_iter().map(|node|
+                                FileSystemNode {
+                                    value: Some(
+                                        match node.kind {
+                                            golem_client::model::FlatComponentFileSystemNodeKind::Directory => {
+                                                file_system_node::Value::File(FileFileSystemNode {
+                                                    name: node.name,
+                                                    last_modified: node.last_modified,
+                                                    size: node.size.unwrap(),
+                                                    permissions: match node.permissions.unwrap() {
+                                                        golem_client::model::ComponentFilePermissions::ReadOnly => {
+                                                            ComponentFilePermissions::ReadOnly.into()
+                                                        }
+                                                        golem_client::model::ComponentFilePermissions::ReadWrite => {
+                                                            ComponentFilePermissions::ReadWrite.into()
+                                                        }
+                                                    },
+                                                })
                                             }
-                                        ),
-                                    }
-                                ).collect(),
-                            },
-                        )),
-                    }),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                                            golem_client::model::FlatComponentFileSystemNodeKind::File => {
+                                                file_system_node::Value::Directory(DirectoryFileSystemNode {
+                                                    name: node.name,
+                                                    last_modified: node.last_modified,
+                                                })
+                                            }
+                                        }
+                                    ),
+                                }
+                            ).collect(),
+                        },
+                    )),
+                })
             }
         }
     }
 
-    async fn get_file_contents(&self, request: GetFileContentsRequest) -> crate::Result<Bytes> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+    async fn get_file_contents(
+        &self,
+        token: &Uuid,
+        request: GetFileContentsRequest,
+    ) -> crate::Result<Bytes> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 let mut stream = client.get_file_contents(request).await?.into_inner();
                 let mut bytes = Vec::new();
                 while let Some(chunk) = stream.message().await? {
@@ -846,8 +899,10 @@ pub trait WorkerService: WorkerServiceInternal {
                 }
                 Ok(Bytes::from(bytes))
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+
+                let result = client
                     .get_file_content(
                         &request
                             .worker_id
@@ -861,26 +916,25 @@ pub trait WorkerService: WorkerServiceInternal {
                         &request.worker_id.unwrap().name.unwrap(),
                         &request.file_path,
                     )
-                    .await
-                {
-                    Ok(result) => Ok(result),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+
+                Ok(result)
             }
         }
     }
 
     async fn fork_worker(
         &self,
+        token: &Uuid,
         fork_worker_request: ForkWorkerRequest,
     ) -> crate::Result<ForkWorkerResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request =
-                    authorised_request(fork_worker_request, &self.cloud_service().admin_token());
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(fork_worker_request, token);
                 Ok(client.fork_worker(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(_client) => {
+            GolemClientProtocol::Http => {
                 panic!("Fork worker is not available on HTTP API");
             }
         }
@@ -888,18 +942,19 @@ pub trait WorkerService: WorkerServiceInternal {
 
     async fn revert_worker(
         &self,
+        token: &Uuid,
         request: RevertWorkerRequest,
     ) -> crate::Result<RevertWorkerResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(
-                    request,
-                    &self.cloud_service().admin_token(),
-                );
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.revert_worker(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+
+                client
                     .revert_worker(
                         &request
                             .worker_id
@@ -925,26 +980,29 @@ pub trait WorkerService: WorkerServiceInternal {
                             _ => Err(anyhow!("RevertWorkerRequest.target is required"))?,
                         },
                     )
-                    .await
-                {
-                    Ok(_) => Ok(RevertWorkerResponse { result: Some(revert_worker_response::Result::Success(Empty {})) }),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+
+                Ok(RevertWorkerResponse {
+                    result: Some(revert_worker_response::Result::Success(Empty {})),
+                })
             }
         }
     }
 
     async fn cancel_invocation(
         &self,
+        token: &Uuid,
         request: CancelInvocationRequest,
     ) -> crate::Result<CancelInvocationResponse> {
-        match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.worker_grpc_client().await;
+                let request = authorised_request(request, token);
                 Ok(client.cancel_invocation(request).await?.into_inner())
             }
-            WorkerServiceClient::Http(client) => {
-                match client
+            GolemClientProtocol::Http => {
+                let client = self.worker_http_client(token).await;
+                let response = client
                     .cancel_invocation(
                         &request
                             .worker_id
@@ -958,33 +1016,35 @@ pub trait WorkerService: WorkerServiceInternal {
                         &request.worker_id.unwrap().name,
                         &request.idempotency_key.as_ref().unwrap().value,
                     )
-                    .await
-                {
-                    Ok(response) => Ok(CancelInvocationResponse {
-                        result: Some(cancel_invocation_response::Result::Success(
-                            response.canceled,
-                        )),
-                    }),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+
+                Ok(CancelInvocationResponse {
+                    result: Some(cancel_invocation_response::Result::Success(
+                        response.canceled,
+                    )),
+                })
             }
         }
     }
 
     async fn create_api_definition(
         &self,
+        token: &Uuid,
+        project_id: &ProjectId,
         request: CreateApiDefinitionRequest,
     ) -> crate::Result<ApiDefinition> {
-        match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("create_api_definition"),
-            ApiDefinitionServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await?;
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("create_api_definition"),
+            GolemClientProtocol::Http => {
+                let client = self.api_definition_http_client(token).await;
+
                 match request.api_definition.unwrap() {
                     create_api_definition_request::ApiDefinition::Definition(request) => {
                         match client
                             .create_definition_json(
-                                &default_project.0,
+                                &project_id.0,
                                 &grpc_api_definition_request_to_http(
+                                    token,
                                     request,
                                     self.component_service(),
                                 )
@@ -993,6 +1053,7 @@ pub trait WorkerService: WorkerServiceInternal {
                             .await
                         {
                             Ok(result) => Ok(http_api_definition_to_grpc(
+                                token,
                                 result,
                                 self.component_service(),
                             )
@@ -1001,12 +1062,15 @@ pub trait WorkerService: WorkerServiceInternal {
                         }
                     }
                     create_api_definition_request::ApiDefinition::Openapi(open_api) => match client
-                        .import_open_api_yaml(&default_project.0, &serde_yaml::from_str(&open_api)?)
+                        .import_open_api_yaml(&project_id.0, &serde_yaml::from_str(&open_api)?)
                         .await
                     {
-                        Ok(result) => {
-                            Ok(http_api_definition_to_grpc(result, self.component_service()).await)
-                        }
+                        Ok(result) => Ok(http_api_definition_to_grpc(
+                            token,
+                            result,
+                            self.component_service(),
+                        )
+                        .await),
                         Err(error) => Err(anyhow!("{error:?}")),
                     },
                 }
@@ -1016,20 +1080,24 @@ pub trait WorkerService: WorkerServiceInternal {
 
     async fn update_api_definition(
         &self,
+        token: &Uuid,
+        project_id: &ProjectId,
         request: UpdateApiDefinitionRequest,
     ) -> crate::Result<ApiDefinition> {
-        match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("update_api_definition"),
-            ApiDefinitionServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await?;
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("update_api_definition"),
+            GolemClientProtocol::Http => {
+                let client = self.api_definition_http_client(token).await;
+
                 match request.api_definition.unwrap() {
                     update_api_definition_request::ApiDefinition::Definition(request) => {
                         match client
                             .update_definition_yaml(
-                                &default_project.0,
+                                &project_id.0,
                                 &request.id.clone().unwrap().value,
                                 &request.clone().version,
                                 &grpc_api_definition_request_to_http(
+                                    token,
                                     ApiDefinitionRequest {
                                         id: request.id,
                                         version: request.version,
@@ -1043,6 +1111,7 @@ pub trait WorkerService: WorkerServiceInternal {
                             .await
                         {
                             Ok(result) => Ok(http_api_definition_to_grpc(
+                                token,
                                 result,
                                 self.component_service(),
                             )
@@ -1060,186 +1129,225 @@ pub trait WorkerService: WorkerServiceInternal {
 
     async fn get_api_definition(
         &self,
+        token: &Uuid,
+        project_id: &ProjectId,
         request: GetApiDefinitionRequest,
     ) -> crate::Result<ApiDefinition> {
-        match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("get_api_definition"),
-            ApiDefinitionServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await?;
-                match client
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("get_api_definition"),
+            GolemClientProtocol::Http => {
+                let client = self.api_definition_http_client(token).await;
+
+                let result = client
                     .get_definition(
-                        &default_project.0,
+                        &project_id.0,
                         &request.api_definition_id.unwrap().value,
                         &request.version,
                     )
-                    .await
-                {
-                    Ok(definition) => {
-                        Ok(http_api_definition_to_grpc(definition, self.component_service()).await)
-                    }
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+
+                Ok(http_api_definition_to_grpc(token, result, self.component_service()).await)
             }
         }
     }
 
     async fn get_api_definition_versions(
         &self,
+        token: &Uuid,
+        project_id: &ProjectId,
         request: GetApiDefinitionVersionsRequest,
     ) -> crate::Result<Vec<ApiDefinition>> {
-        match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc => {
-                not_available_on_grpc_api("get_api_definition_versions")
-            }
-            ApiDefinitionServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await?;
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("get_api_definition_versions"),
+            GolemClientProtocol::Http => {
+                let client = self.api_definition_http_client(token).await;
 
-                match client
+                let result = client
                     .list_definitions(
-                        &default_project.0,
+                        &project_id.0,
                         request.api_definition_id.map(|id| id.value).as_deref(),
                     )
-                    .await
-                {
-                    Ok(result) => Ok(join_all(result.into_iter().map(async |def| {
-                        http_api_definition_to_grpc(def, self.component_service()).await
-                    }))
-                    .await),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+
+                Ok(join_all(result.into_iter().map(async |def| {
+                    http_api_definition_to_grpc(token, def, self.component_service()).await
+                }))
+                .await)
             }
         }
     }
 
-    async fn get_all_api_definitions(&self) -> crate::Result<Vec<ApiDefinition>> {
-        match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc => {
-                not_available_on_grpc_api("get_all_api_definitions")
-            }
-            ApiDefinitionServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await?;
-                match client.list_definitions(&default_project.0, None).await {
-                    Ok(result) => Ok(join_all(result.into_iter().map(async |def| {
-                        http_api_definition_to_grpc(def, self.component_service()).await
-                    }))
-                    .await),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+    async fn get_all_api_definitions(
+        &self,
+        token: &Uuid,
+        project_id: &ProjectId,
+    ) -> crate::Result<Vec<ApiDefinition>> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("get_all_api_definitions"),
+            GolemClientProtocol::Http => {
+                let client = self.api_definition_http_client(token).await;
+
+                let result = client.list_definitions(&project_id.0, None).await?;
+
+                Ok(join_all(result.into_iter().map(async |def| {
+                    http_api_definition_to_grpc(token, def, self.component_service()).await
+                }))
+                .await)
             }
         }
     }
 
     async fn delete_api_definition(
         &self,
+        token: &Uuid,
+        project_id: &ProjectId,
         request: DeleteApiDefinitionRequest,
     ) -> crate::Result<()> {
-        match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("delete_api_definition"),
-            ApiDefinitionServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await?;
-                match client
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("delete_api_definition"),
+            GolemClientProtocol::Http => {
+                let client = self.api_definition_http_client(token).await;
+
+                client
                     .delete_definition(
-                        &default_project.0,
+                        &project_id.0,
                         &request.api_definition_id.unwrap().value,
                         &request.version,
                     )
-                    .await
-                {
-                    Ok(_) => Ok(()),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+
+                Ok(())
             }
         }
     }
 
     async fn create_or_update_api_deployment(
         &self,
+        token: &Uuid,
         request: ApiDeploymentRequest,
     ) -> crate::Result<ApiDeployment> {
-        match self.api_deployment_client() {
-            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("create_api_deployment"),
-            ApiDeploymentServiceClient::Http(client) => client
-                .deploy(&request)
-                .await
-                .map_err(|error| anyhow!("{error:?}")),
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("create_api_deployment"),
+            GolemClientProtocol::Http => {
+                let client = self.api_deployment_http_client(token).await;
+
+                let result = client.deploy(&request).await?;
+
+                Ok(result)
+            }
         }
     }
 
-    async fn get_api_deployment(&self, site: &str) -> crate::Result<ApiDeployment> {
-        match self.api_deployment_client() {
-            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("get_api_deployment"),
-            ApiDeploymentServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await?;
-                client
-                    .get_deployment(&default_project.0, site)
-                    .await
-                    .map_err(|error| anyhow!("{error:?}"))
+    async fn get_api_deployment(
+        &self,
+        token: &Uuid,
+        project_id: &ProjectId,
+        site: &str,
+    ) -> crate::Result<ApiDeployment> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("get_api_deployment"),
+            GolemClientProtocol::Http => {
+                let client = self.api_deployment_http_client(token).await;
+
+                let result = client.get_deployment(&project_id.0, site).await?;
+
+                Ok(result)
             }
         }
     }
 
     async fn list_api_deployments(
         &self,
+        token: &Uuid,
+        project_id: &ProjectId,
         api_definition_id: Option<&str>,
     ) -> crate::Result<Vec<ApiDeployment>> {
-        match self.api_deployment_client() {
-            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("list_api_deployments"),
-            ApiDeploymentServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await.unwrap();
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("list_api_deployments"),
+            GolemClientProtocol::Http => {
+                let client = self.api_deployment_http_client(token).await;
 
-                client
-                    .list_deployments(&default_project.0, api_definition_id)
-                    .await
-                    .map_err(|error| anyhow!("{error:?}"))
+                let result = client
+                    .list_deployments(&project_id.0, api_definition_id)
+                    .await?;
+
+                Ok(result)
             }
         }
     }
 
-    async fn delete_api_deployment(&self, site: &str) -> crate::Result<()> {
-        match self.api_deployment_client() {
-            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("delete_api_deployment"),
-            ApiDeploymentServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await?;
-                match client.delete_deployment(&default_project.0, site).await {
-                    Ok(_) => Ok(()),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+    async fn delete_api_deployment(
+        &self,
+        token: &Uuid,
+        project_id: &ProjectId,
+        site: &str,
+    ) -> crate::Result<()> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("delete_api_deployment"),
+            GolemClientProtocol::Http => {
+                let client = self.api_deployment_http_client(token).await;
+
+                client.delete_deployment(&project_id.0, site).await?;
+
+                Ok(())
+            }
+        }
+    }
+
+    async fn undeploy_api(
+        &self,
+        token: &Uuid,
+        project_id: &ProjectId,
+        site: &str,
+        id: &str,
+        version: &str,
+    ) -> crate::Result<()> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("undeploy_api"),
+            GolemClientProtocol::Http => {
+                let client = self.api_deployment_http_client(token).await;
+
+                client
+                    .undeploy_api(&project_id.0, site, id, version)
+                    .await?;
+
+                Ok(())
             }
         }
     }
 
     async fn create_api_security_scheme(
         &self,
+        token: &Uuid,
+        project_id: &ProjectId,
         request: SecuritySchemeData,
     ) -> crate::Result<SecuritySchemeData> {
-        match self.api_security_client() {
-            ApiSecurityServiceClient::Grpc => {
-                not_available_on_grpc_api("create_api_security_scheme")
-            }
-            ApiSecurityServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await?;
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("create_api_security_scheme"),
+            GolemClientProtocol::Http => {
+                let client = self.api_security_http_client(token).await;
 
-                client
-                    .create(&default_project.0, &request)
-                    .await
-                    .map_err(|error| anyhow!("{error:?}"))
+                let result = client.create(&project_id.0, &request).await?;
+
+                Ok(result)
             }
         }
     }
 
     async fn get_api_security_scheme(
         &self,
+        token: &Uuid,
+        project_id: &ProjectId,
         security_scheme_id: &str,
     ) -> crate::Result<SecuritySchemeData> {
-        match self.api_security_client() {
-            ApiSecurityServiceClient::Grpc => not_available_on_grpc_api("get_api_security_scheme"),
-            ApiSecurityServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await?;
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("get_api_security_scheme"),
+            GolemClientProtocol::Http => {
+                let client = self.api_security_http_client(token).await;
 
-                client
-                    .get(&default_project.0, security_scheme_id)
-                    .await
-                    .map_err(|error| anyhow!("{error:?}"))
+                let result = client.get(&project_id.0, security_scheme_id).await?;
+
+                Ok(result)
             }
         }
     }
@@ -1266,23 +1374,6 @@ pub trait WorkerService: WorkerServiceInternal {
     }
 
     async fn kill(&self);
-
-    async fn undeploy_api(&self, site: &str, id: &str, version: &str) -> crate::Result<()> {
-        match self.api_deployment_client() {
-            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("undeploy_api"),
-            ApiDeploymentServiceClient::Http(client) => {
-                let default_project = self.cloud_service().get_default_project().await?;
-
-                match client
-                    .undeploy_api(&default_project.0, site, id, version)
-                    .await
-                {
-                    Ok(_) => Ok(()),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
-            }
-        }
-    }
 }
 
 async fn new_worker_grpc_client(host: &str, grpc_port: u16) -> WorkerServiceGrpcClient<Channel> {
@@ -1296,128 +1387,6 @@ async fn new_worker_grpc_client(host: &str, grpc_port: u16) -> WorkerServiceGrpc
     WorkerServiceGrpcClient::new(channel)
         .send_compressed(CompressionEncoding::Gzip)
         .accept_compressed(CompressionEncoding::Gzip)
-}
-
-fn new_worker_http_client(
-    host: &str,
-    http_port: u16,
-    cloud_service: &Arc<dyn CloudService>,
-) -> Arc<WorkerServiceHttpClientLive> {
-    Arc::new(WorkerServiceHttpClientLive {
-        context: Context {
-            client: new_reqwest_client(),
-            base_url: Url::parse(&format!("http://{host}:{http_port}"))
-                .expect("Failed to parse url"),
-            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
-        },
-    })
-}
-
-async fn new_worker_client(
-    protocol: GolemClientProtocol,
-    host: &str,
-    grpc_port: u16,
-    http_port: u16,
-    cloud_service: &Arc<dyn CloudService>,
-) -> WorkerServiceClient {
-    match protocol {
-        GolemClientProtocol::Grpc => {
-            WorkerServiceClient::Grpc(new_worker_grpc_client(host, grpc_port).await)
-        }
-        GolemClientProtocol::Http => {
-            WorkerServiceClient::Http(new_worker_http_client(host, http_port, cloud_service))
-        }
-    }
-}
-
-fn new_api_definition_http_client(
-    host: &str,
-    http_port: u16,
-    cloud_service: &Arc<dyn CloudService>,
-) -> Arc<ApiDefinitionServiceHttpClientLive> {
-    Arc::new(ApiDefinitionServiceHttpClientLive {
-        context: Context {
-            client: new_reqwest_client(),
-            base_url: Url::parse(&format!("http://{host}:{http_port}"))
-                .expect("Failed to parse url"),
-            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
-        },
-    })
-}
-
-async fn new_api_definition_client(
-    protocol: GolemClientProtocol,
-    host: &str,
-    _grpc_port: u16,
-    http_port: u16,
-    cloud_service: &Arc<dyn CloudService>,
-) -> ApiDefinitionServiceClient {
-    match protocol {
-        GolemClientProtocol::Grpc => ApiDefinitionServiceClient::Grpc,
-        GolemClientProtocol::Http => ApiDefinitionServiceClient::Http(
-            new_api_definition_http_client(host, http_port, cloud_service),
-        ),
-    }
-}
-
-fn new_api_deployment_http_client(
-    host: &str,
-    http_port: u16,
-    cloud_service: &Arc<dyn CloudService>,
-) -> Arc<ApiDeploymentServiceHttpClientLive> {
-    Arc::new(ApiDeploymentServiceHttpClientLive {
-        context: Context {
-            client: new_reqwest_client(),
-            base_url: Url::parse(&format!("http://{host}:{http_port}"))
-                .expect("Failed to parse url"),
-            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
-        },
-    })
-}
-
-async fn new_api_deployment_client(
-    protocol: GolemClientProtocol,
-    host: &str,
-    http_port: u16,
-    cloud_service: &Arc<dyn CloudService>,
-) -> ApiDeploymentServiceClient {
-    match protocol {
-        GolemClientProtocol::Grpc => ApiDeploymentServiceClient::Grpc,
-        GolemClientProtocol::Http => ApiDeploymentServiceClient::Http(
-            new_api_deployment_http_client(host, http_port, cloud_service),
-        ),
-    }
-}
-
-fn new_api_security_http_client(
-    host: &str,
-    http_port: u16,
-    cloud_service: &Arc<dyn CloudService>,
-) -> Arc<ApiSecurityServiceHttpClientLive> {
-    Arc::new(ApiSecurityServiceHttpClientLive {
-        context: Context {
-            client: new_reqwest_client(),
-            base_url: Url::parse(&format!("http://{host}:{http_port}"))
-                .expect("Failed to parse url"),
-            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
-        },
-    })
-}
-
-async fn new_api_security_client(
-    protocol: GolemClientProtocol,
-    host: &str,
-    http_port: u16,
-    cloud_service: &Arc<dyn CloudService>,
-) -> ApiSecurityServiceClient {
-    match protocol {
-        GolemClientProtocol::Grpc => ApiSecurityServiceClient::Grpc,
-        GolemClientProtocol::Http => ApiSecurityServiceClient::Http(new_api_security_http_client(
-            host,
-            http_port,
-            cloud_service,
-        )),
-    }
 }
 
 async fn wait_for_startup(
@@ -1442,8 +1411,8 @@ async fn env_vars(
     grpc_port: u16,
     custom_request_port: u16,
     component_service: &Arc<dyn ComponentService>,
-    shard_manager: &Arc<dyn ShardManager + Send + Sync>,
-    rdb: &Arc<dyn Rdb + Send + Sync>,
+    shard_manager: &Arc<dyn ShardManager>,
+    rdb: &Arc<dyn Rdb>,
     verbosity: Level,
     rdb_private_connection: bool,
     cloud_service: &Arc<dyn CloudService>,
@@ -1690,6 +1659,7 @@ fn invoke_parameters_to_grpc(parameters: Vec<ValueAndType>) -> Option<InvokePara
 }
 
 async fn http_api_definition_to_grpc(
+    token: &Uuid,
     response: golem_client::model::HttpApiDefinitionResponseData,
     component_service: &Arc<dyn ComponentService>,
 ) -> ApiDefinition {
@@ -1716,10 +1686,13 @@ async fn http_api_definition_to_grpc(
                     binding: Some(GatewayBinding {
                         component: join_option(route.binding.component.map(async |component| {
                             let response = component_service
-                                .get_components(grpc_components::v1::GetComponentsRequest {
-                                    project_id: None,
-                                    component_name: Some(component.name),
-                                })
+                                .get_components(
+                                    token,
+                                    grpc_components::v1::GetComponentsRequest {
+                                        project_id: None,
+                                        component_name: Some(component.name),
+                                    },
+                                )
                                 .await
                                 .unwrap();
                             let resolved_component = response.first().unwrap();
@@ -1794,6 +1767,7 @@ async fn join_option<F: Future>(value: Option<F>) -> Option<F::Output> {
 }
 
 async fn grpc_api_definition_request_to_http(
+    token: &Uuid,
     request: ApiDefinitionRequest,
     component_service: &Arc<dyn ComponentService>,
 ) -> golem_client::model::HttpApiDefinitionRequest {
@@ -1843,6 +1817,7 @@ async fn grpc_api_definition_request_to_http(
                                     async |versioned_component_id| {
                                         let component = component_service
                                             .get_latest_component_metadata(
+                                                token,
                                                 grpc_components::v1::GetLatestComponentRequest {
                                                     component_id: versioned_component_id
                                                         .component_id,

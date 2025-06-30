@@ -153,7 +153,7 @@ impl TracingConfig {
                 ..OutputConfig::json_flatten_span()
             },
             file_dir: None,
-            file_name: Some(format!("{}.log", name)),
+            file_name: Some(format!("{name}.log")),
             file_truncate: true,
             console: false,
             dtor_friendly: false,
@@ -242,19 +242,19 @@ pub mod directive {
     }
 
     pub fn debug(target: &str) -> Directive {
-        format!("{}=debug", target).parse().unwrap()
+        format!("{target}=debug").parse().unwrap()
     }
 
     pub fn info(target: &str) -> Directive {
-        format!("{}=info", target).parse().unwrap()
+        format!("{target}=info").parse().unwrap()
     }
 
     pub fn warn(target: &str) -> Directive {
-        format!("{}=warn", target).parse().unwrap()
+        format!("{target}=warn").parse().unwrap()
     }
 
     pub fn error(target: &str) -> Directive {
-        format!("{}=error", target).parse().unwrap()
+        format!("{target}=error").parse().unwrap()
     }
 
     pub fn default_deps() -> Vec<Directive> {

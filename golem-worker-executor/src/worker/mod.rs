@@ -62,7 +62,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit, RwLock};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, span, Instrument, Level};
+use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
 
@@ -1572,7 +1572,7 @@ impl RunningWorker {
                     },
                 );
 
-            parent
+            match parent
                 .component_service()
                 .get(
                     &parent.engine(),
@@ -1580,7 +1580,39 @@ impl RunningWorker {
                     &component_id,
                     component_version,
                 )
-                .await?
+                .await
+            {
+                Ok((component, component_metadata)) => Ok((component, component_metadata)),
+                Err(error) => {
+                    if component_version != worker_metadata.last_known_status.component_version {
+                        // An update was attempted but the targeted version does not exist
+                        warn!(
+                            "Attempting update to version {component_version} failed with {error}"
+                        );
+
+                        parent.pop_pending_update().await;
+                        Ctx::on_worker_update_failed_to_start(
+                            &parent.deps,
+                            &parent.owned_worker_id,
+                            component_version,
+                            Some(error.to_string()),
+                        )
+                        .await?;
+
+                        parent
+                            .component_service()
+                            .get(
+                                &parent.engine(),
+                                &account_id,
+                                &component_id,
+                                worker_metadata.last_known_status.component_version,
+                            )
+                            .await
+                    } else {
+                        Err(error)
+                    }
+                }
+            }?
         };
 
         let component_env = component_metadata.env.clone();

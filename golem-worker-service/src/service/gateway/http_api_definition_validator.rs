@@ -46,7 +46,7 @@ impl Display for RouteValidationError {
         )?;
 
         if let Some(ref component) = self.component {
-            write!(f, ", component: {}", component)?;
+            write!(f, ", component: {component}")?;
         }
 
         Ok(())

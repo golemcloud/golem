@@ -1739,8 +1739,7 @@ impl ComponentService for ComponentServiceDefault {
             )
             .await?
             .ok_or(ComponentError::ComponentConstraintCreateError(format!(
-                "Failed to create constraints for {}",
-                component_id
+                "Failed to create constraints for {component_id}"
             )))?;
 
         let component_constraints = ComponentConstraints {
@@ -1769,8 +1768,7 @@ impl ComponentService for ComponentServiceDefault {
             .get_constraint(&owner.to_string(), component_id.0)
             .await?
             .ok_or(ComponentError::ComponentConstraintCreateError(format!(
-                "Failed to get constraints for {}",
-                component_id
+                "Failed to get constraints for {component_id}"
             )))?;
 
         let component_constraints = ComponentConstraints {
@@ -2105,8 +2103,7 @@ fn initial_component_file_path_from_zip_entry(
 ) -> Result<ComponentFilePath, ComponentError> {
     let file_path = entry.filename().as_str().map_err(|e| {
         ComponentError::malformed_component_archive_from_message(format!(
-            "Failed to convert filename to string: {}",
-            e
+            "Failed to convert filename to string: {e}"
         ))
     })?;
 
@@ -2120,8 +2117,7 @@ fn initial_component_file_path_from_zip_entry(
 
     ComponentFilePath::from_abs_str(&format!("/{file_path}")).map_err(|e| {
         ComponentError::malformed_component_archive_from_message(format!(
-            "Failed to convert path to InitialComponentFilePath: {}",
-            e
+            "Failed to convert path to InitialComponentFilePath: {e}"
         ))
     })
 }

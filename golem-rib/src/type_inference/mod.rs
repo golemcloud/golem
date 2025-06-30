@@ -2821,7 +2821,7 @@ mod tests {
                 .into_iter()
                 .enumerate()
                 .map(|(index, typ)| AnalysedFunctionParameter {
-                    name: format!("param{}", index),
+                    name: format!("param{index}"),
                     typ,
                 })
                 .collect();

@@ -332,7 +332,7 @@ mod filesystem {
                                             GolemError::ComponentParseFailed {
                                                 component_id: component_id.clone(),
                                                 component_version,
-                                                reason: format!("{}", e),
+                                                reason: format!("{e}"),
                                             }
                                         })
                                     }
@@ -388,8 +388,7 @@ mod filesystem {
                 self.refresh_index().await?;
                 let metadata = self.index.read().await.metadata.get(&key).cloned();
                 metadata.ok_or(GolemError::unknown(format!(
-                    "No such component found: {}/{}",
-                    component_id, component_version
+                    "No such component found: {component_id}/{component_version}"
                 )))?
             };
 
@@ -414,8 +413,7 @@ mod filesystem {
                     };
                     let metadata = index.metadata.get(&key).cloned();
                     metadata.ok_or(GolemError::unknown(format!(
-                        "No such component found: {}/{}",
-                        component_id, component_version
+                        "No such component found: {component_id}/{component_version}"
                     )))?
                 }
                 None => Err(GolemError::unknown(
@@ -448,8 +446,7 @@ mod filesystem {
                 self.refresh_index().await?;
                 let metadata = self.index.read().await.metadata.get(&key).cloned();
                 metadata.ok_or(GolemError::unknown(format!(
-                    "No such component found: {}/{}",
-                    component_id, component_version
+                    "No such component found: {component_id}/{component_version}"
                 )))?
             };
 
@@ -831,7 +828,7 @@ mod grpc {
                                         GolemError::ComponentParseFailed {
                                             component_id: component_id_clone2,
                                             component_version,
-                                            reason: format!("{}", e),
+                                            reason: format!("{e}"),
                                         }
                                     })
                                 })
@@ -1208,7 +1205,7 @@ mod grpc {
         GolemError::ComponentDownloadFailed {
             component_id: component_id.clone(),
             component_version,
-            reason: format!("{}", error),
+            reason: format!("{error}"),
         }
     }
 
@@ -1218,7 +1215,7 @@ mod grpc {
     ) -> GolemError {
         GolemError::GetLatestVersionOfComponentFailed {
             component_id: component_id.clone(),
-            reason: format!("{}", error),
+            reason: format!("{error}"),
         }
     }
 

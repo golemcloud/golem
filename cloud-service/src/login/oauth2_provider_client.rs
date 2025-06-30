@@ -127,7 +127,7 @@ async fn github_user_email(
 fn add_headers(request: reqwest::RequestBuilder, access_token: &str) -> reqwest::RequestBuilder {
     request
         .header("Accept", "application/json")
-        .header("Authorization", format!("token {}", access_token))
+        .header("Authorization", format!("token {access_token}"))
         // see https://docs.github.com/en/rest/overview/resources-in-the-rest-api?apiVersion=2022-11-28#user-agent-required
         .header("User-Agent", "Golem Cloud")
         .header("X-GitHub-Api-Version", "2022-11-28")

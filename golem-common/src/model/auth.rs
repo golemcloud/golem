@@ -76,7 +76,7 @@ impl TryFrom<i32> for Role {
     type Error = String;
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
-        Role::from_repr(value).ok_or_else(|| format!("Invalid role: {}", value))
+        Role::from_repr(value).ok_or_else(|| format!("Invalid role: {value}"))
     }
 }
 
@@ -87,7 +87,7 @@ impl FromStr for Role {
         match s {
             "Admin" => Ok(Role::Admin),
             "MarketingAdmin" => Ok(Role::MarketingAdmin),
-            _ => Err(format!("Unknown role id: {}", s)),
+            _ => Err(format!("Unknown role id: {s}")),
         }
     }
 }
@@ -205,7 +205,7 @@ impl From<ProjectAction> for i32 {
 impl TryFrom<i32> for ProjectAction {
     type Error = String;
     fn try_from(value: i32) -> Result<Self, Self::Error> {
-        ProjectAction::from_repr(value).ok_or_else(|| format!("Invalid project action: {}", value))
+        ProjectAction::from_repr(value).ok_or_else(|| format!("Invalid project action: {value}"))
     }
 }
 
@@ -318,7 +318,7 @@ impl TryFrom<ProjectAction> for ProjectPermisison {
             ProjectAction::ViewApiDomain => Ok(Self::ViewApiDomain),
             ProjectAction::DeleteApiDomain => Ok(Self::DeleteApiDomain),
             ProjectAction::BatchUpdatePluginInstallations | ProjectAction::ViewProject => {
-                Err(format!("Unknown project permission: {:?}", value))
+                Err(format!("Unknown project permission: {value:?}"))
             }
         }
     }
@@ -394,7 +394,7 @@ impl FromStr for ProjectPermisison {
             "UpsertApiDomain" => Ok(ProjectPermisison::UpsertApiDomain),
             "ViewApiDomain" => Ok(ProjectPermisison::ViewApiDomain),
             "DeleteApiDomain" => Ok(ProjectPermisison::DeleteApiDomain),
-            _ => Err(format!("Unknown project permission: {}", s)),
+            _ => Err(format!("Unknown project permission: {s}")),
         }
     }
 }

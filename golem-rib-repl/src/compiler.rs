@@ -100,8 +100,8 @@ pub enum InstanceKey {
 impl Display for InstanceKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InstanceKey::Worker(key) => write!(f, "{}", key),
-            InstanceKey::Resource(key) => write!(f, "{}", key),
+            InstanceKey::Worker(key) => write!(f, "{key}"),
+            InstanceKey::Resource(key) => write!(f, "{key}"),
         }
     }
 }

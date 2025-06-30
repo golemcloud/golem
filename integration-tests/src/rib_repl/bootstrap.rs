@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use golem_common::base_model::{ComponentId, TargetWorkerId};
 use golem_rib_repl::WorkerFunctionInvoke;
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
-use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
@@ -34,12 +34,14 @@ impl RibDependencyManager for TestRibReplDependencyManager {
     ) -> anyhow::Result<ComponentDependency> {
         let component_id = self
             .dependencies
+            .admin()
             .component(component_name.as_str())
             .store()
             .await;
 
         let metadata = self
             .dependencies
+            .admin()
             .get_latest_component_metadata(&component_id)
             .await;
 
@@ -92,6 +94,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
             });
 
         self.embedded_worker_executor
+            .admin()
             .invoke_and_await_typed(target_worker_id, function_name, args)
             .await
             .map_err(|e| anyhow!("Failed to invoke function: {:?}", e))
