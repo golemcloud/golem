@@ -347,6 +347,21 @@ impl ExternalOperations<Context> for Context {
     ) -> Result<(), Error> {
         DurableWorkerCtx::<Context>::on_shard_assignment_changed(this).await
     }
+
+    async fn on_worker_update_failed_to_start<T: HasAll<Context> + Send + Sync>(
+        this: &T,
+        owned_worker_id: &OwnedWorkerId,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    ) -> Result<(), GolemError> {
+        DurableWorkerCtx::<Context>::on_worker_update_failed_to_start(
+            this,
+            owned_worker_id,
+            target_version,
+            details,
+        )
+        .await
+    }
 }
 
 #[async_trait]

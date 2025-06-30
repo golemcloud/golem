@@ -902,3 +902,59 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     check!(metadata.last_known_status.failed_updates.is_empty());
     check!(metadata.last_known_status.successful_updates.len() == 1);
 }
+
+#[test]
+#[tracing::instrument]
+async fn auto_update_on_idle_to_non_existing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
+
+    let component_id = executor.component("update-test-v1").unique().store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "auto_update_on_idle")
+        .await;
+    let _ = executor.log_output(&worker_id).await;
+
+    let target_version = executor
+        .update_component(&component_id, "update-test-v2")
+        .await;
+    info!("Updated component to version {target_version}");
+
+    executor
+        .auto_update_worker(&worker_id, target_version)
+        .await;
+
+    let result1 = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
+        .await
+        .unwrap();
+
+    // Now we try to update to version target_version + 1, which does not exist.
+    executor
+        .auto_update_worker(&worker_id, target_version + 1)
+        .await;
+
+    // We expect this update to fail, and the component to remain on `target_version` and remain
+    // responsible to further invocations:
+
+    let result2 = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
+        .await
+        .unwrap();
+
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    // Expectation: the worker has no history so the update succeeds and then calling f2 returns
+    // the current state which is 0
+    check!(result1[0] == Value::U64(0));
+    check!(result2[0] == Value::U64(0));
+    check!(metadata.last_known_status.component_version == target_version);
+    check!(metadata.last_known_status.pending_updates.is_empty());
+    check!(metadata.last_known_status.failed_updates.len() == 1);
+    check!(metadata.last_known_status.successful_updates.len() == 1);
+}
