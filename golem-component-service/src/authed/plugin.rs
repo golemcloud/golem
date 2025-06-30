@@ -42,14 +42,6 @@ impl AuthedPluginService {
         }
     }
 
-    pub async fn list_plugins(
-        &self,
-        auth: &AuthCtx,
-    ) -> Result<Vec<PluginDefinition>, ComponentError> {
-        let owner = self.get_owner(auth).await?;
-        self.plugin_service.list_plugins(&owner).await
-    }
-
     pub async fn list_plugins_for_scope(
         &self,
         auth: &AuthCtx,
@@ -65,6 +57,7 @@ impl AuthedPluginService {
     pub async fn list_plugin_versions(
         &self,
         auth: &AuthCtx,
+        account_id: AccountId,
         name: &str,
     ) -> Result<Vec<PluginDefinition>, ComponentError> {
         let owner = self.get_owner(auth).await?;

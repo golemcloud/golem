@@ -17,7 +17,7 @@ service PluginService {
 }
 
 message ListPluginsRequest {
-  optional golem.component.CloudPluginScope scope = 1;
+  golem.component.PluginScope scope = 1;
 }
 
 message ListPluginVersionsRequest {

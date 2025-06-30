@@ -51,18 +51,15 @@ impl PluginGrpcApi {
     ) -> Result<Vec<PluginDefinition>, ComponentError> {
         let auth = auth(metadata)?;
 
-        let plugins = match &request.scope {
-            Some(scope) => {
-                let scope = (*scope)
-                    .try_into()
-                    .map_err(|err| bad_request_error(&format!("Invalid plugin scope: {err}")))?;
+        let scope = request
+            .scope
+            .ok_or(bad_request_error("no scope found in request"))?
+            .try_into()
+            .map_err(|err| bad_request_error(&format!("Invalid plugin scope: {err}")))?;
 
-                self.plugin_service
-                    .list_plugins_for_scope(&auth, &scope)
-                    .await?
-            }
-            None => self.plugin_service.list_plugins(&auth).await?,
-        };
+        let plugins = self.plugin_service
+            .list_plugins_for_scope(&auth, &scope)
+            .await?;
 
         Ok(plugins.into_iter().map(|pd| pd.into()).collect())
     }
