@@ -23,6 +23,6 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2204
     steps:
       - name: Setup dieharder
-        run: apt-get update && apt-get install dieharder
+        run: sudo apt-get update && sudo apt-get install dieharder
       - name: Run dieharder
         run: dieharder -a
