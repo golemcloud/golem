@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::SqlDateTime;
+use crate::repo::model::{AuditFields, BindFields, RevisionAuditFields, SqlDateTime};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_service_base::db::{Pool, PoolApi};
@@ -29,8 +29,18 @@ pub struct ApplicationRecord {
     pub application_id: Uuid,
     pub name: String,
     pub account_id: Uuid,
-    pub created_at: SqlDateTime,
-    pub created_by: Uuid,
+    #[sqlx(flatten)]
+    pub audit: AuditFields,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ApplicationRevisionRecord {
+    pub application_id: Uuid,
+    pub revision_id: i64,
+    pub name: String,
+    pub account_id: Uuid,
+    #[sqlx(flatten)]
+    pub audit: RevisionAuditFields,
 }
 
 #[async_trait]
@@ -123,9 +133,9 @@ impl ApplicationRepo for DbApplicationRepo<golem_service_base::db::postgres::Pos
         self.with_ro("get_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT application_id, name, account_id, created_at, created_by
+                    SELECT application_id, name, account_id, created_at, updated_at, deleted_at, modified_by
                     FROM applications
-                    WHERE account_id = $1 AND name = $2
+                    WHERE account_id = $1 AND name = $2 AND deleted_at IS NULL
                 "#})
                 .bind(owner_account_id)
                 .bind(name),
@@ -147,15 +157,14 @@ impl ApplicationRepo for DbApplicationRepo<golem_service_base::db::postgres::Pos
             self.with_rw("ensure - insert")
                 .fetch_one_as(
                     sqlx::query_as(indoc! {r#"
-                        INSERT INTO applications (application_id, name, account_id, created_at, created_by)
-                        VALUES ($1, $2, $3, $4, $5)
-                        RETURNING application_id, name, account_id, created_at, created_by
+                        INSERT INTO applications (application_id, name, account_id, created_at, updated_at, deleted_at, modified_by)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by
                     "#})
                         .bind(Uuid::new_v4())
                         .bind(name)
                         .bind(owner_account_id)
-                        .bind(SqlDateTime::now())
-                        .bind(user_account_id)
+                        .bind_audit_fields(AuditFields::new(*user_account_id))
             )
             .await
         };

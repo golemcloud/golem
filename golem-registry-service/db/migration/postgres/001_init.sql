@@ -37,25 +37,51 @@ CREATE TABLE plan_usage_limits
         FOREIGN KEY (usage_type) REFERENCES usage_types
 );
 
-CREATE INDEX plan_usage_limits_usage_type_idx ON plan_usage_limits (usage_type);
+CREATE INDEX plan_usage_limits_usage_type_idx
+    ON plan_usage_limits (usage_type);
 
 CREATE TABLE accounts
 (
-    account_id UUID      NOT NULL,
-    name       TEXT      NOT NULL,
-    email      TEXT      NOT NULL,
-    created_at TIMESTAMP NOT NULL,
-    plan_id    UUID      NOT NULL,
-    deleted    BOOLEAN   NOT NULL,
+    account_id  UUID      NOT NULL,
+    email       TEXT      NOT NULL,
+
+    created_at  TIMESTAMP NOT NULL,
+    updated_at  TIMESTAMP NOT NULL,
+    deleted_at  TIMESTAMP,
+    modified_by UUID      NOT NULL,
+
+    name        TEXT      NOT NULL,
+    plan_id     UUID      NOT NULL,
+
     CONSTRAINT accounts_pk
         PRIMARY KEY (account_id),
-    CONSTRAINT accounts_email_uk
-        UNIQUE (email),
     CONSTRAINT accounts_plans_fk
         FOREIGN KEY (plan_id) REFERENCES plans
 );
 
+CREATE UNIQUE INDEX accounts_email_uk
+    ON accounts (email)
+    WHERE deleted_at IS NULL;
+
 CREATE INDEX accounts_plan_id_idx ON accounts (plan_id);
+
+CREATE TABLE account_revisions
+(
+    account_id  UUID      NOT NULL,
+    revision_id BIGINT    NOT NULL,
+    email       TEXT      NOT NULL,
+
+    created_at  TIMESTAMP NOT NULL,
+    deleted     BOOLEAN   NOT NULL,
+
+    plan_id     UUID      NOT NULL,
+    name        TEXT      NOT NULL,
+
+    CONSTRAINT account_revisions_pk
+        PRIMARY KEY (account_id, revision_id),
+    CONSTRAINT account_revisions_fk
+        FOREIGN KEY (account_id) REFERENCES accounts
+);
 
 CREATE TABLE tokens
 (
@@ -141,8 +167,12 @@ CREATE TABLE applications
     application_id UUID      NOT NULL,
     name           TEXT      NOT NULL,
     account_id     UUID      NOT NULL,
+
     created_at     TIMESTAMP NOT NULL,
-    created_by     UUID      NOT NULL,
+    updated_at     TIMESTAMP NOT NULL,
+    deleted_at     TIMESTAMP,
+    modified_by    UUID      NOT NULL,
+
     CONSTRAINT applications_pk
         PRIMARY KEY (application_id),
     CONSTRAINT applications_name_uk
@@ -151,39 +181,62 @@ CREATE TABLE applications
         FOREIGN KEY (account_id) REFERENCES accounts
 );
 
+CREATE TABLE application_revisions
+(
+    application_id UUID      NOT NULL,
+    revision_id    BIGINT    NOT NULL,
+    name           TEXT      NOT NULL,
+    account_id     UUID      NOT NULL,
+
+    created_at     TIMESTAMP NOT NULL,
+    created_by     UUID      NOT NULL,
+    deleted        BOOLEAN   NOT NULL,
+
+    CONSTRAINT application_revisions_pk
+        PRIMARY KEY (application_id, revision_id),
+    CONSTRAINT application_revisions_applications_fk
+        FOREIGN KEY (application_id) REFERENCES applications
+);
+
+CREATE INDEX application_revisions_name_idx ON application_revisions (application_id, name);
+
 CREATE TABLE environments
 (
     environment_id      UUID      NOT NULL,
     name                TEXT      NOT NULL,
     application_id      UUID      NOT NULL,
+
     created_at          TIMESTAMP NOT NULL,
-    created_by          UUID      NOT NULL,
-    current_revision_id BIGINT,
+    updated_at          TIMESTAMP NOT NULL,
+    deleted_at          TIMESTAMP,
+    modified_by         UUID      NOT NULL,
+
+    current_revision_id BIGINT    NOT NULL,
+
     CONSTRAINT environments_pk
         PRIMARY KEY (environment_id),
-    CONSTRAINT environments_app_name_uk
-        UNIQUE (application_id, name),
     CONSTRAINT environments_applications_fk
         FOREIGN KEY (application_id) REFERENCES applications
-    -- NOTE: To avoid circular constraints (or having more tables), this is only enforced by the app,
-    --       but we still have an index for making joins fast
-    -- CONSTRAINT environment_revisions_fk
-    --     FOREIGN KEY (environment_id, current_revision) REFERENCES environment_revisions (environment_id, revision_id)
 );
 
-CREATE INDEX environment_current_revision_idx
-    ON environments (environment_id, current_revision_id);
+CREATE UNIQUE INDEX environments_app_name_uk
+    ON environments (application_id, name)
+    WHERE deleted_at IS NULL;
 
 CREATE TABLE environment_revisions
 (
     environment_id      UUID      NOT NULL,
     revision_id         BIGINT    NOT NULL,
+
     created_at          TIMESTAMP NOT NULL,
     created_by          UUID      NOT NULL,
+    deleted             BOOLEAN   NOT NULL,
+
     compatibility_check BOOL      NOT NULL,
     version_check       BOOL      NOT NULL,
     security_overrides  BOOL      NOT NULL,
     hash                BYTEA     NOT NULL,
+
     CONSTRAINT environment_revisions_pk
         PRIMARY KEY (environment_id, revision_id),
     CONSTRAINT environment_revisions_fk
@@ -281,7 +334,9 @@ CREATE TABLE current_deployments
     environment_id      UUID   NOT NULL,
     current_revision_id BIGINT NOT NULL,
     CONSTRAINT current_deployments_pk
-        PRIMARY KEY (environment_id, current_revision_id)
+        PRIMARY KEY (environment_id, current_revision_id),
+    CONSTRAINT current_deployments_deployments_revisions_fk
+        FOREIGN KEY (environment_id, current_revision_id) REFERENCES deployment_revisions (environment_id, revision_id)
 );
 
 CREATE TABLE deployment_component_revisions

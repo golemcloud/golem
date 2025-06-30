@@ -110,21 +110,21 @@ async fn test_application_ensure_concurrent(deps: &Deps) {
 }
 
 #[test]
-async fn test_environment_ensure(deps: &Deps) {
-    crate::repo::common::test_environment_ensure(deps).await;
+async fn test_environment_create(deps: &Deps) {
+    crate::repo::common::test_environment_create(deps).await;
 }
 
 #[test]
-async fn test_environment_ensure_concurrent(deps: &Deps) {
-    crate::repo::common::test_environment_ensure_concurrent(deps).await;
+async fn test_environment_create_concurrently(deps: &Deps) {
+    crate::repo::common::test_environment_create_concurrently(deps).await;
 }
 
 #[test]
-async fn test_create_environment_revision(deps: &Deps) {
-    crate::repo::common::test_create_environment_revision(deps).await;
+async fn test_environment_update(deps: &Deps) {
+    crate::repo::common::test_environment_update(deps).await;
 }
 
 #[test]
-async fn test_create_environment_revisions_concurrently(deps: &Deps) {
-    crate::repo::common::test_create_environment_revisions_concurrently(deps).await;
+async fn test_environment_update_concurrently(deps: &Deps) {
+    crate::repo::common::test_environment_update_concurrently(deps).await;
 }

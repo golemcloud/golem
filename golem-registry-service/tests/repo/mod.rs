@@ -16,10 +16,10 @@ use crate::Tracing;
 use golem_registry_service::repo::account::{AccountRecord, AccountRepo};
 use golem_registry_service::repo::application::{ApplicationRecord, ApplicationRepo};
 use golem_registry_service::repo::environment::{
-    EnvironmentCurrentRevisionRecord, EnvironmentRepo,
+    EnvironmentCurrentRevisionRecord, EnvironmentRepo, EnvironmentRevisionRecord,
 };
+use golem_registry_service::repo::model::{AuditFields, RevisionAuditFields};
 use golem_registry_service::repo::plan::{PlanRecord, PlanRepository};
-use golem_registry_service::repo::SqlDateTime;
 use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
@@ -61,10 +61,10 @@ impl Deps {
         let account_id = Uuid::new_v4();
         self.account_repo
             .create(AccountRecord {
-                account_id: account_id,
-                name: format!("Test Account {}", account_id),
+                account_id,
                 email: format!("test-{}@golem", account_id),
-                created_at: SqlDateTime::now(),
+                audit: AuditFields::new(account_id),
+                name: format!("Test Account {}", account_id),
                 plan_id: self.test_plan_id(),
             })
             .await
@@ -87,8 +87,21 @@ impl Deps {
         let app = self.create_application().await;
         let env_name = format!("env-{}", Uuid::new_v4());
         self.environment_repo
-            .ensure(&app.created_by, &app.application_id, &env_name)
+            .create(
+                &app.application_id,
+                &env_name,
+                EnvironmentRevisionRecord {
+                    environment_id: Uuid::new_v4(),
+                    revision_id: 0,
+                    audit: RevisionAuditFields::new(app.audit.modified_by),
+                    compatibility_check: false,
+                    version_check: false,
+                    security_overrides: false,
+                    hash: blake3::hash("test".as_bytes()).into(),
+                },
+            )
             .await
+            .unwrap()
             .unwrap()
     }
 }

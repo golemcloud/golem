@@ -17,18 +17,19 @@ use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures_util::future::join_all;
 use golem_registry_service::repo::account::AccountRecord;
-use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
-use golem_registry_service::repo::SqlDateTime;
+use golem_registry_service::repo::environment::{
+    EnvironmentCurrentRevisionRecord, EnvironmentRevisionRecord,
+};
+use golem_registry_service::repo::model::{AuditFields, RevisionAuditFields, SqlDateTime};
 use uuid::Uuid;
-
 // Common test cases -------------------------------------------------------------------------------
 
 pub async fn test_create_and_get_account(deps: &Deps) {
     let account = AccountRecord {
         account_id: Uuid::new_v4(),
-        name: Uuid::new_v4().to_string(),
         email: Uuid::new_v4().to_string(),
-        created_at: SqlDateTime::now(),
+        audit: AuditFields::new(Uuid::new_v4()),
+        name: Uuid::new_v4().to_string(),
         plan_id: deps.test_plan_id(),
     };
 
@@ -40,9 +41,9 @@ pub async fn test_create_and_get_account(deps: &Deps) {
         .account_repo
         .create(AccountRecord {
             account_id: Uuid::new_v4(),
-            name: Uuid::new_v4().to_string(),
             email: account.email.clone(),
-            created_at: SqlDateTime::now(),
+            audit: AuditFields::new(Uuid::new_v4()),
+            name: Uuid::new_v4().to_string(),
             plan_id: deps.test_plan_id(),
         })
         .await
@@ -87,8 +88,10 @@ pub async fn test_application_ensure(deps: &Deps) {
 
     check!(app.name == app_name);
     check!(app.account_id == owner.account_id);
-    check!(app.created_by == user.account_id);
-    check!(app.created_at.as_utc() >= &now);
+    check!(app.audit.modified_by == user.account_id);
+    check!(app.audit.created_at.as_utc() >= &now);
+    check!(app.audit.created_at == app.audit.updated_at);
+    check!(app.audit.deleted_at.is_none());
 
     let app_2 = deps
         .application_repo
@@ -138,38 +141,39 @@ pub async fn test_application_ensure_concurrent(deps: &Deps) {
     }
 }
 
-pub async fn test_environment_ensure(deps: &Deps) {
+pub async fn test_environment_create(deps: &Deps) {
     let now = Utc::now();
     let user = deps.create_account().await;
     let app = deps.create_application().await;
     let env_name = "local";
 
+    assert!(deps
+        .environment_repo
+        .get_by_name(&app.application_id, &env_name)
+        .await
+        .unwrap()
+        .is_none());
+
+    let revision_0 = EnvironmentRevisionRecord {
+        environment_id: Uuid::new_v4(),
+        revision_id: 0,
+        audit: RevisionAuditFields::new(user.account_id),
+        compatibility_check: false,
+        version_check: false,
+        security_overrides: false,
+        hash: blake3::hash("test".as_bytes()).into(),
+    };
+
     let env = deps
         .environment_repo
-        .ensure(&user.account_id, &app.application_id, env_name)
+        .create(&app.application_id, &env_name, revision_0.clone())
         .await
         .unwrap();
+    let_assert!(Some(env) = env);
 
     check!(env.name == env_name);
     check!(env.application_id == app.application_id);
-    check!(env.environment_created_at.as_utc() >= &now);
-    check!(env.environment_created_by == user.account_id);
-    check!(env.current_revision_id.is_none());
-    check!(env.created_at.is_none());
-    check!(env.created_by.is_none());
-    check!(env.compatibility_check.is_none());
-    check!(env.version_check.is_none());
-    check!(env.security_overrides.is_none());
-    check!(env.hash.is_none());
-
-    let another_user = deps.create_account().await;
-    let env_ensured_by_other_user = deps
-        .environment_repo
-        .ensure(&another_user.account_id, &app.application_id, env_name)
-        .await
-        .unwrap();
-
-    check!(env == env_ensured_by_other_user);
+    check!(env.revision == revision_0);
 
     let env_by_name = deps
         .environment_repo
@@ -181,14 +185,14 @@ pub async fn test_environment_ensure(deps: &Deps) {
 
     let env_by_id = deps
         .environment_repo
-        .get_by_id(&env.environment_id)
+        .get_by_id(&env.revision.environment_id)
         .await
         .unwrap();
     let_assert!(Some(env_by_id) = env_by_id);
     check!(env == env_by_id);
 }
 
-pub async fn test_environment_ensure_concurrent(deps: &Deps) {
+pub async fn test_environment_create_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application().await;
     let env_name = "local";
@@ -200,7 +204,19 @@ pub async fn test_environment_ensure_concurrent(deps: &Deps) {
                 let deps = deps.clone();
                 async move {
                     deps.environment_repo
-                        .ensure(&user.account_id, &app.application_id, env_name)
+                        .create(
+                            &app.application_id,
+                            &env_name,
+                            EnvironmentRevisionRecord {
+                                environment_id: Uuid::new_v4(),
+                                revision_id: 0,
+                                audit: RevisionAuditFields::new(user.account_id),
+                                compatibility_check: false,
+                                version_check: false,
+                                security_overrides: false,
+                                hash: blake3::hash("test".as_bytes()).into(),
+                            },
+                        )
                         .await
                 }
             })
@@ -209,122 +225,128 @@ pub async fn test_environment_ensure_concurrent(deps: &Deps) {
     .await;
 
     assert_eq!(results.len(), concurrency);
-    let env = &results[0];
-    assert!(env.is_ok());
-
-    for result in &results {
-        check!(env == result);
-    }
+    let created = results
+        .iter()
+        .filter(|result| matches!(result, Ok(Some(_))))
+        .count();
+    let skipped = results
+        .iter()
+        .filter(|result| matches!(result, Ok(None)))
+        .count();
+    check!(created == 1);
+    check!(skipped == concurrency - 1);
 }
 
-pub async fn test_create_environment_revision(deps: &Deps) {
+pub async fn test_environment_update(deps: &Deps) {
     let user = deps.create_account().await;
-    let env_no_revision = deps.create_env().await;
-    assert!(env_no_revision.current_revision_id.is_none());
-    assert!(env_no_revision.to_revision().is_none());
+    let env_rev_0 = deps.create_env().await;
 
-    let revision_0 = EnvironmentRevisionRecord {
-        environment_id: env_no_revision.environment_id,
-        revision_id: 0,
-        created_at: SqlDateTime::now(),
-        created_by: user.account_id,
+    let env_rev_1 = EnvironmentRevisionRecord {
+        environment_id: env_rev_0.revision.environment_id,
+        revision_id: 1,
+        audit: RevisionAuditFields::new(user.account_id),
         compatibility_check: true,
         version_check: true,
         security_overrides: false,
         hash: blake3::hash("test".as_bytes()).into(),
     };
 
-    let revision_0_created = deps
-        .environment_repo
-        .create_revision(env_no_revision.current_revision_id, revision_0.clone())
-        .await
-        .unwrap();
-    let_assert!(Some(revision_0_created) = revision_0_created);
-    assert!(revision_0 == revision_0_created);
-
-    let env_with_rev_0 = deps
-        .environment_repo
-        .ensure(
-            &user.account_id,
-            &env_no_revision.application_id,
-            &env_no_revision.name,
-        )
-        .await
-        .unwrap();
-    let_assert!(Some(rev_0_from_ensure) = env_with_rev_0.to_revision());
-    assert!(rev_0_from_ensure == revision_0_created);
-
-    let retry_of_rev_0 = deps
-        .environment_repo
-        .create_revision(env_no_revision.current_revision_id, revision_0.clone())
-        .await
-        .unwrap();
-    assert!(retry_of_rev_0.is_none());
-
-    let mut revision_1 = EnvironmentRevisionRecord {
-        environment_id: env_no_revision.environment_id,
-        revision_id: 0, // NOTE: this is expected to be overwritten by the repo
-        created_at: SqlDateTime::now(),
-        created_by: user.account_id,
-        compatibility_check: false,
-        version_check: false,
-        security_overrides: true,
-        hash: blake3::hash("test_2".as_bytes()).into(),
-    };
-
     let revision_1_created = deps
         .environment_repo
-        .create_revision(env_with_rev_0.current_revision_id, revision_1.clone())
+        .update(env_rev_0.revision.revision_id, env_rev_1.clone())
         .await
         .unwrap();
     let_assert!(Some(revision_1_created) = revision_1_created);
-    assert!(revision_1_created.revision_id == 1);
-    revision_1.revision_id = revision_1_created.revision_id;
-    assert!(revision_1 == revision_1_created);
+    assert!(env_rev_1 == revision_1_created.revision);
+    assert!(env_rev_0.name == revision_1_created.name);
+    assert!(env_rev_0.application_id == revision_1_created.application_id);
 
-    let env_with_rev_1 = deps
+    let revision_1_retry = deps
         .environment_repo
-        .ensure(
-            &user.account_id,
-            &env_no_revision.application_id,
-            &env_no_revision.name,
-        )
+        .update(env_rev_0.revision.revision_id, env_rev_1.clone())
         .await
         .unwrap();
-    let_assert!(Some(rev_1_from_ensure) = env_with_rev_1.to_revision());
-    assert!(rev_1_from_ensure == revision_1_created);
+    assert!(revision_1_retry.is_none());
 
-    let retry_of_rev_1 = deps
+    let rev_1_by_name = deps
         .environment_repo
-        .create_revision(env_no_revision.current_revision_id, revision_1.clone())
+        .get_by_name(&env_rev_0.application_id, &env_rev_0.name)
         .await
         .unwrap();
-    assert!(retry_of_rev_1.is_none());
+    let_assert!(Some(rev_1_by_name) = rev_1_by_name);
+    assert!(env_rev_1 == rev_1_by_name.revision);
+    assert!(env_rev_0.name == rev_1_by_name.name);
+    assert!(env_rev_0.application_id == rev_1_by_name.application_id);
+
+    let rev_1_by_id = deps
+        .environment_repo
+        .get_by_id(&env_rev_1.environment_id)
+        .await
+        .unwrap();
+    let_assert!(Some(rev_1_by_id) = rev_1_by_id);
+    assert!(env_rev_1 == rev_1_by_id.revision);
+    assert!(env_rev_0.name == rev_1_by_id.name);
+    assert!(env_rev_0.application_id == rev_1_by_id.application_id);
+
+    let env_rev_2 = EnvironmentRevisionRecord {
+        environment_id: env_rev_0.revision.environment_id,
+        revision_id: 2,
+        audit: RevisionAuditFields::new(user.account_id),
+        compatibility_check: true,
+        version_check: true,
+        security_overrides: false,
+        hash: blake3::hash("test".as_bytes()).into(),
+    };
+
+    let revision_2_created = deps
+        .environment_repo
+        .update(revision_1_created.revision.revision_id, env_rev_2.clone())
+        .await
+        .unwrap();
+    let_assert!(Some(revision_2_created) = revision_2_created);
+    assert!(env_rev_2 == revision_2_created.revision);
+    assert!(env_rev_0.name == revision_2_created.name);
+    assert!(env_rev_0.application_id == revision_2_created.application_id);
+
+    let revision_1_retry = deps
+        .environment_repo
+        .update(env_rev_0.revision.revision_id, env_rev_1.clone())
+        .await
+        .unwrap();
+    assert!(revision_1_retry.is_none());
+
+    let revision_2_retry = deps
+        .environment_repo
+        .update(env_rev_0.revision.revision_id, env_rev_2.clone())
+        .await
+        .unwrap();
+    assert!(revision_2_retry.is_none());
+
+    let rev_2_by_name = deps
+        .environment_repo
+        .get_by_name(&env_rev_0.application_id, &env_rev_0.name)
+        .await
+        .unwrap();
+    let_assert!(Some(rev_2_by_name) = rev_2_by_name);
+    assert!(env_rev_2 == rev_2_by_name.revision);
+    assert!(env_rev_0.name == rev_2_by_name.name);
+    assert!(env_rev_0.application_id == rev_2_by_name.application_id);
+
+    let rev_2_by_id = deps
+        .environment_repo
+        .get_by_id(&env_rev_2.environment_id)
+        .await
+        .unwrap();
+    let_assert!(Some(rev_2_by_id) = rev_2_by_id);
+    assert!(env_rev_2 == rev_2_by_id.revision);
+    assert!(env_rev_0.name == rev_2_by_id.name);
+    assert!(env_rev_0.application_id == rev_2_by_id.application_id);
 }
 
-pub async fn test_create_environment_revisions_concurrently(deps: &Deps) {
+pub async fn test_environment_update_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
-    let env_no_revision = deps.create_env().await;
+    let env_rev_0 = deps.create_env().await;
     let concurrency = 20;
-
-    let revision_0_created = deps
-        .environment_repo
-        .create_revision(
-            env_no_revision.current_revision_id,
-            EnvironmentRevisionRecord {
-                environment_id: env_no_revision.environment_id,
-                revision_id: 0,
-                created_at: SqlDateTime::now(),
-                created_by: user.account_id,
-                compatibility_check: true,
-                version_check: true,
-                security_overrides: false,
-                hash: blake3::hash("test".as_bytes()).into(),
-            },
-        )
-        .await
-        .unwrap();
-    let_assert!(Some(revision_0_created) = revision_0_created);
 
     let results = join_all(
         (0..concurrency)
@@ -332,13 +354,12 @@ pub async fn test_create_environment_revisions_concurrently(deps: &Deps) {
                 let deps = deps.clone();
                 async move {
                     deps.environment_repo
-                        .create_revision(
-                            Some(0),
+                        .update(
+                            env_rev_0.revision.revision_id,
                             EnvironmentRevisionRecord {
-                                environment_id: env_no_revision.environment_id,
+                                environment_id: env_rev_0.revision.environment_id,
                                 revision_id: 0,
-                                created_at: SqlDateTime::now(),
-                                created_by: user.account_id,
+                                audit: RevisionAuditFields::new(user.account_id),
                                 compatibility_check: false,
                                 version_check: false,
                                 security_overrides: false,
@@ -351,8 +372,6 @@ pub async fn test_create_environment_revisions_concurrently(deps: &Deps) {
             .collect::<Vec<_>>(),
     )
     .await;
-
-    println!("{:#?}", results);
 
     let created_count = results
         .iter()

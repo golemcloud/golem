@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::{SqlBlake3Hash, SqlDateTime};
+use crate::repo::model::{
+    AuditFields, BindFields, RevisionAuditFields, SqlBlake3Hash, SqlDateTime,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures_util::future::BoxFuture;
@@ -21,7 +23,8 @@ use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
-use sqlx::FromRow;
+use sqlx::postgres::PgRow;
+use sqlx::{FromRow, Row};
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 
@@ -30,8 +33,8 @@ pub struct EnvironmentRecord {
     pub environment_id: Uuid,
     pub name: String,
     pub application_id: Uuid,
-    pub created_at: SqlDateTime,
-    pub created_by: Uuid,
+    #[sqlx(flatten)]
+    pub audit: AuditFields,
     pub current_revision_id: Option<i64>,
 }
 
@@ -39,8 +42,8 @@ pub struct EnvironmentRecord {
 pub struct EnvironmentRevisionRecord {
     pub environment_id: Uuid,
     pub revision_id: i64,
-    pub created_at: SqlDateTime,
-    pub created_by: Uuid,
+    #[sqlx(flatten)]
+    pub audit: RevisionAuditFields,
     pub compatibility_check: bool,
     pub version_check: bool,
     pub security_overrides: bool,
@@ -49,34 +52,10 @@ pub struct EnvironmentRevisionRecord {
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct EnvironmentCurrentRevisionRecord {
-    pub environment_id: Uuid,
     pub name: String,
     pub application_id: Uuid,
-    pub environment_created_at: SqlDateTime,
-    pub environment_created_by: Uuid,
-    pub current_revision_id: Option<i64>,
-    pub created_at: Option<SqlDateTime>,
-    pub created_by: Option<Uuid>,
-    pub compatibility_check: Option<bool>,
-    pub version_check: Option<bool>,
-    pub security_overrides: Option<bool>,
-    pub hash: Option<SqlBlake3Hash>,
-}
-
-impl EnvironmentCurrentRevisionRecord {
-    pub fn to_revision(&self) -> Option<EnvironmentRevisionRecord> {
-        self.current_revision_id?;
-        Some(EnvironmentRevisionRecord {
-            environment_id: self.environment_id,
-            revision_id: self.current_revision_id.unwrap(),
-            created_at: self.created_at.clone().unwrap(),
-            created_by: self.created_by.unwrap(),
-            compatibility_check: self.compatibility_check.unwrap(),
-            version_check: self.version_check.unwrap(),
-            security_overrides: self.security_overrides.unwrap(),
-            hash: self.hash.unwrap(),
-        })
-    }
+    #[sqlx(flatten)]
+    pub revision: EnvironmentRevisionRecord,
 }
 
 #[async_trait]
@@ -92,18 +71,18 @@ pub trait EnvironmentRepo: Send + Sync {
         environment_id: &Uuid,
     ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>>;
 
-    async fn ensure(
+    async fn create(
         &self,
-        user_account_id: &Uuid,
         application_id: &Uuid,
         name: &str,
-    ) -> repo::Result<EnvironmentCurrentRevisionRecord>;
-
-    async fn create_revision(
-        &self,
-        current_revision_id: Option<i64>,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentRevisionRecord>>;
+    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>>;
+
+    async fn update(
+        &self,
+        current_revision_id: i64,
+        revision: EnvironmentRevisionRecord,
+    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>>;
 }
 
 pub struct LoggedEnvironmentRepo<Repo: EnvironmentRepo> {
@@ -119,8 +98,12 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
         info_span!("environment repository", application_id=%application_id, name)
     }
 
-    fn span_id(environment_id: &Uuid) -> Span {
+    fn span_env_id(environment_id: &Uuid) -> Span {
         info_span!("environment repository", environment_id=%environment_id)
+    }
+
+    fn span_app_id(application_id: &Uuid) -> Span {
+        info_span!("environment repository", application_id=%application_id)
     }
 }
 
@@ -143,30 +126,30 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
         self.repo
             .get_by_id(environment_id)
-            .instrument(Self::span_id(environment_id))
+            .instrument(Self::span_env_id(environment_id))
             .await
     }
 
-    async fn ensure(
+    async fn create(
         &self,
-        user_account_id: &Uuid,
         application_id: &Uuid,
         name: &str,
-    ) -> repo::Result<EnvironmentCurrentRevisionRecord> {
+        revision: EnvironmentRevisionRecord,
+    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
         self.repo
-            .ensure(user_account_id, application_id, name)
-            .instrument(Self::span_name(application_id, name))
+            .create(application_id, name, revision)
+            .instrument(Self::span_app_id(application_id))
             .await
     }
 
-    async fn create_revision(
+    async fn update(
         &self,
-        current_revision_id: Option<i64>,
+        current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentRevisionRecord>> {
-        let span = Self::span_id(&revision.environment_id);
+    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
+        let span = Self::span_env_id(&revision.environment_id);
         self.repo
-            .create_revision(current_revision_id, revision)
+            .update(current_revision_id, revision)
             .instrument(span)
             .await
     }
@@ -219,14 +202,13 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.environment_id AS environment_id,
                         e.name AS name,
                         e.application_id AS application_id,
-                        e.created_at AS environment_created_at,
-                        e.created_by AS environment_created_by,
-                        e.current_revision_id AS current_revision_id,
+                        r.environment_id AS environment_id,
+                        r.revision_id AS revision_id,
                         r.created_at AS created_at,
                         r.created_by AS created_by,
+                        r.deleted AS deleted,
                         r.compatibility_check AS compatibility_check,
                         r.version_check AS version_check,
                         r.security_overrides AS security_overrides,
@@ -234,7 +216,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
                     FROM environments e
                     LEFT JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
-                    WHERE e.application_id = $1 AND e.name = $2
+                    WHERE e.application_id = $1 AND e.name = $2 AND e.deleted_at IS NULL
                 "# })
                     .bind(application_id)
                     .bind(name),
@@ -250,14 +232,13 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.environment_id AS environment_id,
                         e.name AS name,
                         e.application_id AS application_id,
-                        e.created_at AS environment_created_at,
-                        e.created_by AS environment_created_by,
-                        e.current_revision_id AS current_revision_id,
+                        r.environment_id AS environment_id,
+                        r.revision_id AS revision_id,
                         r.created_at AS created_at,
                         r.created_by AS created_by,
+                        r.deleted AS deleted,
                         r.compatibility_check AS compatibility_check,
                         r.version_check AS version_check,
                         r.security_overrides AS security_overrides,
@@ -265,147 +246,144 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
                     FROM environments e
                     LEFT JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
-                    WHERE e.environment_id = $1
+                    WHERE e.environment_id = $1 AND e.deleted_at IS NULL
                 "# })
                     .bind(environment_id),
             )
             .await
     }
 
-    async fn ensure(
+    async fn create(
         &self,
-        user_account_id: &Uuid,
         application_id: &Uuid,
         name: &str,
-    ) -> repo::Result<EnvironmentCurrentRevisionRecord> {
-        if let Some(env) = self.get_by_name(application_id, name).await? {
-            return Ok(env);
-        };
+        revision: EnvironmentRevisionRecord,
+    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
+        let application_id = *application_id;
+        let name = name.to_owned();
 
-        let result: repo::Result<EnvironmentRecord> = self
-            .with_rw("ensure - insert")
-            .fetch_one_as(
-                sqlx::query_as(indoc! { r#"
+        let result: repo::Result<EnvironmentCurrentRevisionRecord> =
+            self.with_tx("create", |tx| async move {
+                tx.execute(
+                    sqlx::query(indoc! { r#"
                     INSERT INTO environments
-                    (environment_id, name, application_id, created_at, created_by, current_revision_id)
-                    VALUES ($1, $2, $3, $4, $5, NULL)
-                    RETURNING environment_id, name, application_id, created_at, created_by, current_revision_id
+                    (environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                    VALUES ($1, $2, $3, $4, $5, NULL, $6, 0)
                 "# })
-                    .bind(Uuid::new_v4())
-                    .bind(name)
-                    .bind(application_id)
-                    .bind(SqlDateTime::now())
-                    .bind(user_account_id)
-            )
-            .await;
+                        .bind(revision.environment_id)
+                        .bind(&name)
+                        .bind(application_id)
+                        .bind(&revision.audit.created_at)
+                        .bind(&revision.audit.created_at)
+                        .bind(revision.audit.created_by)
+                ).await?;
 
-        let result = result.map(|env| EnvironmentCurrentRevisionRecord {
-            environment_id: env.environment_id,
-            name: env.name,
-            application_id: env.application_id,
-            environment_created_at: env.created_at,
-            environment_created_by: env.created_by,
-            current_revision_id: None,
-            created_at: None,
-            created_by: None,
-            compatibility_check: None,
-            version_check: None,
-            security_overrides: None,
-            hash: None,
-        });
+                let revision = tx.fetch_one_as(
+                    sqlx::query_as(indoc! { r#"
+                        INSERT INTO environment_revisions
+                        (environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash)
+                        VALUES ($1, 0, $2, $3, FALSE, $4, $5, $6, $7)
+                        RETURNING environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash
+                    "# })
+                        .bind(revision.environment_id)
+                        .bind(revision.audit.created_at)
+                        .bind(revision.audit.created_by)
+                        .bind(revision.compatibility_check)
+                        .bind(revision.version_check)
+                        .bind(revision.security_overrides)
+                        .bind(revision.hash)
+                ).await?;
 
-        let result = match result {
-            Err(err) if err.is_unique_violation() => None,
-            result => Some(result),
-        };
-        if let Some(result) = result {
-            return result;
-        }
+                Ok(EnvironmentCurrentRevisionRecord {
+                    name,
+                    application_id,
+                    revision,
+                })
+            }.boxed()).await;
 
-        match self.get_by_name(application_id, name).await? {
-            Some(app) => Ok(app),
-            None => Err(RepoError::Internal(
-                "illegal state: missing environment".to_string(),
-            )),
+        match result {
+            Ok(env) => Ok(Some(env)),
+            Err(err) if err.is_unique_violation() => Ok(None),
+            Err(err) => Err(err),
         }
     }
 
-    async fn create_revision(
+    async fn update(
         &self,
-        current_revision_id: Option<i64>,
+        current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentRevisionRecord>> {
-        {
-            let current_revision_matches = self
-                .with_ro("create_revision - check current revision")
-                .fetch_optional(
-                    match current_revision_id {
-                        Some(current_revision_id) => {
-                            sqlx::query(indoc! { r#"
-                                SELECT 1 FROM environments WHERE environment_id = $1 AND current_revision_id = $2
-                            "#})
-                                .bind(revision.environment_id)
-                                .bind(current_revision_id)
-                        }
-                        None => {
-                            sqlx::query(indoc! { r#"
-                                SELECT 1 FROM environments WHERE environment_id = $1 AND current_revision_id IS NULL
-                            "#})
-                                .bind(revision.environment_id)
-                        }
-                    }
-                )
-                .await?
-                .is_some();
-
-            if !current_revision_matches {
-                return Ok(None);
-            }
+    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
+        #[derive(sqlx::FromRow)]
+        struct AppIdAndName {
+            application_id: Uuid,
+            name: String,
         }
 
-        let revision = self
-            .with_tx("create_revision - insert and update", |tx| {
+        let matching_current_revision: Option<AppIdAndName> = self
+            .with_ro("update - check current revision")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT application_id, name FROM environments
+                    WHERE environment_id = $1 AND current_revision_id = $2 AND deleted_at IS NULL
+                "#})
+                .bind(revision.environment_id)
+                .bind(current_revision_id),
+            )
+            .await?;
+
+        let Some(matching_current_revision) = matching_current_revision else {
+            return Ok(None);
+        };
+
+        let result: repo::Result<EnvironmentCurrentRevisionRecord> = self
+            .with_tx("update - insert and update", |tx| {
                 async move {
                     let revision: EnvironmentRevisionRecord = tx
                         .fetch_one_as(
                             sqlx::query_as(indoc! { r#"
                                 INSERT INTO environment_revisions
-                                    (environment_id, revision_id, created_at, created_by,
-                                     compatibility_check, version_check, security_overrides, hash)
-                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                                RETURNING
-                                    environment_id, revision_id, created_at, created_by,
-                                    compatibility_check, version_check, security_overrides, hash
+                                (environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash)
+                                VALUES ($1, $2, $3, $4, FALSE, $5, $6, $7, $8)
+                                RETURNING environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash
                             "#})
-                            .bind(revision.environment_id)
-                            .bind(current_revision_id.unwrap_or(-1) + 1)
-                            .bind(revision.created_at)
-                            .bind(revision.created_by)
-                            .bind(revision.compatibility_check)
-                            .bind(revision.version_check)
-                            .bind(revision.security_overrides)
-                            .bind(revision.hash),
+                                .bind(revision.environment_id)
+                                .bind(current_revision_id + 1)
+                                .bind(revision.audit.created_at)
+                                .bind(revision.audit.created_by)
+                                .bind(revision.compatibility_check)
+                                .bind(revision.version_check)
+                                .bind(revision.security_overrides)
+                                .bind(revision.hash),
                         )
                         .await?;
 
                     tx.execute(
                         sqlx::query(indoc! { r#"
-                            UPDATE environments SET current_revision_id = $1 WHERE environment_id = $2
+                            UPDATE environments
+                            SET updated_at = $1, modified_by = $2, current_revision_id = $3
+                            WHERE environment_id = $4
                         "#})
-                        .bind(revision.revision_id)
-                        .bind(revision.environment_id),
+                            .bind(&revision.audit.created_at)
+                            .bind(revision.audit.created_by)
+                            .bind(revision.revision_id)
+                            .bind(revision.environment_id),
                     )
-                    .await?;
+                        .await?;
 
-                    Ok(Some(revision))
+                    Ok(EnvironmentCurrentRevisionRecord {
+                        name: matching_current_revision.name,
+                        application_id: matching_current_revision.application_id,
+                        revision,
+                    })
                 }
-                .boxed()
+                    .boxed()
             })
             .await;
 
-        match revision {
+        match result {
+            Ok(env) => Ok(Some(env)),
             Err(err) if err.is_unique_violation() => Ok(None),
-            result => result,
+            Err(err) => Err(err),
         }
     }
 }

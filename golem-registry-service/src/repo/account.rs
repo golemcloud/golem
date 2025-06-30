@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::account::Account;
-use crate::repo::SqlDateTime;
+use crate::repo::model::{AuditFields, BindFields, RevisionAuditFields, SqlDateTime};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::{AccountId, PlanId};
@@ -27,39 +27,22 @@ use uuid::Uuid;
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountRecord {
     pub account_id: Uuid,
-    pub name: String,
     pub email: String,
-    pub created_at: SqlDateTime,
+    #[sqlx(flatten)]
+    pub audit: AuditFields,
+    pub name: String,
     pub plan_id: Uuid,
 }
 
-impl From<AccountRecord> for Account {
-    fn from(value: AccountRecord) -> Self {
-        Self {
-            id: AccountId {
-                value: value.account_id.as_hyphenated().to_string(),
-            },
-            name: value.name,
-            email: value.email,
-            plan_id: PlanId(value.plan_id),
-        }
-    }
-}
-
-impl From<Account> for AccountRecord {
-    fn from(value: Account) -> Self {
-        Self {
-            account_id: value
-                .id
-                .value
-                .try_into()
-                .unwrap_or_else(|err| panic!("Expected UUID for account ID, error: {:?}", err)),
-            name: value.name,
-            email: value.email,
-            created_at: SqlDateTime::now(), // TODO: from account
-            plan_id: value.plan_id.0,
-        }
-    }
+#[derive(FromRow, Debug, Clone, PartialEq)]
+pub struct AccountRevisionRecord {
+    pub account_id: Uuid,
+    pub email: String,
+    pub revision_id: i64,
+    #[sqlx(flatten)]
+    pub audit: RevisionAuditFields,
+    pub name: String,
+    pub plan_id: Uuid,
 }
 
 #[async_trait]
@@ -141,15 +124,15 @@ impl AccountRepo for DbAccountRepo<golem_service_base::db::postgres::PostgresPoo
             .with_rw("create")
             .fetch_one_as(
                 sqlx::query_as(indoc! {r#"
-                    INSERT INTO accounts (account_id, name, email, created_at, plan_id, deleted)
-                    VALUES ($1, $2, $3, $4, $5, FALSE)
-                    RETURNING account_id, name, email, created_at, plan_id
+                    INSERT INTO accounts (account_id, email, created_at, updated_at, deleted_at, modified_by, name, plan_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, name, plan_id
                 "#})
-                .bind(account.account_id)
-                .bind(account.name)
-                .bind(account.email)
-                .bind(account.created_at)
-                .bind(account.plan_id),
+                    .bind(account.account_id)
+                    .bind(account.email)
+                    .bind_audit_fields(account.audit)
+                    .bind(account.name)
+                    .bind(account.plan_id),
             )
             .await;
 
@@ -164,8 +147,9 @@ impl AccountRepo for DbAccountRepo<golem_service_base::db::postgres::PostgresPoo
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT account_id, name, email, plan_id, created_at FROM accounts
-                    WHERE account_id = $1 AND deleted = FALSE
+                    SELECT account_id, email, created_at, updated_at, deleted_at, modified_by, name, plan_id
+                    FROM accounts
+                    WHERE account_id = $1 AND deleted_at IS NULL
                 "#})
                 .bind(account_id),
             )
@@ -176,8 +160,9 @@ impl AccountRepo for DbAccountRepo<golem_service_base::db::postgres::PostgresPoo
         self.with_ro("get_by_email")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT account_id, name, email, plan_id, created_at FROM accounts
-                    WHERE email = $1 AND deleted = FALSE
+                    SELECT account_id, email, created_at, updated_at, deleted_at, modified_by, name, plan_id
+                    FROM accounts
+                    WHERE email = $1 AND deleted_at IS NULL
                 "#})
                 .bind(email),
             )
