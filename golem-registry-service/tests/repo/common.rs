@@ -17,10 +17,8 @@ use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures_util::future::join_all;
 use golem_registry_service::repo::account::AccountRecord;
-use golem_registry_service::repo::environment::{
-    EnvironmentCurrentRevisionRecord, EnvironmentRevisionRecord,
-};
-use golem_registry_service::repo::model::{AuditFields, RevisionAuditFields, SqlDateTime};
+use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
+use golem_registry_service::repo::model::{AuditFields, RevisionAuditFields};
 use uuid::Uuid;
 // Common test cases -------------------------------------------------------------------------------
 
@@ -149,7 +147,7 @@ pub async fn test_environment_create(deps: &Deps) {
 
     assert!(deps
         .environment_repo
-        .get_by_name(&app.application_id, &env_name)
+        .get_by_name(&app.application_id, env_name)
         .await
         .unwrap()
         .is_none());
@@ -166,7 +164,7 @@ pub async fn test_environment_create(deps: &Deps) {
 
     let env = deps
         .environment_repo
-        .create(&app.application_id, &env_name, revision_0.clone())
+        .create(&app.application_id, env_name, revision_0.clone())
         .await
         .unwrap();
     let_assert!(Some(env) = env);
@@ -206,7 +204,7 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
                     deps.environment_repo
                         .create(
                             &app.application_id,
-                            &env_name,
+                            env_name,
                             EnvironmentRevisionRecord {
                                 environment_id: Uuid::new_v4(),
                                 revision_id: 0,

@@ -15,8 +15,8 @@
 use chrono::{DateTime, NaiveDateTime, TimeDelta, Utc};
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
-use sqlx::query::{Query, QueryAs};
-use sqlx::{Database, Encode, Type};
+use sqlx::query::QueryAs;
+use sqlx::{Database, Encode};
 use std::fmt::Display;
 use std::ops::{Deref, Sub};
 use uuid::Uuid;

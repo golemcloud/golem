@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::{
-    AuditFields, BindFields, RevisionAuditFields, SqlBlake3Hash, SqlDateTime,
-};
+use crate::repo::model::{AuditFields, RevisionAuditFields, SqlBlake3Hash};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures_util::future::BoxFuture;
@@ -23,7 +21,6 @@ use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
-use sqlx::postgres::PgRow;
 use sqlx::{FromRow, Row};
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;

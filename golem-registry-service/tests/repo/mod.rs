@@ -62,9 +62,9 @@ impl Deps {
         self.account_repo
             .create(AccountRecord {
                 account_id,
-                email: format!("test-{}@golem", account_id),
+                email: format!("test-{account_id}@golem"),
                 audit: AuditFields::new(account_id),
-                name: format!("Test Account {}", account_id),
+                name: format!("Test Account {account_id}"),
                 plan_id: self.test_plan_id(),
             })
             .await
