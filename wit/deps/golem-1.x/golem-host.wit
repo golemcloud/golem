@@ -5,6 +5,7 @@ package golem:api@1.1.7;
 interface host {
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
     use golem:rpc/types@0.2.1.{component-id, uuid, worker-id};
+    use golem:agentic/common.{agent-definition, agent-dependency, status-update};
 
     /// An index into the persistent log storing all performed operations of a worker
     type oplog-index = u64;
@@ -147,6 +148,13 @@ interface host {
         get-next: func() -> option<list<worker-metadata>>;
     }
 
+
+    resource remote-agent {
+        constructor(agent: agent-dependency, agent-id: string);
+
+        invoke: func(method-name: string, input: list<string>) -> status-update;
+    }
+
     /// Target parameter for the `revert-worker` operation
     variant revert-worker-target {
         /// Revert to a specific oplog index. The given index will be the last one to be kept.
@@ -269,6 +277,9 @@ interface host {
     /// and this worker continues running as well. The return value is going to be different in this worker and
     /// the forked worker.
     fork: func(new-name: string) -> fork-result;
+
+    discover-agent-definitions: func() -> list<agent-definition>;
+
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers

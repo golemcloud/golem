@@ -22,7 +22,8 @@ use crate::model::public_oplog::{
 use crate::model::InterruptKind;
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
-    ForkResult, GetWorkers, Host, HostGetWorkers, WorkerAnyFilter,
+    AgentDependency, ForkResult, GetWorkers, Host, HostGetWorkers, RemoteAgent, StatusUpdate,
+    WorkerAnyFilter,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
@@ -39,6 +40,7 @@ use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
+use golem_wasm_rpc::HostWasmRpc;
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
@@ -101,7 +103,40 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
+    for DurableWorkerCtx<Ctx>
+{
+    async fn new(
+        &mut self,
+        agent: AgentDependency,
+        agent_id: wasmtime::component::__internal::String,
+    ) -> anyhow::Result<wasmtime::component::Resource<RemoteAgent>> {
+        todo!("Implement RemoteAgent creation in DurableWorkerCtx");
+    }
+
+    async fn invoke(
+        &mut self,
+        self_: wasmtime::component::Resource<RemoteAgent>,
+        method_name: wasmtime::component::__internal::String,
+        input: wasmtime::component::__internal::Vec<wasmtime::component::__internal::String>,
+    ) -> anyhow::Result<StatusUpdate> {
+        todo!()
+    }
+
+    async fn drop(
+        &mut self,
+        rep: wasmtime::component::Resource<RemoteAgent>,
+    ) -> anyhow::Result<()> {
+        todo!()
+    }
+}
+
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn discover_agent_definitions(
+        &mut self,
+    ) -> anyhow::Result<Vec<crate::preview2::golem_api_1_x::host::AgentDefinition>> {
+        todo!("bhoom")
+    }
     async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
         self.observe_function_call("golem::api", "create_promise");
 
