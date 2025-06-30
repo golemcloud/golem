@@ -445,7 +445,12 @@ pub trait TestDsl {
 
     async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()>;
 
-    async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()>;
+    async fn delete_plugin(
+        &self,
+        account_id: AccountId,
+        name: &str,
+        version: &str,
+    ) -> crate::Result<()>;
 
     async fn install_plugin_to_component(
         &self,
@@ -1607,10 +1612,15 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .await
     }
 
-    async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()> {
+    async fn delete_plugin(
+        &self,
+        account_id: AccountId,
+        name: &str,
+        version: &str,
+    ) -> crate::Result<()> {
         self.deps
             .component_service()
-            .delete_plugin(&self.token, name, version)
+            .delete_plugin(&self.token, account_id, name, version)
             .await
     }
 
@@ -2284,7 +2294,7 @@ pub trait TestDslUnsafe {
 
     async fn create_plugin(&self, definition: PluginDefinitionCreation);
 
-    async fn delete_plugin(&self, name: &str, version: &str);
+    async fn delete_plugin(&self, account_id: AccountId, name: &str, version: &str);
 
     async fn install_plugin_to_component(
         &self,
@@ -2667,8 +2677,8 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to create plugin")
     }
 
-    async fn delete_plugin(&self, name: &str, version: &str) {
-        <T as TestDsl>::delete_plugin(self, name, version)
+    async fn delete_plugin(&self, account_id: AccountId, name: &str, version: &str) {
+        <T as TestDsl>::delete_plugin(self, account_id, name, version)
             .await
             .expect("Failed to delete plugin")
     }

@@ -1115,7 +1115,7 @@ paths:
         schema:
           $ref: '#/components/schemas/PluginScope'
         in: query
-        required: false
+        required: true
         deprecated: false
         explode: true
       responses:
@@ -1224,13 +1224,27 @@ paths:
       - Cookie: []
       - Token: []
       operationId: create_plugin
-  /v1/plugins/{name}:
+  /v1/plugins/{account_id}/{name}/{version}:
     get:
       tags:
       - Plugin
-      summary: Lists all the registered versions of a specific plugin identified by its name
+      summary: Gets a registered plugin by its name and version
       parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
       - name: name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
         schema:
           type: string
         in: path
@@ -1243,9 +1257,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/PluginDefinition'
+                $ref: '#/components/schemas/PluginDefinition'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -1285,7 +1297,80 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: list_plugin_versions
+      operationId: get_plugin
+    delete:
+      tags:
+      - Plugin
+      summary: Deletes a registered plugin by its name and version
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_plugin
   /v1/plugins/library-plugins:
     post:
       tags:
@@ -1452,139 +1537,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: create_app_plugin
-  /v1/plugins/{name}/{version}:
-    get:
-      tags:
-      - Plugin
-      summary: Gets a registered plugin by its name and version
-      parameters:
-      - name: name
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: version
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/PluginDefinition'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Maximum number of components exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Component not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: Component already exists
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_plugin
-    delete:
-      tags:
-      - Plugin
-      summary: Deletes a registered plugin by its name and version
-      parameters:
-      - name: name
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: version
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Empty'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Maximum number of components exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Component not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: Component already exists
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: delete_plugin
 components:
   schemas:
     AnalysedExport:

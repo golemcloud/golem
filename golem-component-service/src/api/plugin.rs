@@ -49,7 +49,8 @@ impl PluginApi {
         let record = recorded_http_api_request!("list_plugins",);
         let auth = AuthCtx::new(token.secret());
 
-        let response = self.plugin_service
+        let response = self
+            .plugin_service
             .list_plugins_for_scope(&auth, &scope)
             .instrument(record.span.clone())
             .await
@@ -59,32 +60,15 @@ impl PluginApi {
         record.result(response)
     }
 
-    /// Lists all the registered versions of a specific plugin identified by its name
-    #[oai(path = "/:account_id/:name", method = "get", operation_id = "list_plugin_versions")]
-    pub async fn list_plugin_versions(
-        &self,
-        account_id: Path<AccountId>,
-        name: Path<String>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<PluginDefinition>>> {
-        let record = recorded_http_api_request!("list_plugin_versions", plugin_name = name.0);
-        let auth = AuthCtx::new(token.secret());
-
-        let response = self
-            .plugin_service
-            .list_plugin_versions(&auth, &name)
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|response| Json(response.into_iter().collect()));
-
-        record.result(response)
-    }
-
     /// Gets a registered plugin by its name and version
-    #[oai(path = "/:account_id/:name/:version", method = "get", operation_id = "get_plugin")]
+    #[oai(
+        path = "/:account_id/:name/:version",
+        method = "get",
+        operation_id = "get_plugin"
+    )]
     pub async fn get_plugin(
         &self,
+        account_id: Path<AccountId>,
         name: Path<String>,
         version: Path<String>,
         token: GolemSecurityScheme,
@@ -96,12 +80,9 @@ impl PluginApi {
         );
         let auth = AuthCtx::new(token.secret());
 
-        // FIXME: This endpoint cannot retrieve plugins registered in shared projects by other users.
-        // Pass account_id of the plugin as a parameter instead of getting it from auth.
-
         let response = self
             .plugin_service
-            .get_own(&auth, &name, &version)
+            .get(&auth, account_id.0, &name, &version)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -123,6 +104,7 @@ impl PluginApi {
     )]
     pub async fn delete_plugin(
         &self,
+        account_id: Path<AccountId>,
         name: Path<String>,
         version: Path<String>,
         token: GolemSecurityScheme,
@@ -136,7 +118,7 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .delete(&auth, &name, &version)
+            .delete(&auth, account_id.0, &name, &version)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

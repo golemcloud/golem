@@ -54,16 +54,6 @@ impl AuthedPluginService {
             .await
     }
 
-    pub async fn list_plugin_versions(
-        &self,
-        auth: &AuthCtx,
-        account_id: AccountId,
-        name: &str,
-    ) -> Result<Vec<PluginDefinition>, ComponentError> {
-        let owner = self.get_owner(auth).await?;
-        self.plugin_service.list_plugin_versions(&owner, name).await
-    }
-
     pub async fn create_plugin(
         &self,
         auth: &AuthCtx,
@@ -134,32 +124,13 @@ impl AuthedPluginService {
     pub async fn get(
         &self,
         auth: &AuthCtx,
-        account_id: AccountId,
+        owner_account: AccountId,
         name: &str,
         version: &str,
     ) -> Result<Option<PluginDefinition>, ComponentError> {
-        let owner = PluginOwner { account_id };
-        let plugin = self.plugin_service.get(&owner, name, version).await?;
-        if let Some(plugin) = &plugin {
-            self.check_plugin_access(
-                plugin,
-                ProjectAction::ViewPluginDefinition,
-                AccountAction::ViewGlobalPlugins,
-                auth,
-            )
-            .await?;
+        let owner = PluginOwner {
+            account_id: owner_account,
         };
-        Ok(plugin)
-    }
-
-    pub async fn get_own(
-        &self,
-        auth: &AuthCtx,
-        name: &str,
-        version: &str,
-    ) -> Result<Option<PluginDefinition>, ComponentError> {
-        let account_id = self.auth_service.get_account(auth).await?;
-        let owner = PluginOwner { account_id };
         let plugin = self.plugin_service.get(&owner, name, version).await?;
         if let Some(plugin) = &plugin {
             self.check_plugin_access(
@@ -194,10 +165,30 @@ impl AuthedPluginService {
     pub async fn delete(
         &self,
         auth: &AuthCtx,
+        owner_account: AccountId,
         name: &str,
         version: &str,
     ) -> Result<(), ComponentError> {
-        let owner = self.get_owner(auth).await?;
+        let owner = PluginOwner {
+            account_id: owner_account.clone(),
+        };
+        let plugin = self.plugin_service.get(&owner, name, version).await?;
+        if let Some(plugin) = &plugin {
+            self.check_plugin_access(
+                plugin,
+                ProjectAction::DeletePluginDefinition,
+                AccountAction::DeleteGlobalPlugin,
+                auth,
+            )
+            .await?;
+        } else {
+            Err(ComponentError::PluginNotFound {
+                account_id: owner_account,
+                plugin_name: name.to_string(),
+                plugin_version: version.to_string(),
+            })?
+        };
+
         self.plugin_service.delete(&owner, name, version).await?;
         Ok(())
     }

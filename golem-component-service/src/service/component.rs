@@ -1900,6 +1900,7 @@ impl ComponentService for ComponentServiceDefault {
                             )
                             .await?
                             .ok_or(ComponentError::PluginNotFound {
+                                account_id: owner.account_id.clone(),
                                 plugin_name: installation.name.clone(),
                                 plugin_version: installation.version.clone(),
                             })?;

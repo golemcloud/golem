@@ -784,7 +784,9 @@ async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     admin.create_plugin(plugin_definition.clone()).await;
 
-    admin.delete_plugin("library-plugin-2", "v1").await;
+    admin
+        .delete_plugin(admin.account_id.clone(), "library-plugin-2", "v1")
+        .await;
 
     admin.create_plugin(plugin_definition.clone()).await;
 
@@ -836,7 +838,9 @@ async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing:
         .install_plugin_to_component(&component_id, "library-plugin-3", "v1", 0, HashMap::new())
         .await;
 
-    admin.delete_plugin("library-plugin-3", "v1").await;
+    admin
+        .delete_plugin(admin.account_id.clone(), "library-plugin-3", "v1")
+        .await;
 
     let worker = admin.start_worker(&component_id, "worker1").await;
 

@@ -945,13 +945,20 @@ pub trait ComponentService: Send + Sync {
         }
     }
 
-    async fn delete_plugin(&self, token: &Uuid, name: &str, version: &str) -> crate::Result<()> {
+    async fn delete_plugin(
+        &self,
+        token: &Uuid,
+        account_id: AccountId,
+        name: &str,
+        version: &str,
+    ) -> crate::Result<()> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => {
                 let mut client = self.plugin_grpc_client().await;
 
                 let request = authorised_request(
                     DeletePluginRequest {
+                        account_id: Some(account_id.into()),
                         name: name.to_string(),
                         version: version.to_string(),
                     },
