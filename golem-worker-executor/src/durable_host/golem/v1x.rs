@@ -135,7 +135,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn discover_agent_definitions(
         &mut self,
     ) -> anyhow::Result<Vec<crate::preview2::golem_api_1_x::host::AgentDefinition>> {
-        todo!("bhoom")
+       Ok(vec![])
     }
     async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
         self.observe_function_call("golem::api", "create_promise");
