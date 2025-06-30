@@ -39,7 +39,7 @@ impl Services {
         }
     }
 
-    async fn make_with_db<DB>(config: &RegistryServiceConfig, db_pool: DB) -> Result<Self, String>
+    async fn make_with_db<DB>(_config: &RegistryServiceConfig, _db_pool: DB) -> Result<Self, String>
     where
         DB: Pool + Clone + Send + Sync + 'static,
     {

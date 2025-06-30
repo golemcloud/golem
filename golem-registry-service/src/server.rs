@@ -70,10 +70,10 @@ async fn dump_openapi_yaml() -> Result<(), std::io::Error> {
 
 async fn async_main(
     config: &RegistryServiceConfig,
-    prometheus_registry: Registry,
+    _prometheus_registry: Registry,
 ) -> Result<(), std::io::Error> {
-    let grpc_port = config.grpc_port;
-    let http_port = config.http_port;
+    let _grpc_port = config.grpc_port;
+    let _http_port = config.http_port;
 
     let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
     match config.db.clone() {
@@ -95,7 +95,7 @@ async fn async_main(
         }
     };
 
-    let services = Services::new(config).await.map_err(|e| {
+    let _services = Services::new(config).await.map_err(|e| {
         error!("Services - init error: {}", e);
         std::io::Error::other(e)
     })?;

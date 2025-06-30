@@ -21,7 +21,7 @@ use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
-use sqlx::{FromRow, Row};
+use sqlx::FromRow;
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 
@@ -165,10 +165,6 @@ impl<DB: Pool> DbEnvironmentRepo<DB> {
 
     fn with_ro(&self, api_name: &'static str) -> DB::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
-    }
-
-    fn with_rw(&self, api_name: &'static str) -> DB::LabelledApi {
-        self.db_pool.with_rw(METRICS_SVC_NAME, api_name)
     }
 
     async fn with_tx<F, R>(&self, api_name: &'static str, f: F) -> Result<R, RepoError>

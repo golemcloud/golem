@@ -66,10 +66,6 @@ impl<DB: Pool> DbPlanRepository<DB> {
         Self { db_pool }
     }
 
-    fn with_ro(&self, api_name: &'static str) -> DB::LabelledApi {
-        self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
-    }
-
     fn with_rw(&self, api_name: &'static str) -> DB::LabelledApi {
         self.db_pool.with_rw(METRICS_SVC_NAME, api_name)
     }

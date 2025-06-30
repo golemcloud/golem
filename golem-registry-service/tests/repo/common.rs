@@ -140,7 +140,6 @@ pub async fn test_application_ensure_concurrent(deps: &Deps) {
 }
 
 pub async fn test_environment_create(deps: &Deps) {
-    let now = Utc::now();
     let user = deps.create_account().await;
     let app = deps.create_application().await;
     let env_name = "local";
