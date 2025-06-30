@@ -931,7 +931,7 @@ async fn querying_plugins_return_only_plugins_valid_in_scope(
             .component_service()
             .plugin_http_client(&user.token)
             .await
-            .list_plugins(Some(&PluginScope::project(project_1)))
+            .list_plugins(Some(&PluginScope::project(project_1.clone())))
             .await
             .unwrap()
             .into_iter()
@@ -954,7 +954,7 @@ async fn querying_plugins_return_only_plugins_valid_in_scope(
             .component_service()
             .plugin_http_client(&user.token)
             .await
-            .list_plugins(Some(&PluginScope::component(component_id)))
+            .list_plugins(Some(&PluginScope::component(component_id.clone())))
             .await
             .unwrap()
             .into_iter()
@@ -971,4 +971,234 @@ async fn querying_plugins_return_only_plugins_valid_in_scope(
             ]
         );
     }
+
+    // a user the project was shared with can also query the plugins
+    {
+        let user_2 = deps.user().await;
+        user.grant_full_project_access(&project_1, &user_2.account_id)
+            .await;
+
+        // project scope
+        {
+            let mut plugins = deps
+                .component_service()
+                .plugin_http_client(&user_2.token)
+                .await
+                .list_plugins(Some(&PluginScope::project(project_1)))
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|p| p.name)
+                .collect::<Vec<_>>();
+            plugins.sort();
+
+            assert_eq!(
+                plugins,
+                vec![
+                    "oplog-processor-1".to_string(),
+                    "oplog-processor-2".to_string()
+                ]
+            );
+        }
+
+        // component scope
+        {
+            let mut plugins = deps
+                .component_service()
+                .plugin_http_client(&user_2.token)
+                .await
+                .list_plugins(Some(&PluginScope::component(component_id)))
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|p| p.name)
+                .collect::<Vec<_>>();
+            plugins.sort();
+
+            assert_eq!(
+                plugins,
+                vec![
+                    "oplog-processor-1".to_string(),
+                    "oplog-processor-2".to_string(),
+                    "oplog-processor-4".to_string()
+                ]
+            );
+        }
+    }
+}
+
+#[test]
+async fn install_global_plugin_in_shared_project(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
+    // user 1 defines a project and a global plugin, user 2 installs the plugin to a component in the project
+
+    let user_1 = deps.user().await;
+    let user_2 = deps.user().await;
+
+    let project = user_1.create_project().await;
+    user_1
+        .grant_full_project_access(&project, &user_2.account_id)
+        .await;
+
+    let plugin_wasm_key = user_1.add_plugin_wasm("app_and_library_library").await;
+
+    user_1
+        .create_plugin(PluginDefinitionCreation {
+            name: "library-plugin-1".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+                blob_storage_key: plugin_wasm_key,
+            }),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
+
+    let component_id = user_2
+        .component("app_and_library_app")
+        .unique()
+        .with_project(project.clone())
+        .store()
+        .await;
+
+    let _installation_id = user_2
+        .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
+        .await;
+
+    let worker = user_2.start_worker(&component_id, "worker1").await;
+
+    let response = user_2
+        .invoke_and_await(
+            &worker,
+            "it:app-and-library-app/app-api.{app-function}",
+            vec![],
+        )
+        .await;
+
+    assert_eq!(response, Ok(vec![Value::U64(2)]))
+}
+
+#[test]
+async fn install_project_plugin_in_shared_project(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
+    // user 1 defines a project, user 2 defines and installs the plugin to a component in the project
+
+    let user_1 = deps.user().await;
+    let user_2 = deps.user().await;
+
+    let project = user_1.create_project().await;
+    user_1
+        .grant_full_project_access(&project, &user_2.account_id)
+        .await;
+
+    // make sure the plugin is stored in the blobstorage of the user that will eventually end up owning it
+    let plugin_wasm_key = user_1.add_plugin_wasm("app_and_library_library").await;
+
+    deps.component_service()
+        .create_plugin(
+            &user_2.token,
+            &user_1.account_id,
+            PluginDefinitionCreation {
+                name: "library-plugin-1".to_string(),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: vec![],
+                homepage: "none".to_string(),
+                specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+                    blob_storage_key: plugin_wasm_key,
+                }),
+                scope: PluginScope::project(project.clone()),
+            },
+        )
+        .await
+        .unwrap();
+
+    let component_id = user_2
+        .component("app_and_library_app")
+        .unique()
+        .with_project(project.clone())
+        .store()
+        .await;
+
+    let _installation_id = user_2
+        .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
+        .await;
+
+    let worker = user_2.start_worker(&component_id, "worker1").await;
+
+    let response = user_2
+        .invoke_and_await(
+            &worker,
+            "it:app-and-library-app/app-api.{app-function}",
+            vec![],
+        )
+        .await;
+
+    assert_eq!(response, Ok(vec![Value::U64(2)]))
+}
+
+#[test]
+async fn install_component_plugin_in_shared_project(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
+    // user 1 defines a project, user 2 defines and installs the plugin to a component in the project
+
+    let user_1 = deps.user().await;
+    let user_2 = deps.user().await;
+
+    let project = user_1.create_project().await;
+    user_1
+        .grant_full_project_access(&project, &user_2.account_id)
+        .await;
+
+    let plugin_wasm_key = user_1.add_plugin_wasm("app_and_library_library").await;
+
+    deps.component_service()
+        .create_plugin(
+            &user_2.token,
+            &user_1.account_id,
+            PluginDefinitionCreation {
+                name: "library-plugin-1".to_string(),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: vec![],
+                homepage: "none".to_string(),
+                specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+                    blob_storage_key: plugin_wasm_key,
+                }),
+                scope: PluginScope::project(project.clone()),
+            },
+        )
+        .await
+        .unwrap();
+
+    let component_id = user_2
+        .component("app_and_library_app")
+        .unique()
+        .with_project(project.clone())
+        .store()
+        .await;
+
+    let _installation_id = user_2
+        .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
+        .await;
+
+    let worker = user_2.start_worker(&component_id, "worker1").await;
+
+    let response = user_2
+        .invoke_and_await(
+            &worker,
+            "it:app-and-library-app/app-api.{app-function}",
+            vec![],
+        )
+        .await;
+
+    assert_eq!(response, Ok(vec![Value::U64(2)]))
 }

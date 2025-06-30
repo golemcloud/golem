@@ -49,6 +49,10 @@ impl PluginApi {
         let record = recorded_http_api_request!("list_plugins",);
         let auth = AuthCtx::new(token.secret());
 
+        // FIXME: This endpoint behaves weirdly depending on the parameters passed to it.
+        // When a scope is provided it will return all plugins that are available in that scope, even if they are owned by other accounts.
+        // If no scope is provided all plugins _owned by the current account_
+
         let response = if let Some(scope) = scope.0 {
             self.plugin_service
                 .list_plugins_for_scope(&auth, &scope)
