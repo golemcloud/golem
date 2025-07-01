@@ -21,7 +21,9 @@ use anyhow::anyhow;
 use golem_common::model::oplog::{WorkerError, WorkerResourceId};
 use golem_common::model::{IdempotencyKey, WorkerStatus};
 use golem_common::virtual_exports;
-use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
+use golem_wasm_rpc::wasmtime::{
+    decode_param, encode_output, type_to_analysed_type, DecodeParamResult,
+};
 use golem_wasm_rpc::Value;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use tracing::{debug, error, Instrument};
@@ -205,13 +207,14 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     let function = find_function(&mut store, instance, &parsed)?;
 
-    validate_function_parameters(
+    let decoded_params = validate_function_parameters(
         &mut store,
         &function,
         &full_function_name,
         &function_input,
         parsed.function().is_indexed_resource(),
-    )?;
+    )
+    .await?;
 
     if store.data().is_live() {
         store
@@ -250,7 +253,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     let mut call_result = match function {
         FindFunctionResult::ExportedFunction(function) => {
-            invoke(&mut store, function, &function_input, &full_function_name).await
+            invoke(&mut store, function, decoded_params, &full_function_name).await
         }
         FindFunctionResult::ResourceDrop => {
             // Special function: drop
@@ -269,16 +272,16 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     call_result
 }
 
-fn validate_function_parameters(
+async fn validate_function_parameters(
     store: &mut impl AsContextMut<Data = impl WorkerCtx>,
     function: &FindFunctionResult,
     raw_function_name: &str,
     function_input: &[Value],
     using_indexed_resource: bool,
-) -> Result<(), GolemError> {
+) -> Result<Vec<DecodeParamResult>, GolemError> {
     match function {
         FindFunctionResult::ExportedFunction(func) => {
-            let store = store.as_context_mut();
+            let mut store = store.as_context_mut();
             let param_types: Vec<_> = if using_indexed_resource {
                 // For indexed resources we are going to inject the resource handle as the first parameter
                 // later so we only have to validate the remaining parameters
@@ -298,6 +301,15 @@ fn validate_function_parameters(
                     ),
                 });
             }
+
+            let mut results = Vec::new();
+            for (param, (_, param_type)) in function_input.iter().zip(param_types.iter()) {
+                let decoded = decode_param(param, param_type, store.data_mut())
+                    .await
+                    .map_err(GolemError::from)?;
+                results.push(decoded);
+            }
+            Ok(results)
         }
         FindFunctionResult::ResourceDrop => {
             let expected = if using_indexed_resource { 0 } else { 1 };
@@ -331,10 +343,10 @@ fn validate_function_parameters(
                     }),
                 }?;
             }
+            Ok(vec![])
         }
-        FindFunctionResult::IncomingHttpHandlerBridge => {}
+        FindFunctionResult::IncomingHttpHandlerBridge => Ok(vec![]),
     }
-    Ok(())
 }
 
 async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
@@ -411,12 +423,21 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
                 .map(|vnt| vnt.value)
                 .collect();
 
+            let decoded_constructor_params: Vec<DecodeParamResult> = validate_function_parameters(
+                store,
+                &FindFunctionResult::ExportedFunction(resource_constructor),
+                raw_function_name,
+                &constructor_params,
+                true, // using indexed resource
+            )
+            .await?;
+
             debug!("Creating new indexed resource with parameters {constructor_params:?}");
 
             let constructor_result = invoke(
                 store,
                 resource_constructor,
-                &constructor_params,
+                decoded_constructor_params,
                 raw_function_name,
             )
             .await?;
@@ -447,18 +468,14 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
 async fn invoke<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
-    function_input: &[Value],
+    decoded_function_input: Vec<DecodeParamResult>,
     raw_function_name: &str,
 ) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
-    let param_types = function.params(&store);
 
     let mut params = Vec::new();
     let mut resources_to_drop = Vec::new();
-    for (param, (_, param_type)) in function_input.iter().zip(param_types.iter()) {
-        let result = decode_param(param, param_type, store.data_mut())
-            .await
-            .map_err(GolemError::from)?;
+    for result in decoded_function_input {
         params.push(result.val);
         resources_to_drop.extend(result.resources_to_drop);
     }
