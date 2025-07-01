@@ -253,7 +253,25 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     let mut call_result = match function {
         FindFunctionResult::ExportedFunction(function) => {
-            invoke(&mut store, function, decoded_params, &full_function_name).await
+            let final_decoded_params = if parsed.function().is_indexed_resource() {
+                let param_types = function.params(&store);
+                let decoded_self_param =
+                    decode_param(&function_input[0], &param_types[0].1, store.data_mut()).await?;
+
+                let mut result = vec![decoded_self_param];
+                result.extend(decoded_params);
+                result
+            } else {
+                decoded_params
+            };
+
+            invoke(
+                &mut store,
+                function,
+                final_decoded_params,
+                &full_function_name,
+            )
+            .await
         }
         FindFunctionResult::ResourceDrop => {
             // Special function: drop
@@ -428,7 +446,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
                 &FindFunctionResult::ExportedFunction(resource_constructor),
                 raw_function_name,
                 &constructor_params,
-                true, // using indexed resource
+                false,
             )
             .await?;
 
