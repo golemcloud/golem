@@ -1941,6 +1941,36 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         info!("Finished recovering workers");
         Ok(())
     }
+
+    async fn on_worker_update_failed_to_start<T: HasAll<Ctx> + Send + Sync>(
+        this: &T,
+        owned_worker_id: &OwnedWorkerId,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    ) -> Result<(), GolemError> {
+        let worker = this
+            .worker_activator()
+            .get_or_create_suspended(owned_worker_id, None, None, None, None)
+            .await?;
+
+        let entry = OplogEntry::failed_update(target_version, details.clone());
+        let timestamp = entry.timestamp();
+        worker.oplog().add_and_commit(entry).await;
+        let metadata = worker.get_metadata()?;
+        let mut status = metadata.last_known_status;
+        status.failed_updates.push(FailedUpdateRecord {
+            timestamp,
+            target_version,
+            details: details.clone(),
+        });
+
+        if status.skipped_regions.is_overridden() {
+            status.skipped_regions.drop_override()
+        }
+
+        worker.update_status(status).await;
+        Ok(())
+    }
 }
 
 #[async_trait]
