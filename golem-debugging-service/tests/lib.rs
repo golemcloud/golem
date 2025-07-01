@@ -48,7 +48,8 @@ pub mod services;
 pub use debug_mode::context::DebugExecutorTestContext;
 pub use debug_mode::dsl::TestDslDebugMode;
 pub use debug_mode::start_debug_worker_executor;
-
+use golem_test_framework::components::redis::docker::DockerRedis;
+use golem_test_framework::components::redis_monitor::docker::DockerRedisMonitor;
 pub use regular_mode::context::RegularExecutorTestContext;
 pub use regular_mode::start_regular_worker_executor;
 
@@ -226,15 +227,26 @@ impl Debug for RegularWorkerExecutorTestDependencies {
 
 impl RegularWorkerExecutorTestDependencies {
     pub async fn new() -> Self {
-        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
-            6379,
-            "".to_string(),
-            Level::INFO,
-            Level::ERROR,
-        ));
-        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-            SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
-        );
+        let docker_active = match option_env!("GOLEM_DOCKER_SERVICES").unwrap() {
+            "true" => { true }
+            _ => { false }
+        };
+
+        let redis: Arc<dyn Redis + Send + Sync + 'static> = if !docker_active {
+            Arc::new(SpawnedRedis::new(
+                6379,
+                "".to_string(),
+                Level::INFO,
+                Level::ERROR,
+            ))
+        } else {
+            Arc::new(DockerRedis::new( "test_network", "".to_string() ).await)
+        };
+        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = if !docker_active {
+            Arc::new(SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR))
+        } else {
+            Arc::new(DockerRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR))
+        };
 
         let blob_storage = Arc::new(
             FileSystemBlobStorage::new(Path::new("data/blobs"))
