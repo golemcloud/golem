@@ -412,7 +412,7 @@ pub trait TestDsl {
         &self,
         worker_id: &WorkerId,
         from: OplogIndex,
-    ) -> crate::Result<Vec<PublicOplogEntry>>;
+    ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
     async fn search_oplog(
         &self,
         worker_id: &WorkerId,
@@ -1438,7 +1438,7 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         &self,
         worker_id: &WorkerId,
         from: OplogIndex,
-    ) -> crate::Result<Vec<PublicOplogEntry>> {
+    ) -> crate::Result<Vec<PublicOplogEntryWithIndex>> {
         let mut result = Vec::new();
         let mut cursor = None;
 
@@ -1468,7 +1468,17 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
                                 chunk
                                     .entries
                                     .into_iter()
-                                    .map(|entry| entry.try_into())
+                                    .enumerate()
+                                    .map(|(chunk_idx, entry)| {
+                                        PublicOplogEntry::try_from(entry).map(
+                                            |public_oplog_entry| PublicOplogEntryWithIndex {
+                                                entry: public_oplog_entry,
+                                                oplog_index: OplogIndex::from_u64(
+                                                    chunk.first_index_in_chunk + chunk_idx as u64,
+                                                ),
+                                            },
+                                        )
+                                    })
                                     .collect::<Result<Vec<_>, _>>()
                                     .map_err(|err| {
                                         anyhow!("Failed to convert oplog entry: {err}")
@@ -1547,8 +1557,12 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let oplog = TestDsl::get_oplog(self, worker_id, OplogIndex::INITIAL).await?;
 
-        for (idx, entry) in oplog.iter().enumerate() {
-            debug!("#{}:\n{}", idx + 1, debug_render_oplog_entry(entry));
+        for entry in oplog.iter() {
+            debug!(
+                "#{}:\n{}",
+                entry.oplog_index,
+                debug_render_oplog_entry(&entry.entry)
+            );
         }
 
         Ok(())
@@ -2242,7 +2256,11 @@ pub trait TestDslUnsafe {
     async fn simulated_crash(&self, worker_id: &WorkerId);
     async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
     async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
-    async fn get_oplog(&self, worker_id: &WorkerId, from: OplogIndex) -> Vec<PublicOplogEntry>;
+    async fn get_oplog(
+        &self,
+        worker_id: &WorkerId,
+        from: OplogIndex,
+    ) -> Vec<PublicOplogEntryWithIndex>;
     async fn search_oplog(
         &self,
         worker_id: &WorkerId,
@@ -2584,7 +2602,11 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to update worker")
     }
 
-    async fn get_oplog(&self, worker_id: &WorkerId, from: OplogIndex) -> Vec<PublicOplogEntry> {
+    async fn get_oplog(
+        &self,
+        worker_id: &WorkerId,
+        from: OplogIndex,
+    ) -> Vec<PublicOplogEntryWithIndex> {
         <T as TestDsl>::get_oplog(self, worker_id, from)
             .await
             .expect("Failed to get oplog")
