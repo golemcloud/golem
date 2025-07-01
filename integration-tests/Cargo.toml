@@ -64,8 +64,8 @@ path = "src/rib_repl/main.rs"
 harness = false
 test = false
 
-[[bin]]
-name = "benchmarks"
-path = "src/benchmarks/all.rs"
-harness = false
-test = false
+# [[bin]]
+# name = "benchmarks"
+# path = "src/benchmarks/all.rs"
+# harness = false
+# test = false

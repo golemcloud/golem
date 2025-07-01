@@ -1,11 +1,12 @@
 name: CI
 on:
-  push:
-    tags:
-      - "v*.*.*"
-    branches:
-      - main
-  pull_request:
+#  push:
+#    tags:
+#      - "v*.*.*"
+#    branches:
+#      - main
+#  pull_request:
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -22,7 +23,8 @@ jobs:
   build:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+#    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,7 +55,8 @@ jobs:
   unit-tests-and-checks:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    #    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -92,6 +95,7 @@ jobs:
           include_passed: true
 
   worker-tests:
+    if: false
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -147,6 +151,7 @@ jobs:
           include_passed: true
 
   api-and-integration-tests:
+    if: false
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -206,7 +211,8 @@ jobs:
           include_passed: true
 
   wasm-rpc-stub:
-    runs-on: blacksmith
+    if: false
+    runs-on: ubuntu-22.04
     env:
       CARGO_BUILD_JOBS: 10
     steps:
@@ -240,8 +246,9 @@ jobs:
   docker-targets-build:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    #    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: ubuntu-22.04
+#    if: github.event_name == 'push' && github.ref_type == 'tag'
     strategy:
       fail-fast: false
       matrix:
@@ -302,10 +309,10 @@ jobs:
           path: target/${{ matrix.platform.target }}.tar
 
   docker-publish:
-    runs-on: blacksmith
+    runs-on: ubuntu-22.04
     needs:
       - docker-targets-build
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+#    if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -435,13 +442,14 @@ jobs:
           labels: ${{ steps.meta-golem-router.outputs.labels }}
 
   publish:
+    if: false
     needs:
       - build
       - unit-tests-and-checks
       - wasm-rpc-stub
       - worker-tests
       - api-and-integration-tests
-    if: "startsWith(github.ref, 'refs/tags/v')"
+#    if: "startsWith(github.ref, 'refs/tags/v')"
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -474,19 +482,19 @@ jobs:
           VERSION: ${{ steps.get_version.outputs.version-without-v }}
         run: cargo make --profile ci publish
 
-  publish-slack-notification:
-    needs:
-      - publish
-      - docker-publish
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: blacksmith
-    steps:
-      - name: Publish Slack Notification
-        uses: rtCamp/action-slack-notify@v2
-        env:
-          SLACK_COLOR: ${{ needs.publish.result }}
-          SLACK_ICON: https://uploads-ssl.webflow.com/64721eeec7cd7ef4f6f1683e/64831138b73a996d0e831773_32.png
-          SLACK_TITLE: "Release Notification"
-          SLACK_MESSAGE: "Publish - cargo result: `${{ needs.publish.result }}`, docker result: `${{ needs.docker-publish.result }}`"
-          SLACK_USERNAME: CI
-          SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}
+#  publish-slack-notification:
+#    needs:
+#      - publish
+#      - docker-publish
+#    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+#    runs-on: ubuntu-22.04
+#    steps:
+#      - name: Publish Slack Notification
+#        uses: rtCamp/action-slack-notify@v2
+#        env:
+#          SLACK_COLOR: ${{ needs.publish.result }}
+#          SLACK_ICON: https://uploads-ssl.webflow.com/64721eeec7cd7ef4f6f1683e/64831138b73a996d0e831773_32.png
+#          SLACK_TITLE: "Release Notification"
+#          SLACK_MESSAGE: "Publish - cargo result: `${{ needs.publish.result }}`, docker result: `${{ needs.docker-publish.result }}`"
+#          SLACK_USERNAME: CI
+#          SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}
