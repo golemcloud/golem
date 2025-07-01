@@ -37,6 +37,12 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
+async fn test_rib_repl_with_agents(deps: &EnvBasedTestDependencies) {
+    test_repl_invoking_agentic_functions(deps, Some("worker-repl-agents")).await
+}
+
+#[test]
+#[tracing::instrument]
 async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     test_repl_invoking_functions(deps, Some("worker-repl-simple-test")).await;
 }
@@ -57,6 +63,60 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
 #[tracing::instrument]
 async fn test_rib_repl_with_resource_without_param(deps: &EnvBasedTestDependencies) {
     test_repl_invoking_resource_methods(deps, None).await;
+}
+
+async fn test_repl_invoking_agentic_functions(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
+    let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
+        history_file: None,
+        dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
+        worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
+        printer: None,
+        component_source: Some(ComponentSource {
+            component_name: "golem_agentic_exp".to_string(),
+            source_path: deps.component_directory().join("golem_agentic_exp.wasm"),
+        }),
+        prompt: None,
+        command_registry: None,
+    })
+        .await
+        .expect("Failed to bootstrap REPL");
+
+    let rib1 = match worker_name {
+        Some(name) => format!(r#"let worker = instance("{name}")"#),
+        None => r#"let worker = instance()"#.to_string(),
+    };
+
+    let rib2 = r#"
+      let resource = worker.agent("AssistantAgent", "foo")
+    "#;
+
+    let rib3 = r#"
+      resource.invoke("ask", ["Newyork"])
+     "#;
+
+
+    let result = rib_repl
+        .execute(&rib1)
+        .await
+        .expect("Failed to process command");
+
+    dbg!(&result);
+
+    let result = rib_repl
+        .execute(&rib2)
+        .await
+        .expect("Failed to process command");
+
+    dbg!(&result);
+
+    let result = rib_repl
+        .execute(&rib3)
+        .await
+        .expect("Failed to process command");
+
+    dbg!(&result);
+
+    assert!(false);
 }
 
 async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {

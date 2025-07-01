@@ -32,6 +32,7 @@ wasmtime::component::bindgen!({
         "golem:api/context/span": super::durable_host::golem::invocation_context_api::SpanEntry,
         "golem:api/context/invocation-context": super::durable_host::golem::invocation_context_api::InvocationContextEntry,
         "golem:api/host/get-workers": super::durable_host::golem::v1x::GetWorkersEntry,
+        "golem:api/host/remote-agent": super::durable_host::golem::v1x::RemoteAgentEntry,
         "golem:api/oplog/get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
         "golem:api/oplog/search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
         "golem:durability/durability/lazy-initialized-pollable": super::durable_host::durability::LazyInitializedPollableEntry,

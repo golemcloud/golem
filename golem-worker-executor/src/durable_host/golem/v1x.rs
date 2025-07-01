@@ -40,12 +40,16 @@ use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
-use golem_wasm_rpc::HostWasmRpc;
+use golem_wasm_rpc::{HostWasmRpc, Uri, WasmRpcEntry};
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
+use golem_common::base_model::TargetWorkerId;
+use golem_common::model::invocation_context::SpanId;
+use crate::durable_host::wasm_rpc::{create_rpc_connection_span, WasmRpcEntryPayload};
+use crate::services::rpc::RpcDemand;
 
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -103,21 +107,72 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     }
 }
 
+pub struct RemoteAgentEntry {
+    pub payload: Box<dyn std::any::Any + Send + Sync>,
+}
+
+pub enum RemoteAgentEntryPayload {
+    Interface {
+        #[allow(dead_code)]
+        demand: Box<dyn RpcDemand>,
+        remote_worker_id: OwnedWorkerId,
+        span_id: SpanId,
+    }
+}
+
+async fn construct_remote_agent_resource<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    remote_worker_id: TargetWorkerId,
+) -> anyhow::Result<Resource<RemoteAgentEntry>> {
+    let remote_worker_id = ctx
+        .generate_unique_local_worker_id(remote_worker_id)
+        .await?;
+
+    let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
+
+    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.account_id, &remote_worker_id);
+    let demand = ctx.rpc().create_demand(&remote_worker_id).await;
+    let entry = ctx.table().push(RemoteAgentEntry {
+        payload: Box::new(RemoteAgentEntryPayload::Interface {
+            demand,
+            remote_worker_id,
+            span_id: span.span_id().clone(),
+        }),
+    })?;
+    Ok(entry)
+}
+
+
 impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
     for DurableWorkerCtx<Ctx>
 {
     async fn new(
         &mut self,
         agent: AgentDependency,
-        agent_id: wasmtime::component::__internal::String,
-    ) -> anyhow::Result<wasmtime::component::Resource<RemoteAgent>> {
-        todo!("Implement RemoteAgent creation in DurableWorkerCtx");
+        agent_id: String,
+    ) -> anyhow::Result<wasmtime::component::Resource<RemoteAgentEntry>> {
+        self.observe_function_call("golem::host::remote-agent", "new");
+
+        let agent_name = agent.agent_name;
+
+        dbg!(agent_name.clone());
+
+        dbg!("here??");
+
+        let worker_id: WorkerId = WorkerId {
+            component_id: ComponentId(Uuid::new_v4()), // TODO; what to do here??
+            worker_name: agent_id.to_string(),
+        };
+
+        let remote_worker_id = worker_id.into_target_worker_id();
+
+        construct_remote_agent_resource(self, remote_worker_id).await
     }
 
     async fn invoke(
         &mut self,
-        self_: wasmtime::component::Resource<RemoteAgent>,
-        method_name: wasmtime::component::__internal::String,
+        self_: wasmtime::component::Resource<RemoteAgentEntry>,
+        method_name: String,
         input: wasmtime::component::__internal::Vec<wasmtime::component::__internal::String>,
     ) -> anyhow::Result<StatusUpdate> {
         todo!()
@@ -125,7 +180,7 @@ impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
 
     async fn drop(
         &mut self,
-        rep: wasmtime::component::Resource<RemoteAgent>,
+        rep: wasmtime::component::Resource<RemoteAgentEntry>,
     ) -> anyhow::Result<()> {
         todo!()
     }
