@@ -22,6 +22,7 @@ use golem_common::model::public_oplog::{
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
+use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::config::TestDependencies;
@@ -2099,13 +2100,13 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
 
     for e in entries {
         let end = matches!(
-            e,
+            &e.entry,
             PublicOplogEntry::CommittedRemoteTransaction(_)
                 | PublicOplogEntry::RolledBackRemoteTransaction(_)
                 | PublicOplogEntry::Jump(_)
         );
 
-        group.push(e);
+        group.push(e.entry);
 
         if end {
             grouped.push(group.clone());

@@ -84,18 +84,26 @@ async fn get_oplog_1(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog2 = executor.get_oplog(&worker_id, OplogIndex::NONE).await;
     drop(executor);
 
     // Whether there is an "enqueued invocation" entry or just directly started invocation
     // depends on timing
     assert!(oplog.len() >= 12 && oplog.len() <= 14);
-    assert!(matches!(oplog[0], PublicOplogEntry::Create(_)));
+    assert_eq!(oplog[0].oplog_index, OplogIndex::INITIAL);
+    assert!(matches!(oplog[0].entry, PublicOplogEntry::Create(_)));
+
+    assert_eq!(oplog2[0].oplog_index, OplogIndex::INITIAL);
+    assert!(matches!(oplog2[0].entry, PublicOplogEntry::Create(_)));
+
     assert_eq!(
         oplog
             .iter()
             .filter(
-                |entry| matches!(entry, PublicOplogEntry::ExportedFunctionInvoked(
+                |entry| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
         ExportedFunctionInvokedParameters { function_name, .. }
     ) if function_name == "golem:it/api.{generate-idempotency-keys}")
             )
@@ -247,7 +255,7 @@ async fn get_oplog_with_api_changing_updates(
     // there might be a pending invocation entry before the update entry. Filter it out to make the test more robust
     let oplog = oplog
         .into_iter()
-        .filter(|entry| !matches!(entry, PublicOplogEntry::PendingWorkerInvocation(_)))
+        .filter(|entry| !matches!(entry.entry, PublicOplogEntry::PendingWorkerInvocation(_)))
         .collect::<Vec<_>>();
 
     check!(result[0] == Value::U64(11));
