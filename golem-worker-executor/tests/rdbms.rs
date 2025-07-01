@@ -1982,7 +1982,7 @@ enum TransactionOplogBlockEnd {
 }
 
 fn check_transaction_oplog_entries<T: RdbmsType>(
-    entries: Vec<PublicOplogEntry>,
+    entries: Vec<PublicOplogEntryWithIndex>,
     expected_ends: Option<Vec<TransactionOplogBlockEnd>>,
 ) {
     fn check_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>) -> TransactionOplogBlockEnd {
