@@ -120,28 +120,6 @@ pub enum RemoteAgentEntryPayload {
     }
 }
 
-async fn construct_remote_agent_resource<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_worker_id: TargetWorkerId,
-) -> anyhow::Result<Resource<RemoteAgentEntry>> {
-    let remote_worker_id = ctx
-        .generate_unique_local_worker_id(remote_worker_id)
-        .await?;
-
-    let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
-
-    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.account_id, &remote_worker_id);
-    let demand = ctx.rpc().create_demand(&remote_worker_id).await;
-    let entry = ctx.table().push(RemoteAgentEntry {
-        payload: Box::new(RemoteAgentEntryPayload::Interface {
-            demand,
-            remote_worker_id,
-            span_id: span.span_id().clone(),
-        }),
-    })?;
-    Ok(entry)
-}
-
 
 impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
     for DurableWorkerCtx<Ctx>
@@ -150,7 +128,7 @@ impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
         &mut self,
         agent: AgentDependency,
         agent_id: String,
-    ) -> anyhow::Result<wasmtime::component::Resource<RemoteAgentEntry>> {
+    ) -> anyhow::Result<wasmtime::component::Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::host::remote-agent", "new");
 
         let agent_name = agent.agent_name;
@@ -166,12 +144,12 @@ impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
 
         let remote_worker_id = worker_id.into_target_worker_id();
 
-        construct_remote_agent_resource(self, remote_worker_id).await
+        crate::durable_host::wasm_rpc::construct_wasm_rpc_resource(self, remote_worker_id).await
     }
 
     async fn invoke(
         &mut self,
-        self_: wasmtime::component::Resource<RemoteAgentEntry>,
+        self_: wasmtime::component::Resource<WasmRpcEntry>,
         method_name: String,
         input: wasmtime::component::__internal::Vec<wasmtime::component::__internal::String>,
     ) -> anyhow::Result<StatusUpdate> {
@@ -180,7 +158,7 @@ impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
 
     async fn drop(
         &mut self,
-        rep: wasmtime::component::Resource<RemoteAgentEntry>,
+        rep: wasmtime::component::Resource<WasmRpcEntry>,
     ) -> anyhow::Result<()> {
         todo!()
     }
