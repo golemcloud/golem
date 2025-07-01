@@ -162,7 +162,7 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         .expect("Expect at least one entry in source oplog");
 
     assert!(matches!(
-        log_record,
+        &log_record.entry,
         PublicOplogEntry::ExportedFunctionInvoked(_)
     ));
 
@@ -347,7 +347,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .expect("Expect at least one entry in source oplog");
 
     assert!(matches!(
-        log_record,
+        &log_record.entry,
         PublicOplogEntry::ExportedFunctionCompleted(_)
     ));
 
@@ -583,7 +583,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
 
     let entry = oplog.last().unwrap().clone();
 
-    match entry {
+    match entry.entry {
         PublicOplogEntry::ExportedFunctionCompleted(parameters) => {
             assert_eq!(parameters.response.map(|vat| vat.value), Some(expected));
         }

@@ -100,8 +100,12 @@ pub async fn get_public_oplog_chunk(
     let mut entries = Vec::new();
     let mut current_component_version = initial_component_version;
     let mut next_oplog_index = initial_oplog_index;
+    let mut first_index_in_chunk = None;
 
     for (index, raw_entry) in raw_entries {
+        if first_index_in_chunk.is_none() {
+            first_index_in_chunk = Some(index);
+        }
         if let Some(version) = raw_entry.specifies_component_version() {
             current_component_version = version;
         }
@@ -123,7 +127,7 @@ pub async fn get_public_oplog_chunk(
         entries,
         next_oplog_index,
         current_component_version,
-        first_index_in_chunk: initial_oplog_index,
+        first_index_in_chunk: first_index_in_chunk.unwrap_or(initial_oplog_index),
         last_index,
     })
 }

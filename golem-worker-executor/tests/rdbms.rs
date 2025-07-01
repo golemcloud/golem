@@ -21,6 +21,7 @@ use golem_common::model::public_oplog::{
     PublicOplogEntry, TimestampParameter, WriteRemoteBatchedParameters,
 };
 use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
+use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::config::TestDependencies;
@@ -1189,7 +1190,7 @@ fn query_empty_ok_response() -> serde_json::Value {
     query_ok_response(vec![], vec![])
 }
 
-fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>) {
+fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntryWithIndex>) {
     fn check_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>) {
         let mut begin_entry: Option<(usize, TimestampParameter)> = None;
         let mut end_entry: Option<(usize, EndRegionParameters)> = None;
@@ -1253,9 +1254,9 @@ fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>)
     let mut group: Vec<PublicOplogEntry> = Vec::new();
 
     for e in entries {
-        let end = matches!(e, PublicOplogEntry::EndRemoteWrite(_));
+        let end = matches!(&e.entry, PublicOplogEntry::EndRemoteWrite(_));
 
-        group.push(e);
+        group.push(e.entry);
 
         if end {
             grouped.push(group.clone());
