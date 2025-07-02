@@ -995,15 +995,37 @@ async fn update_component_version_environment_variable(
         .auto_update_worker(&worker_id, target_version1)
         .await;
 
-    // FIXME: broken as get-environment during the replay is getting cached
-    // {
-    //     let result = executor
-    //         .invoke_and_await(&worker_id, "golem:component/api.{get-version-from-env-var}", vec![])
-    //         .await
-    //         .unwrap();
+    {
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
+            .await
+            .unwrap();
 
-    //     assert_eq!(result, vec![Value::String("1".to_string())]);
-    // }
+        assert_eq!(result, vec![Value::String("0".to_string())]);
+
+        // FIXME: broken as get-environment during the replay is getting cached
+        // assert_eq!(result, vec![Value::String("1".to_string())]);
+    }
+
+    // worker created on the new version sees correct component version
+    {
+        let worker2 = executor.start_worker(&component_id, "worker-2").await;
+
+        let result = executor
+            .invoke_and_await(
+                &worker2,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, vec![Value::String("1".to_string())]);
+    }
 
     let target_version2 = executor
         .update_component(&component_id, "update-test-env-var")
