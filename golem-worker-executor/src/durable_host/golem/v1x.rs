@@ -185,6 +185,7 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
             Value::String(method_name),
             str(),
         );
+
         let method_name = WitValue::from(method_name);
 
         let random_arg_list = ValueAndType::new(Value::List(vec![Value::String("newyork".to_string())]), list(str()));
@@ -203,13 +204,47 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
         let result = Value::from(value);
 
         match result {
-            Value::String(str) => {
-                Ok(StatusUpdate::Emit("invoked remote worker method".to_string()))
+            Value::Tuple(values) => {
+                // not sure why it is vec of value -
+                let value = values.into_iter().next().expect("Expected a single value in the tuple from remote worker method");
+
+                match value {
+                    // Because the result is a Variant of StatusUpdate
+                    // this code may not be required in real imol cleanups as part of code first agents
+                    Value::Variant{case_idx, case_value} => {
+                        match case_value {
+                            Some(value) => match value.as_ref() {
+                                Value::String(s) => {
+                                    // This is a demo, so we just return the string as a status update
+                                    Ok(StatusUpdate::Emit(s.to_string()))
+                                }
+                                _ => {
+                                    // This is not expected, but we can handle it gracefully
+                                    Err(anyhow!("(only in demo) Unexpected value type from remote worker method: {:?}", value))
+                                }
+                            }
+                            None => {
+                                // This is not expected, but we can handle it gracefully
+                                Err(anyhow!("(only in demo) No value returned from remote worker method"))
+                            }
+                        }
+                    }
+
+                    _ => {
+                        // These are not needed
+                        Err(anyhow!("(only in demo) Unexpected result type from remote worker method"))
+                    }
+
+
+                }
+
             }
+
             _ => {
-                // These are not needed
-                Err(anyhow!("(demo) Unexpected result type from remote worker method: {:?}", result))
+                Err(anyhow!("(only in demo) Unexpected result type from remote worker method: {:?}", result))
             }
+
+
         }
     }
 
