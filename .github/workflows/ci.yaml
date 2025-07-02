@@ -325,7 +325,8 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Prepare
         run: |
-          echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
+#          echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
+          echo "PLATFORMS=linux/amd64" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         name: Download Targets
         with:
