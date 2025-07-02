@@ -101,23 +101,21 @@ async fn test_repl_invoking_agentic_functions(deps: &EnvBasedTestDependencies, w
         .await
         .expect("Failed to process command");
 
-    dbg!(&result);
-
+    assert_eq!(result, Some(RibResult::Unit));
+    
     let result = rib_repl
         .execute(&rib2)
         .await
         .expect("Failed to process command");
 
-    dbg!(&result);
+    assert_eq!(result, Some(RibResult::Unit));
 
     let result = rib_repl
         .execute(&rib3)
         .await
         .expect("Failed to process command");
 
-    dbg!(&result);
-
-    assert!(false);
+    assert!(result.is_some());
 }
 
 async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
