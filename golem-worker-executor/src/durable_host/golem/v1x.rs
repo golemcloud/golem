@@ -226,10 +226,9 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
     // and have parallels of a wasm-rpc
     async fn invoke(
         &mut self,
-        resource: wasmtime::component::Resource<WasmRpcEntry>,
+        resource: Resource<WasmRpcEntry>,
         method_name: String,
-        // This will be already wit-value
-        input: wasmtime::component::__internal::Vec<String>,
+        input: Vec<String>,
     ) -> anyhow::Result<StatusUpdate> {
         let method_name = ValueAndType::new(
             Value::String(method_name),
@@ -302,7 +301,7 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
         &mut self,
         rep: wasmtime::component::Resource<WasmRpcEntry>,
     ) -> anyhow::Result<()> {
-        Ok(())
+       HostWasmRpc::drop(self, rep).await
     }
 }
 
