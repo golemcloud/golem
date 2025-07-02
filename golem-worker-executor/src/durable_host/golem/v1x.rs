@@ -141,7 +141,7 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
 
         let worker_id: WorkerId = WorkerId {
             component_id: ComponentId(Uuid::from_u64_pair(component_id.uuid.high_bits, component_id.uuid.low_bits)),
-            worker_name: "a_new_agent_instance".to_string()
+            worker_name: agent_id.clone(),
         };
 
         let remote_worker_id = worker_id.clone().into_target_worker_id();
