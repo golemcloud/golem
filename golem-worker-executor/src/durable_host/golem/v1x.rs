@@ -122,6 +122,29 @@ pub enum RemoteAgentEntryPayload {
     },
 }
 
+pub fn unwrap_constructor_result(constructor_result: Value) -> anyhow::Result<(Uri, u64)> {
+    if let Value::Tuple(values) = constructor_result {
+        if values.len() == 1 {
+            if let Value::Handle { uri, resource_id } = values.into_iter().next().unwrap() {
+                Ok((Uri { value: uri }, resource_id))
+            } else {
+                Err(anyhow!(
+                    "Invalid constructor result: single handle expected"
+                ))
+            }
+        } else {
+            Err(anyhow!(
+                "Invalid constructor result: single result value expected, but got {}",
+                values.len()
+            ))
+        }
+    } else {
+        Err(anyhow!(
+                "Invalid constructor result: a tuple with a single field expected, but got {constructor_result:?}"
+            ))
+    }
+}
+
 impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
     for DurableWorkerCtx<Ctx>
 {
@@ -136,9 +159,7 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
 
         let component_id = self_metadata.worker_id.component_id;
 
-        // TODO: we should be able to use agent_name to detect the component. ask John
-        // This will resolve the issue what happens if the remote agent is from another component as such
-        let _agent_name = agent.agent_name;
+        let agent_name = agent.agent_name;
 
         let worker_id: WorkerId = WorkerId {
             component_id: ComponentId(Uuid::from_u64_pair(component_id.uuid.high_bits, component_id.uuid.low_bits)),
@@ -151,7 +172,6 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
             .generate_unique_local_worker_id(remote_worker_id.clone())
             .await?;
 
-        // TODO: this is repeated in wasm-rpc, so remove it
         let span = create_rpc_connection_span(self, &remote_worker_id).await?;
 
         let remote_worker_id = OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
@@ -167,6 +187,36 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
             }),
         })?;
 
+        let agent_name = ValueAndType::new(Value::String(agent_name.to_string()), str());
+        let agent_id = ValueAndType::new(Value::String(agent_id), str());
+
+        let wit_value_agent_name = WitValue::from(agent_name);
+        let wit_value_agent_id = WitValue::from(agent_id);
+
+        let remote_agent_resource = HostWasmRpc::invoke_and_await(
+            self,
+            entry,
+            "golem:agentic-guest/guest.{agent.new}".to_string(),
+            vec![wit_value_agent_name, wit_value_agent_id]
+        ).await?;
+
+        let resource = remote_agent_resource?;
+
+        let remote_agent_constructor_result: Value = resource.into();
+
+        let (resource_uri, resource_id) = unwrap_constructor_result(remote_agent_constructor_result)?;
+
+        let demand = self.rpc().create_demand(&remote_worker_id).await;
+
+        let entry = self.table().push(WasmRpcEntry {
+            payload: Box::new(WasmRpcEntryPayload::Resource {
+                demand,
+                remote_worker_id,
+                resource_uri,
+                resource_id,
+                span_id: span.span_id().clone(),
+            }),
+        })?;
 
         Ok(entry)
     }
@@ -195,7 +245,7 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
         let result = HostWasmRpc::invoke_and_await(
             self,
             resource,
-            "golem:agentic-guest/guest.{agent(\"WeatherAgent\", \"WeatherAgent\").invoke}".to_string(),
+            "golem:agentic-guest/guest.{[method]agent.invoke}".to_string(),
             vec![method_name, random_arg_wit_list]).await?;
 
         let value = result?;
