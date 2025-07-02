@@ -45,12 +45,13 @@ use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
-use golem_wasm_rpc::{HostWasmRpc, Uri, WasmRpcEntry};
+use golem_wasm_rpc::{HostWasmRpc, IntoValue, Uri, Value, ValueAndType, WasmRpcEntry, WitValue};
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
+use golem_wasm_ast::analysis::analysed_type::{list, str};
 
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -170,13 +171,46 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
         Ok(entry)
     }
 
+    // Currently I am delegating invoke to invoke-and-await
+    // Probably the spec for remote-agent resource need to consider this
+    // and have parallels of a wasm-rpc
     async fn invoke(
         &mut self,
-        self_: wasmtime::component::Resource<WasmRpcEntry>,
+        resource: wasmtime::component::Resource<WasmRpcEntry>,
         method_name: String,
+        // This will be already wit-value
         input: wasmtime::component::__internal::Vec<String>,
     ) -> anyhow::Result<StatusUpdate> {
-        Ok(StatusUpdate::Emit("invoked remote worker method".to_string()))
+        let method_name = ValueAndType::new(
+            Value::String(method_name),
+            str(),
+        );
+        let method_name = WitValue::from(method_name);
+
+        let random_arg_list = ValueAndType::new(Value::List(vec![Value::String("newyork".to_string())]), list(str()));
+
+        let random_arg_wit_list = WitValue::from(random_arg_list);
+
+        let result = HostWasmRpc::invoke_and_await(
+            self,
+            resource,
+            "golem:agentic-guest/guest.{agent(\"WeatherAgent\", \"WeatherAgent\").invoke}".to_string(),
+            vec![method_name, random_arg_wit_list]).await?;
+
+        let value = result?;
+
+        // Only for demo
+        let result = Value::from(value);
+
+        match result {
+            Value::String(str) => {
+                Ok(StatusUpdate::Emit("invoked remote worker method".to_string()))
+            }
+            _ => {
+                // These are not needed
+                Err(anyhow!("(demo) Unexpected result type from remote worker method: {:?}", result))
+            }
+        }
     }
 
     async fn drop(
