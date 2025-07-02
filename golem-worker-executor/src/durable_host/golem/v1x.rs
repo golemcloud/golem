@@ -150,8 +150,8 @@ impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
             .generate_unique_local_worker_id(remote_worker_id.clone())
             .await?;
 
+        // TODO: this is repeated in wasm-rpc, so remove it
         let span = create_rpc_connection_span(self, &remote_worker_id).await?;
-
 
         let remote_worker_id = OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
 
@@ -166,13 +166,8 @@ impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
             }),
         })?;
 
-        // Err(anyhow!(
-        //     "Remote agents are not supported in durable workers. Use `golem::host::wasm_rpc` instead. {}, {:?}, {:?}", entry.rep(), remote_worker_id, worker_id
-        // ))
 
         Ok(entry)
-
-       //crate::durable_host::wasm_rpc::construct_wasm_rpc_resource(self, remote_worker_id).await
     }
 
     async fn invoke(
