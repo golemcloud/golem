@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::test;
+use test_r::{test, timeout};
 
 use crate::Tracing;
 use anyhow::anyhow;
@@ -37,6 +37,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
+#[timeout(10000)]
 async fn test_rib_repl_with_agents(deps: &EnvBasedTestDependencies) {
     test_repl_invoking_agentic_functions(deps, Some("worker-repl-agents")).await
 }

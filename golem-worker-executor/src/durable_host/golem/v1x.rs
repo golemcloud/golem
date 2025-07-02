@@ -166,11 +166,11 @@ impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
             }),
         })?;
 
-        Err(anyhow!(
-            "Remote agents are not supported in durable workers. Use `golem::host::wasm_rpc` instead. {}, {:?}, {:?}", entry.rep(), remote_worker_id, worker_id
-        ))
+        // Err(anyhow!(
+        //     "Remote agents are not supported in durable workers. Use `golem::host::wasm_rpc` instead. {}, {:?}, {:?}", entry.rep(), remote_worker_id, worker_id
+        // ))
 
-        //Ok(entry)
+        Ok(entry)
 
        //crate::durable_host::wasm_rpc::construct_wasm_rpc_resource(self, remote_worker_id).await
     }
@@ -188,7 +188,7 @@ impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
         &mut self,
         rep: wasmtime::component::Resource<WasmRpcEntry>,
     ) -> anyhow::Result<()> {
-        todo!()
+        Ok(())
     }
 }
 
