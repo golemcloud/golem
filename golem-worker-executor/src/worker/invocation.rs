@@ -48,6 +48,8 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
 
+    debug!("Beginning invocation {full_function_name}");
+
     let result = invoke_observed(
         full_function_name.clone(),
         function_input,
