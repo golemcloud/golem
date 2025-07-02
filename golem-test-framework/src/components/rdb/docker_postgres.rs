@@ -47,7 +47,6 @@ impl DockerPostgresRdb {
                 .with_env_var("POSTGRES_DB", database)
                 .with_env_var("POSTGRES_PASSWORD", password)
                 .with_env_var("POSTGRES_USER", username)
-                .with_network(network(unique_network_id))
                 .start()
         })
         .retries(5)
@@ -56,7 +55,7 @@ impl DockerPostgresRdb {
         .await
         .expect("Failed to start Postgres container");
 
-        let private_host = get_docker_container_name(unique_network_id, container.id()).await;
+//        let private_host = get_docker_container_name(unique_network_id, container.id()).await;
 
         let public_port = container
             .get_host_port_ipv4(port)
@@ -66,7 +65,7 @@ impl DockerPostgresRdb {
         let info = PostgresInfo {
             public_host: "localhost".to_string(),
             public_port,
-            private_host,
+            private_host: container.get_host().await.unwrap().to_string(),
             private_port: port,
             database_name: database.to_string(),
             username: username.to_string(),

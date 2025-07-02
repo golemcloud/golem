@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::num::NonZeroU64;
 use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::wasm_rpc::{create_rpc_connection_span, WasmRpcEntryPayload};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::error::GolemError;
 use crate::get_oplog_entry;
@@ -29,6 +31,7 @@ use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
 use crate::services::oplog::CommitLevel;
+use crate::services::rpc::RpcDemand;
 use crate::services::{HasOplogService, HasPlugins, HasWorker};
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
@@ -36,6 +39,8 @@ use bincode::de::Decoder;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::Decode;
+use golem_common::base_model::TargetWorkerId;
+use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
@@ -46,10 +51,6 @@ use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
-use golem_common::base_model::TargetWorkerId;
-use golem_common::model::invocation_context::SpanId;
-use crate::durable_host::wasm_rpc::{create_rpc_connection_span, WasmRpcEntryPayload};
-use crate::services::rpc::RpcDemand;
 
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -117,9 +118,8 @@ pub enum RemoteAgentEntryPayload {
         demand: Box<dyn RpcDemand>,
         remote_worker_id: OwnedWorkerId,
         span_id: SpanId,
-    }
+    },
 }
-
 
 impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
     for DurableWorkerCtx<Ctx>
@@ -128,23 +128,51 @@ impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
         &mut self,
         agent: AgentDependency,
         agent_id: String,
-    ) -> anyhow::Result<wasmtime::component::Resource<WasmRpcEntry>> {
+    ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::host::remote-agent", "new");
 
-        let agent_name = agent.agent_name;
+        let self_metadata = Host::get_self_metadata(self).await?;
 
-        dbg!(agent_name.clone());
+        let component_id = self_metadata.worker_id.component_id;
 
-        dbg!("here??");
+        // TODO: we should be able to use agent_name to detect the component. ask John
+        // This will resolve the issue what happens if the remote agent is from another component as such
+        let _agent_name = agent.agent_name;
 
         let worker_id: WorkerId = WorkerId {
-            component_id: ComponentId(Uuid::new_v4()), // TODO; what to do here??
-            worker_name: agent_id.to_string(),
+            component_id: ComponentId(Uuid::from_u64_pair(component_id.uuid.high_bits, component_id.uuid.low_bits)),
+            worker_name: "a_new_agent_instance".to_string()
         };
 
-        let remote_worker_id = worker_id.into_target_worker_id();
+        let remote_worker_id = worker_id.clone().into_target_worker_id();
 
-        crate::durable_host::wasm_rpc::construct_wasm_rpc_resource(self, remote_worker_id).await
+        let remote_worker_id = self
+            .generate_unique_local_worker_id(remote_worker_id.clone())
+            .await?;
+
+        let span = create_rpc_connection_span(self, &remote_worker_id).await?;
+
+
+        let remote_worker_id = OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
+
+
+        let demand = self.rpc().create_demand(&remote_worker_id).await;
+
+        let entry = self.table().push(WasmRpcEntry {
+            payload: Box::new(WasmRpcEntryPayload::Interface {
+                demand,
+                remote_worker_id: remote_worker_id.clone(),
+                span_id: span.span_id().clone(),
+            }),
+        })?;
+
+        Err(anyhow!(
+            "Remote agents are not supported in durable workers. Use `golem::host::wasm_rpc` instead. {}, {:?}, {:?}", entry.rep(), remote_worker_id, worker_id
+        ))
+
+        //Ok(entry)
+
+       //crate::durable_host::wasm_rpc::construct_wasm_rpc_resource(self, remote_worker_id).await
     }
 
     async fn invoke(
@@ -168,7 +196,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn discover_agent_definitions(
         &mut self,
     ) -> anyhow::Result<Vec<crate::preview2::golem_api_1_x::host::AgentDefinition>> {
-       Ok(vec![])
+        Ok(vec![])
     }
     async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
         self.observe_function_call("golem::api", "create_promise");
