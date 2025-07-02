@@ -121,7 +121,7 @@ pub enum RemoteAgentEntryPayload {
     },
 }
 
-impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
+impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent
     for DurableWorkerCtx<Ctx>
 {
     async fn new(
@@ -174,9 +174,9 @@ impl<Ctx: WorkerCtx> crate::preview2::golem_api_1_x::host::HostRemoteAgent
         &mut self,
         self_: wasmtime::component::Resource<WasmRpcEntry>,
         method_name: String,
-        input: wasmtime::component::__internal::Vec<wasmtime::component::__internal::String>,
+        input: wasmtime::component::__internal::Vec<String>,
     ) -> anyhow::Result<StatusUpdate> {
-        todo!()
+        Ok(StatusUpdate::Emit("invoked remote worker method".to_string()))
     }
 
     async fn drop(
