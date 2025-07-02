@@ -252,15 +252,15 @@ jobs:
     runs-on: ubuntu-22.04
 #    if: github.event_name == 'push' && github.ref_type == 'tag'
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         platform:
           - platform: linux/amd64
             name: linux/amd64
             target: x86_64-unknown-linux-gnu
-          - platform: linux/arm64
-            name: linux/arm64
-            target: aarch64-unknown-linux-gnu
+#          - platform: linux/arm64
+#            name: linux/arm64
+#            target: aarch64-unknown-linux-gnu
             cross: true
     name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
@@ -344,13 +344,7 @@ jobs:
       - name: Set Docker version
         id: set-version
         run: |
-          if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
-            DOCKER_VERSION=$(echo "${{ github.ref }}" | sed 's|^refs/tags/v||')
-            echo "DOCKER_VERSION=${DOCKER_VERSION}" >> $GITHUB_ENV
-          else
-            COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
-            echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
-          fi
+          echo "DOCKER_VERSION=latest" >> $GITHUB_ENV
       - uses: jpribyl/action-docker-layer-caching@v0.1.1
         continue-on-error: true
       - name: Log in to Docker Hub
