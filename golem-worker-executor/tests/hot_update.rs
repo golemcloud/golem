@@ -967,19 +967,20 @@ async fn update_component_version_environment_variable(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("update-test-env-var").store().await;
 
-    let worker_id = executor
-        .start_worker(&component_id, "worker-1")
-        .await;
+    let worker_id = executor.start_worker(&component_id, "worker-1").await;
 
     {
         let result = executor
-            .invoke_and_await(&worker_id, "golem:component/api.{get-version-from-env-var}", vec![])
+            .invoke_and_await(
+                &worker_id,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
             .await
             .unwrap();
 
@@ -1014,7 +1015,11 @@ async fn update_component_version_environment_variable(
 
     {
         let result = executor
-            .invoke_and_await(&worker_id, "golem:component/api.{get-version-from-env-var}", vec![])
+            .invoke_and_await(
+                &worker_id,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
             .await
             .unwrap();
 
