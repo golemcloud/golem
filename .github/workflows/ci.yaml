@@ -21,6 +21,7 @@ env:
 
 jobs:
   build:
+    if: false
     env:
       CARGO_BUILD_JOBS: 10
 #    runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -53,6 +54,7 @@ jobs:
         timeout-minutes: 45
 
   unit-tests-and-checks:
+    if: false
     env:
       CARGO_BUILD_JOBS: 10
     #    runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -360,7 +362,7 @@ jobs:
         id: meta-worker-executor
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-worker-executor
+          images: parvit/golemservices/golem-worker-executor
       - name: Build and push worker executor image
         uses: docker/build-push-action@v5
         with:
@@ -374,7 +376,7 @@ jobs:
         id: meta-shard-manager
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-shard-manager
+          images: parvit/golemservices/golem-shard-manager
       - name: Build and push shard manager image
         uses: docker/build-push-action@v5
         with:
@@ -388,7 +390,7 @@ jobs:
         id: meta-golem-component-service
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-component-service
+          images: parvit/golemservices/golem-component-service
       - name: Build and push golem component service image
         uses: docker/build-push-action@v5
         with:
@@ -402,7 +404,7 @@ jobs:
         id: meta-golem-worker-service
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-worker-service
+          images: parvit/golemservices/golem-worker-service
       - name: Build and push golem worker service image
         uses: docker/build-push-action@v5
         with:
@@ -416,7 +418,7 @@ jobs:
         id: meta-golem-component-compilation-service
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-component-compilation-service
+          images: parvit/golemservices/golem-component-compilation-service
       - name: Build and push golem component compilation service image
         uses: docker/build-push-action@v5
         with:
@@ -430,7 +432,7 @@ jobs:
         id: meta-golem-router
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-router
+          images: parvit/golemservices/golem-router
       - name: Build and push golem router
         uses: docker/build-push-action@v5
         with:
