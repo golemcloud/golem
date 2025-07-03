@@ -45,7 +45,7 @@ use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
-use golem_wasm_rpc::{HostWasmRpc, IntoValue, Uri, Value, ValueAndType, WasmRpcEntry, WitValue};
+use golem_wasm_rpc::{HostWasmRpc, IntoValue, Uri, Value, ValueAndType, WasmRpcEntry, WitType, WitValue};
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;

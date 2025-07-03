@@ -84,7 +84,7 @@ protobuf = ["dep:bincode", "dep:serde", "dep:prost", "dep:prost-build", "golem-w
 serde = ["dep:serde"]
 stub = []
 text = ["typeinfo", "dep:wasm-wave", "golem-wasm-ast/wave"]
-typeinfo = ["dep:golem-wasm-ast", "golem-wasm-ast/analysis"]
+typeinfo = ["golem-wasm-ast/analysis"]
 wasmtime = [
     "dep:wasmtime",
     "dep:wasmtime-wasi",
