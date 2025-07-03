@@ -258,9 +258,9 @@ jobs:
           - platform: linux/amd64
             name: linux/amd64
             target: x86_64-unknown-linux-gnu
-#          - platform: linux/arm64
-#            name: linux/arm64
-#            target: aarch64-unknown-linux-gnu
+          - platform: linux/arm64
+            name: linux/arm64
+            target: aarch64-unknown-linux-gnu
             cross: true
     name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
@@ -327,7 +327,7 @@ jobs:
 
       - name: Prepare
         run: |
-          echo "PLATFORMS=linux/amd64" >> $GITHUB_ENV
+          echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         name: Download Targets
         with:
@@ -340,6 +340,8 @@ jobs:
           ls -R target
           cd target
           for f in *.tar; do tar xvf "$f"; done
+          cd ..
+          ls -R .
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
