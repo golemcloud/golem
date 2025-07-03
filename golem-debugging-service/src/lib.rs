@@ -296,7 +296,7 @@ pub async fn run_debug_server(
 
     let config = service_dependencies.config();
 
-    let app = Router::new().route("/v1/debugger", any(handle_ws));
+    let app = Router::new().route("/ws", any(handle_ws));
 
     let addr = SocketAddrV4::new(
         config
