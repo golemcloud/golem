@@ -110,6 +110,11 @@ async fn test_application_ensure_concurrent(deps: &Deps) {
 }
 
 #[test]
+async fn test_application_delete(deps: &Deps) {
+    crate::repo::common::test_application_delete(deps).await;
+}
+
+#[test]
 async fn test_environment_create(deps: &Deps) {
     crate::repo::common::test_environment_create(deps).await;
 }

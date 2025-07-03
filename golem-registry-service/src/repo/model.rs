@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use chrono::{DateTime, NaiveDateTime, TimeDelta, Utc};
+use golem_service_base::db::postgres::PostgresLabelledTransaction;
+use golem_service_base::db::sqlite::SqliteLabelledTransaction;
+use golem_service_base::db::LabelledPoolTransaction;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
-use sqlx::query::QueryAs;
+use sqlx::query::{Query, QueryAs};
 use sqlx::Database;
 use std::fmt::Display;
 use std::ops::{Deref, Sub};
@@ -255,6 +258,28 @@ impl RevisionAuditFields {
             deleted: false,
         }
     }
+
+    pub fn deletion(created_by: Uuid) -> Self {
+        Self {
+            created_at: SqlDateTime::now(),
+            created_by,
+            deleted: true,
+        }
+    }
+
+    pub fn ensure_new(self) -> Self {
+        Self {
+            deleted: false,
+            ..self
+        }
+    }
+
+    pub fn ensure_deletion(self) -> Self {
+        Self {
+            deleted: true,
+            ..self
+        }
+    }
 }
 
 /// BindFields is used to extract binding of common field sets
@@ -265,13 +290,10 @@ pub trait BindFields {
 
 impl<'q, DB: Database, O> BindFields for QueryAs<'q, DB, O, <DB as Database>::Arguments<'q>>
 where
-    NaiveDateTime: sqlx::Encode<'q, DB>,
-    NaiveDateTime: sqlx::Type<DB>,
+    NaiveDateTime: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
+    Uuid: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
+    bool: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     Option<SqlDateTime>: sqlx::Encode<'q, DB>,
-    Uuid: sqlx::Encode<'q, DB>,
-    Uuid: sqlx::Type<DB>,
-    bool: sqlx::Encode<'q, DB>,
-    bool: sqlx::Type<DB>,
 {
     fn bind_audit_fields(self, entity_audit_fields: AuditFields) -> Self {
         self.bind(entity_audit_fields.created_at)
@@ -284,5 +306,41 @@ where
         self.bind(entity_revision_audit_fields.created_at)
             .bind(entity_revision_audit_fields.created_by)
             .bind(entity_revision_audit_fields.deleted)
+    }
+}
+
+impl<'q, DB: Database> BindFields for Query<'q, DB, <DB as Database>::Arguments<'q>>
+where
+    NaiveDateTime: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
+    Uuid: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
+    bool: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
+    Option<SqlDateTime>: sqlx::Encode<'q, DB>,
+{
+    fn bind_audit_fields(self, entity_audit_fields: AuditFields) -> Self {
+        self.bind(entity_audit_fields.created_at)
+            .bind(entity_audit_fields.updated_at)
+            .bind(entity_audit_fields.deleted_at)
+            .bind(entity_audit_fields.modified_by)
+    }
+
+    fn bind_revision_audit_fields(self, entity_revision_audit_fields: RevisionAuditFields) -> Self {
+        self.bind(entity_revision_audit_fields.created_at)
+            .bind(entity_revision_audit_fields.created_by)
+            .bind(entity_revision_audit_fields.deleted)
+    }
+}
+
+pub trait ForUpdateSupport: LabelledPoolTransaction {
+    fn requires_and_supports_for_update(&self) -> bool {
+        true
+    }
+}
+
+impl ForUpdateSupport for PostgresLabelledTransaction {}
+
+// NOTE: Sqlite does not support FOR UPDATE, but only one transaction can write at a time
+impl ForUpdateSupport for SqliteLabelledTransaction {
+    fn requires_and_supports_for_update(&self) -> bool {
+        false
     }
 }

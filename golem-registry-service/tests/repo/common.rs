@@ -139,6 +139,44 @@ pub async fn test_application_ensure_concurrent(deps: &Deps) {
     }
 }
 
+pub async fn test_application_delete(deps: &Deps) {
+    let app = deps.create_application().await;
+    let user = deps.create_account().await;
+
+    deps.application_repo
+        .delete(&user.account_id, &app.application_id)
+        .await
+        .unwrap();
+
+    let get_by_id = deps
+        .application_repo
+        .get_by_id(&app.application_id)
+        .await
+        .unwrap();
+    assert!(get_by_id.is_none());
+    let get_by_name = deps
+        .application_repo
+        .get_by_name(&user.account_id, &app.name)
+        .await
+        .unwrap();
+    assert!(get_by_name.is_none());
+
+    // Delete app again, should not fail
+    deps.application_repo
+        .delete(&user.account_id, &app.application_id)
+        .await
+        .unwrap();
+
+    let new_app_with_same_name = deps
+        .application_repo
+        .ensure(&user.account_id, &app.account_id, &app.name)
+        .await
+        .unwrap();
+
+    check!(new_app_with_same_name.name == app.name);
+    check!(new_app_with_same_name.application_id != app.application_id);
+}
+
 pub async fn test_environment_create(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application().await;

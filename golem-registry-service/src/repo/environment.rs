@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::{AuditFields, RevisionAuditFields, SqlBlake3Hash};
+use crate::repo::model::{
+    AuditFields, BindFields, RevisionAuditFields, SqlBlake3Hash, SqlDateTime,
+};
 use async_trait::async_trait;
+use chrono::NaiveDateTime;
 use conditional_trait_gen::trait_gen;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
@@ -21,7 +24,8 @@ use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
-use sqlx::FromRow;
+use sqlx::query::QueryAs;
+use sqlx::{ColumnIndex, Database, FromRow};
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 
@@ -32,7 +36,7 @@ pub struct EnvironmentRecord {
     pub application_id: Uuid,
     #[sqlx(flatten)]
     pub audit: AuditFields,
-    pub current_revision_id: Option<i64>,
+    pub current_revision_id: i64,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -45,6 +49,36 @@ pub struct EnvironmentRevisionRecord {
     pub version_check: bool,
     pub security_overrides: bool,
     pub hash: SqlBlake3Hash,
+}
+
+impl EnvironmentRevisionRecord {
+    fn deletion(created_by: Uuid, environment_id: Uuid, current_revision_id: i64) -> Self {
+        Self {
+            environment_id,
+            revision_id: current_revision_id + 1,
+            audit: RevisionAuditFields::deletion(created_by),
+            compatibility_check: false,
+            version_check: false,
+            security_overrides: false,
+            hash: blake3::hash("".as_bytes()).into(),
+        }
+    }
+
+    pub fn ensure_first(self) -> Self {
+        Self {
+            revision_id: 0,
+            audit: self.audit.ensure_new(),
+            ..self
+        }
+    }
+
+    pub fn ensure_new(self, current_revision_id: i64) -> Self {
+        Self {
+            revision_id: current_revision_id + 1,
+            audit: self.audit.ensure_new(),
+            ..self
+        }
+    }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -80,6 +114,13 @@ pub trait EnvironmentRepo: Send + Sync {
         current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
     ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>>;
+
+    async fn delete(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        current_revision_id: i64,
+    ) -> repo::Result<bool>;
 }
 
 pub struct LoggedEnvironmentRepo<Repo: EnvironmentRepo> {
@@ -92,15 +133,15 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
     }
 
     fn span_name(application_id: &Uuid, name: &str) -> Span {
-        info_span!("environment repository", application_id=%application_id, name)
+        info_span!("environment repository", application_id = % application_id, name)
     }
 
     fn span_env_id(environment_id: &Uuid) -> Span {
-        info_span!("environment repository", environment_id=%environment_id)
+        info_span!("environment repository", environment_id = % environment_id)
     }
 
     fn span_app_id(application_id: &Uuid) -> Span {
-        info_span!("environment repository", application_id=%application_id)
+        info_span!("environment repository", application_id = % application_id)
     }
 }
 
@@ -147,6 +188,19 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         let span = Self::span_env_id(&revision.environment_id);
         self.repo
             .update(current_revision_id, revision)
+            .instrument(span)
+            .await
+    }
+
+    async fn delete(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        current_revision_id: i64,
+    ) -> repo::Result<bool> {
+        let span = Self::span_env_id(user_account_id);
+        self.repo
+            .delete(user_account_id, environment_id, current_revision_id)
             .instrument(span)
             .await
     }
@@ -254,15 +308,16 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
     ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
         let application_id = *application_id;
         let name = name.to_owned();
+        let revision = revision.ensure_first();
 
         let result: repo::Result<EnvironmentCurrentRevisionRecord> =
             self.with_tx("create", |tx| async move {
                 tx.execute(
                     sqlx::query(indoc! { r#"
-                    INSERT INTO environments
-                    (environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
-                    VALUES ($1, $2, $3, $4, $5, NULL, $6, 0)
-                "# })
+                        INSERT INTO environments
+                        (environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                        VALUES ($1, $2, $3, $4, $5, NULL, $6, 0)
+                    "# })
                         .bind(revision.environment_id)
                         .bind(&name)
                         .bind(application_id)
@@ -271,21 +326,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
                         .bind(revision.audit.created_by)
                 ).await?;
 
-                let revision = tx.fetch_one_as(
-                    sqlx::query_as(indoc! { r#"
-                        INSERT INTO environment_revisions
-                        (environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash)
-                        VALUES ($1, 0, $2, $3, FALSE, $4, $5, $6, $7)
-                        RETURNING environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash
-                    "# })
-                        .bind(revision.environment_id)
-                        .bind(revision.audit.created_at)
-                        .bind(revision.audit.created_by)
-                        .bind(revision.compatibility_check)
-                        .bind(revision.version_check)
-                        .bind(revision.security_overrides)
-                        .bind(revision.hash)
-                ).await?;
+                let revision = tx.fetch_one_as(Self::query_as_insert_revision(revision)).await?;
 
                 Ok(EnvironmentCurrentRevisionRecord {
                     name,
@@ -306,48 +347,20 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
         current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
     ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
-        #[derive(sqlx::FromRow)]
-        struct AppIdAndName {
-            application_id: Uuid,
-            name: String,
-        }
-
-        let matching_current_revision: Option<AppIdAndName> = self
-            .with_ro("update - check current revision")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT application_id, name FROM environments
-                    WHERE environment_id = $1 AND current_revision_id = $2 AND deleted_at IS NULL
-                "#})
-                .bind(revision.environment_id)
-                .bind(current_revision_id),
-            )
-            .await?;
-
-        let Some(matching_current_revision) = matching_current_revision else {
+        let Some(checked_env) = self
+            .check_current_revision(&revision.environment_id, current_revision_id)
+            .await?
+        else {
             return Ok(None);
         };
 
         let result: repo::Result<EnvironmentCurrentRevisionRecord> = self
-            .with_tx("update - insert and update", |tx| {
+            .with_tx("update", |tx| {
                 async move {
                     let revision: EnvironmentRevisionRecord = tx
-                        .fetch_one_as(
-                            sqlx::query_as(indoc! { r#"
-                                INSERT INTO environment_revisions
-                                (environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash)
-                                VALUES ($1, $2, $3, $4, FALSE, $5, $6, $7, $8)
-                                RETURNING environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash
-                            "#})
-                                .bind(revision.environment_id)
-                                .bind(current_revision_id + 1)
-                                .bind(revision.audit.created_at)
-                                .bind(revision.audit.created_by)
-                                .bind(revision.compatibility_check)
-                                .bind(revision.version_check)
-                                .bind(revision.security_overrides)
-                                .bind(revision.hash),
-                        )
+                        .fetch_one_as(Self::query_as_insert_revision(
+                            revision.ensure_new(current_revision_id),
+                        ))
                         .await?;
 
                     tx.execute(
@@ -356,20 +369,20 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
                             SET updated_at = $1, modified_by = $2, current_revision_id = $3
                             WHERE environment_id = $4
                         "#})
-                            .bind(&revision.audit.created_at)
-                            .bind(revision.audit.created_by)
-                            .bind(revision.revision_id)
-                            .bind(revision.environment_id),
+                        .bind(&revision.audit.created_at)
+                        .bind(revision.audit.created_by)
+                        .bind(revision.revision_id)
+                        .bind(revision.environment_id),
                     )
-                        .await?;
+                    .await?;
 
                     Ok(EnvironmentCurrentRevisionRecord {
-                        name: matching_current_revision.name,
-                        application_id: matching_current_revision.application_id,
+                        name: checked_env.name,
+                        application_id: checked_env.application_id,
                         revision,
                     })
                 }
-                    .boxed()
+                .boxed()
             })
             .await;
 
@@ -378,5 +391,133 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
             Err(err) if err.is_unique_violation() => Ok(None),
             Err(err) => Err(err),
         }
+    }
+
+    async fn delete(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        current_revision_id: i64,
+    ) -> repo::Result<bool> {
+        let user_account_id = *user_account_id;
+        let environment_id = *environment_id;
+
+        let Some(_checked_env) = self
+            .check_current_revision(&environment_id, current_revision_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+
+        let result: repo::Result<()> = self
+            .with_tx("update", |tx| {
+                async move {
+                    let revision: EnvironmentRevisionRecord = tx
+                        .fetch_one_as(Self::query_as_insert_revision(
+                            EnvironmentRevisionRecord::deletion(
+                                user_account_id,
+                                environment_id,
+                                current_revision_id,
+                            ),
+                        ))
+                        .await?;
+
+                    tx.execute(
+                        sqlx::query(indoc! { r#"
+                            UPDATE environments
+                            SET deleted_at = $1, modified_by = $2, current_revision_id = $3
+                            WHERE environment_id = $4
+                        "#})
+                        .bind(&revision.audit.created_at)
+                        .bind(revision.audit.created_by)
+                        .bind(revision.revision_id)
+                        .bind(revision.environment_id),
+                    )
+                    .await?;
+
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await;
+
+        match result {
+            Ok(()) => Ok(true),
+            Err(err) if err.is_unique_violation() => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+}
+
+#[async_trait]
+trait EnvironmentRepoInternal: EnvironmentRepo {
+    async fn check_current_revision(
+        &self,
+        environment_id: &Uuid,
+        current_revision_id: i64,
+    ) -> repo::Result<Option<EnvironmentRecord>>;
+
+    fn query_as_insert_revision<'q, DB: Database>(
+        revision: EnvironmentRevisionRecord,
+    ) -> QueryAs<'q, DB, EnvironmentRevisionRecord, <DB as Database>::Arguments<'q>>
+    where
+        NaiveDateTime: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        Option<SqlDateTime>: sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        Uuid: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        Vec<u8>: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        bool: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        i64: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        for<'r> &'r str: ColumnIndex<<DB as Database>::Row>;
+}
+
+#[trait_gen(
+    golem_service_base::db::postgres::PostgresPool ->
+        golem_service_base::db::postgres::PostgresPool,
+        golem_service_base::db::sqlite::SqlitePool
+)]
+#[async_trait]
+impl EnvironmentRepoInternal for DbEnvironmentRepo<golem_service_base::db::postgres::PostgresPool> {
+    async fn check_current_revision(
+        &self,
+        environment_id: &Uuid,
+        current_revision_id: i64,
+    ) -> repo::Result<Option<EnvironmentRecord>> {
+        self.with_ro("check_current_revision").fetch_optional_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                FROM environments
+                WHERE environment_id = $1 AND current_revision_id = $2 and deleted_at IS NULL
+            "#})
+                .bind(environment_id)
+                .bind(current_revision_id),
+        )
+            .await
+    }
+
+    fn query_as_insert_revision<'q, DB: Database>(
+        revision: EnvironmentRevisionRecord,
+    ) -> QueryAs<'q, DB, EnvironmentRevisionRecord, <DB as Database>::Arguments<'q>>
+    where
+        NaiveDateTime: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        Option<SqlDateTime>: sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        Uuid: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        Vec<u8>: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        bool: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        i64: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
+        for<'r> &'r str: ColumnIndex<<DB as Database>::Row>,
+    {
+        sqlx::query_as(indoc! { r#"
+            INSERT INTO environment_revisions
+            (environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash
+        "# })
+            .bind(revision.environment_id)
+            .bind(revision.revision_id)
+            .bind_revision_audit_fields(revision.audit)
+            .bind(revision.compatibility_check)
+            .bind(revision.version_check)
+            .bind(revision.security_overrides)
+            .bind(revision.hash)
     }
 }

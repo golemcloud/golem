@@ -175,11 +175,13 @@ CREATE TABLE applications
 
     CONSTRAINT applications_pk
         PRIMARY KEY (application_id),
-    CONSTRAINT applications_name_uk
-        UNIQUE (account_id, name),
     CONSTRAINT applications_accounts_fk
         FOREIGN KEY (account_id) REFERENCES accounts
 );
+
+CREATE UNIQUE INDEX applications_name_uk
+    ON applications (account_id, name)
+    WHERE deleted_at IS NULL;
 
 CREATE TABLE application_revisions
 (
