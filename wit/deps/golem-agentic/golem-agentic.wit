@@ -1,6 +1,8 @@
 package golem:agentic;
 
 interface common {
+    use golem:rpc/types@0.2.1.{wit-type};
+
     record agent-definition {
         agent-name:  string,
         description: string,
@@ -31,6 +33,7 @@ interface common {
     }
 
     variant parameter-type {
+        wit(wit-type),
         text(text-type),
     }
 
