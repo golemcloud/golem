@@ -328,6 +328,8 @@ jobs:
       - name: Prepare
         run: |
           echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
+          rm -f .gitignore
+
       - uses: actions/download-artifact@v4
         name: Download Targets
         with:
@@ -340,8 +342,6 @@ jobs:
           ls -R target
           cd target
           for f in *.tar; do tar xvf "$f"; done
-          cd ..
-          ls -R .
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
