@@ -18,10 +18,12 @@ use crate::service::gateway::BoxConversionContext;
 use internal::*;
 use openapiv3::OpenAPI;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
-use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult};
+use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult, ToJSON};
+use serde::Serialize;
 use serde_json::Value;
 use std::borrow::Cow;
 
+#[derive(Serialize)]
 pub struct OpenApiHttpApiDefinition(pub OpenAPI);
 
 impl OpenApiHttpApiDefinition {
@@ -118,12 +120,19 @@ impl poem_openapi::types::Type for OpenApiHttpApiDefinition {
     }
 }
 
+impl ToJSON for OpenApiHttpApiDefinition {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        serde_json::to_value(&self.0).ok()
+    }
+}
+
 mod internal {
 
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
 
     use crate::gateway_binding::{
-        GatewayBinding, HttpHandlerBinding, ResponseMapping, StaticBinding, WorkerBinding,
+        GatewayBinding, HttpHandlerBinding, ResponseMapping, StaticBinding, SwaggerUiBinding,
+        WorkerBinding,
     };
     use crate::gateway_middleware::{CorsPreflightExpr, HttpCors};
     use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
@@ -274,6 +283,14 @@ mod internal {
                             path: path_pattern.clone(),
                             method,
                             binding: GatewayBinding::HttpHandler(Box::new(binding)),
+                            security,
+                        })
+                    }
+                    (GatewayBindingType::SwaggerUi, _) => {
+                        Ok(RouteRequest {
+                            path: path_pattern.clone(),
+                            method,
+                            binding: GatewayBinding::SwaggerUi(SwaggerUiBinding::default()),
                             security,
                         })
                     }
