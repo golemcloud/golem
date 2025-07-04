@@ -15,6 +15,7 @@
 use super::auth_call_back_binding_handler::{AuthorisationError, AuthorisationSuccess};
 use super::file_server_binding_handler::FileServerBindingSuccess;
 use super::http_handler_binding_handler::{HttpHandlerBindingError, HttpHandlerBindingSuccess};
+use super::swagger_binding_handler::{SwaggerBindingError, SwaggerBindingSuccess};
 use super::RibInputTypeMismatch;
 use crate::api::common::ApiEndpointError;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingError;
@@ -280,6 +281,30 @@ impl ToHttpResponse for AuthorisationError {
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         self.to_response_from_safe_display(|_| StatusCode::UNAUTHORIZED)
+    }
+}
+
+#[async_trait]
+impl ToHttpResponse for SwaggerBindingSuccess {
+    async fn to_response(
+        self,
+        _request_details: &RichRequest,
+        _session_store: &GatewaySessionStore,
+    ) -> poem::Response {
+        poem::Response::builder()
+            .content_type("text/html")
+            .body(Body::from_string(self.html_content))
+    }
+}
+
+#[async_trait]
+impl ToHttpResponse for SwaggerBindingError {
+    async fn to_response(
+        self,
+        _request_details: &RichRequest,
+        _session_store: &GatewaySessionStore,
+    ) -> poem::Response {
+        self.into()
     }
 }
 
