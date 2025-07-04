@@ -37,8 +37,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::Trap;
 
-pub mod public_oplog;
 pub mod event;
+pub mod public_oplog;
 
 pub trait ShardAssignmentCheck {
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError>;

@@ -98,6 +98,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::TcpStream;
 use tokio::{task, time};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Payload;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
@@ -107,7 +108,6 @@ use tonic::Streaming;
 use tracing::Level;
 use url::Url;
 use uuid::Uuid;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 #[async_trait]
 pub trait WorkerService: Send + Sync {

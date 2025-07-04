@@ -1,5 +1,5 @@
-use golem_common::model::{oplog, IdempotencyKey, LogLevel, Timestamp, WorkerEvent};
 use golem_common::model::oplog::OplogEntry;
+use golem_common::model::{oplog, IdempotencyKey, LogLevel, Timestamp, WorkerEvent};
 
 // Internal version of WorkerEvent, without any operational details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -27,7 +27,7 @@ pub enum InternalWorkerEvent {
         timestamp: Timestamp,
         function: String,
         idempotency_key: IdempotencyKey,
-    }
+    },
 }
 
 impl InternalWorkerEvent {
@@ -111,16 +111,37 @@ impl InternalWorkerEvent {
 impl From<InternalWorkerEvent> for WorkerEvent {
     fn from(event: InternalWorkerEvent) -> Self {
         match event {
-            InternalWorkerEvent::StdOut { timestamp, bytes } =>
-                Self::StdOut { timestamp, bytes },
-            InternalWorkerEvent::StdErr { timestamp, bytes } =>
-                Self::StdErr { timestamp, bytes },
-            InternalWorkerEvent::Log { timestamp, level, context, message } =>
-                Self::Log { timestamp, level, context, message },
-            InternalWorkerEvent::InvocationStart { timestamp, function, idempotency_key } =>
-                Self::InvocationStart { timestamp, function, idempotency_key },
-            InternalWorkerEvent::InvocationFinished { timestamp, function, idempotency_key } =>
-                Self::InvocationFinished { timestamp, function, idempotency_key },
+            InternalWorkerEvent::StdOut { timestamp, bytes } => Self::StdOut { timestamp, bytes },
+            InternalWorkerEvent::StdErr { timestamp, bytes } => Self::StdErr { timestamp, bytes },
+            InternalWorkerEvent::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            } => Self::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            },
+            InternalWorkerEvent::InvocationStart {
+                timestamp,
+                function,
+                idempotency_key,
+            } => Self::InvocationStart {
+                timestamp,
+                function,
+                idempotency_key,
+            },
+            InternalWorkerEvent::InvocationFinished {
+                timestamp,
+                function,
+                idempotency_key,
+            } => Self::InvocationFinished {
+                timestamp,
+                function,
+                idempotency_key,
+            },
         }
     }
 }

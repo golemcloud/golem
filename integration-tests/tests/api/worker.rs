@@ -14,21 +14,22 @@
 
 use crate::Tracing;
 use assert2::{assert, check, let_assert};
+use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::v1::{
-    invoke_and_await_response, launch_new_worker_response, ConnectWorkerRequest, InvokeAndAwaitResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse
+    invoke_and_await_response, launch_new_worker_response, ConnectWorkerRequest,
+    InvokeAndAwaitResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, InvokeResult, LogEvent, TargetWorkerId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test};
+use tokio_stream::StreamExt;
 use tracing::info;
 use uuid::Uuid;
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use tokio_stream::StreamExt;
-use futures_concurrency::future::Join;
-use std::time::Duration;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -160,8 +161,8 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) {
         .connect_worker(
             &user.token,
             ConnectWorkerRequest {
-                worker_id: Some(worker.clone().into())
-            }
+                worker_id: Some(worker.clone().into()),
+            },
         )
         .await
         .unwrap();
@@ -171,20 +172,23 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) {
         loop {
             let event = output_stream.message().await.unwrap();
             println!("event: {event:?}");
-            match event {
-                   Some(LogEvent { event: Some(log_event::Event::Stdout(inner)) }) => {
-                     if inner.message.contains("Iteration 100:") {
-                        break true;
-                     }
-                   }
-                   _ => {}
+            if let Some(LogEvent {
+                event: Some(log_event::Event::Stdout(inner)),
+            }) = event
+            {
+                if inner.message.contains("Iteration 100:") {
+                    break true;
+                }
             }
             tokio::time::sleep(Duration::from_millis(10)).await
         }
     };
 
-    let result_future = user
-        .invoke_and_await(&worker, "golem-it:high-volume-logging-exports/golem-it-high-volume-logging-api.{run}", vec![]);
+    let result_future = user.invoke_and_await(
+        &worker,
+        "golem-it:high-volume-logging-exports/golem-it-high-volume-logging-api.{run}",
+        vec![],
+    );
 
     let (found_log_entry, result) = (output_consumer, result_future).join().await;
     result.unwrap();

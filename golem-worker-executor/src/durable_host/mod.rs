@@ -21,6 +21,7 @@ use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::serialized::SerializableError;
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
+use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, InvocationContext, LastError,
     ListDirectoryResult, ReadFileResult, TrapType, WorkerConfig,
@@ -74,8 +75,8 @@ use golem_common::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
     FailedUpdateRecord, IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor,
-    ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
@@ -104,7 +105,6 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
-use crate::model::event::InternalWorkerEvent;
 
 pub mod blobstore;
 mod cli;

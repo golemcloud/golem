@@ -19,7 +19,7 @@ use futures_util::Stream;
 use futures_util::StreamExt;
 use gethostname::gethostname;
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::worker::{Cursor, LogEvent, ResourceMetadata, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
@@ -64,6 +64,7 @@ use uuid::Uuid;
 use wasmtime::Error;
 
 use crate::grpc::invocation::{CanStartWorker, GrpcInvokeRequest};
+use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
@@ -79,7 +80,6 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use tokio;
-use crate::model::event::InternalWorkerEvent;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -2653,7 +2653,8 @@ pub fn authorised_grpc_request<T>(request: T, access_token: &Uuid) -> Request<T>
 }
 
 pub struct WorkerEventStream {
-    inner: Pin<Box<dyn Stream<Item = WorkerEvent> + Send>>,
+    inner:
+        Pin<Box<dyn Stream<Item = Result<InternalWorkerEvent, BroadcastStreamRecvError>> + Send>>,
 }
 
 impl WorkerEventStream {
@@ -2676,21 +2677,16 @@ impl Stream for WorkerEventStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let WorkerEventStream { inner } = self.get_mut();
         match inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(event)) => match &event {
-                WorkerEvent::Close => Poll::Ready(None),
-                WorkerEvent::StdOut { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
-                WorkerEvent::StdErr { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
-                WorkerEvent::Log { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
-                WorkerEvent::InvocationStart { .. } => {
-                    Poll::Ready(Some(Ok(event.try_into().unwrap())))
+            Poll::Ready(Some(Ok(event))) => {
+                Poll::Ready(Some(Ok(WorkerEvent::from(event).try_into().unwrap())))
+            }
+            Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => {
+                Poll::Ready(Some(Ok(WorkerEvent::ClientLagged {
+                    number_of_missed_messages: n,
                 }
-                WorkerEvent::InvocationFinished { .. } => {
-                    Poll::Ready(Some(Ok(event.try_into().unwrap())))
-                }
-                WorkerEvent::ClientLagged { .. } => {
-                    Poll::Ready(Some(Ok(event.try_into().unwrap())))
-                }
-            },
+                .try_into()
+                .unwrap())))
+            }
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }

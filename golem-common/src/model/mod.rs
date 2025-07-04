@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::oplog::{
-    IndexedResourceKey, OplogEntry, TimestampedUpdateDescription, WorkerResourceId,
-};
+use crate::model::oplog::{IndexedResourceKey, TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
@@ -1616,10 +1614,7 @@ pub enum WorkerEvent {
     },
     /// The client fell behind and the point it left of is no longer in our buffer.
     /// {number_of_skipped_messages} is the number of messages between the client left of and the point it is now at.
-    ClientLagged {
-        number_of_missed_messages: u64
-    },
-    Close,
+    ClientLagged { number_of_missed_messages: u64 },
 }
 
 impl Display for WorkerEvent {
@@ -1662,12 +1657,9 @@ impl Display for WorkerEvent {
                 write!(f, "<invocation-finished> {function} {idempotency_key}")
             }
             WorkerEvent::ClientLagged {
-                number_of_missed_messages
+                number_of_missed_messages,
             } => {
                 write!(f, "<client-lagged> {number_of_missed_messages}")
-            }
-            WorkerEvent::Close => {
-                write!(f, "<close>")
             }
         }
     }
