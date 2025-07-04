@@ -27,7 +27,6 @@ use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
-use tokio_stream::StreamExt;
 use tracing::info;
 use uuid::Uuid;
 
@@ -171,12 +170,11 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) {
     let output_consumer = async {
         loop {
             let event = output_stream.message().await.unwrap();
-            println!("event: {event:?}");
             if let Some(LogEvent {
                 event: Some(log_event::Event::Stdout(inner)),
             }) = event
             {
-                if inner.message.contains("Iteration 100:") {
+                if inner.message.contains("Iteration 100") {
                     break true;
                 }
             }
