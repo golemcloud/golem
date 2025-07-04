@@ -328,7 +328,6 @@ jobs:
       - name: Prepare
         run: |
           echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
-          rm -f .gitignore
 
       - uses: actions/download-artifact@v4
         name: Download Targets
@@ -339,6 +338,7 @@ jobs:
 
       - name: Extract Targets
         run: |
+          rm -f .dockerignore
           ls -R target
           cd target
           for f in *.tar; do tar xvf "$f"; done
