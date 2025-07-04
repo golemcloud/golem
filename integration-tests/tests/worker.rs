@@ -1392,12 +1392,13 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     // Whether there is an "enqueued invocation" entry or just directly started invocation
     // depends on oplog
     assert!(oplog.len() >= 12 && oplog.len() <= 14);
-    assert!(matches!(oplog[0], PublicOplogEntry::Create(_)));
+    assert_eq!(oplog[0].oplog_index, OplogIndex::INITIAL);
+    assert!(matches!(&oplog[0].entry, PublicOplogEntry::Create(_)));
     assert_eq!(
         oplog
             .iter()
             .filter(
-                |entry| matches!(entry, PublicOplogEntry::ExportedFunctionInvoked(
+                |entry| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
         ExportedFunctionInvokedParameters { function_name, .. }
     ) if function_name == "golem:it/api.{generate-idempotency-keys}")
             )
