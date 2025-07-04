@@ -751,7 +751,6 @@ async fn create_binding_info(
         );
     }
 
-    // Add worker name
     if let Some(worker_name) = data.worker_name {
         binding_info.insert(
             "worker-name".to_string(),
