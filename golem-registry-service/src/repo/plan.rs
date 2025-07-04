@@ -14,6 +14,8 @@
 
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
@@ -61,23 +63,19 @@ pub struct DbPlanRepository<DB: Pool> {
 
 static METRICS_SVC_NAME: &str = "plan";
 
-impl<DB: Pool> DbPlanRepository<DB> {
-    pub fn new(db_pool: DB) -> Self {
+impl<DBP: Pool> DbPlanRepository<DBP> {
+    pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
     }
 
-    fn with_rw(&self, api_name: &'static str) -> DB::LabelledApi {
+    fn with_rw(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_rw(METRICS_SVC_NAME, api_name)
     }
 }
 
-#[trait_gen(
-    golem_service_base::db::postgres::PostgresPool ->
-        golem_service_base::db::postgres::PostgresPool,
-        golem_service_base::db::sqlite::SqlitePool
-)]
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
-impl PlanRepository for DbPlanRepository<golem_service_base::db::postgres::PostgresPool> {
+impl PlanRepository for DbPlanRepository<PostgresPool> {
     async fn create(&self, plan: PlanRecord) -> repo::Result<PlanRecord> {
         self.with_rw("create")
             .fetch_one_as(

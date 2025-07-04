@@ -17,11 +17,13 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
-use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
-use sqlx::FromRow;
+use sqlx::{Database, FromRow};
 use std::fmt::Debug;
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
@@ -163,12 +165,12 @@ pub struct DbApplicationRepo<DB: Pool> {
 
 static METRICS_SVC_NAME: &str = "application";
 
-impl<DB: Pool> DbApplicationRepo<DB> {
-    pub fn new(db_pool: DB) -> Self {
+impl<DBP: Pool> DbApplicationRepo<DBP> {
+    pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
     }
 
-    fn with_ro(&self, api_name: &'static str) -> DB::LabelledApi {
+    fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
@@ -176,7 +178,7 @@ impl<DB: Pool> DbApplicationRepo<DB> {
     where
         R: Send,
         F: for<'f> FnOnce(
-                &'f mut <DB::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
             ) -> BoxFuture<'f, Result<R, RepoError>>
             + Send,
     {
@@ -184,13 +186,9 @@ impl<DB: Pool> DbApplicationRepo<DB> {
     }
 }
 
-#[trait_gen(
-    golem_service_base::db::postgres::PostgresPool ->
-        golem_service_base::db::postgres::PostgresPool,
-        golem_service_base::db::sqlite::SqlitePool
-)]
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
-impl ApplicationRepo for DbApplicationRepo<golem_service_base::db::postgres::PostgresPool> {
+impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn get_by_name(
         &self,
         owner_account_id: &Uuid,
@@ -282,15 +280,15 @@ impl ApplicationRepo for DbApplicationRepo<golem_service_base::db::postgres::Pos
                         .bind_audit_fields(AuditFields::new(user_id))
                 ).await?;
 
-                tx.execute(
-                    sqlx::query(indoc! {r#"
-                        INSERT INTO application_revisions (application_id, revision_id, name, account_id, created_at, created_by, deleted)
-                        VALUES ($1, 0, $2, $3, $4, $5, false)
-                    "#})
-                        .bind(app.application_id)
-                        .bind(name)
-                        .bind(owner_id)
-                        .bind_revision_audit_fields(RevisionAuditFields::new(user_id))
+                Self::insert_revision(
+                    tx,
+                    ApplicationRevisionRecord {
+                        application_id: app.application_id,
+                        revision_id: 0,
+                        name: app.name.clone(),
+                        account_id: app.account_id,
+                        audit: RevisionAuditFields::new(user_id),
+                    },
                 ).await?;
 
                 Ok(app)
@@ -336,19 +334,16 @@ impl ApplicationRepo for DbApplicationRepo<golem_service_base::db::postgres::Pos
                 return Ok(());
             }
 
-            let revision_audit_fields = RevisionAuditFields::deletion(user_account_id);
-            let deleted_at = revision_audit_fields.created_at;
-            tx.execute(
-                sqlx::query(indoc! {r#"
-                    INSERT INTO application_revisions (application_id, revision_id, name, account_id, created_at, created_by, deleted)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                "#})
-                    .bind(application_id)
-                    .bind(latest_revision.revision_id + 1)
-                    .bind(latest_revision.name)
-                    .bind(latest_revision.account_id)
-                    .bind_revision_audit_fields(RevisionAuditFields::deletion(user_account_id))
-            ).await?;
+            let revision = ApplicationRevisionRecord {
+                application_id: latest_revision.application_id,
+                revision_id: latest_revision.revision_id + 1,
+                name: latest_revision.name,
+                account_id: latest_revision.account_id,
+                audit: RevisionAuditFields::deletion(user_account_id),
+            };
+            let deleted_at = revision.audit.created_at.clone();
+
+            Self::insert_revision(tx, revision).await?;
 
             tx.execute(
                 sqlx::query(indoc! {r#"
@@ -369,5 +364,42 @@ impl ApplicationRepo for DbApplicationRepo<golem_service_base::db::postgres::Pos
             Err(err) if err.is_unique_violation() => Ok(()),
             Err(err) => Err(err),
         }
+    }
+}
+
+#[async_trait]
+trait ApplicationRepoInternal: ApplicationRepo {
+    type Db: Database;
+    type Tx: LabelledPoolTransaction;
+
+    async fn insert_revision(
+        tx: &mut Self::Tx,
+        revision: ApplicationRevisionRecord,
+    ) -> repo::Result<()>;
+}
+
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
+#[async_trait]
+impl ApplicationRepoInternal for DbApplicationRepo<PostgresPool> {
+    type Db = <PostgresPool as Pool>::Db;
+    type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
+
+    async fn insert_revision(
+        tx: &mut Self::Tx,
+        revision: ApplicationRevisionRecord,
+    ) -> repo::Result<()> {
+        tx.execute(
+            sqlx::query(indoc! {r#"
+                INSERT INTO application_revisions (application_id, revision_id, name, account_id, created_at, created_by, deleted)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#})
+                .bind(revision.application_id)
+                .bind(revision.revision_id)
+                .bind(revision.name)
+                .bind(revision.account_id)
+                .bind_revision_audit_fields(revision.audit)
+        ).await?;
+
+        Ok(())
     }
 }

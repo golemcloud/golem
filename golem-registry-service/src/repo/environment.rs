@@ -12,20 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::{
-    AuditFields, BindFields, RevisionAuditFields, SqlBlake3Hash, SqlDateTime,
-};
+use crate::repo::model::{AuditFields, BindFields, RevisionAuditFields, SqlBlake3Hash};
 use async_trait::async_trait;
-use chrono::NaiveDateTime;
 use conditional_trait_gen::trait_gen;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
-use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
-use sqlx::query::QueryAs;
-use sqlx::{ColumnIndex, Database, FromRow};
+use sqlx::{Database, FromRow};
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 
@@ -206,18 +204,18 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     }
 }
 
-pub struct DbEnvironmentRepo<DB: Pool> {
-    db_pool: DB,
+pub struct DbEnvironmentRepo<DBP: Pool> {
+    db_pool: DBP,
 }
 
 static METRICS_SVC_NAME: &str = "environment";
 
-impl<DB: Pool> DbEnvironmentRepo<DB> {
-    pub fn new(db_pool: DB) -> Self {
+impl<DBP: Pool> DbEnvironmentRepo<DBP> {
+    pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
     }
 
-    fn with_ro(&self, api_name: &'static str) -> DB::LabelledApi {
+    fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
@@ -225,7 +223,7 @@ impl<DB: Pool> DbEnvironmentRepo<DB> {
     where
         R: Send,
         F: for<'f> FnOnce(
-                &'f mut <DB::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
             ) -> BoxFuture<'f, Result<R, RepoError>>
             + Send,
     {
@@ -233,13 +231,9 @@ impl<DB: Pool> DbEnvironmentRepo<DB> {
     }
 }
 
-#[trait_gen(
-    golem_service_base::db::postgres::PostgresPool ->
-        golem_service_base::db::postgres::PostgresPool,
-        golem_service_base::db::sqlite::SqlitePool
-)]
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
-impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::PostgresPool> {
+impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_by_name(
         &self,
         application_id: &Uuid,
@@ -326,7 +320,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
                         .bind(revision.audit.created_by)
                 ).await?;
 
-                let revision = tx.fetch_one_as(Self::query_as_insert_revision(revision)).await?;
+                let revision = Self::insert_revision(tx, revision).await?;
 
                 Ok(EnvironmentCurrentRevisionRecord {
                     name,
@@ -357,11 +351,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
         let result: repo::Result<EnvironmentCurrentRevisionRecord> = self
             .with_tx("update", |tx| {
                 async move {
-                    let revision: EnvironmentRevisionRecord = tx
-                        .fetch_one_as(Self::query_as_insert_revision(
-                            revision.ensure_new(current_revision_id),
-                        ))
-                        .await?;
+                    let revision: EnvironmentRevisionRecord =
+                        Self::insert_revision(tx, revision.ensure_new(current_revision_id)).await?;
 
                     tx.execute(
                         sqlx::query(indoc! { r#"
@@ -412,15 +403,15 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
         let result: repo::Result<()> = self
             .with_tx("update", |tx| {
                 async move {
-                    let revision: EnvironmentRevisionRecord = tx
-                        .fetch_one_as(Self::query_as_insert_revision(
-                            EnvironmentRevisionRecord::deletion(
-                                user_account_id,
-                                environment_id,
-                                current_revision_id,
-                            ),
-                        ))
-                        .await?;
+                    let revision: EnvironmentRevisionRecord = Self::insert_revision(
+                        tx,
+                        EnvironmentRevisionRecord::deletion(
+                            user_account_id,
+                            environment_id,
+                            current_revision_id,
+                        ),
+                    )
+                    .await?;
 
                     tx.execute(
                         sqlx::query(indoc! { r#"
@@ -451,32 +442,27 @@ impl EnvironmentRepo for DbEnvironmentRepo<golem_service_base::db::postgres::Pos
 
 #[async_trait]
 trait EnvironmentRepoInternal: EnvironmentRepo {
+    type Db: Database;
+    type Tx: LabelledPoolTransaction;
+
     async fn check_current_revision(
         &self,
         environment_id: &Uuid,
         current_revision_id: i64,
     ) -> repo::Result<Option<EnvironmentRecord>>;
 
-    fn query_as_insert_revision<'q, DB: Database>(
+    async fn insert_revision(
+        tx: &mut Self::Tx,
         revision: EnvironmentRevisionRecord,
-    ) -> QueryAs<'q, DB, EnvironmentRevisionRecord, <DB as Database>::Arguments<'q>>
-    where
-        NaiveDateTime: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        Option<SqlDateTime>: sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        Uuid: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        Vec<u8>: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        bool: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        i64: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        for<'r> &'r str: ColumnIndex<<DB as Database>::Row>;
+    ) -> repo::Result<EnvironmentRevisionRecord>;
 }
 
-#[trait_gen(
-    golem_service_base::db::postgres::PostgresPool ->
-        golem_service_base::db::postgres::PostgresPool,
-        golem_service_base::db::sqlite::SqlitePool
-)]
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
-impl EnvironmentRepoInternal for DbEnvironmentRepo<golem_service_base::db::postgres::PostgresPool> {
+impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
+    type Db = <PostgresPool as Pool>::Db;
+    type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
+
     async fn check_current_revision(
         &self,
         environment_id: &Uuid,
@@ -494,19 +480,11 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<golem_service_base::db::postg
             .await
     }
 
-    fn query_as_insert_revision<'q, DB: Database>(
+    async fn insert_revision(
+        tx: &mut Self::Tx,
         revision: EnvironmentRevisionRecord,
-    ) -> QueryAs<'q, DB, EnvironmentRevisionRecord, <DB as Database>::Arguments<'q>>
-    where
-        NaiveDateTime: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        Option<SqlDateTime>: sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        Uuid: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        Vec<u8>: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        bool: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        i64: sqlx::Type<DB> + sqlx::Encode<'q, DB> + for<'r> sqlx::Decode<'r, DB>,
-        for<'r> &'r str: ColumnIndex<<DB as Database>::Row>,
-    {
-        sqlx::query_as(indoc! { r#"
+    ) -> repo::Result<EnvironmentRevisionRecord> {
+        tx.fetch_one_as(sqlx::query_as(indoc! { r#"
             INSERT INTO environment_revisions
             (environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -518,6 +496,6 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<golem_service_base::db::postg
             .bind(revision.compatibility_check)
             .bind(revision.version_check)
             .bind(revision.security_overrides)
-            .bind(revision.hash)
+            .bind(revision.hash)).await
     }
 }
