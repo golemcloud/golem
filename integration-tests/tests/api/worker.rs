@@ -15,10 +15,9 @@
 use crate::Tracing;
 use assert2::{assert, check, let_assert};
 use golem_api_grpc::proto::golem::worker::v1::{
-    invoke_and_await_response, launch_new_worker_response, InvokeAndAwaitResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    invoke_and_await_response, launch_new_worker_response, ConnectWorkerRequest, InvokeAndAwaitResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse
 };
-use golem_api_grpc::proto::golem::worker::{InvokeResult, TargetWorkerId};
+use golem_api_grpc::proto::golem::worker::{log_event, InvokeResult, LogEvent, TargetWorkerId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
@@ -26,6 +25,10 @@ use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
 use tracing::info;
 use uuid::Uuid;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::StreamExt;
+use futures_concurrency::future::Join;
+use std::time::Duration;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -137,6 +140,56 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
     );
     check!(env_vars.get("TEST_ENV_VAR_1") == Some(&"value_1".to_string()));
     check!(env_vars.get("TEST_ENV_VAR_2") == Some(&"value_2".to_string()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) {
+    let user = deps.user().await;
+
+    let component_id = user
+        .component("golem_it_high_volume_logging")
+        .unique()
+        .store()
+        .await;
+
+    let worker = user.start_worker(&component_id, "worker-1").await;
+
+    let mut output_stream = deps
+        .worker_service()
+        .connect_worker(
+            &user.token,
+            ConnectWorkerRequest {
+                worker_id: Some(worker.clone().into())
+            }
+        )
+        .await
+        .unwrap();
+
+    // simulate a slow consumer
+    let output_consumer = async {
+        loop {
+            let event = output_stream.message().await.unwrap();
+            println!("event: {event:?}");
+            match event {
+                   Some(LogEvent { event: Some(log_event::Event::Stdout(inner)) }) => {
+                     if inner.message.contains("Iteration 100:") {
+                        break true;
+                     }
+                   }
+                   _ => {}
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await
+        }
+    };
+
+    let result_future = user
+        .invoke_and_await(&worker, "golem-it:high-volume-logging-exports/golem-it-high-volume-logging-api.{run}", vec![]);
+
+    let (found_log_entry, result) = (output_consumer, result_future).join().await;
+    result.unwrap();
+
+    assert!(found_log_entry)
 }
 
 trait Unwrap {

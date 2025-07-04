@@ -24,7 +24,7 @@ use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::{wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder};
 use crate::config::GolemClientProtocol;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::future::join_all;
@@ -107,6 +107,7 @@ use tonic::Streaming;
 use tracing::Level;
 use url::Url;
 use uuid::Uuid;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 #[async_trait]
 pub trait WorkerService: Send + Sync {
@@ -1917,8 +1918,20 @@ impl HttpWorkerLogEventStream {
             request.worker_id.unwrap().name,
         );
 
+        let mut connection_request = url
+            .into_client_request()
+            .context("Failed to create request")?;
+
+        {
+            let headers = connection_request.headers_mut();
+
+            if let Some(bearer_token) = client.context.bearer_token() {
+                headers.insert("Authorization", format!("Bearer {bearer_token}").parse()?);
+            }
+        }
+
         let (stream, _) = tokio_tungstenite::connect_async_tls_with_config(
-            url,
+            connection_request,
             None,
             false,
             Some(Connector::Plain),

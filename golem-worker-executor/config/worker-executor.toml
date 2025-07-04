@@ -70,7 +70,7 @@ multiplier = 2.0
 [limits]
 epoch_interval = "10ms"
 epoch_ticks = 1
-event_broadcast_capacity = 16
+event_broadcast_capacity = 1024
 event_history_size = 128
 fuel_to_borrow = 10000
 invocation_result_broadcast_capacity = 100000
@@ -314,7 +314,7 @@ without_time = false
 # [limits]
 # epoch_interval = "10ms"
 # epoch_ticks = 1
-# event_broadcast_capacity = 16
+# event_broadcast_capacity = 1024
 # event_history_size = 128
 # fuel_to_borrow = 10000
 # invocation_result_broadcast_capacity = 100000
@@ -518,7 +518,7 @@ without_time = false
 # [limits]
 # epoch_interval = "10ms"
 # epoch_ticks = 1
-# event_broadcast_capacity = 16
+# event_broadcast_capacity = 1024
 # event_history_size = 128
 # fuel_to_borrow = 10000
 # invocation_result_broadcast_capacity = 100000
