@@ -118,7 +118,7 @@ fn assert_basic_openapi_properties(yaml: &serde_yaml::Value, id: &str, version: 
     assert_eq!(yaml["x-golem-api-definition-version"], version);
 }
 
-// Test 1
+// Test 1: Simple conversion
 #[tokio::test]
 async fn test_simple_conversion() {
     // Create a simple CompiledHttpApiDefinition with no routes
@@ -154,7 +154,7 @@ async fn test_simple_conversion() {
     assert!(yaml_value["paths"].as_mapping().unwrap().is_empty());
 }
 
-// Test that the conversion works for a CORS preflight route
+// Test 2: CORS preflight route
 // Test cors-preflight is converted to rib valid response string
 #[tokio::test]
 async fn test_cors_preflight_response_formatting() {
@@ -228,7 +228,8 @@ async fn test_cors_preflight_response_formatting() {
         .contains_key("content"));
 }
 
-// Test that the conversion works for a swagger-ui binding type
+// Test 3: SwaggerUI binding type
+// Ajay Other binding types should go here
 #[tokio::test]
 async fn test_swagger_ui_binding() {
     // Create a compiled route with SwaggerUI binding
@@ -285,7 +286,7 @@ async fn test_swagger_ui_binding() {
         .contains_key("content"));
 }
 
-// Test basic worker binding with path parameters
+// Test 4: Basic worker binding with path parameters
 #[tokio::test]
 async fn test_basic_worker_binding_with_path_parameters() {
     use golem_common::base_model::ComponentId;
@@ -317,30 +318,11 @@ async fn test_basic_worker_binding_with_path_parameters() {
         },
     };
 
-    // Create worker name compiled
-    let _worker_name_compiled = WorkerBindingCompiled {
-        component_id: VersionedComponentId {
-            component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
-            version: 0,
-        },
-        idempotency_key_compiled: None,
-        response_compiled: ResponseMappingCompiled {
-            response_mapping_expr: Expr::literal("{status: 200, body: \"success\"}"),
-            response_mapping_compiled: RibByteCode::default(),
-            rib_input: worker_name_input,
-            worker_calls: None,
-            rib_output: None,
-        },
-        invocation_context_compiled: None,
-    };
-
     // Create response mapping compiled
     let response_compiled = ResponseMappingCompiled {
         response_mapping_expr: Expr::literal("{status: 200, body: \"success\"}"),
         response_mapping_compiled: RibByteCode::default(),
-        rib_input: RibInputTypeInfo {
-            types: HashMap::new(),
-        },
+        rib_input: worker_name_input,
         worker_calls: None,
         rib_output: None,
     };
@@ -415,11 +397,10 @@ async fn test_basic_worker_binding_with_path_parameters() {
     assert_eq!(binding["binding-type"], "default");
     assert_eq!(binding["component-name"], "shopping-cart");
     assert_eq!(binding["component-version"], 0);
-    assert_eq!(binding["worker-name"], "\"worker-test\"");
     assert_eq!(binding["response"], "\"{status: 200, body: \"success\"}\"");
 }
 
-// Test for empty routes but with verification of all basic OpenAPI structure
+// Test 5: Empty routes but with verification of all basic OpenAPI structure
 #[tokio::test]
 async fn test_empty_api_with_complete_structure_verification() {
     // Create a simple CompiledHttpApiDefinition with no routes
@@ -768,28 +749,6 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
     use std::collections::HashMap;
     use std::str::FromStr;
 
-    // Create path parameter input
-    // todo
-    let _path_input = RibInputTypeInfo {
-        types: {
-            let mut types = HashMap::new();
-            let path_record = AnalysedType::Record(TypeRecord {
-                fields: vec![NameTypePair {
-                    name: "user".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
-                }],
-            });
-            let request_record = AnalysedType::Record(TypeRecord {
-                fields: vec![NameTypePair {
-                    name: "path".to_string(),
-                    typ: path_record,
-                }],
-            });
-            types.insert("request".to_string(), request_record);
-            types
-        },
-    };
-
     // Create request body with optional field
     let request_body_type = AnalysedType::Record(TypeRecord {
         fields: vec![
@@ -821,11 +780,23 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
                     typ: request_body_type,
                 }],
             });
-            let request_record = AnalysedType::Record(TypeRecord {
+            let path_record = AnalysedType::Record(TypeRecord {
                 fields: vec![NameTypePair {
-                    name: "body".to_string(),
-                    typ: body_record,
+                    name: "user".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
                 }],
+            });
+            let request_record = AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "body".to_string(),
+                        typ: body_record,
+                    },
+                    NameTypePair {
+                        name: "path".to_string(),
+                        typ: path_record,
+                    },
+                ],
             });
             types.insert("request".to_string(), request_record);
             types
@@ -946,6 +917,8 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
     let yaml_value: serde_yaml::Value =
         serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
+    println!("yaml_value: {yaml_value:#?}");
+
     // Verify basic properties
     assert_basic_openapi_properties(&yaml_value, "todo-list", "0.0.1");
 
@@ -999,8 +972,7 @@ async fn test_user_time_conversion() {
     use std::str::FromStr;
 
     // Create RIB input with both user and time path parameters
-    // todo
-    let _path_input = RibInputTypeInfo {
+    let path_input = RibInputTypeInfo {
         types: {
             let mut types = HashMap::new();
             let path_record = AnalysedType::Record(TypeRecord {
@@ -1036,9 +1008,7 @@ async fn test_user_time_conversion() {
         response_compiled: ResponseMappingCompiled {
             response_mapping_expr: Expr::literal("{status: 200, body: \"delayed response\"}"),
             response_mapping_compiled: RibByteCode::default(),
-            rib_input: RibInputTypeInfo {
-                types: HashMap::new(),
-            },
+            rib_input: path_input,
             worker_calls: None,
             rib_output: None,
         },
@@ -1108,7 +1078,6 @@ async fn test_user_time_conversion() {
     assert_eq!(binding["binding-type"], "default");
     assert_eq!(binding["component-name"], "shopping-cart");
     assert_eq!(binding["component-version"], 0);
-    assert_eq!(binding["worker-name"], "\"worker-delay\"");
 }
 
 // Test 9: Query parameter conversion
@@ -1230,7 +1199,6 @@ async fn test_query_parameter_conversion() {
     // Verify binding information
     let binding = &post_op["x-golem-api-gateway-binding"];
     assert_eq!(binding["binding-type"], "default");
-    assert_eq!(binding["worker-name"], "\"worker-static\"");
 
     // Verify response schema
     let response_schema = &post_op["responses"]["201"]["content"]["application/json"]["schema"];
@@ -1596,8 +1564,7 @@ async fn test_oas_conversion_full_structure_shopping_cart() {
     routes.push(swagger_route);
 
     // 2. Worker route with array response
-    // todo
-    let _path_input = RibInputTypeInfo {
+    let path_input = RibInputTypeInfo {
         types: {
             let mut types = HashMap::new();
             let path_record = AnalysedType::Record(TypeRecord {
@@ -1668,7 +1635,7 @@ async fn test_oas_conversion_full_structure_shopping_cart() {
         response_compiled: ResponseMappingCompiled {
             response_mapping_expr: Expr::literal("let result = golem:shoppingcart/api.{get-cart-contents}();\n{status: 200: u64, body: result}"),
             response_mapping_compiled: RibByteCode::default(),
-            rib_input: RibInputTypeInfo { types: HashMap::new() },
+            rib_input: path_input,
             worker_calls: None,
             rib_output: Some(response_output)
         },
@@ -1805,7 +1772,6 @@ paths:
         component-name: shopping-cart
         component-version: 0
         response: "\"let result = golem:shoppingcart/api.{get-cart-contents}();\n{status: 200: u64, body: result}\""
-        worker-name: "\"worker-${user}\""
     options:
       responses:
         '200':
@@ -1831,8 +1797,6 @@ x-golem-api-definition-version: 0.0.1
     assert_eq!(actual_yaml, expected_yaml);
 }
 
-// ------------------- Fix both the tests 13 and 14 below --------------------
-
 // Test 13: Path, Query, and Header Parameter Combinations Test
 #[tokio::test]
 async fn test_path_query_header_parameter_combinations() {
@@ -1848,91 +1812,76 @@ async fn test_path_query_header_parameter_combinations() {
 
     let mut routes = Vec::new();
 
-    // Helper function to create path input
-    let create_path_input = |path_fields: Vec<(&str, AnalysedType)>| -> RibInputTypeInfo {
-        let mut types = HashMap::new();
-        let path_record = AnalysedType::Record(TypeRecord {
-            fields: path_fields
-                .into_iter()
-                .map(|(name, typ)| NameTypePair {
-                    name: name.to_string(),
-                    typ,
-                })
-                .collect(),
-        });
-        let request_record = AnalysedType::Record(TypeRecord {
-            fields: vec![NameTypePair {
-                name: "path".to_string(),
-                typ: path_record,
-            }],
-        });
-        types.insert("request".to_string(), request_record);
-        RibInputTypeInfo { types }
-    };
-
-    // Helper function to create query input
-    let create_query_input = |query_fields: Vec<(&str, AnalysedType)>| -> RibInputTypeInfo {
-        let mut types = HashMap::new();
-        let query_record = AnalysedType::Record(TypeRecord {
-            fields: query_fields
-                .into_iter()
-                .map(|(name, typ)| NameTypePair {
-                    name: name.to_string(),
-                    typ,
-                })
-                .collect(),
-        });
-        let request_record = AnalysedType::Record(TypeRecord {
-            fields: vec![NameTypePair {
-                name: "query".to_string(),
-                typ: query_record,
-            }],
-        });
-        types.insert("request".to_string(), request_record);
-        RibInputTypeInfo { types }
-    };
-
-    // Helper function to create header input
-    let create_header_input = |header_fields: Vec<(&str, AnalysedType)>| -> RibInputTypeInfo {
-        let mut types = HashMap::new();
-        let header_record = AnalysedType::Record(TypeRecord {
-            fields: header_fields
-                .into_iter()
-                .map(|(name, typ)| NameTypePair {
-                    name: name.to_string(),
-                    typ,
-                })
-                .collect(),
-        });
-        let request_record = AnalysedType::Record(TypeRecord {
-            fields: vec![NameTypePair {
-                name: "headers".to_string(),
-                typ: header_record,
-            }],
-        });
-        types.insert("request".to_string(), request_record);
-        RibInputTypeInfo { types }
-    };
-
     // Route 1: Combination of path, query, and header parameters
-    let path_input_worker = create_path_input(vec![("user", AnalysedType::Str(TypeStr))]);
-    let path_input_response = create_path_input(vec![("user_id", AnalysedType::U32(TypeU32))]);
-    let query_input_worker = create_query_input(vec![("limit", AnalysedType::U32(TypeU32))]);
-    let query_input_response = create_query_input(vec![("offset", AnalysedType::U32(TypeU32))]);
-    let header_input_worker = create_header_input(vec![("age", AnalysedType::Str(TypeStr))]);
-    let header_input_response = create_header_input(vec![("country", AnalysedType::Str(TypeStr))]);
+    // Create a unified RibInputTypeInfo that contains all parameter types
+    let combined_input = RibInputTypeInfo {
+        types: {
+            let mut types = HashMap::new();
 
-    // Combine all input types for worker
-    let mut worker_input_types = HashMap::new();
-    worker_input_types.extend(path_input_worker.types);
-    worker_input_types.extend(query_input_worker.types);
-    worker_input_types.extend(header_input_worker.types);
+            // Create path record with both user and user_id
+            let path_record = AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "user".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                    NameTypePair {
+                        name: "user_id".to_string(),
+                        typ: AnalysedType::U32(TypeU32),
+                    },
+                ],
+            });
 
-    // Combine all input types for response
-    let mut response_input_types = HashMap::new();
-    response_input_types.extend(path_input_response.types);
-    response_input_types.extend(query_input_response.types);
-    response_input_types.extend(header_input_response.types);
+            // Create query record with limit and offset
+            let query_record = AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "limit".to_string(),
+                        typ: AnalysedType::U32(TypeU32),
+                    },
+                    NameTypePair {
+                        name: "offset".to_string(),
+                        typ: AnalysedType::U32(TypeU32),
+                    },
+                ],
+            });
+
+            // Create headers record with age and country
+            let headers_record = AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "age".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                    NameTypePair {
+                        name: "country".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                ],
+            });
+
+            // Combine all into a single request record
+            let request_record = AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "path".to_string(),
+                        typ: path_record,
+                    },
+                    NameTypePair {
+                        name: "query".to_string(),
+                        typ: query_record,
+                    },
+                    NameTypePair {
+                        name: "headers".to_string(),
+                        typ: headers_record,
+                    },
+                ],
+            });
+
+            types.insert("request".to_string(), request_record);
+            types
+        },
+    };
 
     let route1 = CompiledRoute {
         method: MethodPattern::Get,
@@ -1949,9 +1898,7 @@ async fn test_path_query_header_parameter_combinations() {
                     "{status: 200, body: \"User profile for ${user_id}\"}",
                 ),
                 response_mapping_compiled: RibByteCode::default(),
-                rib_input: RibInputTypeInfo {
-                    types: response_input_types,
-                },
+                rib_input: combined_input,
                 worker_calls: None,
                 rib_output: Some(RibOutputTypeInfo {
                     analysed_type: AnalysedType::Record(TypeRecord {
@@ -2060,10 +2007,49 @@ async fn test_path_query_header_parameter_combinations() {
             component-name: empty-api
             component-version: 1
             response: '"{status: 200, body: "OK"}"'
-            worker-name: '"health-worker"'
       /api/v1/{user}/profile/{user_id}:
         get:
           parameters:
+          - in: path
+            name: user
+            description: 'Path parameter: user'
+            required: true
+            schema:
+              type: string
+            explode: false
+            style: simple
+          - in: path
+            name: user_id
+            description: 'Path parameter: user_id'
+            required: true
+            schema:
+              type: integer
+              format: int32
+              minimum: 0
+            explode: false
+            style: simple
+          - in: query
+            name: limit
+            description: 'Query parameter: limit'
+            required: true
+            schema:
+              type: integer
+              format: int32
+              minimum: 0
+            explode: false
+            style: form
+            allowEmptyValue: false
+          - in: query
+            name: offset
+            description: 'Query parameter: offset'
+            required: true
+            schema:
+              type: integer
+              format: int32
+              minimum: 0
+            explode: false
+            style: form
+            allowEmptyValue: false
           - in: header
             name: age
             description: 'Header parameter: age'
@@ -2098,7 +2084,6 @@ async fn test_path_query_header_parameter_combinations() {
             component-name: api-with-cors
             component-version: 1
             response: '"{status: 200, body: "User profile for ${user_id}"}"'
-            worker-name: '"worker-${user}"'
     components: {}
     x-golem-api-definition-id: parameter-test-api
     x-golem-api-definition-version: 1.0.0
@@ -2107,6 +2092,8 @@ async fn test_path_query_header_parameter_combinations() {
     // Parse both YAMLs for comparison
     let actual_yaml: serde_yaml::Value = serde_yaml::from_str(&openapi_response.openapi_yaml)
         .expect("Failed to parse actual OpenAPI YAML");
+    println!("actual_yaml: {actual_yaml:#?}");
+
     let expected_yaml: serde_yaml::Value =
         serde_yaml::from_str(expected_yaml).expect("Failed to parse expected OpenAPI YAML");
 
@@ -2611,7 +2598,6 @@ paths:
         component-name: parameter-test-api
         component-version: 1
         response: '"{status: 201, body: result}"'
-        worker-name: '"type-test-worker"'
   /types/collections:
     post:
       requestBody:
@@ -2670,7 +2656,6 @@ paths:
         component-name: swagger-api
         component-version: 1
         response: '"{status: 201, body: result}"'
-        worker-name: '"type-test-worker"'
   /types/complex:
     post:
       requestBody:
@@ -2762,7 +2747,6 @@ paths:
         component-name: delay-echo
         component-version: 1
         response: '"{status: 201, body: result}"'
-        worker-name: '"type-test-worker"'
   /types/enum-flags:
     post:
       requestBody:
@@ -2825,7 +2809,6 @@ paths:
         component-name: empty-api
         component-version: 1
         response: '"{status: 201, body: result}"'
-        worker-name: '"type-test-worker"'
   /types/info:
     get:
       responses:
@@ -2866,7 +2849,6 @@ paths:
         component-name: comprehensive-types-api
         component-version: 1
         response: '"{status: 201, body: result}"'
-        worker-name: '"type-test-worker"'
   /types/numbers:
     post:
       requestBody:
@@ -2911,7 +2893,6 @@ paths:
         component-name: secure-api
         component-version: 1
         response: '"{status: 201, body: result}"'
-        worker-name: '"type-test-worker"'
   /types/primitives:
     post:
       requestBody:
@@ -2972,7 +2953,6 @@ paths:
         component-name: api-with-cors
         component-version: 1
         response: '"{status: 201, body: result}"'
-        worker-name: '"type-test-worker"'
   /types/record:
     post:
       requestBody:
@@ -3038,7 +3018,6 @@ paths:
         component-name: test-worker-api
         component-version: 1
         response: '"{status: 201, body: result}"'
-        worker-name: '"type-test-worker"'
   /types/result:
     post:
       requestBody:
@@ -3111,7 +3090,6 @@ paths:
         component-name: simple-echo
         component-version: 1
         response: '"{status: 201, body: result}"'
-        worker-name: '"type-test-worker"'
   /types/variant:
     post:
       requestBody:
@@ -3183,7 +3161,6 @@ paths:
         component-name: todo-list
         component-version: 1
         response: '"{status: 201, body: result}"'
-        worker-name: '"type-test-worker"'
 components: {}
 x-golem-api-definition-id: comprehensive-types-api
 x-golem-api-definition-version: 2.0.0

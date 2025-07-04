@@ -38,7 +38,6 @@ use golem_api_grpc::proto::golem::apidefinition::v1::{
 };
 use golem_api_grpc::proto::golem::apidefinition::v1::{
     export_openapi_spec_response, ExportOpenapiSpecRequest, ExportOpenapiSpecResponse,
-    OpenApiHttpApiDefinitionResponse,
 };
 use golem_api_grpc::proto::golem::apidefinition::{
     static_binding, ApiDefinition, ApiDefinitionId, CorsPreflight, GatewayBinding,
@@ -1238,39 +1237,24 @@ pub trait WorkerService: Send + Sync {
                 let client = self.api_definition_http_client(token).await;
 
                 match client
-                    .get_definition(
+                    .export_definition(
                         &project_id.0,
                         &request.api_definition_id.unwrap().value,
                         &request.version,
                     )
                     .await
                 {
-                    Ok(result) => {
-                        // Ajay - Figure what is happening here
-                        // Convert from HttpApiDefinitionResponseData to the expected response
-                        let openapi_yaml = if !result.routes.is_empty() {
-                            // For now, return a placeholder since get_definition doesn't return OpenAPI YAML
-                            format!(
-                                "# API Definition: {}\n# Version: {}\n# Routes: {:?}",
-                                result.id, result.version, result.routes
-                            )
-                        } else {
-                            format!(
-                                "# API Definition: {}\n# Version: {}",
-                                result.id, result.version
-                            )
-                        };
-
-                        Ok(ExportOpenapiSpecResponse {
-                            result: Some(export_openapi_spec_response::Result::Success(
-                                OpenApiHttpApiDefinitionResponse {
-                                    id: Some(ApiDefinitionId { value: result.id }),
-                                    version: result.version,
-                                    openapi_yaml,
-                                },
-                            )),
-                        })
-                    }
+                    Ok(result) => Ok(ExportOpenapiSpecResponse {
+                        result: Some(export_openapi_spec_response::Result::Success(
+                            golem_api_grpc::proto::golem::apidefinition::v1::OpenApiHttpApiDefinitionResponse {
+                                id: Some(golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId {
+                                    value: result.id,
+                                }),
+                                version: result.version,
+                                openapi_yaml: result.openapi_yaml,
+                            }
+                        )),
+                    }),
                     Err(error) => Err(anyhow!("{error:?}")),
                 }
             }
