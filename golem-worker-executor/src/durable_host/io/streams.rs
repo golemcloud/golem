@@ -29,6 +29,7 @@ use wasmtime_wasi::p2::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
 use wasmtime_wasi_http::body::{FailingStream, HostIncomingBodyStream};
+use crate::model::event::InternalWorkerEvent;
 
 impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     async fn read(
@@ -194,9 +195,9 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
         let output = self.table().get(&self_)?;
         let event = if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
-            Some(WorkerEvent::stdout(contents.clone()))
+            Some(InternalWorkerEvent::stdout(contents.clone()))
         } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
-            Some(WorkerEvent::stderr(contents.clone()))
+            Some(InternalWorkerEvent::stderr(contents.clone()))
         } else {
             None
         };

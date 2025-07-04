@@ -104,6 +104,7 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
+use crate::model::event::InternalWorkerEvent;
 
 pub mod blobstore;
 mod cli;
@@ -453,7 +454,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn emit_log_event(&self, event: WorkerEvent) {
+    async fn emit_log_event(&self, event: InternalWorkerEvent) {
         if let Some(entry) = event.as_oplog_entry() {
             if let OplogEntry::Log {
                 level,

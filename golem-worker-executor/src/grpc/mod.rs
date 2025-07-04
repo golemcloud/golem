@@ -19,7 +19,7 @@ use futures_util::Stream;
 use futures_util::StreamExt;
 use gethostname::gethostname;
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{Cursor, LogEvent, ResourceMetadata, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
@@ -79,6 +79,7 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use tokio;
+use crate::model::event::InternalWorkerEvent;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -2652,7 +2653,7 @@ pub fn authorised_grpc_request<T>(request: T, access_token: &Uuid) -> Request<T>
 }
 
 pub struct WorkerEventStream {
-    inner: Pin<Box<dyn Stream<Item = Result<WorkerEvent, BroadcastStreamRecvError>> + Send>>,
+    inner: Pin<Box<dyn Stream<Item = WorkerEvent> + Send>>,
 }
 
 impl WorkerEventStream {
@@ -2675,7 +2676,7 @@ impl Stream for WorkerEventStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let WorkerEventStream { inner } = self.get_mut();
         match inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(event))) => match &event {
+            Poll::Ready(Some(event)) => match &event {
                 WorkerEvent::Close => Poll::Ready(None),
                 WorkerEvent::StdOut { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
                 WorkerEvent::StdErr { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
@@ -2686,10 +2687,10 @@ impl Stream for WorkerEventStream {
                 WorkerEvent::InvocationFinished { .. } => {
                     Poll::Ready(Some(Ok(event.try_into().unwrap())))
                 }
+                WorkerEvent::ClientLagged { .. } => {
+                    Poll::Ready(Some(Ok(event.try_into().unwrap())))
+                }
             },
-            Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => Poll::Ready(Some(Err(
-                Status::data_loss(format!("Lagged by {n} events")),
-            ))),
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }

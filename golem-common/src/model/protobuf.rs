@@ -481,6 +481,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::LogEvent> for WorkerEvent {
                         .ok_or("Missing idempotency key")?
                         .into(),
                 }),
+                golem_api_grpc::proto::golem::worker::log_event::Event::ClientLagged(
+                    event,
+                ) => Ok(WorkerEvent::ClientLagged {
+                    number_of_missed_messages: event.number_of_missed_messages
+                }),
             },
             None => Err("Missing event".to_string()),
         }
@@ -553,6 +558,15 @@ impl TryFrom<WorkerEvent> for golem_api_grpc::proto::golem::worker::LogEvent {
                         function,
                         idempotency_key: Some(idempotency_key.into()),
                         timestamp: Some(timestamp.into()),
+                    },
+                )),
+            }),
+            WorkerEvent::ClientLagged {
+                number_of_missed_messages
+            } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::ClientLagged(
+                    golem::worker::ClientLagged {
+                        number_of_missed_messages
                     },
                 )),
             }),

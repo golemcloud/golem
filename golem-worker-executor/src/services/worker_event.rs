@@ -25,13 +25,16 @@ use tokio::sync::broadcast::*;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::Stream;
+use crate::model::event::InternalWorkerEvent;
+use tracing::event;
+use applying::Apply;
 
 /// Per-worker event stream
 pub trait WorkerEventService: Send + Sync {
     /// Emit an arbitrary worker event.
     ///
     /// There are helpers like `emit_stdout` for specific types.
-    fn emit_event(&self, event: WorkerEvent, is_live: bool);
+    fn emit_event(&self, event: InternalWorkerEvent, is_live: bool);
 
     /// Subscribes to the worker event stream and returns a receiver which can be either consumed one
     /// by one using `WorkerEventReceiver::recv` or converted to a tokio stream.
@@ -43,15 +46,15 @@ pub trait WorkerEventService: Send + Sync {
     fn get_last_invocation_errors(&self) -> String;
 
     fn emit_stdout(&self, bytes: Vec<u8>, is_live: bool) {
-        self.emit_event(WorkerEvent::stdout(bytes), is_live)
+        self.emit_event(InternalWorkerEvent::stdout(bytes), is_live)
     }
 
     fn emit_stderr(&self, bytes: Vec<u8>, is_live: bool) {
-        self.emit_event(WorkerEvent::stderr(bytes), is_live)
+        self.emit_event(InternalWorkerEvent::stderr(bytes), is_live)
     }
 
     fn emit_log(&self, log_level: LogLevel, context: &str, message: &str, is_live: bool) {
-        self.emit_event(WorkerEvent::log(log_level, context, message), is_live)
+        self.emit_event(InternalWorkerEvent::log(log_level, context, message), is_live)
     }
 
     fn emit_invocation_start(
@@ -61,7 +64,7 @@ pub trait WorkerEventService: Send + Sync {
         is_live: bool,
     ) {
         self.emit_event(
-            WorkerEvent::invocation_start(function, idempotency_key),
+            InternalWorkerEvent::invocation_start(function, idempotency_key),
             is_live,
         )
     }
@@ -73,7 +76,7 @@ pub trait WorkerEventService: Send + Sync {
         is_live: bool,
     ) {
         self.emit_event(
-            WorkerEvent::invocation_finished(function, idempotency_key),
+            InternalWorkerEvent::invocation_finished(function, idempotency_key),
             is_live,
         )
     }
@@ -81,44 +84,67 @@ pub trait WorkerEventService: Send + Sync {
 
 #[derive(Clone)]
 struct WorkerEventEntry {
-    event: WorkerEvent,
+    event: InternalWorkerEvent,
     is_live: bool,
 }
 
 pub struct WorkerEventReceiver {
     history: VecDeque<WorkerEventEntry>,
-    receiver: Receiver<WorkerEvent>,
+    receiver: Receiver<Option<InternalWorkerEvent>>,
 }
 
 impl WorkerEventReceiver {
-    pub async fn recv(&mut self) -> Result<WorkerEvent, RecvError> {
+    pub async fn recv(&mut self) -> WorkerEvent {
         loop {
             let popped = self.history.pop_front();
             match popped {
-                Some(entry) if entry.is_live => break Ok(entry.event),
+                Some(entry) if entry.is_live => break entry.event.into(),
                 Some(_) => continue,
-                None => break self.receiver.recv().await,
+                None => {
+                   let entry = self.receiver.recv().await;
+                   let converted = match entry {
+                     Ok(Some(event)) => event.into(),
+                     Ok(None) => WorkerEvent::Close,
+                     Err(RecvError::Closed) => WorkerEvent::Close,
+                     Err(RecvError::Lagged(n)) => WorkerEvent::ClientLagged { number_of_missed_messages: n }
+                   };
+                   break converted;
+                }
             }
         }
     }
 
-    pub fn to_stream(self) -> impl Stream<Item = Result<WorkerEvent, BroadcastStreamRecvError>> {
+    pub fn to_stream(self) -> impl Stream<Item = WorkerEvent> {
         let Self { history, receiver } = self;
-        stream::iter(history.into_iter().filter_map(
-            |WorkerEventEntry { event, is_live }| {
-                if is_live {
-                    Some(Ok(event))
-                } else {
-                    None
+
+        let history_stream = history
+            .into_iter()
+            .filter_map(
+                |WorkerEventEntry { event, is_live }| {
+                    if is_live {
+                        Some(event.into())
+                    } else {
+                        None
+                    }
                 }
-            },
-        ))
-        .chain(BroadcastStream::new(receiver))
+            )
+            .apply(stream::iter);
+
+        let broadcast_stream =  BroadcastStream::new(receiver)
+            .map(|entry|
+                match entry {
+                    Ok(Some(event)) => event.into(),
+                    Ok(None) => WorkerEvent::Close,
+                    Err(BroadcastStreamRecvError::Lagged(n)) => WorkerEvent::ClientLagged { number_of_missed_messages: n }
+                }
+            );
+
+        history_stream.chain(broadcast_stream)
     }
 }
 
 pub struct WorkerEventServiceDefault {
-    sender: Sender<WorkerEvent>,
+    sender: Sender<Option<InternalWorkerEvent>>,
     ring_prod: Arc<Mutex<<SharedRb<Heap<WorkerEventEntry>> as Split>::Prod>>,
     ring_cons: Arc<Mutex<<SharedRb<Heap<WorkerEventEntry>> as Split>::Cons>>,
 }
@@ -137,19 +163,21 @@ impl WorkerEventServiceDefault {
 
 impl Drop for WorkerEventServiceDefault {
     fn drop(&mut self) {
-        self.emit_event(WorkerEvent::Close, true);
+        if self.sender.receiver_count() > 0 {
+            let _ = self.sender.send(None);
+        }
     }
 }
 
 impl WorkerEventService for WorkerEventServiceDefault {
-    fn emit_event(&self, event: WorkerEvent, is_live: bool) {
+    fn emit_event(&self, event: InternalWorkerEvent, is_live: bool) {
         if is_live {
             record_event(label(&event));
 
             if self.sender.receiver_count() > 0 {
                 record_broadcast_event(label(&event));
 
-                let _ = self.sender.send(event.clone());
+                let _ = self.sender.send(Some(event.clone()));
             }
         }
 
@@ -174,10 +202,10 @@ impl WorkerEventService for WorkerEventServiceDefault {
         let mut stderr_chunks = Vec::new();
         for event in history.iter().rev() {
             match &event.event {
-                WorkerEvent::StdErr { bytes, .. } => {
+                InternalWorkerEvent::StdErr { bytes, .. } => {
                     stderr_chunks.push(bytes.clone());
                 }
-                WorkerEvent::InvocationStart { .. } => break,
+                InternalWorkerEvent::InvocationStart { .. } => break,
                 _ => {}
             }
         }
@@ -186,14 +214,13 @@ impl WorkerEventService for WorkerEventServiceDefault {
     }
 }
 
-fn label(event: &WorkerEvent) -> &'static str {
+fn label(event: &InternalWorkerEvent) -> &'static str {
     match event {
-        WorkerEvent::StdOut { .. } => "stdout",
-        WorkerEvent::StdErr { .. } => "stderr",
-        WorkerEvent::Log { .. } => "log",
-        WorkerEvent::InvocationStart { .. } => "invocation_start",
-        WorkerEvent::InvocationFinished { .. } => "invocation_finished",
-        WorkerEvent::Close => "close",
+        InternalWorkerEvent::StdOut { .. } => "stdout",
+        InternalWorkerEvent::StdErr { .. } => "stderr",
+        InternalWorkerEvent::Log { .. } => "log",
+        InternalWorkerEvent::InvocationStart { .. } => "invocation_start",
+        InternalWorkerEvent::InvocationFinished { .. } => "invocation_finished",
     }
 }
 
@@ -210,6 +237,7 @@ mod tests {
     use crate::services::worker_event::{
         WorkerEvent, WorkerEventService, WorkerEventServiceDefault,
     };
+    use crate::model::event::InternalWorkerEvent;
 
     #[test]
     #[flaky(10)] // TODO: understand why is this flaky
@@ -227,13 +255,12 @@ mod tests {
                 drop(svc1);
                 loop {
                     match rx1.recv().await {
-                        Ok(WorkerEvent::Close) => break,
-                        Ok(event) => {
-                            rx1_events_clone.lock().await.push(event);
+                        WorkerEvent::Close => break,
+                        WorkerEvent::ClientLagged { number_of_missed_messages } => {
+                            info!("task1 lagged {number_of_missed_messages}");
                         }
-                        Err(RecvError::Closed) => break,
-                        Err(RecvError::Lagged(n)) => {
-                            info!("task1 lagged {n}");
+                        event => {
+                            rx1_events_clone.lock().await.push(event);
                         }
                     }
                 }
@@ -242,7 +269,7 @@ mod tests {
         );
 
         for b in 1..=4u8 {
-            svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            svc.emit_event(InternalWorkerEvent::stdout(vec![b]), true);
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
@@ -263,13 +290,12 @@ mod tests {
                 ready_tx.send(()).unwrap();
                 loop {
                     match rx2.recv().await {
-                        Ok(WorkerEvent::Close) => break,
-                        Ok(event) => {
-                            rx2_events_clone.lock().await.push(event);
+                        WorkerEvent::Close => break,
+                        WorkerEvent::ClientLagged { number_of_missed_messages } => {
+                            info!("task2 lagged {number_of_missed_messages}");
                         }
-                        Err(RecvError::Closed) => break,
-                        Err(RecvError::Lagged(n)) => {
-                            info!("task2 lagged {n}");
+                        event => {
+                            rx2_events_clone.lock().await.push(event);
                         }
                     }
                 }
@@ -280,7 +306,7 @@ mod tests {
         ready_rx.await.unwrap();
 
         for b in 5..=8u8 {
-            svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            svc.emit_event(InternalWorkerEvent::stdout(vec![b]), true);
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
@@ -350,11 +376,11 @@ mod tests {
                 rx1.to_stream()
                     .for_each(|item| async {
                         match item {
-                            Ok(WorkerEvent::Close) => {}
-                            Ok(event) => {
+                            WorkerEvent::Close => {}
+                            WorkerEvent::ClientLagged {.. } => {},
+                            event => {
                                 rx1_events_clone.lock().await.push(event);
                             }
-                            Err(_) => {}
                         }
                     })
                     .await;
@@ -363,7 +389,7 @@ mod tests {
         );
 
         for b in 1..=4u8 {
-            svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            svc.emit_event(InternalWorkerEvent::stdout(vec![b]), true);
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
@@ -385,11 +411,11 @@ mod tests {
                 rx2.to_stream()
                     .for_each(|item| async {
                         match item {
-                            Ok(WorkerEvent::Close) => {}
-                            Ok(event) => {
+                            WorkerEvent::Close => {}
+                            WorkerEvent::ClientLagged {.. } => {},
+                            event => {
                                 rx2_events_clone.lock().await.push(event);
                             }
-                            Err(_) => {}
                         }
                     })
                     .await;
@@ -400,7 +426,7 @@ mod tests {
         ready_rx.await.unwrap();
 
         for b in 5..=8u8 {
-            svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            svc.emit_event(InternalWorkerEvent::stdout(vec![b]), true);
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
@@ -470,13 +496,12 @@ mod tests {
                 drop(svc1);
                 loop {
                     match rx1.recv().await {
-                        Ok(WorkerEvent::Close) => break,
-                        Ok(event) => {
-                            rx1_events_clone.lock().await.push(event);
+                        WorkerEvent::Close => break,
+                        WorkerEvent::ClientLagged { number_of_missed_messages } => {
+                            info!("task1 lagged {number_of_missed_messages}");
                         }
-                        Err(RecvError::Closed) => break,
-                        Err(RecvError::Lagged(n)) => {
-                            info!("task1 lagged {n}");
+                        event => {
+                            rx1_events_clone.lock().await.push(event);
                         }
                     }
                 }
@@ -486,7 +511,7 @@ mod tests {
 
         for b in 1..=1000 {
             let s = format!("{b}");
-            svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()), true);
+            svc.emit_event(InternalWorkerEvent::stdout(s.as_bytes().into()), true);
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
@@ -507,13 +532,12 @@ mod tests {
                 ready_tx.send(()).unwrap();
                 loop {
                     match rx2.recv().await {
-                        Ok(WorkerEvent::Close) => break,
-                        Ok(event) => {
-                            rx2_events_clone.lock().await.push(event);
+                        WorkerEvent::Close => break,
+                        WorkerEvent::ClientLagged { number_of_missed_messages } => {
+                            info!("task2 lagged {number_of_missed_messages}");
                         }
-                        Err(RecvError::Closed) => break,
-                        Err(RecvError::Lagged(n)) => {
-                            info!("task1 lagged {n}");
+                        event => {
+                            rx2_events_clone.lock().await.push(event);
                         }
                     }
                 }
@@ -525,7 +549,7 @@ mod tests {
 
         for b in 1001..=1004 {
             let s = format!("{b}");
-            svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()), true);
+            svc.emit_event(InternalWorkerEvent::stdout(s.as_bytes().into()), true);
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
