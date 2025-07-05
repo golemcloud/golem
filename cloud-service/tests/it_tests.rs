@@ -21,11 +21,12 @@ use golem_service_base::migration::{Migrations, MigrationsDir};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
-use std::vec;
+use std::{env, vec};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
+use golem_service_base::db::sqlite::SqlitePool;
 
 test_r::enable!();
 
@@ -519,7 +520,7 @@ struct SqliteDb {
 impl Default for SqliteDb {
     fn default() -> Self {
         Self {
-            db_path: format!("/tmp/golem-{}.db", Uuid::new_v4()),
+            db_path: format!("{}/golem-{}.db", env::temp_dir().as_path().display(), Uuid::new_v4()),
         }
     }
 }
@@ -581,5 +582,9 @@ pub async fn test_sqlite_db() {
         .await
         .unwrap();
 
+    let pool = SqlitePool::configured(&db_config).await.unwrap();
+
     test_services(&config).await;
+
+    futures::executor::block_on(pool.close());
 }

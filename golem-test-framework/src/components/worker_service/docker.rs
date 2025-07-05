@@ -240,7 +240,7 @@ impl GolemWorkerServiceImage {
 
 impl Image for GolemWorkerServiceImage {
     fn name(&self) -> &str {
-        "golemservices/golem-worker-service"
+        "parvit/golem-worker-service"
     }
 
     fn tag(&self) -> &str {

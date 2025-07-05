@@ -193,7 +193,7 @@ impl GolemComponentServiceImage {
 
 impl Image for GolemComponentServiceImage {
     fn name(&self) -> &str {
-        "golemservices/golem-component-service"
+        "parvit/golem-component-service"
     }
 
     fn tag(&self) -> &str {

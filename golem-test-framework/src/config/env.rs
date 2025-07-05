@@ -53,6 +53,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::Level;
 use uuid::Uuid;
+use crate::components::cloud_service::docker::DockerCloudService;
 
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
@@ -251,10 +252,10 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn CloudService> {
         if config.golem_docker_services {
             Arc::new(
-                ProvidedCloudService::new(
-                    config.unique_network_id.to_string(),
-                    8084,
-                    9095,
+                DockerCloudService::new(
+                    &config.unique_network_id,
+                    rdb.clone(),
+                    config.default_verbosity(),
                     config.golem_client_protocol,
                 )
                 .await,

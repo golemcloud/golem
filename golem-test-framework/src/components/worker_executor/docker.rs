@@ -174,7 +174,7 @@ impl WorkerExecutorImage {
 
 impl Image for WorkerExecutorImage {
     fn name(&self) -> &str {
-        "golemservices/golem-worker-executor"
+        "parvit/golem-worker-executor"
     }
 
     fn tag(&self) -> &str {

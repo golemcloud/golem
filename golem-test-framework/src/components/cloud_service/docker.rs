@@ -149,7 +149,7 @@ impl CloudServiceImage {
 
 impl Image for CloudServiceImage {
     fn name(&self) -> &str {
-        "golemservices/cloud-service"
+        "parvit/cloud-service"
     }
 
     fn tag(&self) -> &str {

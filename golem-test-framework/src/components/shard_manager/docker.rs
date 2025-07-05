@@ -144,7 +144,7 @@ impl ShardManagerImage {
 
 impl Image for ShardManagerImage {
     fn name(&self) -> &str {
-        "golemservices/golem-shard-manager"
+        "parvit/golem-shard-manager"
     }
 
     fn tag(&self) -> &str {
