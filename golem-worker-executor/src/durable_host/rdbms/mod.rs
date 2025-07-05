@@ -101,14 +101,11 @@ where
 
     let result = ctx
         .state
-        .begin_transaction_function(
-            &DurableFunctionType::WriteRemoteTransaction(None),
-            RdbmsRemoteTransactionHandler::<T>::new(
-                pool_key.clone(),
-                ctx.state.owned_worker_id.worker_id.clone(),
-                ctx.state.rdbms_service.clone(),
-            ),
-        )
+        .begin_transaction_function(RdbmsRemoteTransactionHandler::<T>::new(
+            pool_key.clone(),
+            ctx.state.owned_worker_id.worker_id.clone(),
+            ctx.state.rdbms_service.clone(),
+        ))
         .await;
 
     match result {
@@ -570,9 +567,7 @@ where
 
     if pre_result.is_ok() {
         ctx.state
-            .pre_rollback_transaction_function(&DurableFunctionType::WriteRemoteTransaction(Some(
-                begin_oplog_idx,
-            )))
+            .pre_rollback_transaction_function(begin_oplog_idx)
             .await?;
     }
 
@@ -586,10 +581,7 @@ where
 
             if result.is_ok() {
                 ctx.state
-                    .rolled_back_transaction_function(
-                        &DurableFunctionType::WriteRemoteTransaction(None),
-                        begin_oplog_idx,
-                    )
+                    .rolled_back_transaction_function(begin_oplog_idx)
                     .await?;
             }
 
@@ -629,9 +621,7 @@ where
 
     if pre_result.is_ok() {
         ctx.state
-            .pre_commit_transaction_function(&DurableFunctionType::WriteRemoteTransaction(Some(
-                begin_oplog_idx,
-            )))
+            .pre_commit_transaction_function(begin_oplog_idx)
             .await?;
     }
 
@@ -645,10 +635,7 @@ where
 
             if result.is_ok() {
                 ctx.state
-                    .committed_transaction_function(
-                        &DurableFunctionType::WriteRemoteTransaction(None),
-                        begin_oplog_idx,
-                    )
+                    .committed_transaction_function(begin_oplog_idx)
                     .await?;
             }
 
@@ -688,9 +675,7 @@ where
             let begin_oplog_idx = ctx.state.open_function_table.get(&handle).cloned();
             if let Some(begin_oplog_idx) = begin_oplog_idx {
                 ctx.state
-                    .pre_rollback_transaction_function(
-                        &DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
-                    )
+                    .pre_rollback_transaction_function(begin_oplog_idx)
                     .await?;
             }
 
@@ -698,10 +683,7 @@ where
 
             if let Some(begin_oplog_idx) = begin_oplog_idx {
                 ctx.state
-                    .rolled_back_transaction_function(
-                        &DurableFunctionType::WriteRemoteTransaction(None),
-                        begin_oplog_idx,
-                    )
+                    .rolled_back_transaction_function(begin_oplog_idx)
                     .await?;
                 ctx.state.open_function_table.remove(&handle);
             }
