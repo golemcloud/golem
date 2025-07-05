@@ -917,8 +917,6 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
     let yaml_value: serde_yaml::Value =
         serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
-    println!("yaml_value: {yaml_value:#?}");
-
     // Verify basic properties
     assert_basic_openapi_properties(&yaml_value, "todo-list", "0.0.1");
 
@@ -2092,7 +2090,6 @@ async fn test_path_query_header_parameter_combinations() {
     // Parse both YAMLs for comparison
     let actual_yaml: serde_yaml::Value = serde_yaml::from_str(&openapi_response.openapi_yaml)
         .expect("Failed to parse actual OpenAPI YAML");
-    println!("actual_yaml: {actual_yaml:#?}");
 
     let expected_yaml: serde_yaml::Value =
         serde_yaml::from_str(expected_yaml).expect("Failed to parse expected OpenAPI YAML");
