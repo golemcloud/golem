@@ -26,7 +26,6 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
-use golem_service_base::db::sqlite::SqlitePool;
 
 test_r::enable!();
 
@@ -527,7 +526,9 @@ impl Default for SqliteDb {
 
 impl Drop for SqliteDb {
     fn drop(&mut self) {
-        std::fs::remove_file(&self.db_path).unwrap();
+        while std::fs::remove_file(&self.db_path).is_err() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 }
 
@@ -582,9 +583,5 @@ pub async fn test_sqlite_db() {
         .await
         .unwrap();
 
-    let pool = SqlitePool::configured(&db_config).await.unwrap();
-
     test_services(&config).await;
-
-    futures::executor::block_on(pool.close());
 }

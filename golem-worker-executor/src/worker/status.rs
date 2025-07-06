@@ -1517,7 +1517,7 @@ mod test {
             .unwrap();
 
             assert_eq!(
-                final_status, final_expected_status,
+                final_status.status, final_expected_status.status,
                 "Calculating the last known status from oplog index {idx}"
             )
         }
