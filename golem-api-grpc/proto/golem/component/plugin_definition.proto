@@ -19,7 +19,7 @@ message PluginDefinitionCreation {
   bytes icon = 4;
   string homepage = 5;
   golem.component.PluginTypeSpecificDefinition specs = 6;
-  golem.component.CloudPluginScope scope = 7;
+  golem.component.PluginScope scope = 7;
 }
 
 message PluginDefinition {
@@ -30,12 +30,12 @@ message PluginDefinition {
   bytes icon = 5;
   string homepage = 6;
   golem.component.PluginTypeSpecificDefinition specs = 7;
-  golem.component.CloudPluginScope scope = 8;
+  golem.component.PluginScope scope = 8;
   golem.common.AccountId account_id = 9;
   bool deleted = 10;
 }
 
-message CloudPluginScope {
+message PluginScope {
   oneof scope {
     golem.common.Empty global = 1;
     golem.component.ComponentPluginScope component = 2;

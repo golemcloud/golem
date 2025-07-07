@@ -37,14 +37,13 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let user = deps.user().await;
 
     // Create some components
     let (counter_1_id, counter_2_id, caller_id, ephemeral_id) = join!(
-        admin.component("counters").unique().store(),
-        admin.component("counters").unique().store(),
-        admin
-            .component("caller")
+        user.component("counters").unique().store(),
+        user.component("counters").unique().store(),
+        user.component("caller")
             .unique()
             .with_dynamic_linking(&[
                 (
@@ -85,7 +84,7 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                 ),
             ])
             .store(),
-        admin.component("ephemeral").unique().ephemeral().store()
+        user.component("ephemeral").unique().ephemeral().store()
     );
 
     let counter_1_id = common_component_id_to_str(&counter_1_id);
@@ -97,7 +96,7 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
     let components = deps
         .component_service()
         .get_components(
-            &admin.token,
+            &user.token,
             GetComponentsRequest {
                 project_id: None,
                 component_name: None,
@@ -124,9 +123,7 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
         })
         .collect::<HashMap<_, _>>();
 
-    // Check that we have all the components with some meta (we check equal or more,
-    // so tests can run in parallel)
-    assert!(components.len() >= 4);
+    assert_eq!(components.len(), 4);
 
     let counter_1 = components.get(&counter_1_id).unwrap();
     let counter_2 = components.get(&counter_2_id).unwrap();
@@ -218,10 +215,10 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let user = deps.user().await;
 
     // Create component
-    let (component_id, component_name) = admin
+    let (component_id, component_name) = user
         .component("counters")
         .unique()
         .store_and_get_name()
@@ -231,7 +228,7 @@ async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
     let components = deps
         .component_service()
         .get_components(
-            &admin.token,
+            &user.token,
             GetComponentsRequest {
                 project_id: None,
                 component_name: Some(component_name.0.clone()),
@@ -245,14 +242,14 @@ async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
     check_versioned_id(&components[0], &component_id, 0);
 
     // Update component two times
-    admin.update_component(&component_id, "counters").await;
-    admin.update_component(&component_id, "counters").await;
+    user.update_component(&component_id, "counters").await;
+    user.update_component(&component_id, "counters").await;
 
     // Search for the component by name again
     let components = deps
         .component_service()
         .get_components(
-            &admin.token,
+            &user.token,
             GetComponentsRequest {
                 project_id: None,
                 component_name: Some(component_name.0.clone()),

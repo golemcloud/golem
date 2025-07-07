@@ -17,10 +17,11 @@ use crate::grpcapi::get_authorisation_token;
 use crate::service::auth::{AuthService, AuthServiceError};
 use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_server::CloudAuthService;
 use golem_api_grpc::proto::golem::auth::v1::{
-    auth_error, authorize_project_action_response, get_account_response, AuthError,
-    AuthorizeProjectActionRequest, AuthorizeProjectActionResponse,
-    AuthorizeProjectActionSuccessResponse, GetAccountRequest, GetAccountResponse,
-    GetAccountSuccessResponse,
+    auth_error, authorize_account_action_response, authorize_project_action_response,
+    get_account_response, AuthError, AuthorizeAccountActionRequest, AuthorizeAccountActionResponse,
+    AuthorizeAccountActionSuccessResponse, AuthorizeProjectActionRequest,
+    AuthorizeProjectActionResponse, AuthorizeProjectActionSuccessResponse, GetAccountRequest,
+    GetAccountResponse, GetAccountSuccessResponse,
 };
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_common::metrics::api::TraceErrorKind;
@@ -89,6 +90,24 @@ impl AuthGrpcApi {
         })
     }
 
+    async fn authorize_account_action(
+        &self,
+        request: AuthorizeAccountActionRequest,
+        metadata: MetadataMap,
+    ) -> Result<AuthorizeAccountActionSuccessResponse, AuthError> {
+        let auth = self.auth(metadata).await?;
+
+        self.auth_service
+            .authorize_account_action(
+                &auth,
+                &request.account_id.unwrap().into(),
+                &request.action.try_into().unwrap(),
+            )
+            .await?;
+
+        Ok(AuthorizeAccountActionSuccessResponse {})
+    }
+
     async fn authorize_project_action(
         &self,
         request: AuthorizeProjectActionRequest,
@@ -131,6 +150,33 @@ impl CloudAuthService for AuthGrpcApi {
         };
 
         Ok(Response::new(GetAccountResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn authorize_account_action(
+        &self,
+        request: Request<AuthorizeAccountActionRequest>,
+    ) -> Result<Response<AuthorizeAccountActionResponse>, Status> {
+        let (m, _, r) = request.into_parts();
+
+        let record = recorded_grpc_api_request!("authorize_account_action",);
+
+        let response = match self
+            .authorize_account_action(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(payload) => {
+                record.succeed(authorize_account_action_response::Result::Success(payload))
+            }
+            Err(error) => record.fail(
+                authorize_account_action_response::Result::Error(error.clone()),
+                &AuthTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(AuthorizeAccountActionResponse {
             result: Some(response),
         }))
     }

@@ -288,6 +288,9 @@ impl From<ProjectError> for ApiError {
                 error: value.to_safe_string(),
             })),
             ProjectError::LimitExceeded(_) => Self::limit_exceeded(value),
+            ProjectError::ProjectNotFound(_) => Self::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
             ProjectError::PluginNotFound { .. } => Self::BadRequest(Json(ErrorsBody {
                 errors: vec![value.to_safe_string()],
             })),

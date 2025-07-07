@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::SystemTime;
 use tempfile::NamedTempFile;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component {
@@ -40,11 +41,13 @@ pub struct Component {
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<Utc>,
     pub component_type: ComponentType,
-    pub object_store_key: Option<String>,
-    pub transformed_object_store_key: Option<String>,
+    pub object_store_key: String,
+    pub transformed_object_store_key: String,
     pub files: Vec<InitialComponentFile>,
+    pub transformed_files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<PluginInstallation>,
     pub env: HashMap<String, String>,
+    pub transformed_env: HashMap<String, String>,
 }
 
 impl Component {
@@ -59,8 +62,7 @@ impl Component {
         owner: ComponentOwner,
         env: HashMap<String, String>,
     ) -> Result<Component, ComponentProcessingError> {
-        let mut metadata = ComponentMetadata::analyse_component(data)?;
-        metadata.dynamic_linking = dynamic_linking;
+        let metadata = ComponentMetadata::analyse_component(data, dynamic_linking)?;
 
         let versioned_component_id = VersionedComponentId {
             component_id: component_id.clone(),
@@ -73,36 +75,42 @@ impl Component {
             component_size: data.len() as u64,
             metadata,
             created_at: Utc::now(),
-            object_store_key: Some(versioned_component_id.to_string()),
-            transformed_object_store_key: Some(versioned_component_id.to_string()),
+            object_store_key: Uuid::new_v4().to_string(),
+            transformed_object_store_key: Uuid::new_v4().to_string(),
             versioned_component_id,
             component_type,
+            transformed_files: files.clone(),
             files,
             installed_plugins,
+            transformed_env: env.clone(),
             env,
         })
     }
 
     pub fn user_object_store_key(&self) -> String {
-        format!(
-            "{}:user",
-            self.object_store_key
-                .as_ref()
-                .unwrap_or(&self.versioned_component_id.to_string())
-        )
+        format!("{}:user", self.object_store_key)
     }
 
     pub fn protected_object_store_key(&self) -> String {
-        format!(
-            "{}:protected",
-            self.transformed_object_store_key
-                .as_ref()
-                .unwrap_or(&self.versioned_component_id.to_string())
-        )
+        format!("{}:protected", self.transformed_object_store_key)
     }
 
-    pub fn owns_stored_object(&self) -> bool {
-        self.object_store_key == Some(self.versioned_component_id.to_string())
+    pub fn regenerate_object_store_key(&mut self) {
+        self.object_store_key = Uuid::new_v4().to_string();
+    }
+
+    pub fn regenerate_transformed_object_store_key(&mut self) {
+        self.transformed_object_store_key = Uuid::new_v4().to_string();
+    }
+
+    pub fn bump_version(&mut self) {
+        assert!(self.versioned_component_id.version < u64::MAX);
+        self.versioned_component_id.version += 1;
+    }
+
+    pub fn reset_transformations(&mut self) {
+        self.transformed_env = self.env.clone();
+        self.transformed_files = self.files.clone();
     }
 }
 
@@ -116,9 +124,9 @@ impl From<Component> for golem_service_base::model::Component {
             metadata: value.metadata,
             created_at: value.created_at,
             component_type: value.component_type,
-            files: value.files,
+            files: value.transformed_files,
             installed_plugins: value.installed_plugins,
-            env: value.env,
+            env: value.transformed_env,
         }
     }
 }
@@ -139,13 +147,17 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
                 value.created_at,
             ))),
             component_type: Some(component_type.into()),
-            files: value.files.into_iter().map(|file| file.into()).collect(),
+            files: value
+                .transformed_files
+                .into_iter()
+                .map(|file| file.into())
+                .collect(),
             installed_plugins: value
                 .installed_plugins
                 .into_iter()
                 .map(|plugin| plugin.into())
                 .collect(),
-            env: value.env,
+            env: value.transformed_env,
         }
     }
 }

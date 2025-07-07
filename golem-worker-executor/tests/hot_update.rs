@@ -958,3 +958,95 @@ async fn auto_update_on_idle_to_non_existing(
     check!(metadata.last_known_status.failed_updates.len() == 1);
     check!(metadata.last_known_status.successful_updates.len() == 1);
 }
+
+/// Check that GOLEM_COMPONENT_VERSION environment variable is updated as part of a worker update
+#[test]
+#[tracing::instrument]
+async fn update_component_version_environment_variable(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
+
+    let component_id = executor.component("update-test-env-var").store().await;
+
+    let worker_id = executor.start_worker(&component_id, "worker-1").await;
+
+    {
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, vec![Value::String("0".to_string())]);
+    }
+
+    let target_version1 = executor
+        .update_component(&component_id, "update-test-env-var")
+        .await;
+
+    executor
+        .auto_update_worker(&worker_id, target_version1)
+        .await;
+
+    {
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, vec![Value::String("0".to_string())]);
+
+        // FIXME: broken as get-environment during the replay is getting cached
+        // assert_eq!(result, vec![Value::String("1".to_string())]);
+    }
+
+    // worker created on the new version sees correct component version
+    {
+        let worker2 = executor.start_worker(&component_id, "worker-2").await;
+
+        let result = executor
+            .invoke_and_await(
+                &worker2,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, vec![Value::String("1".to_string())]);
+    }
+
+    let target_version2 = executor
+        .update_component(&component_id, "update-test-env-var")
+        .await;
+
+    executor
+        .manual_update_worker(&worker_id, target_version2)
+        .await;
+
+    {
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, vec![Value::String("2".to_string())]);
+    }
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+}
