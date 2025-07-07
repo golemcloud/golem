@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::additional_deps::AdditionalDeps;
-use crate::auth::{AuthService, AuthServiceDefault};
+use crate::auth::{AuthService, GrpcAuthService};
 use crate::config::DebugConfig;
 use crate::debug_context::DebugContext;
 use crate::debug_session::{DebugSessions, DebugSessionsDefault};
@@ -23,7 +23,7 @@ use anyhow::{Context, Error};
 use async_trait::async_trait;
 use axum::routing::any;
 use axum::Router;
-use golem_service_base::clients::auth::CloudAuthService;
+use golem_service_base::clients::auth::AuthService as BaseAuthService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
@@ -153,8 +153,8 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     ) -> anyhow::Result<All<DebugContext>> {
         let remote_cloud_service_config = self.debug_config.cloud_service.clone();
 
-        let auth_service: Arc<dyn AuthService> = Arc::new(AuthServiceDefault::new(
-            CloudAuthService::new(&remote_cloud_service_config),
+        let auth_service: Arc<dyn AuthService> = Arc::new(GrpcAuthService::new(
+            BaseAuthService::new(&remote_cloud_service_config),
             self.debug_config.component_service.clone(),
         ));
 

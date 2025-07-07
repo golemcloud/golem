@@ -38,6 +38,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
+use golem_client::model::Account;
 use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
@@ -46,7 +47,7 @@ use golem_common::model::plugin::PluginWasmFileKey;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    ComponentFilePermissions, PluginInstallationId, ProjectId, WorkerStatus,
+    AccountId, ComponentFilePermissions, PluginInstallationId, ProjectId, WorkerStatus,
 };
 use golem_common::model::{
     ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
@@ -80,6 +81,7 @@ pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     files: Vec<(PathBuf, InitialComponentFile)>,
     dynamic_linking: Vec<(&'static str, DynamicLinkedInstance)>,
     env: HashMap<String, String>,
+    project_id: Option<ProjectId>,
 }
 
 impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
@@ -94,6 +96,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
             files: vec![],
             dynamic_linking: vec![],
             env: HashMap::new(),
+            project_id: None,
         }
     }
 
@@ -176,6 +179,11 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
         self
     }
 
+    pub fn with_project(mut self, project_id: ProjectId) -> Self {
+        let _ = self.project_id.insert(project_id);
+        self
+    }
+
     /// Stores the component
     pub async fn store(self) -> ComponentId {
         self.store_and_get_name().await.0
@@ -194,6 +202,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
                 &self.files,
                 &self.dynamic_linking,
                 &self.env,
+                self.project_id,
             )
             .await
     }
@@ -213,6 +222,7 @@ pub trait TestDsl {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> (ComponentId, ComponentName);
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
@@ -462,12 +472,20 @@ pub trait TestDsl {
     ) -> crate::Result<bool>;
 
     async fn default_project(&self) -> crate::Result<ProjectId>;
+
+    async fn create_project(&self) -> crate::Result<ProjectId>;
+
+    async fn grant_full_project_access(
+        &self,
+        project_id: &ProjectId,
+        grantee_account_id: &AccountId,
+    ) -> crate::Result<()>;
+
+    async fn get_account(&self, account_id: &AccountId) -> crate::Result<Account>;
 }
 
 #[async_trait]
-impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
-    for TestDependenciesDsl<Deps, Inner>
-{
+impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
     fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self> {
         StoreComponentBuilder::new(self, name)
     }
@@ -482,10 +500,10 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> (ComponentId, ComponentName) {
         let source_path = self
             .deps
-            .borrow()
             .component_directory()
             .join(format!("{wasm_name}.wasm"));
         let component_name = if unique {
@@ -517,7 +535,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         let component = {
             if unique {
                 self.deps
-                    .borrow()
                     .component_service()
                     .add_component(
                         &self.token,
@@ -528,12 +545,12 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
                         &dynamic_linking,
                         unverified,
                         env,
+                        project_id,
                     )
                     .await
                     .expect("Failed to add component")
             } else {
                 self.deps
-                    .borrow()
                     .component_service()
                     .get_or_add_component(
                         &self.token,
@@ -544,6 +561,7 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
                         &dynamic_linking,
                         unverified,
                         env,
+                        project_id,
                     )
                     .await
             }
@@ -562,15 +580,16 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     }
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
-        let source_path = self
-            .deps
-            .borrow()
-            .component_directory()
-            .join(format!("{name}.wasm"));
+        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         self.deps
-            .borrow()
             .component_service()
-            .add_component_with_id(&source_path, component_id, name, ComponentType::Durable)
+            .add_component_with_id(
+                &source_path,
+                component_id,
+                name,
+                ComponentType::Durable,
+                None,
+            )
             .await
             .expect("Failed to store component");
     }
@@ -580,7 +599,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         component_id: &ComponentId,
     ) -> crate::Result<ComponentMetadata> {
         self.deps
-            .borrow()
             .component_service()
             .get_latest_component_metadata(
                 &self.token,
@@ -608,7 +626,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
             .map_error(widen_infallible);
 
         self.deps
-            .borrow()
             .initial_component_files_service()
             .put_if_not_exists(&self.account_id, stream)
             .await
@@ -616,11 +633,7 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     }
 
     async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey> {
-        let source_path = self
-            .deps
-            .borrow()
-            .component_directory()
-            .join(format!("{name}.wasm"));
+        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         let data = tokio::fs::read(&source_path)
             .await
             .map_err(|e| anyhow!("Failed to read file: {e}"))?;
@@ -633,7 +646,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
 
         let key = self
             .deps
-            .borrow()
             .plugin_wasm_files_service()
             .put_if_not_exists(&self.account_id, stream)
             .await
@@ -643,14 +655,9 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
-        let source_path = self
-            .deps
-            .borrow()
-            .component_directory()
-            .join(format!("{name}.wasm"));
+        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         let component_env = HashMap::new();
         self.deps
-            .borrow()
             .component_service()
             .update_component(
                 &self.token,
@@ -671,13 +678,8 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         name: &str,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
     ) -> ComponentVersion {
-        let source_path = self
-            .deps
-            .borrow()
-            .component_directory()
-            .join(format!("{name}.wasm"));
+        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         self.deps
-            .borrow()
             .component_service()
             .update_component(
                 &self.token,
@@ -700,13 +702,8 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     ) -> ComponentVersion {
         let map = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
-        let source_path = self
-            .deps
-            .borrow()
-            .component_directory()
-            .join(format!("{name}.wasm"));
+        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         self.deps
-            .borrow()
             .component_service()
             .update_component(
                 &self.token,
@@ -757,7 +754,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     ) -> crate::Result<Result<WorkerId, Error>> {
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .create_worker(
                 &self.token,
@@ -793,7 +789,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         let worker_id: golem_api_grpc::proto::golem::worker::WorkerId = worker_id.clone().into();
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .get_worker_metadata(
                 &self.token,
@@ -837,7 +832,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
             component_id.clone().into();
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .get_workers_metadata(
                 &self.token,
@@ -867,7 +861,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     async fn delete_worker(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let _ = self
             .deps
-            .borrow()
             .worker_service()
             .delete_worker(
                 &self.token,
@@ -888,7 +881,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .deps
-            .borrow()
             .worker_service()
             .invoke(
                 &self.token,
@@ -922,7 +914,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .deps
-            .borrow()
             .worker_service()
             .invoke(
                 &self.token,
@@ -999,7 +990,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .deps
-            .borrow()
             .worker_service()
             .invoke_and_await(
                 &self.token,
@@ -1081,7 +1071,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .deps
-            .borrow()
             .worker_service()
             .invoke_and_await_typed(
                 &self.token,
@@ -1128,7 +1117,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         let params = params.into_iter().map(|p| p.to_string()).collect();
         let invoke_response = self
             .deps
-            .borrow()
             .worker_service()
             .invoke_and_await_json(
                 &self.token,
@@ -1304,7 +1292,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()> {
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .resume_worker(
                 &self.token,
@@ -1327,7 +1314,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     async fn interrupt(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .interrupt_worker(
                 &self.token,
@@ -1352,7 +1338,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     async fn simulated_crash(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .interrupt_worker(
                 &self.token,
@@ -1381,7 +1366,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     ) -> crate::Result<()> {
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .update_worker(
                 &self.token,
@@ -1411,7 +1395,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     ) -> crate::Result<()> {
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .update_worker(
                 &self.token,
@@ -1445,7 +1428,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         loop {
             let chunk = self
                 .deps
-                .borrow()
                 .worker_service()
                 .get_oplog(
                     &self.token,
@@ -1510,7 +1492,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         loop {
             let chunk = self
                 .deps
-                .borrow()
                 .worker_service()
                 .search_oplog(
                     &self.token,
@@ -1577,7 +1558,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
 
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .list_directory(
                 &self.token,
@@ -1609,7 +1589,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     ) -> crate::Result<Bytes> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         self.deps
-            .borrow()
             .worker_service()
             .get_file_contents(
                 &self.token,
@@ -1623,7 +1602,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
 
     async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()> {
         self.deps
-            .borrow()
             .component_service()
             .create_plugin(&self.token, &self.account_id, definition)
             .await
@@ -1631,7 +1609,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
 
     async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()> {
         self.deps
-            .borrow()
             .component_service()
             .delete_plugin(&self.token, name, version)
             .await
@@ -1646,7 +1623,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
         parameters: HashMap<String, String>,
     ) -> crate::Result<PluginInstallationId> {
         self.deps
-            .borrow()
             .component_service()
             .install_plugin_to_component(
                 &self.token,
@@ -1709,7 +1685,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     ) -> crate::Result<()> {
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .fork_worker(
                 &self.token,
@@ -1735,7 +1710,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> crate::Result<()> {
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .revert_worker(
                 &self.token,
@@ -1762,7 +1736,6 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
     ) -> crate::Result<bool> {
         let response = self
             .deps
-            .borrow()
             .worker_service()
             .cancel_invocation(
                 &self.token,
@@ -1784,9 +1757,37 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
 
     async fn default_project(&self) -> crate::Result<ProjectId> {
         self.deps
-            .borrow()
             .cloud_service()
             .get_default_project(&self.token)
+            .await
+    }
+
+    async fn create_project(&self) -> crate::Result<ProjectId> {
+        let name = Uuid::new_v4().to_string();
+        let description = Uuid::new_v4().to_string();
+
+        self.deps
+            .cloud_service()
+            .create_project(&self.token, name, self.account_id.clone(), description)
+            .await
+    }
+
+    async fn grant_full_project_access(
+        &self,
+        project_id: &ProjectId,
+        grantee_account_id: &AccountId,
+    ) -> crate::Result<()> {
+        self.deps
+            .cloud_service()
+            .grant_full_project_access(&self.token, project_id, grantee_account_id)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_account(&self, account_id: &AccountId) -> crate::Result<Account> {
+        self.deps
+            .cloud_service()
+            .get_account_by_id(&self.token, account_id)
             .await
     }
 }
@@ -2113,6 +2114,7 @@ pub trait TestDslUnsafe {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> (ComponentId, ComponentName);
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
@@ -2310,6 +2312,16 @@ pub trait TestDslUnsafe {
     ) -> crate::Result<bool>;
 
     async fn default_project(&self) -> ProjectId;
+
+    async fn create_project(&self) -> ProjectId;
+
+    async fn grant_full_project_access(
+        &self,
+        project_id: &ProjectId,
+        grantee_account_id: &AccountId,
+    );
+
+    async fn get_account(&self, account_id: &AccountId) -> Account;
 }
 
 #[async_trait]
@@ -2329,6 +2341,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> (ComponentId, ComponentName) {
         <T as TestDsl>::store_component_with(
             self,
@@ -2340,6 +2353,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             files,
             dynamic_linking,
             env,
+            project_id,
         )
         .await
     }
@@ -2736,6 +2750,28 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::default_project(self)
             .await
             .expect("failed to get default project")
+    }
+
+    async fn create_project(&self) -> ProjectId {
+        <T as TestDsl>::create_project(self)
+            .await
+            .expect("failed to create project")
+    }
+
+    async fn grant_full_project_access(
+        &self,
+        project_id: &ProjectId,
+        grantee_account_id: &AccountId,
+    ) {
+        <T as TestDsl>::grant_full_project_access(self, project_id, grantee_account_id)
+            .await
+            .expect("failed to grant full project access")
+    }
+
+    async fn get_account(&self, account_id: &AccountId) -> Account {
+        <T as TestDsl>::get_account(self, account_id)
+            .await
+            .expect("failed to get account")
     }
 }
 

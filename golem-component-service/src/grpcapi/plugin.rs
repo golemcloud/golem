@@ -106,9 +106,15 @@ impl PluginGrpcApi {
     ) -> Result<PluginDefinition, ComponentError> {
         let auth = auth(metadata)?;
 
+        let account_id = request
+            .account_id
+            .clone()
+            .ok_or(bad_request_error("Missing account id"))?
+            .into();
+
         let plugin = self
             .plugin_service
-            .get(&auth, &request.name, &request.version)
+            .get(&auth, account_id, &request.name, &request.version)
             .await?;
 
         match plugin {

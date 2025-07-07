@@ -224,7 +224,7 @@ async fn recover_counter_resource_test_2(
 }
 
 async fn restore_from_recovery_golden_file(
-    executor: &TestDependenciesDsl<TestWorkerExecutor, TestWorkerExecutor>,
+    executor: &TestDependenciesDsl<TestWorkerExecutor>,
     context: &TestContext,
     name: &str,
     component_names: &[&str],
@@ -322,7 +322,7 @@ pub async fn save_recovery_golden_file(
 }
 
 async fn wait_for_worker_recovery(
-    executor: &TestDependenciesDsl<TestWorkerExecutor, TestWorkerExecutor>,
+    executor: &TestDependenciesDsl<TestWorkerExecutor>,
     worker_id: &WorkerId,
 ) -> WorkerStatus {
     loop {

@@ -29,13 +29,16 @@ pub use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::Cloud
 use golem_api_grpc::proto::golem::auth::v1::{get_account_response, GetAccountRequest};
 pub use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient as ProjectServiceGrpcClient;
 use golem_api_grpc::proto::golem::project::v1::{
-    get_default_project_response, GetDefaultProjectRequest,
+    get_default_project_response, CreateProjectRequest, GetDefaultProjectRequest,
 };
 pub use golem_api_grpc::proto::golem::token::v1::cloud_token_service_client::CloudTokenServiceClient as TokenServiceGrpcClient;
 use golem_api_grpc::proto::golem::token::v1::CreateTokenRequest;
 use golem_api_grpc::proto::golem::token::CreateTokenDto;
-use golem_client::api::{AccountClient, ProjectClient};
+use golem_client::api::{AccountClient, ProjectClient, ProjectGrantClient, ProjectPolicyClient};
 use golem_client::api::{LoginClient, TokenClient};
+use golem_client::model::{
+    Account, ProjectActions, ProjectDataRequest, ProjectGrantDataRequest, ProjectPolicyData,
+};
 use golem_client::{Context, Security};
 use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::clients::authorised_request;
@@ -50,6 +53,7 @@ use uuid::{uuid, Uuid};
 
 const ADMIN_TOKEN: uuid::Uuid = uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1");
 const ADMIN_ACCOUNT_ID: uuid::Uuid = uuid!("24a9f0e2-f491-4e96-974e-b9fbf78c924e");
+const ADMIN_EMAIL: &str = "test-admin@golem.cloud";
 
 #[async_trait]
 pub trait CloudService: Send + Sync {
@@ -92,6 +96,34 @@ pub trait CloudService: Send + Sync {
         }
     }
     async fn project_grpc_client(&self) -> ProjectServiceGrpcClient<Channel>;
+
+    async fn project_policy_http_client(
+        &self,
+        token: Uuid,
+    ) -> golem_client::api::ProjectPolicyClientLive {
+        let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
+        golem_client::api::ProjectPolicyClientLive {
+            context: Context {
+                client: self.base_http_client().await,
+                base_url: Url::parse(&url).expect("Failed to parse url"),
+                security_token: Security::Bearer(token.to_string()),
+            },
+        }
+    }
+
+    async fn project_grant_http_client(
+        &self,
+        token: Uuid,
+    ) -> golem_client::api::ProjectGrantClientLive {
+        let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
+        golem_client::api::ProjectGrantClientLive {
+            context: Context {
+                client: self.base_http_client().await,
+                base_url: Url::parse(&url).expect("Failed to parse url"),
+                security_token: Security::Bearer(token.to_string()),
+            },
+        }
+    }
 
     async fn login_http_client(&self, token: Uuid) -> golem_client::api::LoginClientLive {
         let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
@@ -203,7 +235,8 @@ pub trait CloudService: Send + Sync {
                 };
 
                 Ok(AccountWithToken {
-                    account_id: account_id.into(),
+                    id: account_id.into(),
+                    email: account.email,
                     token: account_token.value.unwrap().into(),
                 })
             }
@@ -223,9 +256,106 @@ pub trait CloudService: Send + Sync {
                     .await?;
 
                 Ok(AccountWithToken {
-                    account_id: AccountId { value: account.id },
+                    id: AccountId { value: account.id },
+                    email: account.email,
                     token: account_token.secret.value,
                 })
+            }
+        }
+    }
+
+    async fn get_account_by_id(
+        &self,
+        token: &Uuid,
+        account_id: &AccountId,
+    ) -> crate::Result<Account> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                Err(anyhow!("get_account_by_id not supported for grpc api"))
+            }
+            GolemClientProtocol::Http => {
+                let client = self.account_http_client(*token).await;
+                let account = client.get_account(&account_id.value).await?;
+                Ok(account)
+            }
+        }
+    }
+
+    async fn create_project(
+        &self,
+        token: &Uuid,
+        name: String,
+        owner_account_id: AccountId,
+        description: String,
+    ) -> crate::Result<ProjectId> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.project_grpc_client().await;
+
+                let request = authorised_request(
+                    CreateProjectRequest {
+                        name,
+                        owner_account_id: Some(owner_account_id.into()),
+                        description,
+                    },
+                    token,
+                );
+
+                let response = client.create_project(request).await?.into_inner();
+
+                match response.result.unwrap() {
+                    golem_api_grpc::proto::golem::project::v1::create_project_response::Result::Success(inner) => Ok(inner.project.unwrap().id.unwrap().try_into().unwrap()),
+                    golem_api_grpc::proto::golem::project::v1::create_project_response::Result::Error(error) => Err(anyhow!("{error:?}"))?
+                }
+            }
+            GolemClientProtocol::Http => {
+                let client = self.project_http_client(*token).await;
+                let response = client
+                    .create_project(&ProjectDataRequest {
+                        name,
+                        owner_account_id: owner_account_id.value,
+                        description,
+                    })
+                    .await?;
+                Ok(ProjectId(response.project_id))
+            }
+        }
+    }
+
+    async fn grant_full_project_access(
+        &self,
+        token: &Uuid,
+        project_id: &ProjectId,
+        grantee_account_id: &AccountId,
+    ) -> crate::Result<()> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => Err(anyhow!(
+                "grant_full_project_access not supported on grpc api"
+            ))?,
+            GolemClientProtocol::Http => {
+                let policy_client = self.project_policy_http_client(*token).await;
+                let grant_client = self.project_grant_http_client(*token).await;
+
+                let policy = policy_client
+                    .create_project_policy(&ProjectPolicyData {
+                        name: "full_access".to_string(),
+                        project_actions: ProjectActions::all(),
+                    })
+                    .await?;
+
+                grant_client
+                    .create_project_grant(
+                        &project_id.0,
+                        &ProjectGrantDataRequest {
+                            grantee_account_id: Some(grantee_account_id.value.clone()),
+                            grantee_email: None,
+                            project_policy_id: Some(policy.id),
+                            project_actions: vec![],
+                            project_policy_name: None,
+                        },
+                    )
+                    .await?;
+                Ok(())
             }
         }
     }
@@ -238,6 +368,10 @@ pub trait CloudService: Send + Sync {
         AccountId {
             value: ADMIN_ACCOUNT_ID.to_string(),
         }
+    }
+
+    fn admin_email(&self) -> String {
+        ADMIN_EMAIL.to_string()
     }
 
     fn private_host(&self) -> String;
@@ -318,6 +452,7 @@ async fn env_vars(
     EnvVarBuilder::golem_service(verbosity)
         .with("GOLEM__ACCOUNTS__ROOT__ID", ADMIN_ACCOUNT_ID.to_string())
         .with("GOLEM__ACCOUNTS__ROOT__TOKEN", ADMIN_TOKEN.to_string())
+        .with("GOLEM__ACCOUNTS__ROOT__EMAIL", ADMIN_EMAIL.to_string())
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with("GOLEM__LOGIN__TYPE", "Disabled".to_string())
@@ -326,7 +461,8 @@ async fn env_vars(
 }
 
 pub struct AccountWithToken {
-    pub account_id: AccountId,
+    pub id: AccountId,
+    pub email: String,
     pub token: Uuid,
 }
 
