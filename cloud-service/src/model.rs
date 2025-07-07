@@ -782,29 +782,3 @@ pub enum GlobalAction {
     ViewAccountSummaries,
     ViewAccountCount,
 }
-
-#[derive(Debug, Clone)]
-pub enum AccountAction {
-    ViewAccount,
-    UpdateAccount,
-    DeleteAccount,
-
-    ViewPlan,
-
-    CreateProject,
-
-    ViewAccountGrants,
-    CreateAccountGrant,
-    DeleteAccountGrant,
-
-    ViewDefaultProject,
-
-    ListProjectGrants,
-
-    ViewLimits,
-    UpdateLimits,
-
-    CreateToken,
-    ViewTokens,
-    DeleteToken,
-}

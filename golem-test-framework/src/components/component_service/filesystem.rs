@@ -44,7 +44,7 @@ pub struct FileSystemComponentService {
     root: PathBuf,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     account_id: AccountId,
-    project_id: ProjectId,
+    default_project_id: ProjectId,
 }
 
 impl FileSystemComponentService {
@@ -65,7 +65,7 @@ impl FileSystemComponentService {
             root: root.to_path_buf(),
             plugin_wasm_files_service,
             account_id,
-            project_id,
+            default_project_id: project_id,
         }
     }
 
@@ -80,6 +80,7 @@ impl FileSystemComponentService {
         skip_analysis: bool,
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         env: &HashMap<String, String>,
+        project_id_override: Option<ProjectId>,
     ) -> Result<Component, AddComponentError> {
         let target_dir = &self.root;
 
@@ -131,7 +132,7 @@ impl FileSystemComponentService {
 
         let metadata = LocalFileSystemComponentMetadata {
             account_id: self.account_id.clone(),
-            project_id: self.project_id.clone(),
+            project_id: project_id_override.unwrap_or_else(|| self.default_project_id.clone()),
             component_id: component_id.clone(),
             component_name: component_name.to_string(),
             version: component_version,
@@ -172,7 +173,7 @@ impl FileSystemComponentService {
                 root_package_version: raw_component_metadata.root_package_version,
             }),
             account_id: Some(self.account_id.clone().into()),
-            project_id: Some(self.project_id.clone().into()),
+            project_id: Some(self.default_project_id.clone().into()),
             created_at: Some(SystemTime::now().into()),
             component_type: Some(component_type as i32),
             files: files.iter().map(|file| file.clone().into()).collect(),
@@ -252,6 +253,7 @@ impl ComponentService for FileSystemComponentService {
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> Component {
         self.add_component(
             token,
@@ -262,6 +264,7 @@ impl ComponentService for FileSystemComponentService {
             dynamic_linking,
             unverified,
             env,
+            project_id,
         )
         .await
         .expect("Failed to add component")
@@ -277,6 +280,7 @@ impl ComponentService for FileSystemComponentService {
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> Result<Component, AddComponentError> {
         self.write_component_to_filesystem(
             local_path,
@@ -291,6 +295,7 @@ impl ComponentService for FileSystemComponentService {
             unverified,
             dynamic_linking,
             env,
+            project_id,
         )
         .await
     }
@@ -301,6 +306,7 @@ impl ComponentService for FileSystemComponentService {
         component_id: &ComponentId,
         component_name: &str,
         component_type: ComponentType,
+        project_id: Option<ProjectId>,
     ) -> Result<(), AddComponentError> {
         self.write_component_to_filesystem(
             local_path,
@@ -312,6 +318,7 @@ impl ComponentService for FileSystemComponentService {
             false,
             &HashMap::new(),
             &HashMap::new(),
+            project_id,
         )
         .await?;
         Ok(())
@@ -364,6 +371,7 @@ impl ComponentService for FileSystemComponentService {
             false,
             dynamic_linking.unwrap_or(&old_metadata.dynamic_linking),
             env,
+            Some(old_metadata.project_id),
         )
         .await
         .expect("Failed to write component to filesystem");

@@ -573,13 +573,13 @@ impl ComponentApi {
     ) -> Result<Json<Vec<dto::PluginInstallation>>> {
         let version_int = Self::parse_version_path_segment(&version)?;
 
-        let (owner, installations) = self
+        let installations = self
             .component_service
             .get_plugin_installations_for_component(&auth, &component_id, version_int)
             .await?;
 
         let converted = stream::iter(installations)
-            .then(|pi| self.api_mapper.convert_plugin_installation(&owner, pi))
+            .then(|pi| self.api_mapper.convert_plugin_installation(pi))
             .try_collect::<Vec<_>>()
             .await?;
 
@@ -621,14 +621,14 @@ impl ComponentApi {
         plugin: PluginInstallationCreation,
         auth: AuthCtx,
     ) -> Result<Json<dto::PluginInstallation>> {
-        let (owner, installation) = self
+        let installation = self
             .component_service
             .create_plugin_installation_for_component(&auth, &component_id, plugin)
             .await?;
 
         Ok(Json(
             self.api_mapper
-                .convert_plugin_installation(&owner, installation)
+                .convert_plugin_installation(installation)
                 .await?,
         ))
     }

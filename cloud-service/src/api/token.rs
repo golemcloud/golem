@@ -18,6 +18,7 @@ use crate::login::LoginSystem;
 use crate::model::*;
 use crate::service::auth::AuthService;
 use crate::service::token::{TokenService, TokenServiceError};
+use golem_common::model::auth::AccountAction;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::AccountId;
 use golem_common::model::TokenId;

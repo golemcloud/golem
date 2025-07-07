@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::auth::AccountAuthorisation;
+use crate::model::GlobalAction;
 use crate::model::ProjectPolicy;
-use crate::model::{AccountAction, GlobalAction};
 use crate::repo::account::AccountRepo;
 use crate::repo::account_grant::AccountGrantRepo;
 use crate::repo::project::ProjectRepo;
@@ -22,6 +22,7 @@ use crate::repo::project_grant::ProjectGrantRepo;
 use crate::repo::project_policy::ProjectPolicyRepo;
 use crate::service::token::{TokenService, TokenServiceError};
 use async_trait::async_trait;
+use golem_common::model::auth::AccountAction;
 use golem_common::model::auth::{
     ProjectAction, ProjectActions, ProjectAuthorisedActions, ProjectPermisison, Role, TokenSecret,
 };
@@ -98,7 +99,7 @@ pub enum ViewableProjects {
     All,
     OwnedAndAdditional {
         owner_account_id: AccountId,
-        additional_project_ids: Vec<ProjectId>,
+        additional_project_ids: HashSet<ProjectId>,
     },
 }
 
@@ -107,7 +108,7 @@ pub enum ViewableAccounts {
     /// Special case for admins, they can see all accounts even if no grant is present.
     All,
     Limited {
-        account_ids: Vec<AccountId>,
+        account_ids: HashSet<AccountId>,
     },
 }
 
@@ -194,6 +195,34 @@ impl AuthServiceDefault {
             project_grant_repo,
         }
     }
+
+    async fn limit_to_accounts_with_shared_projects(
+        &self,
+        auth: &AccountAuthorisation,
+        target_account: &AccountId,
+    ) -> Result<(), AuthServiceError> {
+        // These resources are visible in all shared projects.
+        // So an account has access to the resource if either owns the resource or has at least
+        // one project shared with it from the account owning the resource.
+
+        if auth.has_account(target_account) {
+            Ok(())
+        } else {
+            let viewable_accounts = self.viewable_accounts(auth).await?;
+            match viewable_accounts {
+                ViewableAccounts::All => Ok(()),
+                ViewableAccounts::Limited { account_ids } => {
+                    if account_ids.contains(target_account) {
+                        Ok(())
+                    } else {
+                        Err(AuthServiceError::AccountAccessForbidden {
+                            account_id: target_account.clone(),
+                        })
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -250,19 +279,8 @@ impl AuthService for AuthServiceDefault {
 
         match requested_action {
             AccountAction::ViewAccount => {
-                if auth.has_account(account_id) {
-                    Ok(())
-                } else {
-                    let visible_accounts = self.viewable_accounts(auth).await?;
-                    match visible_accounts {
-                        ViewableAccounts::All => Ok(()),
-                        ViewableAccounts::Limited { .. } => {
-                            Err(AuthServiceError::AccountAccessForbidden {
-                                account_id: account_id.clone(),
-                            })
-                        }
-                    }
-                }
+                self.limit_to_accounts_with_shared_projects(auth, account_id)
+                    .await
             }
             AccountAction::UpdateAccount => {
                 limit_to_account_or_roles(auth, account_id, &[Role::Admin])
@@ -292,6 +310,19 @@ impl AuthService for AuthServiceDefault {
                 limit_to_account_or_roles(auth, account_id, &[Role::Admin])
             }
             AccountAction::DeleteToken => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
+            AccountAction::ViewGlobalPlugins => {
+                self.limit_to_accounts_with_shared_projects(auth, account_id)
+                    .await
+            }
+            AccountAction::CreateGlobalPlugin => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
+            AccountAction::UpdateGlobalPlugin => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
+            AccountAction::DeleteGlobalPlugin => {
                 limit_to_account_or_roles(auth, account_id, &[Role::Admin])
             }
         }
@@ -392,8 +423,8 @@ impl AuthService for AuthServiceDefault {
         let mut account_ids = owner_accounts
             .into_iter()
             .map(|value| AccountId { value })
-            .collect::<Vec<_>>();
-        account_ids.push(auth.token.account_id.clone());
+            .collect::<HashSet<_>>();
+        account_ids.insert(auth.token.account_id.clone());
 
         Ok(ViewableAccounts::Limited { account_ids })
     }

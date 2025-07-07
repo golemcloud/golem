@@ -3801,6 +3801,7 @@ paths:
       parameters:
       - in: query
         name: scope
+        required: true
         deprecated: false
         schema:
           $ref: '#/components/schemas/PluginScope'
@@ -3911,15 +3912,31 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/plugins/{name}:
+  /v1/plugins/{account_id}/{name}/{version}:
     get:
       tags:
       - Plugin
-      summary: Lists all the registered versions of a specific plugin identified by its name
-      operationId: list_plugin_versions
+      summary: Gets a registered plugin by its name and version
+      operationId: get_plugin
       parameters:
       - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
         name: name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
         required: true
         deprecated: false
         schema:
@@ -3932,9 +3949,83 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/PluginDefinition'
+                $ref: '#/components/schemas/PluginDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - Plugin
+      summary: Deletes a registered plugin by its name and version
+      operationId: delete_plugin
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -4094,143 +4185,6 @@ paths:
               - scope
               - wasm
         required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Empty'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Maximum number of components exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Component not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: Component already exists
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/plugins/{name}/{version}:
-    get:
-      tags:
-      - Plugin
-      summary: Gets a registered plugin by its name and version
-      operationId: get_plugin
-      parameters:
-      - in: path
-        name: name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: path
-        name: version
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/PluginDefinition'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Maximum number of components exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Component not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: Component already exists
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-    delete:
-      tags:
-      - Plugin
-      summary: Deletes a registered plugin by its name and version
-      operationId: delete_plugin
-      parameters:
-      - in: path
-        name: name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: path
-        name: version
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -7850,6 +7804,10 @@ components:
       - UpsertApiDomain
       - ViewApiDomain
       - DeleteApiDomain
+      - ViewPluginDefinition
+      - CreatePluginDefinition
+      - UpdatePluginDefinition
+      - DeletePluginDefinition
     ProjectPolicy:
       title: ProjectPolicy
       type: object
