@@ -651,16 +651,14 @@ where
 
     if ctx.durable_execution_state().is_live {
         if let RdbmsTransactionState::Open(transaction) = entry.state {
-            let begin_oplog_idx = entry.begin_index.cloned();
-
             ctx.state
-                .pre_rollback_transaction_function(begin_oplog_idx)
+                .pre_rollback_transaction_function(entry.begin_index)
                 .await?;
 
             let _ = transaction.rollback_if_open().await;
 
             ctx.state
-                .rolled_back_transaction_function(begin_oplog_idx)
+                .rolled_back_transaction_function(entry.begin_index)
                 .await?;
 
             let _ = ctx
@@ -676,18 +674,16 @@ where
                 .await;
         }
     } else {
-        let begin_oplog_idx = entry.begin_index.cloned();
-
         let _ = ctx
             .state
             .replay_state
-            .try_get_oplog_entry(|e| e.is_pre_rollback_remote_transaction(begin_oplog_idx))
+            .try_get_oplog_entry(|e| e.is_pre_rollback_remote_transaction(entry.begin_index))
             .await;
 
         let _ = ctx
             .state
             .replay_state
-            .try_get_oplog_entry(|e| e.is_rolled_back_remote_transaction(begin_oplog_idx))
+            .try_get_oplog_entry(|e| e.is_rolled_back_remote_transaction(entry.begin_index))
             .await;
     }
 
