@@ -39,105 +39,105 @@ async fn main() {
     .await
     .expect("Failed to bootstrap REPL");
 
-    // rib_repl.execute(
-    //     "let x = instance()"
-    // ).await.expect("Failed to execute command");
-    //
-    // let result = rib_repl.execute(
-    //     "x.discover-agent-definitions()"
-    // ).await.expect("Failed to execute command").unwrap();
-    //
-    // let mut analysed_functions = vec![];
-    //
-    // match result  {
-    //     RibResult::Val(value_and_type) => {
-    //        match value_and_type.value {
-    //            Value::List(values) => {
-    //                let typ = value_and_type.typ;
-    //                match typ {
-    //                    AnalysedType::List(typed_list) => {
-    //                        match typed_list.inner.as_ref() {
-    //                            AnalysedType::Record(typed_record) => {
-    //                                let method_info = typed_record.fields.iter().enumerate().find(
-    //                                    |(_, field)| field.name == "methods"
-    //                                );
-    //
-    //                                let (name_index, _) = typed_record.fields.iter().enumerate().find(
-    //                                    |(_, field)| field.name == "agent-name"
-    //                                ).expect("Expected 'name' field in record");
-    //
-    //
-    //
-    //                                let (index, name_type) =
-    //                                    method_info.expect("Expected 'methods' field in record");
-    //
-    //                                // Each value is an agent
-    //                                for agent in values {
-    //                                    match agent {
-    //                                          Value::Record(values) => {
-    //                                               let methods = values.get(index)
-    //                                                 .expect("Expected value for 'methods' field");
-    //
-    //                                                 let agent_name = values.get(name_index).expect("Expected value for 'name' field");
-    //                                                 let resource_name = get_agent_resource_analysed_function(agent_name);
-    //                                                 let agent_methods = get_agent_methods(methods, &name_type.typ).iter().map(|agent_method_info|
-    //                                                     get_agent_resource_method_analysed_function(get_str(agent_name), agent_method_info)
-    //                                                 ).collect::<Vec<_>>();
-    //
-    //                                                 analysed_functions.push(resource_name);
-    //                                                 analysed_functions.extend(agent_methods);
-    //                                          }
-    //
-    //                                          _ => {
-    //                                               panic!("Expected a record type, got: {:?}", agent);
-    //                                          }
-    //                                    }
-    //                                }
-    //
-    //                            }
-    //
-    //                            _ => {
-    //                                panic!("Expected a record type, got: {:?}", typed_list.inner);
-    //                            }
-    //                        }
-    //                    }
-    //
-    //                       _ => panic!("Expected a list type, got: {:?}", typ),
-    //                }
-    //
-    //            }
-    //
-    //            _ => {}
-    //        }
-    //
-    //     }
-    //
-    //     _ => panic!("Expected a value result, got: {:?}", result),
-    // }
+    rib_repl.execute(
+        "let x = instance()"
+    ).await.expect("Failed to execute command");
 
-    // let exports = AnalysedInstance {
-    //     name: "golem:agentic/simulated-agents".to_string(),
-    //     functions: analysed_functions,
-    // };
+    let result = rib_repl.execute(
+        "x.discover-agent-definitions()"
+    ).await.expect("Failed to execute command").unwrap();
 
-    //
-    // // Re-run REPL
-    // let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
-    //     history_file: None,
-    //     dependency_manager: Arc::new(TestRibReplStaticDependencyManager::new(deps.clone(), vec![AnalysedExport::Instance(exports)])),
-    //     worker_function_invoke: Arc::new(TestRibReplAgenticWorkerFunctionInvoke::new(deps.clone())),
-    //     printer: None,
-    //     component_source: Some(ComponentSource {
-    //         component_name: component_name.to_string(),
-    //         source_path: deps
-    //             .component_directory()
-    //             .join(format!("{component_name}.wasm")),
-    //     }),
-    //     prompt: None,
-    //     command_registry: None,
-    // })
-    //     .await
-    //     .expect("Failed to bootstrap REPL");
+    let mut analysed_functions = vec![];
+
+    match result  {
+        RibResult::Val(value_and_type) => {
+           match value_and_type.value {
+               Value::List(values) => {
+                   let typ = value_and_type.typ;
+                   match typ {
+                       AnalysedType::List(typed_list) => {
+                           match typed_list.inner.as_ref() {
+                               AnalysedType::Record(typed_record) => {
+                                   let method_info = typed_record.fields.iter().enumerate().find(
+                                       |(_, field)| field.name == "methods"
+                                   );
+
+                                   let (name_index, _) = typed_record.fields.iter().enumerate().find(
+                                       |(_, field)| field.name == "agent-name"
+                                   ).expect("Expected 'name' field in record");
+
+
+
+                                   let (index, name_type) =
+                                       method_info.expect("Expected 'methods' field in record");
+
+                                   // Each value is an agent
+                                   for agent in values {
+                                       match agent {
+                                             Value::Record(values) => {
+                                                  let methods = values.get(index)
+                                                    .expect("Expected value for 'methods' field");
+
+                                                    let agent_name = values.get(name_index).expect("Expected value for 'name' field");
+                                                    let resource_name = get_agent_resource_analysed_function(agent_name);
+                                                    let agent_methods = get_agent_methods(methods, &name_type.typ).iter().map(|agent_method_info|
+                                                        get_agent_resource_method_analysed_function(get_str(agent_name), agent_method_info)
+                                                    ).collect::<Vec<_>>();
+
+                                                    analysed_functions.push(resource_name);
+                                                    analysed_functions.extend(agent_methods);
+                                             }
+
+                                             _ => {
+                                                  panic!("Expected a record type, got: {:?}", agent);
+                                             }
+                                       }
+                                   }
+
+                               }
+
+                               _ => {
+                                   panic!("Expected a record type, got: {:?}", typed_list.inner);
+                               }
+                           }
+                       }
+
+                          _ => panic!("Expected a list type, got: {:?}", typ),
+                   }
+
+               }
+
+               _ => {}
+           }
+
+        }
+
+        _ => panic!("Expected a value result, got: {:?}", result),
+    }
+
+    let exports = AnalysedInstance {
+        name: "golem:agentic/simulated-agents".to_string(),
+        functions: analysed_functions,
+    };
+
+
+    // Re-run REPL
+    let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
+        history_file: None,
+        dependency_manager: Arc::new(TestRibReplStaticDependencyManager::new(deps.clone(), vec![AnalysedExport::Instance(exports)])),
+        worker_function_invoke: Arc::new(TestRibReplAgenticWorkerFunctionInvoke::new(deps.clone())),
+        printer: None,
+        component_source: Some(ComponentSource {
+            component_name: component_name.to_string(),
+            source_path: deps
+                .component_directory()
+                .join(format!("{component_name}.wasm")),
+        }),
+        prompt: None,
+        command_registry: None,
+    })
+        .await
+        .expect("Failed to bootstrap REPL");
 
     rib_repl.run().await
 }
