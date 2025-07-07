@@ -154,7 +154,13 @@ impl ProfileCommandHandler {
     }
 
     fn cmd_switch(&self, profile_name: ProfileName) -> anyhow::Result<()> {
-        Config::set_active_profile_name(profile_name, self.ctx.config_dir())?;
+        Config::set_active_profile_name(profile_name.clone(), self.ctx.config_dir())?;
+
+        log_action(
+            "Switched",
+            format!("to profile: {}", profile_name.0.log_color_highlight()),
+        );
+
         Ok(())
     }
 
@@ -189,6 +195,18 @@ impl ProfileCommandHandler {
         if profile_name.is_builtin() {
             log_error(format!(
                 "Cannot delete builtin profile: {}",
+                profile_name.0.log_color_error_highlight()
+            ));
+            bail!(NonSuccessfulExit);
+        }
+
+        // Check if we're trying to delete the currently active profile
+        let config = Config::from_dir(self.ctx.config_dir())?;
+        let current_active_profile = config.default_profile_name();
+
+        if profile_name == current_active_profile {
+            log_error(format!(
+                "Cannot delete currently active profile: {}. Switch to another profile first.",
                 profile_name.0.log_color_error_highlight()
             ));
             bail!(NonSuccessfulExit);
