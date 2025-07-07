@@ -6,7 +6,7 @@ use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType};
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm_rpc::{Value, ValueAndType};
 use rib::{ComponentDependency, ComponentDependencyKey, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite};
 use std::path::Path;
 use uuid::Uuid;
@@ -209,8 +209,40 @@ impl WorkerFunctionInvoke for TestRibReplAgenticWorkerFunctionInvoke {
                             .map_err(|e| anyhow!("Failed to invoke function: {:?}", e))
 
                     }
-                    x => {
-                        return Err(anyhow!("Unsupported function reference: {:?}", x));
+                    reference => {
+                       match reference {
+                           ParsedFunctionReference::RawResourceMethod { resource, method } => {
+                               dbg!(&args);
+
+                               let new_function_name = "golem:agentic-guest/guest.{[method]agent.invoke}".to_string();
+
+                               let mut new_args = vec![];
+
+                               new_args.push(args[0].clone());
+
+                               let agent_name =
+                                   ValueAndType::new(Value::String(resource), str());
+
+                               new_args.push(agent_name);
+
+                               let new_list =
+                                   args[1..].iter().map(|x| x.value.clone()).collect();
+
+                               let args_list = ValueAndType::new(Value::List(new_list), str());
+
+                               new_args.push(args_list);
+
+                               self.embedded_worker_executor
+                                   .admin()
+                                   .invoke_and_await_typed(target_worker_id, new_function_name.as_str(), new_args)
+                                   .await
+                                   .map_err(|e| anyhow!("Failed to invoke function: {:?}", e))
+
+                           }
+                           _ => {
+                               Err(anyhow!("Unsupported function reference: {:?}", reference))
+                           }
+                       }
                     }
                 }
             }

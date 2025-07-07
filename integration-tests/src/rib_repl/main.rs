@@ -81,7 +81,7 @@ async fn main() {
                                                     let agent_name = values.get(name_index).expect("Expected value for 'name' field");
                                                     let resource_name = get_agent_resource_analysed_function(agent_name);
                                                     let agent_methods = get_agent_methods(methods, &name_type.typ).iter().map(|agent_method_info|
-                                                        get_agent_resource_method_analysed_function(resource_name.name.clone(), agent_method_info)
+                                                        get_agent_resource_method_analysed_function(get_str(agent_name), agent_method_info)
                                                     ).collect::<Vec<_>>();
 
                                                     analysed_functions.push(resource_name);
@@ -142,17 +142,16 @@ async fn main() {
     rib_repl.run().await
 }
 
+fn get_str(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        _ => panic!("Expected a string value, got: {:?}", value),
+    }
+}
+
 fn get_agent_resource_analysed_function(name: &Value) -> AnalysedFunction {
 
-   let name =  match name {
-        Value::String(s) => {
-            s
-        }
-
-        _ => {
-            panic!("Expected a string value for agent name, got: {:?}", name);
-        }
-    };
+   let name = get_str(name);
 
     let resource_name = format!("[constructor]{}", name);
 
@@ -166,9 +165,14 @@ fn get_agent_resource_analysed_function(name: &Value) -> AnalysedFunction {
 }
 
 fn get_agent_resource_method_analysed_function(resource_name: String, agent_method_info: &AgentMethodInfo) -> AnalysedFunction {
-    let resource_name = format!("[method]{}.{}", resource_name, agent_method_info.method_name);
+    let method_name = format!("[method]{}.{}", resource_name, agent_method_info.method_name);
 
-    let input_params = match &agent_method_info.input_schema {
+    let mut input_params = vec![AnalysedFunctionParameter {
+        name: "agent".to_string(),
+        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+    }];
+
+    let rest_input_params = match &agent_method_info.input_schema {
         Schema::Structured { parameters } => {
             parameters.into_iter().map(|param| {
                 AnalysedFunctionParameter {
@@ -179,6 +183,8 @@ fn get_agent_resource_method_analysed_function(resource_name: String, agent_meth
         }
     };
 
+    input_params.extend(rest_input_params);
+
     let output_params  = match &agent_method_info.output_schema {
         Schema::Structured { parameters } => {
             parameters.first().cloned().map(|x| AnalysedFunctionResult {
@@ -188,7 +194,7 @@ fn get_agent_resource_method_analysed_function(resource_name: String, agent_meth
     };
 
     AnalysedFunction {
-        name: resource_name,
+        name: method_name,
         parameters: input_params,
         result: output_params,
     }
