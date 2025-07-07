@@ -1,4 +1,4 @@
 {
-  "description": "Rust component template with async support using tokio",
+  "description": "Rust component template with async support",
   "appComponentGroup": "default"
 }

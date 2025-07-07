@@ -12,11 +12,14 @@ required-features = []
 # To use common shared libs, use the following:
 # common-lib = { path = "../../common-rust/common-lib" }
 
+futures = { version = "0.3.31", features = [] }
+futures-concurrency = "7.6.3"
 golem-rust = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features=["async"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { version = "1.43.0", features = ["rt", "sync", "time"] }
+wasi = "0.12.1+wasi-0.2.0"
+wasi-async-runtime = "0.1.2"
 wit-bindgen-rt = { workspace = true }
 
 [package.metadata.component.bindings]
