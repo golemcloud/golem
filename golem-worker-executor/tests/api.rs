@@ -3610,3 +3610,41 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
         }
     );
 }
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
+async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin();
+
+    let component_id = executor.component("option-service").store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "wrong-parameter-type-1")
+        .await;
+
+    let failure = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{echo}",
+            vec![100u64.into_value_and_type()],
+        )
+        .await;
+
+    let success = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{echo}",
+            vec![Some("x").into_value_and_type()],
+        )
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+    drop(executor);
+
+    check!(failure.is_err());
+    check!(success.is_ok());
+}
