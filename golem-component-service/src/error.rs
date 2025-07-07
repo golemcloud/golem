@@ -18,7 +18,7 @@ use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::ComponentProcessingError;
-use golem_common::model::{AccountId, ComponentId};
+use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
 use golem_common::model::{ComponentFilePath, InitialComponentFileKey};
 use golem_common::SafeDisplay;
 use golem_service_base::clients::auth::AuthServiceError;
@@ -99,6 +99,15 @@ pub enum ComponentError {
         plugin_version: String,
         details: String,
     },
+    #[error("Concurrent update of component {component_id} to version {version}")]
+    ConcurrentUpdate {
+        component_id: ComponentId,
+        version: ComponentVersion,
+    },
+    #[error("Plugin installation not found: {installation_id}")]
+    PluginInstallationNotFound {
+        installation_id: PluginInstallationId,
+    },
 }
 
 impl ComponentError {
@@ -157,33 +166,35 @@ impl ComponentError {
 impl SafeDisplay for ComponentError {
     fn to_safe_string(&self) -> String {
         match self {
-            ComponentError::AlreadyExists(_) => self.to_string(),
-            ComponentError::UnknownComponentId(_) => self.to_string(),
-            ComponentError::UnknownVersionedComponentId(_) => self.to_string(),
-            ComponentError::ComponentProcessingError(inner) => inner.to_safe_string(),
-            ComponentError::InternalRepoError(inner) => inner.to_safe_string(),
-            ComponentError::InternalConversionError { .. } => self.to_string(),
-            ComponentError::ComponentStoreError { .. } => self.to_string(),
-            ComponentError::ComponentConstraintConflictError(_) => self.to_string(),
-            ComponentError::ComponentConstraintCreateError(_) => self.to_string(),
-            ComponentError::MalformedComponentArchiveError { .. } => self.to_string(),
-            ComponentError::InitialComponentFileUploadError { .. } => self.to_string(),
-            ComponentError::InitialComponentFileNotFound { .. } => self.to_string(),
-            ComponentError::TransformationFailed(_) => self.to_string(),
-            ComponentError::PluginApplicationFailed(_) => self.to_string(),
-            ComponentError::FailedToDownloadFile => self.to_string(),
-            ComponentError::InvalidFilePath(_) => self.to_string(),
-            ComponentError::InvalidComponentName { .. } => self.to_string(),
-            ComponentError::UnknownProject(_) => self.to_string(),
-            ComponentError::Unauthorized(_) => self.to_string(),
-            ComponentError::LimitExceeded(_) => self.to_string(),
-            ComponentError::InternalAuthServiceError(inner) => inner.to_safe_string(),
-            ComponentError::InternalLimitError(inner) => inner.to_safe_string(),
-            ComponentError::InternalProjectError(inner) => inner.to_safe_string(),
-            ComponentError::InvalidOplogProcessorPlugin => self.to_string(),
-            ComponentError::PluginNotFound { .. } => self.to_string(),
-            ComponentError::BlobStorageError(_) => self.to_string(),
-            ComponentError::InvalidPluginScope { .. } => self.to_string(),
+            Self::AlreadyExists(_) => self.to_string(),
+            Self::UnknownComponentId(_) => self.to_string(),
+            Self::UnknownVersionedComponentId(_) => self.to_string(),
+            Self::ComponentProcessingError(inner) => inner.to_safe_string(),
+            Self::InternalRepoError(inner) => inner.to_safe_string(),
+            Self::InternalConversionError { .. } => self.to_string(),
+            Self::ComponentStoreError { .. } => self.to_string(),
+            Self::ComponentConstraintConflictError(_) => self.to_string(),
+            Self::ComponentConstraintCreateError(_) => self.to_string(),
+            Self::MalformedComponentArchiveError { .. } => self.to_string(),
+            Self::InitialComponentFileUploadError { .. } => self.to_string(),
+            Self::InitialComponentFileNotFound { .. } => self.to_string(),
+            Self::TransformationFailed(_) => self.to_string(),
+            Self::PluginApplicationFailed(_) => self.to_string(),
+            Self::FailedToDownloadFile => self.to_string(),
+            Self::InvalidFilePath(_) => self.to_string(),
+            Self::InvalidComponentName { .. } => self.to_string(),
+            Self::UnknownProject(_) => self.to_string(),
+            Self::Unauthorized(_) => self.to_string(),
+            Self::LimitExceeded(_) => self.to_string(),
+            Self::InternalAuthServiceError(inner) => inner.to_safe_string(),
+            Self::InternalLimitError(inner) => inner.to_safe_string(),
+            Self::InternalProjectError(inner) => inner.to_safe_string(),
+            Self::InvalidOplogProcessorPlugin => self.to_string(),
+            Self::PluginNotFound { .. } => self.to_string(),
+            Self::BlobStorageError(_) => self.to_string(),
+            Self::InvalidPluginScope { .. } => self.to_string(),
+            Self::ConcurrentUpdate { .. } => self.to_string(),
+            Self::PluginInstallationNotFound { .. } => self.to_string(),
         }
     }
 }
@@ -223,7 +234,9 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
             | ComponentError::MalformedComponentArchiveError { .. }
             | ComponentError::InvalidComponentName { .. }
             | ComponentError::ComponentProcessingError(_)
-            | ComponentError::InvalidPluginScope { .. } => {
+            | ComponentError::InvalidPluginScope { .. }
+            | ComponentError::ConcurrentUpdate { .. }
+            | ComponentError::PluginInstallationNotFound { .. } => {
                 component_error::Error::BadRequest(ErrorsBody {
                     errors: vec![value.to_safe_string()],
                 })

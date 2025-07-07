@@ -28,7 +28,7 @@ use golem_common::model::{
 use golem_common::repo::ComponentOwnerRow;
 use golem_common::repo::ComponentPluginInstallationRow;
 use golem_common::repo::PluginOwnerRow;
-use golem_service_base::db::{Pool, PoolApi};
+use golem_service_base::db::Pool;
 use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
@@ -36,12 +36,12 @@ use golem_service_base::repo::plugin_installation::{
 use golem_service_base::repo::RepoError;
 use sqlx::types::Json;
 use sqlx::{Postgres, QueryBuilder, Row, Sqlite};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::result::Result;
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::{debug, info_span, Span};
+use tracing::{info_span, Span};
 use tracing_futures::Instrument;
 use uuid::Uuid;
 
@@ -55,31 +55,30 @@ pub struct ComponentRecord {
     pub metadata: Vec<u8>,
     pub created_at: DateTime<Utc>,
     pub component_type: i32,
-    pub available: bool,
-    pub object_store_key: Option<String>,
-    pub transformed_object_store_key: Option<String>,
+    pub object_store_key: String,
+    pub transformed_object_store_key: String,
     // one-to-many relationship. Retrieved separately
     #[sqlx(skip)]
     pub files: Vec<FileRecord>,
+    // one-to-many relationship. Retrieved separately
+    #[sqlx(skip)]
+    pub transformed_files: Vec<FileRecord>,
     // one-to-many relationship. Retrieved separately
     #[sqlx(skip)]
     pub installed_plugins: Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
     pub env: Json<HashMap<String, String>>,
+    pub transformed_env: Json<HashMap<String, String>>,
 }
 
 impl ComponentRecord {
-    pub fn try_from_model(value: Component, available: bool) -> Result<Self, String> {
+    pub fn try_from_model(value: Component) -> Result<Self, String> {
         let metadata = record_metadata_serde::serialize(&value.metadata)?;
 
         let component_owner = value.owner.clone();
         let component_owner_row: ComponentOwnerRow = component_owner.into();
         let plugin_owner_row: PluginOwnerRow = component_owner_row.into();
-
-        let object_store_key = value
-            .object_store_key
-            .unwrap_or(value.versioned_component_id.to_string());
 
         Ok(Self {
             namespace: value.owner.to_string(),
@@ -90,15 +89,21 @@ impl ComponentRecord {
             metadata: metadata.into(),
             created_at: value.created_at,
             component_type: value.component_type as i32,
-            available,
-            object_store_key: Some(object_store_key.clone()),
-            transformed_object_store_key: Some(
-                value
-                    .transformed_object_store_key
-                    .unwrap_or(object_store_key),
-            ),
+            object_store_key: value.object_store_key,
+            transformed_object_store_key: value.transformed_object_store_key,
             files: value
                 .files
+                .iter()
+                .map(|file| FileRecord {
+                    component_id: value.versioned_component_id.component_id.0,
+                    version: value.versioned_component_id.version as i64,
+                    file_path: file.path.to_string(),
+                    file_key: file.key.0.clone(),
+                    file_permissions: file.permissions.as_compact_str().to_string(),
+                })
+                .collect(),
+            transformed_files: value
+                .transformed_files
                 .iter()
                 .map(|file| FileRecord {
                     component_id: value.versioned_component_id.component_id.0,
@@ -125,6 +130,7 @@ impl ComponentRecord {
             root_package_name: value.metadata.root_package_name,
             root_package_version: value.metadata.root_package_version,
             env: Json(value.env),
+            transformed_env: Json(value.transformed_env),
         })
     }
 }
@@ -139,8 +145,15 @@ impl TryFrom<ComponentRecord> for Component {
             version: value.version as u64,
         };
         let owner: ComponentOwner = value.namespace.parse()?;
+
         let files = value
             .files
+            .into_iter()
+            .map(|file| file.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let transformed_files = value
+            .transformed_files
             .into_iter()
             .map(|file| file.try_into())
             .collect::<Result<Vec<_>, _>>()?;
@@ -156,12 +169,14 @@ impl TryFrom<ComponentRecord> for Component {
             object_store_key: value.object_store_key,
             transformed_object_store_key: value.transformed_object_store_key,
             files,
+            transformed_files,
             installed_plugins: value
                 .installed_plugins
                 .into_iter()
                 .map(|record| record.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             env: value.env.0,
+            transformed_env: value.transformed_env.0,
         })
     }
 }
@@ -250,37 +265,6 @@ impl TryFrom<FileRecord> for InitialComponentFile {
 pub trait ComponentRepo: Debug + Send + Sync {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError>;
 
-    /// Creates a new component version (ignores component.version) and copies the plugin
-    /// installations from the previous latest version.
-    ///
-    /// Returns the updated component.
-    async fn update(
-        &self,
-        owner: &ComponentOwnerRow,
-        namespace: &str,
-        component_id: Uuid,
-        size: i32,
-        metadata: Vec<u8>,
-        root_package_version: Option<&str>,
-        component_type: Option<i32>,
-        files: Option<Vec<FileRecord>>,
-        env: Json<HashMap<String, String>>,
-    ) -> Result<ComponentRecord, RepoError>;
-
-    /// Activates a component version previously created with `update`.
-    ///
-    /// Once the version is marked as active, `get_latest_version` will take it into account when
-    /// looking for the latest component version.
-    async fn activate(
-        &self,
-        namespace: &str,
-        component_id: Uuid,
-        component_version: i64,
-        object_store_key: &str,
-        transformed_object_store_key: &str,
-        updated_metadata: Vec<u8>,
-    ) -> Result<(), RepoError>;
-
     async fn get(
         &self,
         namespace: &str,
@@ -344,13 +328,6 @@ pub trait ComponentRepo: Debug + Send + Sync {
         component_id: Uuid,
         version: u64,
     ) -> Result<Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>, RepoError>;
-
-    async fn apply_plugin_installation_changes(
-        &self,
-        owner: &PluginOwnerRow,
-        component_id: Uuid,
-        actions: &[PluginInstallationRepoAction],
-    ) -> Result<u64, RepoError>;
 }
 
 pub enum PluginInstallationRepoAction {
@@ -394,56 +371,6 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         self.repo
             .create(component)
             .instrument(Self::span(component.component_id))
-            .await
-    }
-
-    async fn update(
-        &self,
-        owner: &ComponentOwnerRow,
-        namespace: &str,
-        component_id: Uuid,
-        size: i32,
-        metadata: Vec<u8>,
-        root_package_version: Option<&str>,
-        component_type: Option<i32>,
-        files: Option<Vec<FileRecord>>,
-        env: Json<HashMap<String, String>>,
-    ) -> Result<ComponentRecord, RepoError> {
-        self.repo
-            .update(
-                owner,
-                namespace,
-                component_id,
-                size,
-                metadata,
-                root_package_version,
-                component_type,
-                files,
-                env,
-            )
-            .instrument(Self::span(component_id))
-            .await
-    }
-
-    async fn activate(
-        &self,
-        namespace: &str,
-        component_id: Uuid,
-        component_version: i64,
-        object_store_key: &str,
-        transformed_object_store_key: &str,
-        updated_metadata: Vec<u8>,
-    ) -> Result<(), RepoError> {
-        self.repo
-            .activate(
-                namespace,
-                component_id,
-                component_version,
-                object_store_key,
-                transformed_object_store_key,
-                updated_metadata,
-            )
-            .instrument(Self::span(component_id))
             .await
     }
 
@@ -563,18 +490,6 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
             .instrument(Self::span(component_id))
             .await
     }
-
-    async fn apply_plugin_installation_changes(
-        &self,
-        owner: &PluginOwnerRow,
-        component_id: Uuid,
-        actions: &[PluginInstallationRepoAction],
-    ) -> Result<u64, RepoError> {
-        self.repo
-            .apply_plugin_installation_changes(owner, component_id, actions)
-            .instrument(Self::span(component_id))
-            .await
-    }
 }
 
 pub struct DbComponentRepo<DB: Pool> {
@@ -636,21 +551,30 @@ impl DbComponentRepo<golem_service_base::db::postgres::PostgresPool> {
             .await
     }
 
-    async fn add_files(
+    async fn get_transformed_files(
         &self,
-        components: impl IntoIterator<Item = ComponentRecord>,
-    ) -> Result<Vec<ComponentRecord>, RepoError> {
-        let result = components
-            .into_iter()
-            .map(|component| async move {
-                let files = self
-                    .get_files(component.component_id, component.version as u64)
-                    .await?;
-                Ok(ComponentRecord { files, ..component })
-            })
-            .collect::<Vec<_>>();
-
-        try_join_all(result).await
+        component_id: Uuid,
+        version: u64,
+    ) -> Result<Vec<FileRecord>, RepoError> {
+        let query = sqlx::query_as::<_, FileRecord>(
+            r#"
+            SELECT
+                component_id,
+                version,
+                file_path,
+                file_key,
+                file_permissions
+            FROM transformed_component_files
+            WHERE component_id = $1 AND version = $2
+            ORDER BY file_path
+            "#,
+        )
+        .bind(component_id)
+        .bind(version as i64);
+        self.db_pool
+            .with_ro("component", "get_transformed_files")
+            .fetch_all(query)
+            .await
     }
 
     async fn get_installed_plugins_for_component(
@@ -676,7 +600,7 @@ impl DbComponentRepo<golem_service_base::db::postgres::PostgresPool> {
             .await
     }
 
-    async fn add_installed_plugins(
+    async fn add_joined_data(
         &self,
         components: impl IntoIterator<Item = ComponentRecord>,
     ) -> Result<Vec<ComponentRecord>, RepoError> {
@@ -685,8 +609,16 @@ impl DbComponentRepo<golem_service_base::db::postgres::PostgresPool> {
             .map(|component| async move {
                 let installed_plugins =
                     self.get_installed_plugins_for_component(&component).await?;
+                let files = self
+                    .get_files(component.component_id, component.version as u64)
+                    .await?;
+                let transformed_files = self
+                    .get_transformed_files(component.component_id, component.version as u64)
+                    .await?;
                 Ok(ComponentRecord {
                     installed_plugins,
+                    files,
+                    transformed_files,
                     ..component
                 })
             })
@@ -746,10 +678,30 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             }
         }
 
+        for installed_plugin in &component.installed_plugins {
+            let query = sqlx::query(
+                r#"
+                  INSERT INTO component_plugin_installation
+                    (installation_id, plugin_id, priority, parameters, component_id, component_version, account_id)
+                  VALUES
+                    ($1, $2, $3, $4, $5, $6, $7)
+                "#,
+            )
+            .bind(installed_plugin.installation_id)
+            .bind(installed_plugin.plugin_id)
+            .bind(installed_plugin.priority)
+            .bind(&installed_plugin.parameters)
+            .bind(component.component_id)
+            .bind(component.version)
+            .bind(&installed_plugin.owner.account_id);
+
+            transaction.execute(query).await?;
+        }
+
         let query = sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version, env)
+                (component_id, version, size, metadata, created_at, component_type, object_store_key, transformed_object_store_key, root_package_name, root_package_version, env, transformed_env)
               VALUES
                 ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                "#,
@@ -760,12 +712,12 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .bind(&component.metadata)
             .bind(component.created_at)
             .bind(component.component_type)
-            .bind(component.available)
             .bind(&component.object_store_key)
             .bind(&component.transformed_object_store_key)
             .bind(&component.root_package_name)
             .bind(&component.root_package_version)
-            .bind(&component.env);
+            .bind(&component.env)
+            .bind(&component.transformed_env);
 
         transaction.execute(query).await?;
 
@@ -787,203 +739,28 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             transaction.execute(query).await?;
         }
 
+        for file in &component.transformed_files {
+            let query = sqlx::query(
+                r#"
+                  INSERT INTO transformed_component_files
+                    (component_id, version, file_path, file_key, file_permissions)
+                  VALUES
+                    ($1, $2, $3, $4, $5)
+                "#,
+            )
+            .bind(component.component_id)
+            .bind(component.version)
+            .bind(file.file_path.clone())
+            .bind(file.file_key.clone())
+            .bind(file.file_permissions.clone());
+
+            transaction.execute(query).await?;
+        }
+
         self.db_pool
             .with_rw("component", "create")
             .commit(transaction)
             .await?;
-        Ok(())
-    }
-
-    async fn update(
-        &self,
-        owner: &ComponentOwnerRow,
-        namespace: &str,
-        component_id: Uuid,
-        size: i32,
-        metadata: Vec<u8>,
-        root_package_version: Option<&str>,
-        component_type: Option<i32>,
-        files: Option<Vec<FileRecord>>,
-        env: Json<HashMap<String, String>>,
-    ) -> Result<ComponentRecord, RepoError> {
-        let mut transaction = self.db_pool.with_rw("component", "update").begin().await?;
-
-        let query = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
-            .bind(component_id);
-
-        let result = transaction.fetch_optional(query).await?;
-
-        if let Some(result) = result {
-            let existing_namespace: String = result.get("namespace");
-            if existing_namespace != namespace {
-                self.db_pool
-                    .with_rw("component", "update")
-                    .rollback(transaction)
-                    .await?;
-                Err(RepoError::Internal(
-                    "Component namespace invalid".to_string(),
-                ))
-            } else {
-                let now = Utc::now();
-                let new_version = {
-                    let query = sqlx::query(
-                        r#"
-                        WITH prev AS (SELECT component_id, version, root_package_name, component_type
-                           FROM component_versions WHERE component_id = $1
-                           ORDER BY version DESC
-                           LIMIT 1)
-                        INSERT INTO component_versions
-                          (component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version, env)
-                          SELECT prev.component_id, prev.version + 1, $2, $3, $4, COALESCE($5, prev.component_type), FALSE, NULL, NULL, prev.root_package_name, $6, $7 FROM prev
-                        RETURNING version
-                        "#,
-                    )
-                        .bind(component_id)
-                        .bind(size)
-                        .bind(metadata)
-                        .bind(now)
-                        .bind(component_type)
-                        .bind(root_package_version)
-                        .bind(env);
-
-                    transaction.fetch_one(query).await?.get("version")
-                };
-
-                debug!("update created new component version {new_version}");
-
-                let old_target = ComponentPluginInstallationRow {
-                    component_id,
-                    component_version: new_version - 1,
-                };
-
-                let plugin_owner = owner.clone().into();
-                let mut query = self
-                    .plugin_installation_queries
-                    .get_all(&plugin_owner, &old_target);
-                let query = query
-                    .build_query_as::<PluginInstallationRecord<ComponentPluginInstallationTarget>>(
-                    );
-
-                let existing_installations = transaction.fetch_all(query).await?;
-
-                let new_target = ComponentPluginInstallationRow {
-                    component_id,
-                    component_version: new_version,
-                };
-
-                let mut new_installations = Vec::new();
-                for installation in existing_installations {
-                    let old_id = installation.installation_id;
-                    let new_id = Uuid::new_v4();
-                    let new_installation = PluginInstallationRecord {
-                        installation_id: new_id,
-                        target: new_target.clone(),
-                        ..installation
-                    };
-                    new_installations.push(new_installation);
-
-                    debug!("update copying installation {old_id} as {new_id}");
-                }
-
-                for installation in new_installations {
-                    let mut query = self.plugin_installation_queries.create(&installation);
-                    let query = query.build();
-                    transaction.execute(query).await?;
-                }
-
-                let files = if let Some(files) = files {
-                    files
-                } else {
-                    // Copying the previous file set
-                    let query = sqlx::query_as::<_, FileRecord>(
-                        r#"
-                            SELECT
-                                component_id,
-                                version,
-                                file_path,
-                                file_key,
-                                file_permissions
-                            FROM component_files
-                            WHERE component_id = $1 AND version = $2
-                            "#,
-                    )
-                    .bind(old_target.component_id)
-                    .bind(old_target.component_version);
-
-                    transaction.fetch_all(query).await?
-                };
-
-                // Inserting the new file set
-                for file in files {
-                    let query = sqlx::query(
-                        r#"
-                          INSERT INTO component_files
-                            (component_id, version, file_path, file_key, file_permissions)
-                          VALUES
-                            ($1, $2, $3, $4, $5)
-                        "#,
-                    )
-                    .bind(component_id)
-                    .bind(new_version)
-                    .bind(&file.file_path)
-                    .bind(&file.file_key)
-                    .bind(&file.file_permissions);
-
-                    transaction.execute(query).await?;
-                }
-
-                self.db_pool
-                    .with_rw("component", "update")
-                    .commit(transaction)
-                    .await?;
-
-                let component = self
-                    .get_by_version(namespace, component_id, new_version as u64)
-                    .await?;
-
-                component.ok_or(RepoError::Internal(
-                    "Could not re-get newly created component version".to_string(),
-                ))
-            }
-        } else {
-            self.db_pool
-                .with_rw("component", "update")
-                .rollback(transaction)
-                .await?;
-            Err(RepoError::Internal(
-                "Component not found for update".to_string(),
-            ))
-        }
-    }
-
-    async fn activate(
-        &self,
-        namespace: &str,
-        component_id: Uuid,
-        component_version: i64,
-        object_store_key: &str,
-        transformed_object_store_key: &str,
-        updated_metadata: Vec<u8>,
-    ) -> Result<(), RepoError> {
-        let query = sqlx::query(
-            r#"
-              UPDATE component_versions
-              SET available = TRUE, object_store_key = $4, metadata = $5, transformed_object_store_key = $6
-              WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
-                    AND version = $3
-            "#,
-        ).bind(namespace)
-            .bind(component_id)
-            .bind(component_version)
-            .bind(object_store_key)
-            .bind(updated_metadata)
-            .bind(transformed_object_store_key);
-
-        self.db_pool
-            .with_rw("component", "activate")
-            .execute(query)
-            .await?;
-
         Ok(())
     }
 
@@ -1004,12 +781,12 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                     cv.metadata AS metadata,
                     cv.created_at::timestamptz AS created_at,
                     cv.component_type AS component_type,
-                    cv.available AS available,
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key as transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
                     cv.root_package_version AS root_package_version,
-                    cv.env
+                    cv.env,
+                    cv.transformed_env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
@@ -1025,8 +802,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .fetch_all(query)
             .await?;
 
-        self.add_installed_plugins(self.add_files(components).await?)
-            .await
+        self.add_joined_data(components).await
     }
 
     #[when(golem_service_base::db::sqlite::SqlitePool -> get)]
@@ -1046,12 +822,12 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                     cv.metadata AS metadata,
                     cv.created_at AS created_at,
                     cv.component_type AS component_type,
-                    cv.available AS available,
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
                     cv.root_package_version AS root_package_version,
-                    cv.env
+                    cv.env,
+                    cv.transformed_env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
@@ -1067,8 +843,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .fetch_all(query)
             .await?;
 
-        self.add_installed_plugins(self.add_files(components).await?)
-            .await
+        self.add_joined_data(components).await
     }
 
     #[when(golem_service_base::db::postgres::PostgresPool -> get_all)]
@@ -1084,12 +859,12 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                     cv.metadata AS metadata,
                     cv.created_at::timestamptz AS created_at,
                     cv.component_type AS component_type,
-                    cv.available AS available,
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
                     cv.root_package_version AS root_package_version,
-                    cv.env
+                    cv.env,
+                    cv.transformed_env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -1104,8 +879,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .fetch_all(query)
             .await?;
 
-        self.add_installed_plugins(self.add_files(components).await?)
-            .await
+        self.add_joined_data(components).await
     }
 
     #[when(golem_service_base::db::sqlite::SqlitePool -> get_all)]
@@ -1121,12 +895,12 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                     cv.metadata AS metadata,
                     cv.created_at AS created_at,
                     cv.component_type AS component_type,
-                    cv.available AS available,
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
                     cv.root_package_version AS root_package_version,
-                    cv.env
+                    cv.env,
+                    cv.transformed_env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -1141,8 +915,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .fetch_all(query)
             .await?;
 
-        self.add_installed_plugins(self.add_files(components).await?)
-            .await
+        self.add_joined_data(components).await
     }
 
     #[when(golem_service_base::db::postgres::PostgresPool -> get_latest_version)]
@@ -1162,15 +935,15 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                     cv.metadata AS metadata,
                     cv.created_at::timestamptz AS created_at,
                     cv.component_type AS component_type,
-                    cv.available AS available,
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
                     cv.root_package_version AS root_package_version,
-                    cv.env
+                    cv.env,
+                    cv.transformed_env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
+                WHERE c.component_id = $1 AND c.namespace = $2
                 ORDER BY cv.version DESC
                 LIMIT 1
                 "#,
@@ -1184,10 +957,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .fetch_optional_as(query)
             .await?;
 
-        Ok(self
-            .add_installed_plugins(self.add_files(component).await?)
-            .await?
-            .pop())
+        Ok(self.add_joined_data(component).await?.pop())
     }
 
     #[when(golem_service_base::db::sqlite::SqlitePool -> get_latest_version)]
@@ -1207,15 +977,15 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                     cv.metadata AS metadata,
                     cv.created_at AS created_at,
                     cv.component_type AS component_type,
-                    cv.available AS available,
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
                     cv.root_package_version AS root_package_version,
-                    cv.env
+                    cv.env,
+                    cv.transformed_env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
+                WHERE c.component_id = $1 AND c.namespace = $2
                 ORDER BY cv.version DESC
                 LIMIT 1
                 "#,
@@ -1229,10 +999,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .fetch_optional_as(query)
             .await?;
 
-        Ok(self
-            .add_installed_plugins(self.add_files(component).await?)
-            .await?
-            .pop())
+        Ok(self.add_joined_data(component).await?.pop())
     }
 
     #[when(golem_service_base::db::postgres::PostgresPool -> get_by_version)]
@@ -1253,12 +1020,12 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                     cv.metadata AS metadata,
                     cv.created_at::timestamptz AS created_at,
                     cv.component_type AS component_type,
-                    cv.available AS available,
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
                     cv.root_package_version AS root_package_version,
-                    cv.env
+                    cv.env,
+                    cv.transformed_env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
@@ -1274,10 +1041,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .fetch_optional_as(query)
             .await?;
 
-        Ok(self
-            .add_installed_plugins(self.add_files(component).await?)
-            .await?
-            .pop())
+        Ok(self.add_joined_data(component).await?.pop())
     }
 
     #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_version)]
@@ -1298,12 +1062,12 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                     cv.metadata AS metadata,
                     cv.created_at AS created_at,
                     cv.component_type AS component_type,
-                    cv.available AS available,
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
                     cv.root_package_version AS root_package_version,
-                    cv.env
+                    cv.env,
+                    cv.transformed_env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
@@ -1319,10 +1083,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .fetch_optional_as(query)
             .await?;
 
-        Ok(self
-            .add_installed_plugins(self.add_files(component).await?)
-            .await?
-            .pop())
+        Ok(self.add_joined_data(component).await?.pop())
     }
 
     #[when(golem_service_base::db::postgres::PostgresPool -> get_by_name)]
@@ -1342,12 +1103,12 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                     cv.metadata AS metadata,
                     cv.created_at::timestamptz AS created_at,
                     cv.component_type AS component_type,
-                    cv.available AS available,
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
                     cv.root_package_version AS root_package_version,
-                    cv.env
+                    cv.env,
+                    cv.transformed_env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -1363,8 +1124,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .fetch_all(query)
             .await?;
 
-        self.add_installed_plugins(self.add_files(components).await?)
-            .await
+        Ok(self.add_joined_data(components).await?)
     }
 
     #[when(golem_service_base::db::postgres::PostgresPool -> get_by_names)]
@@ -1409,12 +1169,12 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                 cv.metadata,
                 cv.created_at::timestamptz,
                 cv.component_type,
-                cv.available,
                 cv.object_store_key,
                 cv.transformed_object_store_key,
                 cv.root_package_name,
                 cv.root_package_version,
-                cv.env
+                cv.env,
+                cv.transformed_env
             FROM components c
             JOIN component_versions cv ON c.component_id = cv.component_id
             JOIN input_components ic ON ic.name = c.name
@@ -1436,17 +1196,16 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                 cv.metadata,
                 cv.created_at::timestamptz,
                 cv.component_type,
-                cv.available,
                 cv.object_store_key,
                 cv.transformed_object_store_key,
                 cv.root_package_name,
                 cv.root_package_version,
-                cv.env
+                cv.env,
+                cv.transformed_env
             FROM components c
             JOIN component_versions cv ON c.component_id = cv.component_id
             JOIN input_components ic ON ic.name = c.name
             WHERE ic.is_latest = TRUE
-              AND cv.available = TRUE
               AND c.namespace = "#,
         );
         query_builder.push_bind(namespace);
@@ -1469,11 +1228,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .fetch_all(query)
             .await?;
 
-        let components = self
-            .add_installed_plugins(self.add_files(components).await?)
-            .await?;
-
-        Ok(components)
+        self.add_joined_data(components).await
     }
 
     #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_names)]
@@ -1516,12 +1271,12 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                 cv.metadata,
                 cv.created_at,
                 cv.component_type,
-                cv.available,
                 cv.object_store_key,
                 cv.transformed_object_store_key,
                 cv.root_package_name,
                 cv.root_package_version,
-                cv.env
+                cv.env,
+                cv.transformed_env
             FROM components c
             JOIN component_versions cv ON c.component_id = cv.component_id
             JOIN input_components ic ON ic.name = c.name
@@ -1539,23 +1294,21 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                 cv.metadata,
                 cv.created_at,
                 cv.component_type,
-                cv.available,
                 cv.object_store_key,
                 cv.transformed_object_store_key,
                 cv.root_package_name,
                 cv.root_package_version,
-                cv.env
+                cv.env,
+                cv.transformed_env
             FROM component_versions cv
             JOIN components c ON c.component_id = cv.component_id
             JOIN input_components ic ON ic.name = c.name
             WHERE ic.is_latest = 1
-              AND cv.available = 1
               AND c.namespace = ?
               AND cv.version = (
                   SELECT MAX(cv2.version)
                   FROM component_versions cv2
                   WHERE cv2.component_id = cv.component_id
-                    AND cv2.available = 1
               )
         )
         SELECT * FROM exact_matches
@@ -1570,17 +1323,13 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .bind(namespace)
             .bind(namespace);
 
-        let records = self
+        let components = self
             .db_pool
             .with_ro("component", "get_by_names_sqlite")
             .fetch_all(query)
             .await?;
 
-        let records = self
-            .add_installed_plugins(self.add_files(records).await?)
-            .await?;
-
-        Ok(records)
+        self.add_joined_data(components).await
     }
 
     #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_name)]
@@ -1600,12 +1349,12 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                     cv.metadata AS metadata,
                     cv.created_at AS created_at,
                     cv.component_type AS component_type,
-                    cv.available AS available,
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
                     cv.root_package_version AS root_package_version,
-                    cv.env
+                    cv.env,
+                    cv.transformed_env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -1621,8 +1370,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .fetch_all(query)
             .await?;
 
-        self.add_installed_plugins(self.add_files(components).await?)
-            .await
+        self.add_joined_data(components).await
     }
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {
@@ -1898,134 +1646,6 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             .with_ro("component", "get_installed_plugins")
             .fetch_all(query)
             .await
-    }
-
-    async fn apply_plugin_installation_changes(
-        &self,
-        owner: &PluginOwnerRow,
-        component_id: Uuid,
-        actions: &[PluginInstallationRepoAction],
-    ) -> Result<u64, RepoError> {
-        let mut transaction = self
-            .db_pool
-            .with_rw("component", "apply_plugin_installation_changes")
-            .begin()
-            .await?;
-
-        let query = sqlx::query(
-            r#"
-              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version, env
-                   FROM component_versions WHERE component_id = $1
-                   ORDER BY version DESC
-                   LIMIT 1)
-              INSERT INTO component_versions
-                  (component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version, env)
-                  SELECT prev.component_id, prev.version + 1, prev.size, prev.metadata, $2, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version, prev.env FROM prev
-              RETURNING *
-              "#,
-        ).bind(component_id).bind(Utc::now());
-
-        let new_version = transaction.fetch_one(query).await?.get("version");
-
-        debug!(
-            "apply_plugin_installation_changes cloned old component version into version {new_version}"
-        );
-
-        let old_target = ComponentPluginInstallationRow {
-            component_id,
-            component_version: new_version - 1,
-        };
-        let mut query = self.plugin_installation_queries.get_all(owner, &old_target);
-        let query =
-            query.build_query_as::<PluginInstallationRecord<ComponentPluginInstallationTarget>>();
-
-        let existing_installations = transaction.fetch_all(query).await?;
-
-        let new_target = ComponentPluginInstallationRow {
-            component_id,
-            component_version: new_version,
-        };
-
-        let mut new_installations = Vec::new();
-
-        let mut to_delete = HashSet::new();
-        let mut to_update = HashMap::new();
-        for action in actions {
-            match action {
-                PluginInstallationRepoAction::Install { record } => {
-                    debug!(
-                        "apply_plugin_installation_changes adding new installation as {}",
-                        record.installation_id
-                    );
-                    new_installations.push(PluginInstallationRecord {
-                        target: new_target.clone(),
-                        ..record.clone()
-                    });
-                }
-                PluginInstallationRepoAction::Uninstall {
-                    plugin_installation_id,
-                } => {
-                    to_delete.insert(*plugin_installation_id);
-                }
-                PluginInstallationRepoAction::Update {
-                    plugin_installation_id,
-                    new_priority,
-                    new_parameters,
-                } => {
-                    to_update.insert(
-                        *plugin_installation_id,
-                        (*new_priority, new_parameters.clone()),
-                    );
-                }
-            }
-        }
-
-        for installation in existing_installations {
-            let old_id = installation.installation_id;
-
-            if !to_delete.contains(&old_id) {
-                if let Some((new_priority, new_parameters)) = to_update.get(&old_id) {
-                    let new_id = Uuid::new_v4();
-                    let new_installation = PluginInstallationRecord {
-                        installation_id: new_id,
-                        target: new_target.clone(),
-                        priority: *new_priority,
-                        parameters: new_parameters.clone(),
-                        ..installation
-                    };
-                    new_installations.push(new_installation);
-
-                    debug!(
-                        "apply_plugin_installation_changes copying modified installation {old_id} as {new_id}"
-                    );
-                } else {
-                    let new_id = Uuid::new_v4();
-                    let new_installation = PluginInstallationRecord {
-                        installation_id: new_id,
-                        target: new_target.clone(),
-                        ..installation
-                    };
-                    new_installations.push(new_installation);
-
-                    debug!("apply_plugin_installation_changes copying installation {old_id} as {new_id}");
-                }
-            } else {
-                debug!("apply_plugin_installation_changes deleting installation {old_id}");
-            }
-        }
-
-        for installation in new_installations {
-            let mut query = self.plugin_installation_queries.create(&installation);
-            let query = query.build();
-            transaction.execute(query).await?;
-        }
-
-        self.db_pool
-            .with_rw("component", "apply_plugin_installation_changes")
-            .commit(transaction)
-            .await?;
-
-        Ok(new_version as u64)
     }
 }
 

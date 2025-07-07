@@ -13,10 +13,12 @@
 // limitations under the License.
 
 use crate::Tracing;
+use assert2::let_assert;
 use axum::body::Bytes;
 use axum::extract::Multipart;
 use axum::routing::post;
 use axum::Router;
+use base64::Engine;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
 use golem_client::api::PluginClient;
 use golem_common::model::plugin::{
@@ -24,7 +26,7 @@ use golem_common::model::plugin::{
     OplogProcessorDefinition, PluginTypeSpecificDefinition,
 };
 use golem_common::model::plugin::{PluginScope, ProjectPluginScope};
-use golem_common::model::{Empty, ScanCursor};
+use golem_common::model::{ComponentFilePermissions, Empty, ScanCursor};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl,
 };
@@ -33,6 +35,7 @@ use golem_test_framework::model::PluginDefinitionCreation;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use reqwest::StatusCode;
+use serde_json::json;
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, tag, test};
 use tracing::{debug, info};
@@ -68,7 +71,7 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Trac
         Ok(transformed_bytes)
     }
 
-    async fn transform(mut multipart: Multipart) -> Vec<u8> {
+    async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
         let mut component = None;
 
         while let Some(field) = multipart.next_field().await.unwrap() {
@@ -92,8 +95,17 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Trac
             }
         }
 
-        transform_component(component.expect("did not receive a component part"))
-            .expect("Failed to transform component") // TODO: error handling and returning a proper HTTP response with failed status code
+        let transformed_bytes =
+            transform_component(component.expect("did not receive a component part"))
+                .expect("Failed to transform component");
+
+        let data_base64 = base64::engine::general_purpose::STANDARD.encode(&transformed_bytes);
+
+        let response = json!({
+            "data": data_base64
+        });
+
+        axum::Json(response)
     }
 
     let admin = deps.admin();
@@ -190,7 +202,7 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
         Ok(transformed_bytes)
     }
 
-    async fn transform(mut multipart: Multipart) -> Vec<u8> {
+    async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
         let mut component = None;
 
         while let Some(field) = multipart.next_field().await.unwrap() {
@@ -214,8 +226,17 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
             }
         }
 
-        transform_component(component.expect("did not receive a component part"))
-            .expect("Failed to transform component")
+        let transformed_bytes =
+            transform_component(component.expect("did not receive a component part"))
+                .expect("Failed to transform component");
+
+        let data_base64 = base64::engine::general_purpose::STANDARD.encode(&transformed_bytes);
+
+        let response = json!({
+            "data": data_base64
+        });
+
+        axum::Json(response)
     }
 
     let admin = deps.admin();
@@ -289,6 +310,260 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
         .await;
 
     assert_eq!(response, Ok(vec![Value::U64(2)]));
+}
+
+#[test]
+async fn component_transformer_env_var(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
+        while let Some(field) = multipart.next_field().await.unwrap() {
+            let name = field.name().unwrap().to_string();
+            let data = field.bytes().await.unwrap();
+            debug!("Length of `{}` is {} bytes", name, data.len());
+
+            match name.as_str() {
+                "component" => {
+                    info!("Received component data");
+                }
+                "metadata" => {
+                    let json =
+                        std::str::from_utf8(&data).expect("Failed to parse metadata as UTF-8");
+                    info!("Metadata: {}", json);
+                }
+                _ => {
+                    let value = std::str::from_utf8(&data).expect("Failed to parse field as UTF-8");
+                    info!("Configuration field: {} = {}", name, value);
+                }
+            }
+        }
+
+        let response = json!({
+            "env": {
+                "TEST_ENV_VAR_2": "value_2"
+            }
+        });
+
+        axum::Json(response)
+    }
+
+    let admin = deps.admin();
+
+    let app = Router::new().route("/transform", post(transform));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let port = listener.local_addr().unwrap().port();
+
+    let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let component_id = admin
+        .component("environment-service")
+        .unique()
+        .with_env(vec![("TEST_ENV_VAR_1".to_string(), "value_1".to_string())])
+        .store()
+        .await;
+
+    admin
+        .create_plugin(PluginDefinitionCreation {
+            name: "component-transformer-env".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::ComponentTransformer(
+                ComponentTransformerDefinition {
+                    provided_wit_package: None,
+                    json_schema: None,
+                    validate_url: "not-used".to_string(),
+                    transform_url: format!("http://localhost:{port}/transform"),
+                },
+            ),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
+
+    admin
+        .install_plugin_to_component(
+            &component_id,
+            "component-transformer-env",
+            "v1",
+            0,
+            HashMap::new(),
+        )
+        .await;
+
+    server_handle.abort();
+
+    let worker = admin
+        .start_worker_with(
+            &component_id,
+            "worker1",
+            vec![],
+            HashMap::from_iter(vec![("TEST_ENV_VAR_3".to_string(), "value_3".to_string())]),
+        )
+        .await;
+
+    let response = admin
+        .invoke_and_await(&worker, "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+
+    let response_map = {
+        assert!(response.len() == 1);
+
+        let_assert!(Value::Result(Ok(Some(response))) = &response[0]);
+        let_assert!(Value::List(response) = response.as_ref());
+        response
+            .iter()
+            .map(|env_var| {
+                let_assert!(Value::Tuple(elems) = env_var);
+                let_assert!([Value::String(key), Value::String(value)] = elems.as_slice());
+                (key.to_owned(), value.to_owned())
+            })
+            .collect::<HashMap<_, _>>()
+    };
+
+    assert_eq!(
+        response_map.get("TEST_ENV_VAR_1"),
+        Some(&"value_1".to_string())
+    );
+    assert_eq!(
+        response_map.get("TEST_ENV_VAR_2"),
+        Some(&"value_2".to_string())
+    );
+    assert_eq!(
+        response_map.get("TEST_ENV_VAR_3"),
+        Some(&"value_3".to_string())
+    );
+}
+
+#[test]
+async fn component_transformer_ifs(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
+        while let Some(field) = multipart.next_field().await.unwrap() {
+            let name = field.name().unwrap().to_string();
+            let data = field.bytes().await.unwrap();
+            debug!("Length of `{}` is {} bytes", name, data.len());
+
+            match name.as_str() {
+                "component" => {
+                    info!("Received component data");
+                }
+                "metadata" => {
+                    let json =
+                        std::str::from_utf8(&data).expect("Failed to parse metadata as UTF-8");
+                    info!("Metadata: {}", json);
+                }
+                _ => {
+                    let value = std::str::from_utf8(&data).expect("Failed to parse field as UTF-8");
+                    info!("Configuration field: {} = {}", name, value);
+                }
+            }
+        }
+
+        let file_content_base64 = base64::engine::general_purpose::STANDARD.encode("foobar");
+
+        let response = json!({
+            "additionalFiles": [
+                {
+                    "path": "/files/foo.txt",
+                    "permissions": "read-only",
+                    "content": file_content_base64
+                }
+            ]
+        });
+
+        axum::Json(response)
+    }
+
+    let admin = deps.admin();
+
+    let app = Router::new().route("/transform", post(transform));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let port = listener.local_addr().unwrap().port();
+
+    let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let component_files = admin
+        .add_initial_component_files(&[(
+            "ifs-update/files/bar.txt",
+            "/files/bar.txt",
+            ComponentFilePermissions::ReadOnly,
+        )])
+        .await;
+
+    let component_id = admin
+        .component("file-service")
+        .unique()
+        .with_files(&component_files)
+        .store()
+        .await;
+
+    admin
+        .create_plugin(PluginDefinitionCreation {
+            name: "component-transformer-ifs".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::ComponentTransformer(
+                ComponentTransformerDefinition {
+                    provided_wit_package: None,
+                    json_schema: None,
+                    validate_url: "not-used".to_string(),
+                    transform_url: format!("http://localhost:{port}/transform"),
+                },
+            ),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
+
+    admin
+        .install_plugin_to_component(
+            &component_id,
+            "component-transformer-ifs",
+            "v1",
+            0,
+            HashMap::new(),
+        )
+        .await;
+
+    server_handle.abort();
+
+    let worker_id = admin.start_worker(&component_id, "worker1").await;
+
+    let result_foo = admin
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{read-file}",
+            vec!["/files/foo.txt".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result_foo,
+        vec![Value::Result(Ok(Some(Box::new(Value::String(
+            "foobar".to_string()
+        )))))]
+    );
+
+    let result_bar = admin
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{read-file}",
+            vec!["/files/bar.txt".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result_bar,
+        vec![Value::Result(Ok(Some(Box::new(Value::String(
+            "bar\n".to_string()
+        )))))]
+    );
 }
 
 #[test]
@@ -810,15 +1085,11 @@ async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 /// Test that a component can be invoked after a plugin is unregistered that it depends on
 #[test]
 async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let user = deps.user().await;
 
-    let component_id = admin
-        .component("app_and_library_app")
-        .unique()
-        .store()
-        .await;
+    let component_id = user.component("app_and_library_app").unique().store().await;
 
-    let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_library").await;
+    let plugin_wasm_key = user.add_plugin_wasm("app_and_library_library").await;
 
     let plugin_definition = PluginDefinitionCreation {
         name: "library-plugin-3".to_string(),
@@ -832,19 +1103,18 @@ async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing:
         scope: PluginScope::Global(Empty {}),
     };
 
-    admin.create_plugin(plugin_definition.clone()).await;
+    user.create_plugin(plugin_definition.clone()).await;
 
-    let _installation_id = admin
+    let _installation_id = user
         .install_plugin_to_component(&component_id, "library-plugin-3", "v1", 0, HashMap::new())
         .await;
 
-    admin
-        .delete_plugin(admin.account_id.clone(), "library-plugin-3", "v1")
+    user.delete_plugin(user.account_id.clone(), "library-plugin-3", "v1")
         .await;
 
-    let worker = admin.start_worker(&component_id, "worker1").await;
+    let worker = user.start_worker(&component_id, "worker1").await;
 
-    let response = admin
+    let response = user
         .invoke_and_await(
             &worker,
             "it:app-and-library-app/app-api.{app-function}",
