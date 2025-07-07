@@ -341,16 +341,7 @@ fn get_http_request_begin_idx<Ctx: WorkerCtx>(
             "No matching HTTP request is associated with resource handle"
         ))
     })?;
-    let begin_idx = *ctx
-        .state
-        .open_function_table
-        .get(&request_state.root_handle)
-        .ok_or_else(|| {
-            StreamError::Trap(anyhow!(
-                "No matching BeginRemoteWrite index was found for the open HTTP request"
-            ))
-        })?;
-    Ok(begin_idx)
+    Ok(request_state.begin_index)
 }
 
 fn get_http_stream_request<Ctx: WorkerCtx>(

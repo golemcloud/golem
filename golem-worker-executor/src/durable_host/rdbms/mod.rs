@@ -87,7 +87,7 @@ where
     let interface = get_db_connection_interface::<T>();
     ctx.observe_function_call(interface.as_str(), "begin-transaction");
 
-    let begin_oplog_index = ctx
+    let begin_index = ctx
         .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
         .await?;
 
@@ -98,12 +98,8 @@ where
         .pool_key
         .clone();
 
-    let entry = RdbmsTransactionEntry::new(pool_key, RdbmsTransactionState::New);
+    let entry = RdbmsTransactionEntry::new(pool_key, RdbmsTransactionState::New, begin_index);
     let resource = ctx.as_wasi_view().table().push(entry)?;
-    let handle = resource.rep();
-    ctx.state
-        .open_function_table
-        .insert(handle, begin_oplog_index);
     Ok(Ok(resource))
 }
 
@@ -127,7 +123,7 @@ where
         "execute",
         DurableFunctionType::WriteRemote,
     )
-    .await?;
+        .await?;
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_execute(statement, params, ctx, entry).await;
@@ -160,7 +156,7 @@ where
         "query",
         DurableFunctionType::WriteRemote,
     )
-    .await?;
+        .await?;
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_query(statement, params, ctx, entry).await;
@@ -192,16 +188,16 @@ where
     E: From<RdbmsError>,
 {
     let interface = get_db_connection_interface::<T>();
-    let begin_oplog_idx = ctx
+    let begin_index = ctx
         .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
         .await?;
     let durability = Durability::<RdbmsRequest<T>, SerializableError>::new(
         ctx,
         interface.leak(),
         "query-stream",
-        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
     )
-    .await?;
+        .await?;
 
     let result = if durability.is_live() {
         let result = db_connection_query_stream(statement, params, ctx, entry);
@@ -212,21 +208,22 @@ where
     };
     match result {
         Ok(request) => {
-            let entry = RdbmsResultStreamEntry::new(request, RdbmsResultStreamState::New, None);
+            let entry = RdbmsResultStreamEntry::new(
+                request,
+                RdbmsResultStreamState::New,
+                None,
+                begin_index,
+            );
             let resource = ctx.as_wasi_view().table().push(entry)?;
-            let handle = resource.rep();
-            ctx.state
-                .open_function_table
-                .insert(handle, begin_oplog_idx);
             Ok(Ok(resource))
         }
         Err(error) => {
             ctx.end_durable_function(
                 &DurableFunctionType::WriteRemoteBatched(None),
-                begin_oplog_idx,
+                begin_index,
                 false,
             )
-            .await?;
+                .await?;
 
             Ok(Err(error.into()))
         }
@@ -275,15 +272,14 @@ where
     R: FromRdbmsValue<T::DbColumn>,
 {
     let interface = get_db_result_stream_interface::<T>();
-    let handle = entry.rep();
-    let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+    let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
     let durability = Durability::<Vec<T::DbColumn>, SerializableError>::new(
         ctx,
         interface.leak(),
         "get-columns",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-    .await?;
+        .await?;
 
     let result = if durability.is_live() {
         let query_stream = get_db_query_stream(ctx, entry).await;
@@ -320,8 +316,7 @@ where
     R: FromRdbmsValue<crate::services::rdbms::DbRow<T::DbValue>>,
 {
     let interface = get_db_result_stream_interface::<T>();
-    let handle = entry.rep();
-    let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+    let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
     let durability = Durability::<
         Option<Vec<crate::services::rdbms::DbRow<T::DbValue>>>,
         SerializableError,
@@ -331,7 +326,7 @@ where
         "get-next",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-    .await?;
+        .await?;
 
     let result = if durability.is_live() {
         let query_stream = get_db_query_stream(ctx, entry).await;
@@ -374,17 +369,17 @@ where
     let interface = get_db_result_stream_interface::<T>();
     ctx.observe_function_call(interface.as_str(), "drop");
 
-    let handle = entry.rep();
     let entry = ctx
         .as_wasi_view()
         .table()
         .delete::<RdbmsResultStreamEntry<T>>(entry)?;
 
-    if entry.transaction_handle.is_none() {
-        end_durable_function_if_open(ctx, handle).await?;
-    } else {
-        ctx.state.open_function_table.remove(&handle);
-    }
+    ctx.end_durable_function(
+        &DurableFunctionType::WriteRemoteBatched(None),
+        entry.begin_index,
+        false,
+    )
+        .await?;
 
     Ok(())
 }
@@ -404,15 +399,14 @@ where
     E: From<RdbmsError>,
 {
     let interface = get_db_transaction_interface::<T>();
-    let handle = entry.rep();
-    let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+    let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
     let durability = Durability::<crate::services::rdbms::DbResult<T>, SerializableError>::new(
         ctx,
         interface.leak(),
         "query",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-    .await?;
+        .await?;
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_query(statement, params, ctx, entry).await;
@@ -445,15 +439,14 @@ where
     E: From<RdbmsError>,
 {
     let interface = get_db_transaction_interface::<T>();
-    let handle = entry.rep();
-    let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+    let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
     let durability = Durability::<u64, SerializableError>::new(
         ctx,
         interface.leak(),
         "execute",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-    .await?;
+        .await?;
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_execute(statement, params, ctx, entry).await;
@@ -479,14 +472,14 @@ where
 {
     let handle = entry.rep();
     let interface = get_db_transaction_interface::<T>();
-    let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+    let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
     let durability = Durability::<RdbmsRequest<T>, SerializableError>::new(
         ctx,
         interface.leak(),
         "query-stream",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-    .await?;
+        .await?;
 
     let result = if durability.is_live() {
         let result = db_transaction_query_stream(statement, params, ctx, entry);
@@ -497,13 +490,13 @@ where
     };
     match result {
         Ok(request) => {
-            let entry =
-                RdbmsResultStreamEntry::new(request, RdbmsResultStreamState::New, Some(handle));
+            let entry = RdbmsResultStreamEntry::new(
+                request,
+                RdbmsResultStreamState::New,
+                Some(handle),
+                begin_oplog_idx,
+            );
             let resource = ctx.as_wasi_view().table().push(entry)?;
-            let handle = resource.rep();
-            ctx.state
-                .open_function_table
-                .insert(handle, begin_oplog_idx);
             Ok(Ok(resource))
         }
         Err(error) => Ok(Err(error.into())),
@@ -520,15 +513,14 @@ where
     E: From<RdbmsError>,
 {
     let interface = get_db_transaction_interface::<T>();
-    let handle = entry.rep();
-    let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+    let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
     let durability = Durability::<(), SerializableError>::new(
         ctx,
         interface.leak(),
         "rollback",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-    .await?;
+        .await?;
 
     let result = if durability.is_live() {
         let result = db_transaction_rollback(ctx, entry).await;
@@ -537,7 +529,12 @@ where
         durability.replay(ctx).await
     };
 
-    end_durable_function_if_open(ctx, handle).await?;
+    ctx.end_durable_function(
+        &DurableFunctionType::WriteRemoteBatched(None),
+        begin_oplog_idx,
+        false,
+    )
+        .await?;
 
     Ok(result.map_err(|e| e.into()))
 }
@@ -552,15 +549,14 @@ where
     E: From<RdbmsError>,
 {
     let interface = get_db_transaction_interface::<T>();
-    let handle = entry.rep();
-    let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+    let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
     let durability = Durability::<(), SerializableError>::new(
         ctx,
         interface.leak(),
         "commit",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-    .await?;
+        .await?;
 
     let result = if durability.is_live() {
         let result = db_transaction_commit(ctx, entry).await;
@@ -569,7 +565,11 @@ where
         durability.replay(ctx).await
     };
 
-    end_durable_function_if_open(ctx, handle).await?;
+    ctx.end_durable_function(
+        &DurableFunctionType::WriteRemoteBatched(None),
+        begin_oplog_idx,
+        false,
+    ).await?;
 
     Ok(result.map_err(|e| e.into()))
 }
@@ -586,7 +586,6 @@ where
 
     ctx.observe_function_call(interface.as_str(), "drop");
 
-    let handle = entry.rep();
     let entry = ctx
         .as_wasi_view()
         .table()
@@ -596,8 +595,11 @@ where
         let _ = transaction.rollback_if_open().await;
     }
 
-    end_durable_function_if_open(ctx, handle).await?;
-
+    ctx.end_durable_function(
+        &DurableFunctionType::WriteRemoteBatched(None),
+        entry.begin_index,
+        false,
+    ).await?;
     Ok(())
 }
 
@@ -620,6 +622,7 @@ pub struct RdbmsResultStreamEntry<T: RdbmsType + Clone + 'static> {
     request: RdbmsRequest<T>,
     state: RdbmsResultStreamState<T>,
     transaction_handle: Option<u32>,
+    begin_index: OplogIndex,
 }
 
 impl<T: RdbmsType + Clone + 'static> RdbmsResultStreamEntry<T> {
@@ -627,11 +630,13 @@ impl<T: RdbmsType + Clone + 'static> RdbmsResultStreamEntry<T> {
         request: RdbmsRequest<T>,
         state: RdbmsResultStreamState<T>,
         transaction_handle: Option<u32>,
+        begin_index: OplogIndex,
     ) -> Self {
         Self {
             request,
             state,
             transaction_handle,
+            begin_index,
         }
     }
 
@@ -713,11 +718,20 @@ where
 pub struct RdbmsTransactionEntry<T: RdbmsType + Clone + 'static> {
     pool_key: RdbmsPoolKey,
     state: RdbmsTransactionState<T>,
+    begin_index: OplogIndex,
 }
 
 impl<T: RdbmsType + Clone + 'static> RdbmsTransactionEntry<T> {
-    fn new(pool_key: RdbmsPoolKey, state: RdbmsTransactionState<T>) -> Self {
-        Self { pool_key, state }
+    fn new(
+        pool_key: RdbmsPoolKey,
+        state: RdbmsTransactionState<T>,
+        begin_index: OplogIndex,
+    ) -> Self {
+        Self {
+            pool_key,
+            state,
+            begin_index,
+        }
     }
 
     fn set_open(&mut self, value: Arc<dyn crate::services::rdbms::DbTransaction<T> + Send + Sync>) {
@@ -1063,37 +1077,4 @@ where
         result.push(v);
     }
     Ok(result)
-}
-
-async fn end_durable_function_if_open<Ctx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    handle: u32,
-) -> anyhow::Result<Option<OplogIndex>>
-where
-    Ctx: WorkerCtx,
-{
-    let begin_oplog_idx = ctx.state.open_function_table.get(&handle).cloned();
-    if let Some(begin_oplog_idx) = begin_oplog_idx {
-        ctx.end_durable_function(
-            &DurableFunctionType::WriteRemoteBatched(None),
-            begin_oplog_idx,
-            false,
-        )
-        .await?;
-        ctx.state.open_function_table.remove(&handle);
-
-        Ok(Some(begin_oplog_idx))
-    } else {
-        Ok(None)
-    }
-}
-
-fn get_begin_oplog_index<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    handle: u32,
-) -> anyhow::Result<OplogIndex> {
-    let begin_oplog_idx = *ctx.state.open_function_table.get(&handle).ok_or_else(|| {
-        anyhow!("No matching BeginRemoteWrite index was found for the open Rdbms request")
-    })?;
-    Ok(begin_oplog_idx)
 }

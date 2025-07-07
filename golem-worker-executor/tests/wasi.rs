@@ -31,7 +31,6 @@ use golem_test_framework::dsl::{
 };
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use http::{HeaderMap, StatusCode};
-use serde_json::json;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, Mutex};
@@ -935,198 +934,6 @@ async fn file_update_in_the_middle_of_exported_function(
 
 #[test]
 #[tracing::instrument]
-async fn http_client(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/",
-                post(move |headers: HeaderMap, body: Bytes| async move {
-                    let header = headers.get("X-Test").unwrap().to_str().unwrap();
-                    let body = String::from_utf8(body.to_vec()).unwrap();
-                    format!("response is {header} {body}")
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
-    );
-
-    let component_id = executor.component("http-client").store().await;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), host_http_port.to_string());
-    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
-
-    let worker_id = executor
-        .start_worker_with(&component_id, "http-client-1", vec![], env)
-        .await;
-    let rx = executor.capture_output(&worker_id).await;
-
-    let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
-        .await;
-
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
-    drop(rx);
-    http_server.abort();
-
-    check!(
-        result
-            == Ok(vec![Value::String(
-                "200 response is test-header test-body".to_string()
-            )])
-    );
-}
-
-#[test]
-#[tracing::instrument]
-async fn http_client_using_reqwest(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
-    let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let captured_body_clone = captured_body.clone();
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/post-example",
-                post(move |headers: HeaderMap, body: Bytes| async move {
-                    let header = headers
-                        .get("X-Test")
-                        .map(|h| h.to_str().unwrap().to_string())
-                        .unwrap_or("no X-Test header".to_string());
-                    let body = String::from_utf8(body.to_vec()).unwrap();
-                    {
-                        let mut capture = captured_body_clone.lock().unwrap();
-                        *capture = Some(body.clone());
-                    }
-                    format!(
-                        "{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}"
-                    )
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
-    );
-
-    let component_id = executor.component("http-client-2").store().await;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), host_http_port.to_string());
-
-    let worker_id = executor
-        .start_worker_with(&component_id, "http-client-reqwest-1", vec![], env)
-        .await;
-
-    let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
-        .await
-        .unwrap();
-    let captured_body = captured_body.lock().unwrap().clone().unwrap();
-
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
-    http_server.abort();
-
-    check!(result == vec![Value::String("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }".to_string())]);
-    check!(
-        captured_body
-            == "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
-                .to_string()
-    );
-}
-
-#[test]
-#[tracing::instrument]
-async fn outgoing_http_contains_idempotency_key(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/post-example",
-                post(move |headers: HeaderMap| async move {
-                    let idempotency_key = headers
-                        .get("idempotency-key")
-                        .map(|h| h.to_str().unwrap().to_string());
-                    let idempotency_key_str = idempotency_key.map(|i| i.to_string());
-                    json!({
-                        "percentage": 0.0,
-                        "message": idempotency_key_str
-                    })
-                    .to_string()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
-    );
-
-    let component_id = executor.component("http-client-2").store().await;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), host_http_port.to_string());
-
-    let worker_id = executor
-        .start_worker_with(
-            &component_id,
-            "outgoing-http-contains-idempotency-key",
-            vec![],
-            env,
-        )
-        .await;
-
-    let key = IdempotencyKey::new("177db03d-3234-4a04-8d03-e8d042348abd".to_string());
-    let result = executor
-        .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{run}", vec![])
-        .await
-        .unwrap();
-
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
-    http_server.abort();
-
-    check!(
-        result
-            == vec![Value::String(
-                "200 ExampleResponse { percentage: 0.0, message: Some(\"25b5624b-3a2a-5574-bdad-418287838cba\") }"
-                    .to_string()
-            )]
-    );
-}
-
-#[test]
-#[tracing::instrument]
 async fn environment_service(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1314,6 +1121,115 @@ async fn http_client_interrupting_response_stream(
 
     let worker_id = executor
         .start_worker_with(&component_id, "http-client-2", vec![], env)
+        .await;
+    let rx = executor.capture_output_with_termination(&worker_id).await;
+
+    let key = IdempotencyKey::fresh();
+
+    let executor_clone = executor.clone();
+    let worker_id_clone = worker_id.clone();
+    let key_clone = key.clone();
+    let _handle = spawn(
+        async move {
+            let _ = executor_clone
+                .invoke_and_await_with_key(
+                    &worker_id_clone,
+                    &key_clone,
+                    "golem:it/api.{slow-body-stream}",
+                    vec![],
+                )
+                .await;
+        }
+        .in_current_span(),
+    );
+
+    signal_rx.recv().await.unwrap();
+
+    executor.interrupt(&worker_id).await; // Potential "body stream was interrupted" error
+
+    let _ = drain_connection(rx).await;
+
+    executor.resume(&worker_id, false).await;
+
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .await;
+    executor.log_output(&worker_id).await;
+
+    let result = executor
+        .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{slow-body-stream}", vec![])
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    drop(executor);
+
+    http_server.abort();
+
+    check!(result == Ok(vec![Value::U64(100 * 1024)]));
+
+    let idempotency_keys = idempotency_keys.lock().unwrap();
+    check!(idempotency_keys.len() == 2);
+    check!(idempotency_keys[0] == idempotency_keys[1]);
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_client_interrupting_response_stream_async(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let (signal_tx, mut signal_rx) = tokio::sync::mpsc::unbounded_channel();
+    let idempotency_keys = Arc::new(Mutex::new(Vec::new()));
+    let idempotency_keys_clone = idempotency_keys.clone();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/big-byte-array",
+                get(move |headers: HeaderMap| async move {
+                    let idempotency_key = headers
+                        .get("idempotency-key")
+                        .map(|h| h.to_str().unwrap().to_string());
+                    if let Some(key) = idempotency_key {
+                        let mut keys = idempotency_keys_clone.lock().unwrap();
+                        keys.push(key);
+                    }
+                    let stream = stream::iter(0..100)
+                        .throttle(Duration::from_millis(20))
+                        .map(move |i| {
+                            if i == 50 {
+                                signal_tx.send(()).unwrap();
+                            }
+                            Ok::<Bytes, BoxError>(Bytes::from(vec![0; 1024]))
+                        });
+
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/octet-stream")
+                        .body(axum::body::Body::from_stream(stream))
+                        .unwrap()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component_id = executor.component("http-client-3").store().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_worker_with(&component_id, "http-client-2-async", vec![], env)
         .await;
     let rx = executor.capture_output_with_termination(&worker_id).await;
 

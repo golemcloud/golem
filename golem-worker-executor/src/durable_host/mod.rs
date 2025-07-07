@@ -2231,8 +2231,8 @@ pub(crate) enum HttpRequestCloseOwner {
 struct HttpRequestState {
     /// Who is responsible for calling end_function and removing entries from the table
     pub close_owner: HttpRequestCloseOwner,
-    /// The handle of the FutureIncomingResponse that is registered into the open_function_table
-    pub root_handle: u32,
+    /// The BeginRemoteWrite entry's index
+    pub begin_index: OplogIndex,
     /// Information about the request to be included in the oplog
     pub request: SerializableHttpRequest,
     /// SpanId
@@ -2262,7 +2262,6 @@ struct PrivateDurableWorkerState {
     overridden_retry_policy: Option<RetryConfig>,
     persistence_level: PersistenceLevel,
     assume_idempotence: bool,
-    open_function_table: HashMap<u32, OplogIndex>,
 
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
@@ -2345,7 +2344,6 @@ impl PrivateDurableWorkerState {
             overridden_retry_policy: None,
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
-            open_function_table: HashMap::new(),
             open_http_requests: HashMap::new(),
             snapshotting_mode: None,
             indexed_resources: HashMap::new(),

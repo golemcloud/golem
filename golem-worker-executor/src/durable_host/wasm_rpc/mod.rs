@@ -34,8 +34,8 @@ use golem_common::model::exports::function_by_name;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
 use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduledAction, TargetWorkerId,
-    WorkerId,
+    AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction,
+    TargetWorkerId, WorkerId,
 };
 use golem_common::serialization::try_deserialize;
 use golem_wasm_ast::analysis::analysed_type;
@@ -50,7 +50,7 @@ use golem_wasm_rpc::{
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use tracing::{error, warn, Instrument};
+use tracing::{error, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::cli::environment::Host;
@@ -414,6 +414,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     handle,
                     request,
                     span_id: span.span_id().clone(),
+                    begin_index,
                 }),
             })?;
             Ok(fut)
@@ -428,23 +429,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     function_params,
                     idempotency_key,
                     span_id: span.span_id().clone(),
+                    begin_index,
                 }),
             })?;
             Ok(fut)
         };
 
-        match &result {
-            Ok(future_invoke_result) => {
-                // We have to call state.end_function to mark the completion of the remote write operation when we get a response.
-                // For that we need to store begin_index and associate it with the response handle.
-                let handle = future_invoke_result.rep();
-                self.state.open_function_table.insert(handle, begin_index);
-            }
-            Err(_) => {
-                self.state
-                    .end_function(&DurableFunctionType::WriteRemote, begin_index)
-                    .await?;
-            }
+        if result.is_err() {
+            self.state
+                .end_function(&DurableFunctionType::WriteRemote, begin_index)
+                .await?;
         }
 
         result
@@ -609,11 +603,13 @@ enum FutureInvokeResultState {
         handle:
             AbortOnDropJoinHandle<Result<Result<Option<ValueAndType>, RpcError>, anyhow::Error>>,
         span_id: SpanId,
+        begin_index: OplogIndex,
     },
     Completed {
         request: SerializableInvokeRequest,
         result: Result<Result<Option<ValueAndType>, RpcError>, anyhow::Error>,
         span_id: SpanId,
+        begin_index: OplogIndex,
     },
     Deferred {
         remote_worker_id: OwnedWorkerId,
@@ -624,9 +620,11 @@ enum FutureInvokeResultState {
         function_params: Vec<WitValue>,
         idempotency_key: IdempotencyKey,
         span_id: SpanId,
+        begin_index: OplogIndex,
     },
     Consumed {
         request: SerializableInvokeRequest,
+        begin_index: OplogIndex,
     },
 }
 
@@ -639,6 +637,15 @@ impl FutureInvokeResultState {
             Self::Consumed { .. } => panic!("unexpected state: Consumed"),
         }
     }
+
+    pub fn begin_index(&self) -> OplogIndex {
+        match self {
+            Self::Pending { begin_index, .. } => *begin_index,
+            Self::Completed { begin_index, .. } => *begin_index,
+            Self::Deferred { begin_index, .. } => *begin_index,
+            Self::Consumed { begin_index, .. } => *begin_index,
+        }
+    }
 }
 
 #[async_trait]
@@ -648,12 +655,14 @@ impl SubscribeAny for FutureInvokeResultState {
             handle,
             request,
             span_id,
+            begin_index,
         } = self
         {
             *self = Self::Completed {
                 result: handle.await,
                 request: request.clone(),
                 span_id: span_id.clone(),
+                begin_index: *begin_index,
             };
         }
     }
@@ -694,7 +703,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             entry.span_id().clone()
         };
 
-        let handle = this.rep();
         if self.state.is_live() || self.state.snapshotting_mode.is_some() {
             let stack = self
                 .state
@@ -708,123 +716,162 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 .downcast_mut::<FutureInvokeResultState>()
                 .unwrap();
 
-            let (result, serializable_invoke_request, serializable_invoke_result) = match entry {
-                FutureInvokeResultState::Consumed { request } => {
-                    let message = "future-invoke-result already consumed";
-                    (
-                        Err(anyhow!(message)),
-                        request.clone(),
-                        SerializableInvokeResult::Failed(SerializableError::Generic {
-                            message: message.to_string(),
-                        }),
-                    )
-                }
-                FutureInvokeResultState::Pending { request, .. } => {
-                    (Ok(None), request.clone(), SerializableInvokeResult::Pending)
-                }
-                FutureInvokeResultState::Completed { request, .. } => {
-                    let request = request.clone();
-                    let result =
-                        std::mem::replace(entry, FutureInvokeResultState::Consumed { request });
-                    if let FutureInvokeResultState::Completed {
-                        request, result, ..
-                    } = result
-                    {
-                        match result {
-                            Ok(Ok(result)) => (
-                                Ok(Some(Ok(result.clone()))),
-                                request,
-                                SerializableInvokeResult::Completed(Ok(result)),
-                            ),
-                            Ok(Err(rpc_error)) => (
-                                Ok(Some(Err(rpc_error.clone().into()))),
-                                request,
-                                SerializableInvokeResult::Completed(Err(rpc_error)),
-                            ),
-                            Err(err) => {
-                                let serializable_err = (&err).into();
-                                (
-                                    Err(err),
-                                    request,
-                                    SerializableInvokeResult::Failed(serializable_err),
-                                )
-                            }
-                        }
-                    } else {
-                        panic!("unexpected state: not FutureInvokeResultState::Completed")
+            let (result, serializable_invoke_request, serializable_invoke_result, begin_index) =
+                match entry {
+                    FutureInvokeResultState::Consumed {
+                        request,
+                        begin_index,
+                    } => {
+                        let begin_index = *begin_index;
+                        let message = "future-invoke-result already consumed";
+                        (
+                            Err(anyhow!(message)),
+                            request.clone(),
+                            SerializableInvokeResult::Failed(SerializableError::Generic {
+                                message: message.to_string(),
+                            }),
+                            begin_index,
+                        )
                     }
-                }
-                FutureInvokeResultState::Deferred { .. } => {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    let handle = wasmtime_wasi::runtime::spawn(
-                        async move {
-                            let request = rx.await.map_err(|err| anyhow!(err))?;
-                            let FutureInvokeResultState::Deferred {
-                                remote_worker_id,
-                                self_worker_id,
-                                args,
-                                env,
-                                function_name,
-                                function_params,
-                                idempotency_key,
-                                ..
-                            } = request
-                            else {
-                                return Err(anyhow!(
-                                    "unexpected incoming response state".to_string()
-                                ));
-                            };
-                            Ok(rpc
-                                .invoke_and_await(
-                                    &remote_worker_id,
-                                    Some(idempotency_key),
+                    FutureInvokeResultState::Pending {
+                        request,
+                        begin_index,
+                        ..
+                    } => {
+                        let begin_index = *begin_index;
+
+                        (
+                            Ok(None),
+                            request.clone(),
+                            SerializableInvokeResult::Pending,
+                            begin_index,
+                        )
+                    }
+                    FutureInvokeResultState::Completed {
+                        request,
+                        begin_index,
+                        ..
+                    } => {
+                        let request = request.clone();
+                        let begin_index = *begin_index;
+                        let result = std::mem::replace(
+                            entry,
+                            FutureInvokeResultState::Consumed {
+                                request,
+                                begin_index,
+                            },
+                        );
+                        if let FutureInvokeResultState::Completed {
+                            request, result, ..
+                        } = result
+                        {
+                            match result {
+                                Ok(Ok(result)) => (
+                                    Ok(Some(Ok(result.clone()))),
+                                    request,
+                                    SerializableInvokeResult::Completed(Ok(result)),
+                                    begin_index,
+                                ),
+                                Ok(Err(rpc_error)) => (
+                                    Ok(Some(Err(rpc_error.clone().into()))),
+                                    request,
+                                    SerializableInvokeResult::Completed(Err(rpc_error)),
+                                    begin_index,
+                                ),
+                                Err(err) => {
+                                    let serializable_err = (&err).into();
+                                    (
+                                        Err(err),
+                                        request,
+                                        SerializableInvokeResult::Failed(serializable_err),
+                                        begin_index,
+                                    )
+                                }
+                            }
+                        } else {
+                            panic!("unexpected state: not FutureInvokeResultState::Completed")
+                        }
+                    }
+                    FutureInvokeResultState::Deferred { begin_index, .. } => {
+                        let begin_index = *begin_index;
+
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        let handle = wasmtime_wasi::runtime::spawn(
+                            async move {
+                                let request = rx.await.map_err(|err| anyhow!(err))?;
+                                let FutureInvokeResultState::Deferred {
+                                    remote_worker_id,
+                                    self_worker_id,
+                                    args,
+                                    env,
                                     function_name,
                                     function_params,
-                                    &self_worker_id,
-                                    &args,
-                                    &env,
-                                    stack,
-                                )
-                                .await)
-                        }
-                        .in_current_span(),
-                    );
-                    let FutureInvokeResultState::Deferred {
-                        remote_worker_id,
-                        function_name,
-                        function_params,
-                        idempotency_key,
-                        span_id,
-                        ..
-                    } = &entry
-                    else {
-                        return Err(anyhow!("unexpected state entry".to_string()));
-                    };
-                    let request = SerializableInvokeRequest {
-                        remote_worker_id: remote_worker_id.worker_id(),
-                        idempotency_key: idempotency_key.clone(),
-                        function_name: function_name.clone(),
-                        function_params: try_get_typed_parameters(
-                            component_service,
-                            &remote_worker_id.account_id,
-                            &remote_worker_id.worker_id.component_id,
+                                    idempotency_key,
+                                    ..
+                                } = request
+                                else {
+                                    return Err(anyhow!(
+                                        "unexpected incoming response state".to_string()
+                                    ));
+                                };
+                                Ok(rpc
+                                    .invoke_and_await(
+                                        &remote_worker_id,
+                                        Some(idempotency_key),
+                                        function_name,
+                                        function_params,
+                                        &self_worker_id,
+                                        &args,
+                                        &env,
+                                        stack,
+                                    )
+                                    .await)
+                            }
+                            .in_current_span(),
+                        );
+                        let FutureInvokeResultState::Deferred {
+                            remote_worker_id,
                             function_name,
                             function_params,
+                            idempotency_key,
+                            span_id,
+                            ..
+                        } = &entry
+                        else {
+                            return Err(anyhow!("unexpected state entry".to_string()));
+                        };
+                        let request = SerializableInvokeRequest {
+                            remote_worker_id: remote_worker_id.worker_id(),
+                            idempotency_key: idempotency_key.clone(),
+                            function_name: function_name.clone(),
+                            function_params: try_get_typed_parameters(
+                                component_service,
+                                &remote_worker_id.account_id,
+                                &remote_worker_id.worker_id.component_id,
+                                function_name,
+                                function_params,
+                            )
+                            .await,
+                        };
+
+                        tx.send(std::mem::replace(
+                            entry,
+                            FutureInvokeResultState::Pending {
+                                handle,
+                                request: request.clone(),
+                                span_id: span_id.clone(),
+                                begin_index,
+                            },
+                        ))
+                        .map_err(|_| anyhow!("failed to send request to handler"))?;
+                        (
+                            Ok(None),
+                            request,
+                            SerializableInvokeResult::Pending,
+                            begin_index,
                         )
-                        .await,
-                    };
-                    tx.send(std::mem::replace(
-                        entry,
-                        FutureInvokeResultState::Pending {
-                            handle,
-                            request: request.clone(),
-                            span_id: span_id.clone(),
-                        },
-                    ))
-                    .map_err(|_| anyhow!("failed to send request to handler"))?;
-                    (Ok(None), request, SerializableInvokeResult::Pending)
-                }
-            };
+                    }
+                };
 
             if self.state.snapshotting_mode.is_none() {
                 self.state
@@ -842,17 +889,9 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     serializable_invoke_result,
                     SerializableInvokeResult::Pending
                 ) {
-                    match self.state.open_function_table.get(&handle) {
-                        Some(begin_index) => {
-                            self.state
-                                .end_function(&DurableFunctionType::WriteRemote, *begin_index)
-                                .await?;
-                            self.state.open_function_table.remove(&handle);
-                        }
-                        None => {
-                            warn!("No matching BeginRemoteWrite index was found when RPC response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
-                        }
-                    }
+                    self.state
+                        .end_function(&DurableFunctionType::WriteRemote, begin_index)
+                        .await?;
 
                     self.finish_span(&span_id).await?;
                 }
@@ -905,18 +944,18 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 .map(|v| v.unwrap());
 
             if let Ok(serialized_invoke_result) = serialized_invoke_result {
+                let entry = self.table().get_mut(&this)?;
+                let entry = entry
+                    .payload
+                    .as_any_mut()
+                    .downcast_mut::<FutureInvokeResultState>()
+                    .unwrap();
+                let begin_index = entry.begin_index();
+
                 if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
-                    match self.state.open_function_table.get(&handle) {
-                        Some(begin_index) => {
-                            self.state
-                                .end_function(&DurableFunctionType::WriteRemote, *begin_index)
-                                .await?;
-                            self.state.open_function_table.remove(&handle);
-                        }
-                        None => {
-                            warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
-                        }
-                    }
+                    self.state
+                        .end_function(&DurableFunctionType::WriteRemote, begin_index)
+                        .await?;
 
                     self.finish_span(&span_id).await?;
                 }
@@ -947,6 +986,14 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     SerializableInvokeResult::Failed(error) => Err(error.into()),
                 }
             } else {
+                let entry = self.table().get_mut(&this)?;
+                let entry = entry
+                    .payload
+                    .as_any_mut()
+                    .downcast_mut::<FutureInvokeResultState>()
+                    .unwrap();
+                let begin_index = entry.begin_index();
+
                 let serialized_invoke_result = self
                     .state
                     .oplog
@@ -961,17 +1008,9 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     serialized_invoke_result,
                     SerializableInvokeResultV1::Pending
                 ) {
-                    match self.state.open_function_table.get(&handle) {
-                        Some(begin_index) => {
-                            self.state
-                                .end_function(&DurableFunctionType::WriteRemote, *begin_index)
-                                .await?;
-                            self.state.open_function_table.remove(&handle);
-                        }
-                        None => {
-                            warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
-                        }
-                    }
+                    self.state
+                        .end_function(&DurableFunctionType::WriteRemote, begin_index)
+                        .await?;
                 }
 
                 match serialized_invoke_result {
