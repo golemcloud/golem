@@ -1655,7 +1655,7 @@ impl RunningWorker {
             parent.config(),
             WorkerConfig::new(
                 worker_metadata.worker_id.clone(),
-                worker_metadata.last_known_status.component_version,
+                component_metadata.version,
                 worker_metadata.args.clone(),
                 worker_env,
                 worker_metadata.last_known_status.skipped_regions.clone(),
