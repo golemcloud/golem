@@ -100,7 +100,7 @@ pub enum ParsedFunctionSite {
     Interface {
         name: String,
     },
-    PackagedInterface {
+        PackagedInterface {
         namespace: String,
         package: String,
         interface: String,
