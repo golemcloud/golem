@@ -9,7 +9,6 @@ import "golem/component/plugin_definition.proto";
 
 service PluginService {
   rpc ListPlugins (ListPluginsRequest) returns (ListPluginsResponse);
-  rpc ListPluginVersions (ListPluginVersionsRequest) returns (ListPluginsResponse);
   rpc CreatePlugin (CreatePluginRequest) returns (CreatePluginResponse);
   rpc GetPlugin (GetPluginRequest) returns (GetPluginResponse);
   rpc DeletePlugin (DeletePluginRequest) returns (DeletePluginResponse);
@@ -17,11 +16,7 @@ service PluginService {
 }
 
 message ListPluginsRequest {
-  optional golem.component.CloudPluginScope scope = 1;
-}
-
-message ListPluginVersionsRequest {
-  string name = 1;
+  golem.component.PluginScope scope = 1;
 }
 
 message ListPluginsResponse {
@@ -75,8 +70,9 @@ message GetPluginByIdResponse {
 }
 
 message DeletePluginRequest {
-  string name = 1;
-  string version = 2;
+  golem.common.AccountId account_id = 1;
+  string name = 2;
+  string version = 3;
 }
 
 message DeletePluginResponse {

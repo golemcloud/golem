@@ -20,7 +20,7 @@ use golem_common::model::auth::AuthCtx;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::PluginDefinition;
 use golem_common::model::plugin::PluginScope;
-use golem_common::model::Empty;
+use golem_common::model::{AccountId, Empty};
 use golem_common::recorded_http_api_request;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::{Path, Query};
@@ -43,48 +43,86 @@ impl PluginApi {
     #[oai(path = "/", method = "get", operation_id = "list_plugins")]
     pub async fn list_plugins(
         &self,
-        scope: Query<Option<PluginScope>>,
+        scope: Query<PluginScope>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<PluginDefinition>>> {
         let record = recorded_http_api_request!("list_plugins",);
         let auth = AuthCtx::new(token.secret());
 
-        let response = if let Some(scope) = scope.0 {
-            self.plugin_service
-                .list_plugins_for_scope(&auth, &scope)
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .map(|response| Json(response.into_iter().collect()))
-        } else {
-            self.plugin_service
-                .list_plugins(&auth)
-                .instrument(record.span.clone())
-                .await
-                .map_err(|e| e.into())
-                .map(|response| Json(response.into_iter().collect()))
-        };
-
-        record.result(response)
-    }
-
-    /// Lists all the registered versions of a specific plugin identified by its name
-    #[oai(path = "/:name", method = "get", operation_id = "list_plugin_versions")]
-    pub async fn list_plugin_versions(
-        &self,
-        name: Path<String>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<PluginDefinition>>> {
-        let record = recorded_http_api_request!("list_plugin_versions", plugin_name = name.0);
-        let auth = AuthCtx::new(token.secret());
-
         let response = self
             .plugin_service
-            .list_plugin_versions(&auth, &name)
+            .list_plugins_for_scope(&auth, &scope)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
             .map(|response| Json(response.into_iter().collect()));
+
+        record.result(response)
+    }
+
+    /// Gets a registered plugin by its name and version
+    #[oai(
+        path = "/:account_id/:name/:version",
+        method = "get",
+        operation_id = "get_plugin"
+    )]
+    pub async fn get_plugin(
+        &self,
+        account_id: Path<AccountId>,
+        name: Path<String>,
+        version: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<PluginDefinition>> {
+        let record = recorded_http_api_request!(
+            "get_plugin",
+            plugin_name = name.0,
+            plugin_version = version.0
+        );
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .plugin_service
+            .get(&auth, account_id.0, &name, &version)
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .and_then(|response| match response {
+                Some(response) => Ok(Json(response)),
+                None => Err(ComponentError::NotFound(Json(ErrorBody {
+                    error: "Plugin not found".to_string(),
+                }))),
+            });
+
+        record.result(response)
+    }
+
+    /// Deletes a registered plugin by its name and version
+    #[oai(
+        path = "/:account_id/:name/:version",
+        method = "delete",
+        operation_id = "delete_plugin"
+    )]
+    pub async fn delete_plugin(
+        &self,
+        account_id: Path<AccountId>,
+        name: Path<String>,
+        version: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "delete_plugin",
+            plugin_name = name.0,
+            plugin_version = version.0
+        );
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .plugin_service
+            .delete(&auth, account_id.0, &name, &version)
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}));
 
         record.result(response)
     }
@@ -164,70 +202,6 @@ impl PluginApi {
         let response = self
             .plugin_service
             .create_plugin(&auth, plugin.into())
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(|_| Json(Empty {}));
-
-        record.result(response)
-    }
-
-    /// Gets a registered plugin by its name and version
-    #[oai(path = "/:name/:version", method = "get", operation_id = "get_plugin")]
-    pub async fn get_plugin(
-        &self,
-        name: Path<String>,
-        version: Path<String>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<PluginDefinition>> {
-        let record = recorded_http_api_request!(
-            "get_plugin",
-            plugin_name = name.0,
-            plugin_version = version.0
-        );
-        let auth = AuthCtx::new(token.secret());
-
-        // FIXME: This endpoint cannot retrieve plugins registered in shared projects by other users.
-        // Pass account_id of the plugin as a parameter instead of getting it from auth.
-
-        let response = self
-            .plugin_service
-            .get_own(&auth, &name, &version)
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .and_then(|response| match response {
-                Some(response) => Ok(Json(response)),
-                None => Err(ComponentError::NotFound(Json(ErrorBody {
-                    error: "Plugin not found".to_string(),
-                }))),
-            });
-
-        record.result(response)
-    }
-
-    /// Deletes a registered plugin by its name and version
-    #[oai(
-        path = "/:name/:version",
-        method = "delete",
-        operation_id = "delete_plugin"
-    )]
-    pub async fn delete_plugin(
-        &self,
-        name: Path<String>,
-        version: Path<String>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<Empty>> {
-        let record = recorded_http_api_request!(
-            "delete_plugin",
-            plugin_name = name.0,
-            plugin_version = version.0
-        );
-        let auth = AuthCtx::new(token.secret());
-
-        let response = self
-            .plugin_service
-            .delete(&auth, &name, &version)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

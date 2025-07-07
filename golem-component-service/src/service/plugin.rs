@@ -156,7 +156,7 @@ impl PluginService {
 
     pub async fn list_plugins_for_scopes(
         &self,
-        owner: &PluginOwner,
+        owner: PluginOwner,
         scopes: Vec<PluginScope>,
     ) -> Result<Vec<PluginDefinition>, ComponentError> {
         let owner_record: PluginOwnerRow = owner.clone().into();

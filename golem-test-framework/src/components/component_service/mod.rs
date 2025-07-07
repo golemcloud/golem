@@ -145,7 +145,7 @@ pub trait ComponentService: Send + Sync {
             GolemClientProtocol::Http => {
                 let client = self.plugin_http_client(token).await;
 
-                let result = client.get_plugin(name, version).await;
+                let result = client.get_plugin(&owner.value, name, version).await;
 
                 match result {
                     Ok(def) => Ok(Some(PluginId(def.id))),
@@ -945,13 +945,20 @@ pub trait ComponentService: Send + Sync {
         }
     }
 
-    async fn delete_plugin(&self, token: &Uuid, name: &str, version: &str) -> crate::Result<()> {
+    async fn delete_plugin(
+        &self,
+        token: &Uuid,
+        owner: AccountId,
+        name: &str,
+        version: &str,
+    ) -> crate::Result<()> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => {
                 let mut client = self.plugin_grpc_client().await;
 
                 let request = authorised_request(
                     DeletePluginRequest {
+                        account_id: Some(owner.into()),
                         name: name.to_string(),
                         version: version.to_string(),
                     },
@@ -973,7 +980,7 @@ pub trait ComponentService: Send + Sync {
             GolemClientProtocol::Http => {
                 let client = self.plugin_http_client(token).await;
 
-                let result = client.delete_plugin(name, version).await;
+                let result = client.delete_plugin(&owner.value, name, version).await;
 
                 match result {
                     Ok(_) => Ok(()),
