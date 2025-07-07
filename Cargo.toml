@@ -38,6 +38,7 @@ exclude = [
     "test-components/file-write-read-delete",
     "test-components/flags-service",
     "test-components/golem-rust-tests",
+    "test-components/high-volume-logging",
     "test-components/http-client",
     "test-components/http-client-2",
     "test-components/ifs-update",
@@ -130,6 +131,7 @@ fred = { version = "=9.4.0", features = [
     "partial-tracing",
 ] } # pinned to 9.x to avoid conflicting cookie-factory dependencies
 futures = "0.3"
+futures-concurrency = "7.6.3"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
 gethostname = "0.5.0"

@@ -64,6 +64,7 @@ use uuid::Uuid;
 use wasmtime::Error;
 
 use crate::grpc::invocation::{CanStartWorker, GrpcInvokeRequest};
+use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
@@ -2652,7 +2653,8 @@ pub fn authorised_grpc_request<T>(request: T, access_token: &Uuid) -> Request<T>
 }
 
 pub struct WorkerEventStream {
-    inner: Pin<Box<dyn Stream<Item = Result<WorkerEvent, BroadcastStreamRecvError>> + Send>>,
+    inner:
+        Pin<Box<dyn Stream<Item = Result<InternalWorkerEvent, BroadcastStreamRecvError>> + Send>>,
 }
 
 impl WorkerEventStream {
@@ -2675,21 +2677,16 @@ impl Stream for WorkerEventStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let WorkerEventStream { inner } = self.get_mut();
         match inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(event))) => match &event {
-                WorkerEvent::Close => Poll::Ready(None),
-                WorkerEvent::StdOut { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
-                WorkerEvent::StdErr { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
-                WorkerEvent::Log { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
-                WorkerEvent::InvocationStart { .. } => {
-                    Poll::Ready(Some(Ok(event.try_into().unwrap())))
+            Poll::Ready(Some(Ok(event))) => {
+                Poll::Ready(Some(Ok(WorkerEvent::from(event).try_into().unwrap())))
+            }
+            Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => {
+                Poll::Ready(Some(Ok(WorkerEvent::ClientLagged {
+                    number_of_missed_messages: n,
                 }
-                WorkerEvent::InvocationFinished { .. } => {
-                    Poll::Ready(Some(Ok(event.try_into().unwrap())))
-                }
-            },
-            Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => Poll::Ready(Some(Err(
-                Status::data_loss(format!("Lagged by {n} events")),
-            ))),
+                .try_into()
+                .unwrap())))
+            }
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
