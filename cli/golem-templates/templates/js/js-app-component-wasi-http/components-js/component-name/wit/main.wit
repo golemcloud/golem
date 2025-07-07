@@ -5,4 +5,4 @@ package pack:name;
 
 world component-name {
   export wasi:http/incoming-handler@0.2.3;
-  }
+}

@@ -50,6 +50,7 @@ auditable-serde = { version = "0.8.0" }
 base64 = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+camino = { workspace = true }
 cargo-component = { workspace = true }
 cargo-component-core = { workspace = true }
 cargo_toml = { workspace = true }
@@ -112,6 +113,7 @@ walkdir = { workspace = true }
 wax = { workspace = true }
 wasmparser = { workspace = true }
 wasm-encoder = { workspace = true }
+wasm-rquickjs = { workspace = true }
 wit-bindgen-rust = { workspace = true }
 wit-component = { workspace = true }
 wit-encoder = { workspace = true }

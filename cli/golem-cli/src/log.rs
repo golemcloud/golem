@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan, PathExtra};
+use camino::{Utf8Path, Utf8PathBuf};
 use colored::{ColoredString, Colorize};
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -339,9 +340,21 @@ impl LogColorize for &Path {
     }
 }
 
+impl LogColorize for &Utf8Path {
+    fn as_str(&self) -> impl Colorize {
+        ColoredString::from(self.to_string())
+    }
+}
+
 impl LogColorize for PathBuf {
     fn as_str(&self) -> impl Colorize {
         ColoredString::from(self.display().to_string())
+    }
+}
+
+impl LogColorize for Utf8PathBuf {
+    fn as_str(&self) -> impl Colorize {
+        ColoredString::from(self.to_string())
     }
 }
 

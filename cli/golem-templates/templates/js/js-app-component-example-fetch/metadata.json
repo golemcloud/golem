@@ -1,4 +1,4 @@
 {
-  "description": "A JavaScript worker implementing wasi:http/incoming-handler. For use with the http-handler api gateway binding type",
+  "description": "A JavaScript worker making a remote request using 'fetch'",
   "appComponentGroup": "default"
 }

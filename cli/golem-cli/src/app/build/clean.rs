@@ -52,8 +52,7 @@ pub fn clean_app(ctx: &ApplicationContext) -> anyhow::Result<()> {
 
                     for build_step in &properties.build {
                         let build_dir = build_step
-                            .dir
-                            .as_ref()
+                            .dir()
                             .map(|dir| {
                                 ctx.application
                                     .component_source_dir(component_name)
@@ -66,7 +65,7 @@ pub fn clean_app(ctx: &ApplicationContext) -> anyhow::Result<()> {
                             });
 
                         paths.extend(
-                            compile_and_collect_globs(&build_dir, &build_step.targets)?
+                            compile_and_collect_globs(&build_dir, &build_step.targets())?
                                 .into_iter()
                                 .map(|path| ("build output", path)),
                         );

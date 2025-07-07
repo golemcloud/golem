@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
-import alias from '@rollup/plugin-alias';
+import alias from "@rollup/plugin-alias";
 import nodeResolve from "@rollup/plugin-node-resolve";
 import path from "node:path";
-import typescript from "@rollup/plugin-typescript";
 import url from "node:url";
+import typescript from "@rollup/plugin-typescript";
 
 export default function componentRollupConfig() {
     const dir = path.dirname(url.fileURLToPath(import.meta.url));
@@ -15,19 +15,26 @@ export default function componentRollupConfig() {
             return [];
         }
         return fs
-            .readdirSync(generated_interfaces_dir, {withFileTypes: true})
-            .filter(dirent => dirent.isFile() && dirent.name.endsWith(".d.ts"))
-            .flatMap(dirent =>
-                [...fs.readFileSync(path.join(dirent.parentPath, dirent.name))
-                    .toString()
-                    .matchAll(moduleRegex)]
-                    .map((match) => {
-                        const moduleName = match[1];
-                        if (moduleName === undefined) {
-                            throw new Error(`Missing match for module name`);
-                        }
-                        return moduleName;
-                    }),
+            .readdirSync(generated_interfaces_dir, { withFileTypes: true })
+            .filter(
+                (dirent) =>
+                    dirent.isFile() &&
+                    dirent.name.endsWith(".d.ts") &&
+                    dirent.name !== "exports.d.ts",
+            )
+            .flatMap((dirent) =>
+                [
+                    ...fs
+                        .readFileSync(path.join(generated_interfaces_dir, dirent.name))
+                        .toString()
+                        .matchAll(moduleRegex),
+                ].map((match) => {
+                    const moduleName = match[1];
+                    if (moduleName === undefined) {
+                        throw new Error(`Missing match for module name`);
+                    }
+                    return moduleName;
+                }),
             );
     })();
 

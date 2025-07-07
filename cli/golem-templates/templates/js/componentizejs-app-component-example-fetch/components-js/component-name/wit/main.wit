@@ -1,0 +1,13 @@
+package pack:name;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+
+interface component-name-api {
+  get-last-result: func() -> string;
+  fetch-json: func(url: string) -> string;
+}
+
+world component-name  {
+  import golem:api/host@1.1.7;
+  export component-name-api;
+}

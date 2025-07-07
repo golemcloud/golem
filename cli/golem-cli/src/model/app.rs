@@ -949,7 +949,7 @@ pub struct ComponentProperties {
     pub generated_wit: String,
     pub component_wasm: String,
     pub linked_wasm: Option<String>,
-    pub build: Vec<app_raw::ExternalCommand>,
+    pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: HashMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
     pub component_type: Option<AppComponentType>,

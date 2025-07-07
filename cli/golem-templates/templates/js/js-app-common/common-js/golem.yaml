@@ -3,31 +3,29 @@
 templates:
   js:
     build:
-    - command: node ../../common-js/scripts/jco-wrapper.mjs guest-types wit-generated --async-mode jspi --async-wasi-exports ${JCO_ASYNC_EXPORT_ARGS} -o src/generated
-      sources:
-      - wit-generated
-      targets:
-      - src/generated
-      rmdirs:
-      - src/generated
-      mkdirs:
-      - src/generated
+    - generateQuickjsDts: src/generated/interfaces
+      wit: wit-generated
     - command: npx rollup -c
       sources:
       - src
-      - ../../common-ts
+      - ../../common-js
       - rollup.config.mjs
-      - tsconfig.js
       targets:
       - dist/main.js
-    - command: npx jco componentize -w wit-generated -o dist/{{ component_name | to_snake_case }}.wasm dist/main.js
+    - generateQuickjsCrate: ../../golem-temp/quickjs-wrappers/{{ component_name | to_snake_case }}
+      wit: wit-generated
+      js: dist/main.js
+    - command: cargo component build --release
+      dir: ../../golem-temp/quickjs-wrappers/{{ component_name | to_snake_case }}
       sources:
-      - dist/main.js
+      - src
+      - wit
+      - Cargo.toml
       targets:
-      - dist/{{ component_name | to_snake_case }}.wasm
+      - target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
     sourceWit: wit
     generatedWit: wit-generated
-    componentWasm: dist/{{ component_name | to_snake_case }}.wasm
+    componentWasm: ../../golem-temp/quickjs-wrappers/{{ component_name | to_snake_case }}/target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
     linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}.wasm
     clean:
     - dist

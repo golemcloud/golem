@@ -14,7 +14,7 @@
 
 use crate::app::build::build_app;
 use crate::app::build::clean::clean_app;
-use crate::app::build::external_command::execute_custom_command;
+use crate::app::build::command::execute_custom_command;
 use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
 use crate::app::remote_components::RemoteComponents;
 use crate::config::ProfileName;

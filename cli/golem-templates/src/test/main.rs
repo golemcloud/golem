@@ -189,7 +189,9 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let status = std::process::Command::new("golem-cli")
+    let cwd = std::env::current_dir()?;
+    let cli_path = cwd.join("../target/debug/golem-cli");
+    let status = std::process::Command::new(cli_path)
         .args(args)
         .current_dir(dir)
         .status()?;

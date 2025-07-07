@@ -255,7 +255,7 @@ pub struct ComponentProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub build: Vec<ExternalCommand>,
+    pub build: Vec<BuildCommand>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub custom_commands: HashMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -317,6 +317,32 @@ impl ComponentProperties {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, untagged)]
+pub enum BuildCommand {
+    External(ExternalCommand),
+    QuickJSCrate(GenerateQuickJSCrate),
+    QuickJSDTS(GenerateQuickJSDTS),
+}
+
+impl BuildCommand {
+    pub fn dir(&self) -> Option<&str> {
+        match self {
+            BuildCommand::External(cmd) => cmd.dir.as_deref(),
+            BuildCommand::QuickJSCrate(_) => None,
+            BuildCommand::QuickJSDTS(_) => None,
+        }
+    }
+
+    pub fn targets(&self) -> Vec<String> {
+        match self {
+            BuildCommand::External(cmd) => cmd.targets.clone(),
+            BuildCommand::QuickJSCrate(cmd) => vec![cmd.generate_quickjs_crate.clone()],
+            BuildCommand::QuickJSDTS(cmd) => vec![cmd.generate_quickjs_dts.clone()],
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExternalCommand {
     pub command: String,
@@ -330,6 +356,25 @@ pub struct ExternalCommand {
     pub sources: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GenerateQuickJSCrate {
+    pub generate_quickjs_crate: String,
+    pub wit: String,
+    pub js: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GenerateQuickJSDTS {
+    pub generate_quickjs_dts: String,
+    pub wit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

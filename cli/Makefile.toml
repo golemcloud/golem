@@ -153,7 +153,7 @@ exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integ
 '''
 
 [tasks.template-integration-tests]
-dependencies = ["install-golem-cli-debug"]
+dependencies = ["build"]
 description = "Run template integration tests"
 script_runner = "@duckscript"
 script = '''

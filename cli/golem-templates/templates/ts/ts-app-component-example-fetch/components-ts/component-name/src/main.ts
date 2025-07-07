@@ -1,16 +1,18 @@
-/// <reference path="./generated/wit-generated.d.ts" />
-import type * as bindings from "pack:name/component-name"
+import type * as bindings from "component-name"
 
-let result: any;
+let result: any = undefined;
 
 export const componentNameApi: typeof bindings.componentNameApi = {
-    async getLastResult(): Promise<string> {
-        return JSON.stringify(result);
+    async getLastResult() {
+        return result ? JSON.stringify(result) : "???";
     },
-    async fetchJson(url: string): Promise<string> {
+    async fetchJson(url) {
         const response = await fetch(url);
         const responseBody = await response.json();
         console.log(responseBody);
+
+        result = responseBody; // Store the result for later retrieval
+
         return JSON.stringify(responseBody);
     },
 }

@@ -25,6 +25,7 @@ use chrono::{DateTime, Utc};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tracing::debug;
@@ -32,8 +33,8 @@ use walkdir::WalkDir;
 
 pub mod add_metadata;
 pub mod clean;
+pub mod command;
 pub mod componentize;
-pub mod external_command;
 pub mod gen_rpc;
 pub mod link;
 pub mod task_result_marker;
@@ -114,8 +115,8 @@ fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {
 
 fn is_up_to_date<S, T, FS, FT>(skip_check: bool, sources: FS, targets: FT) -> bool
 where
-    S: IntoIterator<Item = PathBuf>,
-    T: IntoIterator<Item = PathBuf>,
+    S: Debug + IntoIterator<Item = PathBuf>,
+    T: Debug + IntoIterator<Item = PathBuf>,
     FS: FnOnce() -> S,
     FT: FnOnce() -> T,
 {
@@ -167,6 +168,7 @@ where
     }
 
     let targets = targets();
+    debug!(targets=?targets, "collected targets");
 
     let max_target_modified = max_modified_short_circuit_on_missing(targets);
 
@@ -179,6 +181,7 @@ where
     };
 
     let sources = sources();
+    debug!(source=?sources, "collected sources");
 
     let max_source_modified = max_modified_short_circuit_on_missing(sources);
 

@@ -2,14 +2,14 @@
   "name": "app",
   "workspaces": [
     "common-js/*/*",
-    "components-js/*/*"
+    "components-js/*/*",
+    "common-ts/*/*",
+    "components-ts/*/*"
   ],
   "dependencies": {
     "@golemcloud/golem-ts": "1.4.0"
   },
   "devDependencies": {
-    "@bytecodealliance/jco": "1.10.2",
-    "@bytecodealliance/componentize-js": "0.18.0",
     "@rollup/plugin-alias": "^5.1.1",
     "@rollup/plugin-node-resolve": "^16.0.0",
     "@rollup/plugin-typescript": "^12.1.2",

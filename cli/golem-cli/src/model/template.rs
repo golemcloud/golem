@@ -1,4 +1,5 @@
 use crate::model::app_raw;
+use minijinja::{Environment, Error};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -67,6 +68,24 @@ impl<C: Serialize, T: Template<C>> Template<C> for HashMap<String, T> {
     }
 }
 
+impl<C: Serialize> Template<C> for app_raw::BuildCommand {
+    type Rendered = app_raw::BuildCommand;
+
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+        match self {
+            app_raw::BuildCommand::External(external) => {
+                Ok(app_raw::BuildCommand::External(external.render(env, ctx)?))
+            }
+            app_raw::BuildCommand::QuickJSCrate(generate_quickjs_crate) => Ok(
+                app_raw::BuildCommand::QuickJSCrate(generate_quickjs_crate.render(env, ctx)?),
+            ),
+            app_raw::BuildCommand::QuickJSDTS(generate_quickjs_dts) => Ok(
+                app_raw::BuildCommand::QuickJSDTS(generate_quickjs_dts.render(env, ctx)?),
+            ),
+        }
+    }
+}
+
 impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
     type Rendered = app_raw::ExternalCommand;
 
@@ -82,6 +101,31 @@ impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
             mkdirs: self.mkdirs.render(env, ctx)?,
             sources: self.sources.render(env, ctx)?,
             targets: self.targets.render(env, ctx)?,
+        })
+    }
+}
+
+impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSCrate {
+    type Rendered = app_raw::GenerateQuickJSCrate;
+
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+        Ok(app_raw::GenerateQuickJSCrate {
+            generate_quickjs_crate: self.generate_quickjs_crate.render(env, ctx)?,
+            wit: self.wit.render(env, ctx)?,
+            js: self.js.render(env, ctx)?,
+            world: self.world.render(env, ctx)?,
+        })
+    }
+}
+
+impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSDTS {
+    type Rendered = app_raw::GenerateQuickJSDTS;
+
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+        Ok(app_raw::GenerateQuickJSDTS {
+            generate_quickjs_dts: self.generate_quickjs_dts.render(env, ctx)?,
+            wit: self.wit.render(env, ctx)?,
+            world: self.world.render(env, ctx)?,
         })
     }
 }

@@ -459,9 +459,10 @@ impl WorkerCommandHandler {
             .await?;
 
         let batch_size = self.ctx.http_batch_size();
-        let mut entries = Vec::<(u64, PublicOplogEntry)>::new();
         let mut cursor = Option::<OplogCursor>::None;
+        let mut had_entries = false;
         loop {
+            let mut entries = Vec::<(u64, PublicOplogEntry)>::new();
             cursor = {
                 let clients = self.ctx.golem_clients().await?;
 
@@ -486,16 +487,20 @@ impl WorkerCommandHandler {
                 );
                 result.next
             };
+
+            if !entries.is_empty() {
+                had_entries = true;
+                self.ctx.log_handler().log_view(&entries);
+            }
+
             if cursor.is_none() {
                 break;
             }
         }
 
-        if entries.is_empty() {
+        if !had_entries {
             log_warn("No results.")
         }
-
-        self.ctx.log_handler().log_view(&entries);
 
         Ok(())
     }

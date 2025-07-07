@@ -16,6 +16,7 @@ use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash
 use crate::fs;
 use crate::log::log_warn_action;
 use crate::model::app::{AppComponentName, DependentComponent};
+use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS};
 use crate::model::ProjectId;
 use crate::model::{app_raw, ComponentName};
 use anyhow::{anyhow, bail, Context};
@@ -81,6 +82,46 @@ pub struct ResolvedExternalCommandMarkerHash<'a> {
 impl TaskResultMarkerHashSource for ResolvedExternalCommandMarkerHash<'_> {
     fn kind() -> &'static str {
         "ResolvedExternalCommandMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
+}
+
+#[derive(Serialize)]
+pub struct GenerateQuickJSCrateCommandMarkerHash<'a> {
+    pub build_dir: &'a Path,
+    pub command: &'a GenerateQuickJSCrate,
+}
+
+impl TaskResultMarkerHashSource for GenerateQuickJSCrateCommandMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "GenerateQuickJSCrateCommandMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
+}
+
+#[derive(Serialize)]
+pub struct GenerateQuickJSDTSCommandMarkerHash<'a> {
+    pub build_dir: &'a Path,
+    pub command: &'a GenerateQuickJSDTS,
+}
+
+impl TaskResultMarkerHashSource for GenerateQuickJSDTSCommandMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "GenerateQuickJSDTSCommandMarkerHash"
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
