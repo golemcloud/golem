@@ -15,17 +15,37 @@
 use crate::config::PluginTransformationsConfig;
 use crate::model::Component;
 use async_trait::async_trait;
+use golem_common::model::base64::Base64;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::{ComponentType, InitialComponentFile};
+use golem_common::model::{
+    ComponentFilePath, ComponentFilePermissions, ComponentType, InitialComponentFile,
+};
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use golem_service_base::model::ComponentName;
 use http::StatusCode;
 use reqwest::multipart::{Form, Part};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
+use tracing::debug;
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialComponentFileWithData {
+    pub path: ComponentFilePath,
+    pub permissions: ComponentFilePermissions,
+    pub content: Base64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentTransformerResponse {
+    pub data: Option<Base64>,
+    pub additional_files: Option<Vec<InitialComponentFileWithData>>,
+    pub env: Option<HashMap<String, String>>,
+}
 
 #[async_trait]
 pub trait TransformerPluginCaller: Send + Sync {
@@ -35,7 +55,7 @@ pub trait TransformerPluginCaller: Send + Sync {
         data: &[u8],
         url: String,
         parameters: &HashMap<String, String>,
-    ) -> Result<Vec<u8>, TransformationFailedReason>;
+    ) -> Result<ComponentTransformerResponse, TransformationFailedReason>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -84,7 +104,7 @@ impl TransformerPluginCaller for TransformerPluginCallerDefault {
         data: &[u8],
         url: String,
         parameters: &HashMap<String, String>,
-    ) -> Result<Vec<u8>, TransformationFailedReason> {
+    ) -> Result<ComponentTransformerResponse, TransformationFailedReason> {
         let serializable_component: SerializableComponent = component.clone().into();
         let response = with_retries(
             "component_transformer_plugin",
@@ -156,19 +176,27 @@ impl TransformerPluginCaller for TransformerPluginCallerDefault {
             Err(TransformationFailedReason::HttpStatus(response.status()))?
         }
 
-        let body = response.bytes().await.map_err(|err| {
-            TransformationFailedReason::Failure(format!(
-                "Failed to read response from transformation plugin: {err}"
-            ))
-        })?;
+        let parsed = response
+            .json::<ComponentTransformerResponse>()
+            .await
+            .map_err(|err| {
+                TransformationFailedReason::Failure(format!(
+                    "Failed to read response from transformation plugin: {err}"
+                ))
+            })?;
 
-        Ok(body.to_vec())
+        debug!(
+            "Received response from component transformer plugin: {:?}",
+            parsed
+        );
+
+        Ok(parsed)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SerializableComponent {
+struct SerializableComponent {
     pub versioned_component_id: VersionedComponentId,
     pub component_name: ComponentName,
     pub component_size: u64,
@@ -176,6 +204,7 @@ pub struct SerializableComponent {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
+    pub env: HashMap<String, String>,
 }
 
 impl From<crate::model::Component> for SerializableComponent {
@@ -188,6 +217,7 @@ impl From<crate::model::Component> for SerializableComponent {
             created_at: value.created_at,
             component_type: value.component_type,
             files: value.files,
+            env: value.env,
         }
     }
 }

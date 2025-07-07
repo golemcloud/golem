@@ -131,7 +131,9 @@ impl From<DomainComponentError> for ComponentError {
             | DomainComponentError::MalformedComponentArchiveError { .. }
             | DomainComponentError::ComponentConstraintConflictError(_)
             | DomainComponentError::InvalidOplogProcessorPlugin
-            | DomainComponentError::InvalidPluginScope { .. } => {
+            | DomainComponentError::InvalidPluginScope { .. }
+            | DomainComponentError::ConcurrentUpdate { .. }
+            | DomainComponentError::PluginInstallationNotFound { .. } => {
                 ComponentError::BadRequest(Json(ErrorsBody {
                     errors: vec![value.to_safe_string()],
                 }))

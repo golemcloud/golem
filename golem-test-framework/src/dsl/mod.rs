@@ -39,7 +39,9 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
 use golem_client::model::Account;
-use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
+use golem_common::model::component_metadata::{
+    ComponentMetadata, DynamicLinkedInstance, RawComponentMetadata,
+};
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
@@ -2788,7 +2790,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
 fn rename_component_if_needed(temp_dir: &Path, path: &Path, name: &str) -> anyhow::Result<PathBuf> {
     // Check metadata
     let source = std::fs::read(path)?;
-    let metadata = ComponentMetadata::analyse_component(&source)?;
+    let metadata = RawComponentMetadata::analyse_component(&source)?;
     if metadata.root_package_name.is_none() || metadata.root_package_name == Some(name.to_string())
     {
         info!(
