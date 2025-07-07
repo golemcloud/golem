@@ -123,7 +123,7 @@ where
         "execute",
         DurableFunctionType::WriteRemote,
     )
-        .await?;
+    .await?;
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_execute(statement, params, ctx, entry).await;
@@ -156,7 +156,7 @@ where
         "query",
         DurableFunctionType::WriteRemote,
     )
-        .await?;
+    .await?;
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_query(statement, params, ctx, entry).await;
@@ -197,7 +197,7 @@ where
         "query-stream",
         DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
     )
-        .await?;
+    .await?;
 
     let result = if durability.is_live() {
         let result = db_connection_query_stream(statement, params, ctx, entry);
@@ -223,7 +223,7 @@ where
                 begin_index,
                 false,
             )
-                .await?;
+            .await?;
 
             Ok(Err(error.into()))
         }
@@ -279,7 +279,7 @@ where
         "get-columns",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-        .await?;
+    .await?;
 
     let result = if durability.is_live() {
         let query_stream = get_db_query_stream(ctx, entry).await;
@@ -326,7 +326,7 @@ where
         "get-next",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-        .await?;
+    .await?;
 
     let result = if durability.is_live() {
         let query_stream = get_db_query_stream(ctx, entry).await;
@@ -379,7 +379,7 @@ where
         entry.begin_index,
         false,
     )
-        .await?;
+    .await?;
 
     Ok(())
 }
@@ -406,7 +406,7 @@ where
         "query",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-        .await?;
+    .await?;
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_query(statement, params, ctx, entry).await;
@@ -446,7 +446,7 @@ where
         "execute",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-        .await?;
+    .await?;
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_execute(statement, params, ctx, entry).await;
@@ -479,7 +479,7 @@ where
         "query-stream",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-        .await?;
+    .await?;
 
     let result = if durability.is_live() {
         let result = db_transaction_query_stream(statement, params, ctx, entry);
@@ -520,7 +520,7 @@ where
         "rollback",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-        .await?;
+    .await?;
 
     let result = if durability.is_live() {
         let result = db_transaction_rollback(ctx, entry).await;
@@ -534,7 +534,7 @@ where
         begin_oplog_idx,
         false,
     )
-        .await?;
+    .await?;
 
     Ok(result.map_err(|e| e.into()))
 }
@@ -556,7 +556,7 @@ where
         "commit",
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
     )
-        .await?;
+    .await?;
 
     let result = if durability.is_live() {
         let result = db_transaction_commit(ctx, entry).await;
@@ -569,7 +569,8 @@ where
         &DurableFunctionType::WriteRemoteBatched(None),
         begin_oplog_idx,
         false,
-    ).await?;
+    )
+    .await?;
 
     Ok(result.map_err(|e| e.into()))
 }
@@ -599,7 +600,8 @@ where
         &DurableFunctionType::WriteRemoteBatched(None),
         entry.begin_index,
         false,
-    ).await?;
+    )
+    .await?;
     Ok(())
 }
 
