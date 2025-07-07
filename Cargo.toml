@@ -41,6 +41,7 @@ exclude = [
     "test-components/high-volume-logging",
     "test-components/http-client",
     "test-components/http-client-2",
+    "test-components/http-client-3",
     "test-components/ifs-update",
     "test-components/ifs-update-inside-exported-function",
     "test-components/interruption",

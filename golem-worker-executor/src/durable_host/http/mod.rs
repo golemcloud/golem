@@ -30,20 +30,12 @@ pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
     current_handle: u32,
 ) -> Result<(), GolemError> {
     if let Some(state) = ctx.state.open_http_requests.remove(&current_handle) {
-        match ctx.state.open_function_table.get(&state.root_handle) {
-            Some(begin_index) => {
-                ctx.end_durable_function(
-                    &DurableFunctionType::WriteRemoteBatched(None),
-                    *begin_index,
-                    false,
-                )
-                .await?;
-                ctx.state.open_function_table.remove(&state.root_handle);
-            }
-            None => {
-                warn!("No matching BeginRemoteWrite index was found when HTTP response arrived. Handle: {}; open functions: {:?}", state.root_handle, ctx.state.open_function_table);
-            }
-        }
+        ctx.end_durable_function(
+            &DurableFunctionType::WriteRemoteBatched(None),
+            state.begin_index,
+            false,
+        )
+        .await?;
 
         ctx.finish_span(&state.span_id).await?;
     } else {

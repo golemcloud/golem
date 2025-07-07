@@ -1921,6 +1921,76 @@ async fn long_running_poll_loop_works_as_expected(
 
 #[test]
 #[tracing::instrument]
+#[timeout(120_000)]
+async fn long_running_poll_loop_works_as_expected_async_http(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin();
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component_id = executor.component("http-client-3").store().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
+
+    let worker_id = executor
+        .start_worker_with(&component_id, "poll-loop-component-0", vec![], env)
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    executor
+        .invoke(
+            &worker_id,
+            "golem:it/api.{start-polling}",
+            vec!["first".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "first".to_string();
+    }
+
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+    drop(executor);
+    http_server.abort();
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout(300_000)]
 async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     last_unique_id: &LastUniqueId,

@@ -1219,13 +1219,13 @@ fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntryWi
             }
         }
 
-        check!(begin_entry.is_some());
-        check!(end_entry.is_some());
+        assert!(begin_entry.is_some());
+        assert!(end_entry.is_some());
 
         let (begin_index, _) = begin_entry.unwrap();
         let (end_index, end_entry) = end_entry.unwrap();
 
-        check!(!imported_function_invoked.is_empty());
+        assert!(!imported_function_invoked.is_empty());
 
         let fn_prefix1 = format!("rdbms::{}::db-transaction::", T::default());
         let fn_prefix2 = format!("rdbms::{}::db-result-stream::", T::default());
