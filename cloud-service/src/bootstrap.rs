@@ -146,16 +146,6 @@ impl Services {
             service::token::TokenServiceDefault::new(token_repo.clone(), account_repo.clone()),
         );
 
-        let auth_service: Arc<dyn service::auth::AuthService> =
-            Arc::new(service::auth::AuthServiceDefault::new(
-                token_service.clone(),
-                account_repo.clone(),
-                account_grant_repo.clone(),
-                project_repo.clone(),
-                project_policy_repo.clone(),
-                project_grant_repo.clone(),
-            ));
-
         let plan_service: Arc<dyn service::plan::PlanService> = Arc::new(
             service::plan::PlanServiceDefault::new(plan_repo.clone(), config.plans.clone()),
         );
@@ -207,7 +197,6 @@ impl Services {
 
         let project_service: Arc<dyn service::project::ProjectService> =
             Arc::new(service::project::ProjectServiceDefault::new(
-                auth_service.clone(),
                 project_repo.clone(),
                 plan_limit_service.clone(),
                 plugin_service_client.clone(),
@@ -221,6 +210,16 @@ impl Services {
             &token_service,
             &db_pool,
         ));
+
+        let auth_service: Arc<dyn service::auth::AuthService> =
+            Arc::new(service::auth::AuthServiceDefault::new(
+                token_service.clone(),
+                account_repo.clone(),
+                account_grant_repo.clone(),
+                project_repo.clone(),
+                project_policy_repo.clone(),
+                project_grant_repo.clone(),
+            ));
 
         Ok(Self {
             auth_service,

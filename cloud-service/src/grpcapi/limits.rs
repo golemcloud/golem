@@ -14,7 +14,6 @@
 
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
-use crate::model::AccountAction;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody, ResourceLimits};
@@ -30,6 +29,7 @@ use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_worker_id_string,
 };
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::auth::AccountAction;
 use golem_common::model::AccountId;
 use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;

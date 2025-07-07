@@ -629,7 +629,7 @@ pub struct ComponentServiceDefault {
     plugin_service: Arc<PluginService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     transformer_plugin_caller: Arc<dyn TransformerPluginCaller>,
-    limit_service: Arc<dyn LimitService + Send + Sync>,
+    limit_service: Arc<dyn LimitService>,
 }
 
 impl ComponentServiceDefault {
@@ -1058,12 +1058,10 @@ impl ComponentServiceDefault {
             let mut installed_plugins = component.installed_plugins.clone();
             installed_plugins.sort_by_key(|p| p.priority);
 
-            let plugin_owner = component.owner.clone().into();
-
             for installation in installed_plugins {
                 let plugin = self
                     .plugin_service
-                    .get_by_id(&plugin_owner, &installation.plugin_id)
+                    .get_by_id(&installation.plugin_id)
                     .await?
                     .expect("Failed to resolve plugin by id");
 
@@ -1902,6 +1900,7 @@ impl ComponentService for ComponentServiceDefault {
                             )
                             .await?
                             .ok_or(ComponentError::PluginNotFound {
+                                account_id: owner.account_id.clone(),
                                 plugin_name: installation.name.clone(),
                                 plugin_version: installation.version.clone(),
                             })?;

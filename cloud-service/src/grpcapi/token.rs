@@ -15,7 +15,6 @@
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
 use crate::login::{LoginError, LoginSystem};
-use crate::model::AccountAction;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::token::{self, TokenServiceError};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
@@ -29,6 +28,7 @@ use golem_api_grpc::proto::golem::token::v1::{
 use golem_api_grpc::proto::golem::token::{Token, UnsafeToken};
 use golem_common::grpc::proto_account_id_string;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::auth::AccountAction;
 use golem_common::model::AccountId;
 use golem_common::model::TokenId;
 use golem_common::recorded_grpc_api_request;

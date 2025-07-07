@@ -32,8 +32,6 @@ use golem_common::model::AccountId;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
-use std::borrow::Borrow;
-use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -65,31 +63,32 @@ pub trait TestDependencies: Send + Sync {
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
     fn cloud_service(&self) -> Arc<dyn CloudService>;
 
-    fn admin(&self) -> TestDependenciesDsl<Self, &Self> {
+    fn admin(&self) -> TestDependenciesDsl<&Self> {
         TestDependenciesDsl {
             deps: self,
             account_id: self.cloud_service().admin_account_id(),
+            account_email: self.cloud_service().admin_email(),
             token: self.cloud_service().admin_token(),
-            _pd: PhantomData,
         }
     }
 
-    fn into_admin(self) -> TestDependenciesDsl<Self, Self>
+    fn into_admin(self) -> TestDependenciesDsl<Self>
     where
         Self: Sized,
     {
         let account_id = self.cloud_service().admin_account_id();
         let token = self.cloud_service().admin_token();
+        let account_email = self.cloud_service().admin_email();
 
         TestDependenciesDsl {
             deps: self,
             account_id,
+            account_email,
             token,
-            _pd: PhantomData,
         }
     }
 
-    async fn user<'a>(&'a self) -> TestDependenciesDsl<Self, &'a Self> {
+    async fn user(&self) -> TestDependenciesDsl<&Self> {
         let name = Uuid::new_v4().to_string();
         let account_data = AccountData {
             email: format!("{name}@golem.cloud"),
@@ -104,13 +103,13 @@ pub trait TestDependencies: Send + Sync {
 
         TestDependenciesDsl {
             deps: self,
-            account_id: account.account_id,
+            account_id: account.id,
+            account_email: account.email,
             token: account.token,
-            _pd: PhantomData,
         }
     }
 
-    async fn into_user(self) -> TestDependenciesDsl<Self, Self>
+    async fn into_user(self) -> TestDependenciesDsl<Self>
     where
         Self: Sized,
     {
@@ -128,9 +127,9 @@ pub trait TestDependencies: Send + Sync {
 
         TestDependenciesDsl {
             deps: self,
-            account_id: account.account_id,
+            account_id: account.id,
+            account_email: account.email,
             token: account.token,
-            _pd: PhantomData,
         }
     }
 
@@ -146,12 +145,57 @@ pub trait TestDependencies: Send + Sync {
     }
 }
 
+impl<T: TestDependencies> TestDependencies for &T {
+    fn rdb(&self) -> Arc<dyn Rdb> {
+        <T as TestDependencies>::rdb(self)
+    }
+    fn redis(&self) -> Arc<dyn Redis> {
+        <T as TestDependencies>::redis(self)
+    }
+    fn blob_storage(&self) -> Arc<dyn BlobStorage> {
+        <T as TestDependencies>::blob_storage(self)
+    }
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor> {
+        <T as TestDependencies>::redis_monitor(self)
+    }
+    fn shard_manager(&self) -> Arc<dyn ShardManager> {
+        <T as TestDependencies>::shard_manager(self)
+    }
+    fn component_directory(&self) -> &Path {
+        <T as TestDependencies>::component_directory(self)
+    }
+    fn component_temp_directory(&self) -> &Path {
+        <T as TestDependencies>::component_temp_directory(self)
+    }
+    fn component_service(&self) -> Arc<dyn ComponentService> {
+        <T as TestDependencies>::component_service(self)
+    }
+    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
+        <T as TestDependencies>::component_compilation_service(self)
+    }
+    fn worker_service(&self) -> Arc<dyn WorkerService> {
+        <T as TestDependencies>::worker_service(self)
+    }
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
+        <T as TestDependencies>::worker_executor_cluster(self)
+    }
+    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
+        <T as TestDependencies>::initial_component_files_service(self)
+    }
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        <T as TestDependencies>::plugin_wasm_files_service(self)
+    }
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        <T as TestDependencies>::cloud_service(self)
+    }
+}
+
 #[derive(Clone)]
-pub struct TestDependenciesDsl<Deps: TestDependencies + ?Sized, Inner: Borrow<Deps>> {
-    pub deps: Inner,
+pub struct TestDependenciesDsl<Deps> {
+    pub deps: Deps,
     pub account_id: AccountId,
+    pub account_email: String,
     pub token: Uuid,
-    _pd: PhantomData<Deps>,
 }
 
 #[derive(Debug, Clone)]

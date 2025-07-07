@@ -18,7 +18,7 @@ use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::ComponentProcessingError;
-use golem_common::model::ComponentId;
+use golem_common::model::{AccountId, ComponentId};
 use golem_common::model::{ComponentFilePath, InitialComponentFileKey};
 use golem_common::SafeDisplay;
 use golem_service_base::clients::auth::AuthServiceError;
@@ -85,8 +85,9 @@ pub enum ComponentError {
     InternalProjectError(ProjectError),
     #[error("Plugin does not implement golem:api/oplog-processor")]
     InvalidOplogProcessorPlugin,
-    #[error("Plugin not found: {plugin_name}@{plugin_version}")]
+    #[error("Plugin not found: {account_id}/{plugin_name}@{plugin_version}")]
     PluginNotFound {
+        account_id: AccountId,
         plugin_name: String,
         plugin_version: String,
     },
