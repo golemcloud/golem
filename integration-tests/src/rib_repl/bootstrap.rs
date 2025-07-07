@@ -211,9 +211,7 @@ impl WorkerFunctionInvoke for TestRibReplAgenticWorkerFunctionInvoke {
                     }
                     reference => {
                        match reference {
-                           ParsedFunctionReference::RawResourceMethod { resource, method } => {
-                               dbg!(&args);
-
+                           ParsedFunctionReference::RawResourceMethod { method , ..} => {
                                let new_function_name = "golem:agentic-guest/guest.{[method]agent.invoke}".to_string();
 
                                let mut new_args = vec![];
@@ -221,7 +219,7 @@ impl WorkerFunctionInvoke for TestRibReplAgenticWorkerFunctionInvoke {
                                new_args.push(args[0].clone());
 
                                let agent_name =
-                                   ValueAndType::new(Value::String(resource), str());
+                                   ValueAndType::new(Value::String(method), str());
 
                                new_args.push(agent_name);
 
