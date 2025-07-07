@@ -439,16 +439,6 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
         // Only in the second case do we need to add durability. We can distinguish these
         // two cases by checking for presence of an associated open http request.
         if let Some(request_state) = self.state.open_http_requests.get(&self_.rep()) {
-            let begin_idx = self
-                .state
-                .open_function_table
-                .get(&request_state.root_handle)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "No matching BeginRemoteWrite index was found for the open HTTP request"
-                    )
-                })?;
-
             let request = request_state.request.clone();
 
             let durability = Durability::<
@@ -458,7 +448,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                 self,
                 "golem http::types::future_trailers",
                 "get",
-                DurableFunctionType::WriteRemoteBatched(Some(*begin_idx)),
+                DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
             )
             .await?;
 
@@ -612,17 +602,10 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             let request_state = self.state.open_http_requests.get(&handle).ok_or_else(|| {
                 anyhow!("No matching HTTP request is associated with resource handle")
             })?;
-            let begin_idx = *self
-                .state
-                .open_function_table
-                .get(&request_state.root_handle)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "No matching BeginRemoteWrite index was found for the open HTTP request"
-                    )
-                })?;
 
             let request = request_state.request.clone();
+            let begin_index = request_state.begin_index;
+
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
 
@@ -648,7 +631,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         "http::types::future_incoming_response::get".to_string(),
                         &request,
                         &serializable_response,
-                        DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
+                        DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
                     )
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));

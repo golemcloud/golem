@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::model::event::InternalWorkerEvent;
 use crate::preview2::wasi::logging::logging::{Host, Level};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::{LogLevel, WorkerEvent};
+use golem_common::model::LogLevel;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
@@ -29,7 +30,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Level::Debug => LogLevel::Debug,
             Level::Trace => LogLevel::Trace,
         };
-        let event = WorkerEvent::log(log_level, &context, &message);
+        let event = InternalWorkerEvent::log(log_level, &context, &message);
         self.emit_log_event(event).await;
         Ok(())
     }

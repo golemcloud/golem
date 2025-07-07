@@ -12,6 +12,7 @@ message LogEvent {
     Log log = 3;
     InvocationStarted invocation_started = 4;
     InvocationFinished invocation_finished = 5;
+    ClientLagged client_lagged = 6;
   }
 }
 
@@ -51,4 +52,12 @@ message InvocationFinished {
   google.protobuf.Timestamp timestamp = 1;
   string function = 2;
   IdempotencyKey idempotency_key = 3;
+}
+
+/**
+ * The client fell behind and the point it left of is no longer in our buffer.
+ * {number_of_skipped_messages} is the number of messages between the client left of and the point it is now at.
+ */
+message ClientLagged {
+  uint64 number_of_missed_messages = 1;
 }

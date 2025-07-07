@@ -61,7 +61,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await
     }
 
-    async fn subscribe_duration(&mut self, when: Duration) -> anyhow::Result<Resource<Pollable>> {
+    async fn subscribe_duration(
+        &mut self,
+        duration: Duration,
+    ) -> anyhow::Result<Resource<Pollable>> {
         let durability = Durability::<Instant, SerializableError>::new(
             self,
             "monotonic_clock",
@@ -73,14 +76,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let now = {
             if durability.is_live() {
                 let result = Host::now(&mut self.as_wasi_view()).await;
-                durability.persist(self, (), result).await
+                durability.persist(self, duration, result).await
             } else {
                 durability.replay(self).await
             }
         }?;
 
         self.state.oplog.commit(CommitLevel::DurableOnly).await;
-        let when = now.saturating_add(when);
+        let when = now.saturating_add(duration);
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await
     }
 }

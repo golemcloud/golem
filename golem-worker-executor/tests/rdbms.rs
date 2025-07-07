@@ -2042,21 +2042,21 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
             }
         }
 
-        check!(begin_entry.is_some());
+        assert!(begin_entry.is_some());
 
         let (begin_index, _) = begin_entry.unwrap();
 
         let (end_index, oplog_begin_index, end_type) =
             if let Some((end_index, jump_entry)) = jump_entry.clone() {
-                check!(pre_entry.is_none() || end_entry.is_none());
+                assert!(pre_entry.is_none() || end_entry.is_none());
                 (
                     end_index,
                     jump_entry.jump.start.previous(),
                     TransactionOplogBlockEnd::Jump,
                 )
             } else {
-                check!(pre_entry.is_some());
-                check!(end_entry.is_some());
+                assert!(pre_entry.is_some());
+                assert!(end_entry.is_some());
 
                 let (pre_index, pre_entry, pre_type) = pre_entry.unwrap();
                 let (end_index, end_entry, end_type) = end_entry.clone().unwrap();
@@ -2069,7 +2069,7 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
                 (end_index, end_entry.begin_index, end_type)
             };
 
-        check!(!imported_function_invoked.is_empty());
+        assert!(!imported_function_invoked.is_empty());
 
         let fn_prefix1 = format!("rdbms::{}::db-transaction::", T::default());
         let fn_prefix2 = format!("rdbms::{}::db-result-stream::", T::default());

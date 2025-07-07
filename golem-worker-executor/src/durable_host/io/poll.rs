@@ -53,9 +53,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
+            let count = in_.len();
             let result = Host::poll(&mut self.as_wasi_view().0, in_).await;
             if is_suspend_for_sleep(&result).is_none() {
-                durability.persist(self, (), result).await
+                durability.persist(self, count, result).await
             } else {
                 result
             }

@@ -16,7 +16,7 @@ use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OplogIndex,
-    OwnedWorkerId, PluginInstallationId, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
+    OwnedWorkerId, PluginInstallationId, RetryConfig, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
@@ -249,13 +249,14 @@ pub async fn start(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_limited(deps, context, None).await
+    start_customized(deps, context, None, None).await
 }
 
-pub async fn start_limited(
+pub async fn start_customized(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     system_memory_override: Option<u64>,
+    retry_override: Option<RetryConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let redis = deps.redis.clone();
     let redis_monitor = deps.redis_monitor.clone();
@@ -264,7 +265,7 @@ pub async fn start_limited(
     info!("Using Redis on port {}", redis.public_port());
 
     let prometheus = golem_worker_executor::metrics::register_all();
-    let config = GolemConfig {
+    let mut config = GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
             port: redis.public_port(),
             key_prefix: context.redis_prefix(),
@@ -292,6 +293,9 @@ pub async fn start_limited(
         project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {}),
         ..Default::default()
     };
+    if let Some(retry) = retry_override {
+        config.retry = retry;
+    }
 
     let handle = Handle::current();
 
