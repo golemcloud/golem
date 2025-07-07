@@ -1956,7 +1956,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         let entry = OplogEntry::failed_update(target_version, details.clone());
         let timestamp = entry.timestamp();
-        worker.oplog().add_and_commit(entry).await;
+        let failed_update_oplog_idx = worker.oplog().add_and_commit(entry).await;
         let metadata = worker.get_metadata()?;
         let mut status = metadata.last_known_status;
         status.failed_updates.push(FailedUpdateRecord {
@@ -1964,6 +1964,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             target_version,
             details: details.clone(),
         });
+
+        // ensure our status is in sync with the oplog idx
+        status.oplog_idx = failed_update_oplog_idx;
 
         if status.skipped_regions.is_overridden() {
             status.skipped_regions.drop_override()
