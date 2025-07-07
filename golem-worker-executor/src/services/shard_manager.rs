@@ -36,9 +36,11 @@ pub trait ShardManagerService: Send + Sync {
 pub fn configured(config: &ShardManagerServiceConfig) -> Arc<dyn ShardManagerService> {
     match config {
         ShardManagerServiceConfig::Grpc(config) => {
+            tracing::info!("Using grpc shard manager");
             Arc::new(ShardManagerServiceGrpc::new(config.clone()))
         }
         ShardManagerServiceConfig::SingleShard(_) => {
+            tracing::info!("Using single shard shard manager");
             Arc::new(ShardManagerServiceSingleShard::new())
         }
     }
