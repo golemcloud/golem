@@ -26,7 +26,6 @@ use crate::durable_host::wasm_rpc::serialized::{
     SerializableInvokeRequest, SerializableInvokeResult, SerializableScheduleId,
     SerializableScheduleInvocationRequest,
 };
-use crate::error::GolemError;
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::plugins::Plugins;
@@ -60,6 +59,7 @@ use golem_common::model::{
     ComponentId, ComponentVersion, Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation,
 };
 use golem_common::serialization::try_deserialize as core_try_deserialize;
+use golem_service_base::error::worker_executor::GolemError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,

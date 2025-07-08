@@ -24,14 +24,16 @@ use crate::service::gateway::security_scheme::SecuritySchemeServiceError as Base
 use crate::service::worker::{CallWorkerExecutorError, WorkerServiceError};
 use golem_api_grpc::proto::golem::project::v1::project_error::Error;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::ErrorBody;
 use golem_common::model::error::ErrorsBody;
-use golem_common::model::error::{ErrorBody, GolemError};
 use golem_common::{safe, SafeDisplay};
 use golem_service_base::clients::auth::AuthServiceError;
 use golem_service_base::clients::limit::LimitError;
 use golem_service_base::clients::project::ProjectError;
+use golem_service_base::error::worker_executor::GolemError;
 use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, Object, Tags, Union};
+use poem_openapi::{ApiResponse, Tags};
+use serde::{Deserialize, Serialize};
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Tags)]
@@ -43,16 +45,12 @@ pub enum ApiTags {
     Worker,
 }
 
-#[derive(Union, Debug, Clone)]
-#[oai(discriminator_name = "type", one_of = true)]
-pub enum WorkerServiceErrorsBody {
-    Messages(ErrorsBody),
-    Validation(ErrorsBody),
-}
-
-#[derive(Object, Debug, Clone)]
-pub struct MessageBody {
-    message: String,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
+pub struct ErrorBodyWithOptionalErrorLog {
+    pub error: String,
+    /// Error log in case the error was caused by the worker failing
+    pub worker_error_logs: Option<String>,
 }
 
 #[derive(ApiResponse, Debug, Clone)]
@@ -70,7 +68,7 @@ pub enum ApiEndpointError {
     #[oai(status = 409)]
     AlreadyExists(Json<ErrorBody>),
     #[oai(status = 500)]
-    InternalError(Json<ErrorBody>),
+    InternalError(Json<ErrorBodyWithOptionalErrorLog>),
 }
 
 impl TraceErrorKind for ApiEndpointError {
@@ -113,8 +111,9 @@ impl ApiEndpointError {
     }
 
     pub fn internal<T: SafeDisplay>(error: T) -> Self {
-        Self::InternalError(Json(ErrorBody {
+        Self::InternalError(Json(ErrorBodyWithOptionalErrorLog {
             error: error.to_safe_string(),
+            worker_error_logs: None,
         }))
     }
 
@@ -157,10 +156,7 @@ impl From<WorkerServiceError> for ApiEndpointError {
             WorkerServiceError::VersionedComponentIdNotFound(_)
             | WorkerServiceError::ComponentNotFound(_)
             | WorkerServiceError::AccountIdNotFound(_)
-            | WorkerServiceError::WorkerNotFound(_)
-            | WorkerServiceError::GolemError(GolemError::WorkerNotFound(_)) => {
-                Self::not_found(error)
-            }
+            | WorkerServiceError::WorkerNotFound(_) => Self::not_found(error),
 
             WorkerServiceError::GolemError(inner) => inner.into(),
             WorkerServiceError::Component(inner) => inner.into(),
@@ -208,7 +204,13 @@ impl From<CallWorkerExecutorError> for ApiEndpointError {
 impl From<GolemError> for ApiEndpointError {
     fn from(error: GolemError) -> Self {
         match error {
-            GolemError::WorkerNotFound(_) => Self::not_found(error),
+            GolemError::WorkerNotFound { .. } => Self::not_found(error),
+            GolemError::WorkerTrapped { error, error_logs } => {
+                Self::InternalError(Json(ErrorBodyWithOptionalErrorLog {
+                    error: error.message().to_string(),
+                    worker_error_logs: Some(error_logs),
+                }))
+            }
             _ => Self::internal(error),
         }
     }
@@ -321,15 +323,14 @@ impl From<ProjectError> for ApiEndpointError {
     fn from(value: ProjectError) -> Self {
         match value {
             ProjectError::Server(error) => match &error.error {
-                None => ApiEndpointError::InternalError(Json(ErrorBody {
-                    error: "Unknown project error".to_string(),
-                })),
+                None => ApiEndpointError::internal(safe("Unknown project error".to_string())),
                 Some(Error::BadRequest(errors)) => ApiEndpointError::BadRequest(Json(ErrorsBody {
                     errors: errors.errors.clone(),
                 })),
                 Some(Error::InternalError(error)) => {
-                    ApiEndpointError::InternalError(Json(ErrorBody {
+                    ApiEndpointError::InternalError(Json(ErrorBodyWithOptionalErrorLog {
                         error: error.error.clone(),
+                        worker_error_logs: None,
                     }))
                 }
                 Some(Error::NotFound(error)) => ApiEndpointError::NotFound(Json(ErrorBody {
@@ -346,15 +347,15 @@ impl From<ProjectError> for ApiEndpointError {
                     }))
                 }
             },
-            ProjectError::Connection(status) => ApiEndpointError::InternalError(Json(ErrorBody {
-                error: format!("Project service connection error: {status}"),
-            })),
-            ProjectError::Transport(error) => ApiEndpointError::InternalError(Json(ErrorBody {
-                error: format!("Project service transport error: {error}"),
-            })),
-            ProjectError::Unknown(_) => ApiEndpointError::InternalError(Json(ErrorBody {
-                error: "Unknown project error".to_string(),
-            })),
+            ProjectError::Connection(status) => ApiEndpointError::internal(safe(format!(
+                "Project service connection error: {status}"
+            ))),
+            ProjectError::Transport(error) => ApiEndpointError::internal(safe(format!(
+                "Project service transport error: {error}"
+            ))),
+            ProjectError::Unknown(_) => {
+                ApiEndpointError::internal(safe("Unknown project error".to_string()))
+            }
         }
     }
 }

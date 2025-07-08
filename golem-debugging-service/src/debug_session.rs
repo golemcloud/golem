@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use bincode::Encode;
 use golem_common::model::auth::Namespace;
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerError,
+    DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerTrapCause,
 };
 use golem_common::model::public_oplog::{
     CreateParameters, DescribeResourceParameters, ExportedFunctionCompletedParameters,
@@ -351,7 +351,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         }),
         PublicOplogEntry::Error(error) => Ok(OplogEntry::Error {
             timestamp: error.timestamp,
-            error: WorkerError::Unknown(error.error),
+            error: WorkerTrapCause::Unknown(error.error),
         }),
         PublicOplogEntry::NoOp(timestamp_parameter) => Ok(OplogEntry::NoOp {
             timestamp: timestamp_parameter.timestamp,

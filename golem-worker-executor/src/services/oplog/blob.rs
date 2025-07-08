@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CompressedOplogChunk, OplogArchiveService};
 use async_lock::RwLockUpgradableReadGuard;
@@ -20,6 +19,7 @@ use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
+use golem_service_base::error::worker_executor::GolemError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
 };

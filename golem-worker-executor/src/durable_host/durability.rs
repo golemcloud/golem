@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::golem::durability::durability;
 use crate::preview2::golem::durability::durability::PersistedTypedDurableFunctionInvocation;
@@ -25,6 +24,7 @@ use bytes::Bytes;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex, PersistenceLevel};
 use golem_common::model::Timestamp;
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
+use golem_service_base::error::worker_executor::GolemError;
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use std::fmt::Debug;
 use std::marker::PhantomData;

@@ -100,6 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/worker/log_event.proto",
                 "proto/golem/worker/promise_id.proto",
                 "proto/golem/worker/public_oplog.proto",
+                "proto/golem/worker/trap_cause.proto",
                 "proto/golem/worker/update_mode.proto",
                 "proto/golem/worker/v1/worker_error.proto",
                 "proto/golem/worker/v1/worker_execution_error.proto",

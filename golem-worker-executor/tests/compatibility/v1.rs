@@ -25,7 +25,7 @@ use goldenfile::Mint;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, OplogPayload,
-    PayloadId, TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
+    PayloadId, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId, WorkerTrapCause,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
@@ -35,6 +35,7 @@ use golem_common::model::{
     WorkerId, WorkerInvocation, WorkerResourceDescription, WorkerStatus,
 };
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
 use golem_wasm_ast::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
     TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption,
@@ -52,8 +53,6 @@ use golem_worker_executor::durable_host::serialized::{
     SerializableIpAddresses, SerializableStreamError,
 };
 use golem_worker_executor::durable_host::wasm_rpc::serialized::SerializableInvokeResultV1;
-use golem_worker_executor::error::GolemError;
-use golem_worker_executor::model::InterruptKind;
 use golem_worker_executor::services::blob_store;
 use golem_worker_executor::services::promise::RedisPromiseState;
 use golem_worker_executor::services::rpc::RpcError;
@@ -570,10 +569,10 @@ pub fn wrapped_function_type() {
 
 #[test]
 pub fn worker_error() {
-    let we1 = WorkerError::OutOfMemory;
-    let we2 = WorkerError::InvalidRequest("invalid request".to_string());
-    let we3 = WorkerError::StackOverflow;
-    let we4 = WorkerError::Unknown("unknown".to_string());
+    let we1 = WorkerTrapCause::OutOfMemory;
+    let we2 = WorkerTrapCause::InvalidRequest("invalid request".to_string());
+    let we3 = WorkerTrapCause::StackOverflow;
+    let we4 = WorkerTrapCause::Unknown("unknown".to_string());
 
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_error_out_of_memory", &mut mint, we1);
@@ -708,7 +707,7 @@ pub fn oplog_entry() {
 
     let oe6 = OplogEntry::Error {
         timestamp: Timestamp::from(1724701938466),
-        error: WorkerError::OutOfMemory,
+        error: WorkerTrapCause::OutOfMemory,
     };
 
     let oe7 = OplogEntry::NoOp {

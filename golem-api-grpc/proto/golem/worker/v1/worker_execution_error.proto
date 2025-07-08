@@ -6,6 +6,7 @@ import "golem/worker/promise_id.proto";
 import "golem/shardmanager/shard_id.proto";
 import "golem/component/component_id.proto";
 import "golem/worker/worker_id.proto";
+import "golem/worker/trap_cause.proto";
 
 message WorkerExecutionError {
   oneof error {
@@ -34,6 +35,7 @@ message WorkerExecutionError {
     ShardingNotReady sharding_not_ready = 23;
     InitialComponentFileDownloadFailed initial_component_file_download_failed = 24;
     FileSystemError file_system_error = 25;
+    WorkerTrapped worker_trapped = 26;
   }
 }
 
@@ -138,4 +140,9 @@ message InitialComponentFileDownloadFailed {
 message FileSystemError {
   string path = 1;
   string reason = 2;
+}
+
+message WorkerTrapped {
+  TrapCause trap_cause = 1;
+  string error_logs = 2;
 }

@@ -12,25 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(test)]
-use std::collections::HashSet;
-use std::ops::DerefMut;
-use std::sync::Arc;
-
+use crate::metrics::promises::record_promise_created;
+use crate::storage::keyvalue::{
+    KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
+};
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use dashmap::DashMap;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{PromiseId, WorkerId};
+use golem_service_base::error::worker_executor::GolemError;
+#[cfg(test)]
+use std::collections::HashSet;
+use std::ops::DerefMut;
+use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::debug;
-
-use crate::error::GolemError;
-use crate::metrics::promises::record_promise_created;
-use crate::storage::keyvalue::{
-    KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
-};
 
 /// Service implementing creation, completion and polling of promises
 #[async_trait]

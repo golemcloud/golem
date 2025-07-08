@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
@@ -38,6 +37,7 @@ use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PluginInstallationId,
     ScanCursor, ShardId, TargetWorkerId, WorkerId, WorkerMetadata,
 };
+use golem_service_base::error::worker_executor::GolemError;
 use golem_wasm_rpc::{IntoValue, Value};
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, VecDeque};

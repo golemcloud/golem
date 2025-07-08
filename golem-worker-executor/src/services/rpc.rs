@@ -17,7 +17,6 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use super::file_loader::FileLoader;
-use crate::error::GolemError;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::plugins::Plugins;
@@ -40,6 +39,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_service_base::error::worker_executor::GolemError;
 use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
 use tokio::runtime::Handle;

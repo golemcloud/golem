@@ -12,11 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::RwLock;
-
 use super::file_loader::FileLoader;
 use crate::durable_host::serialized::SerializableError;
-use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::preview2::golem_api_1_x::host::ForkResult;
@@ -45,7 +42,9 @@ use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRang
 use golem_common::model::{AccountId, Timestamp, WorkerMetadata, WorkerStatusRecord};
 use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_common::serialization::serialize;
+use golem_service_base::error::worker_executor::GolemError;
 use std::sync::Arc;
+use std::sync::RwLock;
 use tokio::runtime::Handle;
 
 #[async_trait]

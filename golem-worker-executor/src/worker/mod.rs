@@ -23,10 +23,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::durable_host::recover_stderr_logs;
-use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::model::{
-    ExecutionStatus, InterruptKind, ListDirectoryResult, LookupResult, ReadFileResult, TrapType,
-    WorkerConfig,
+    ExecutionStatus, ListDirectoryResult, LookupResult, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
@@ -45,7 +43,7 @@ use anyhow::anyhow;
 use futures::channel::oneshot;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
+    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerTrapCause,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::RetryConfig;
@@ -54,6 +52,7 @@ use golem_common::model::{
     ComponentVersion, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
     WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
+use golem_service_base::error::worker_executor::{GolemError, InterruptKind, WorkerOutOfMemory};
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -1135,7 +1134,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             stderr,
                         }),
                     ..
-                } => LookupResult::Complete(Err(GolemError::runtime(error.to_string(&stderr)))),
+                } => LookupResult::Complete(Err(GolemError::WorkerTrapped {
+                    error,
+                    error_logs: stderr,
+                })),
                 InvocationResult::Cached {
                     result:
                         Err(FailedInvocationResult {
@@ -1818,14 +1820,14 @@ enum WorkerCommand {
 
 pub fn is_worker_error_retriable(
     retry_config: &RetryConfig,
-    error: &WorkerError,
+    error: &WorkerTrapCause,
     retry_count: u64,
 ) -> bool {
     match error {
-        WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
-        WorkerError::InvalidRequest(_) => false,
-        WorkerError::StackOverflow => false,
-        WorkerError::OutOfMemory => true,
+        WorkerTrapCause::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
+        WorkerTrapCause::InvalidRequest(_) => false,
+        WorkerTrapCause::StackOverflow => false,
+        WorkerTrapCause::OutOfMemory => true,
     }
 }
 

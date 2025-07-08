@@ -8,10 +8,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::OplogIndex;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_service_base::error::worker_executor::GolemError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_wasm_rpc::{ValueAndType, WitValue};
-use golem_worker_executor::error::GolemError;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use std::collections::HashMap;
 use std::sync::Arc;

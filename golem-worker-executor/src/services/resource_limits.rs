@@ -12,12 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cmp::{max, min};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-use crate::error::GolemError;
 use crate::grpc::{is_grpc_retriable, GrpcError};
 use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
 use crate::model::CurrentResourceLimits;
@@ -33,8 +27,13 @@ use golem_common::metrics::external_calls::record_external_call_response_size_by
 use golem_common::model::AccountId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
+use golem_service_base::error::worker_executor::GolemError;
 use http::Uri;
 use prost::Message;
+use std::cmp::{max, min};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::task::JoinHandle;
 use tonic::codec::CompressionEncoding;
 use tonic::Request;

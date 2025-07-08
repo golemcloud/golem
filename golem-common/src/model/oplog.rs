@@ -316,7 +316,7 @@ pub enum OplogEntry {
     /// Worker failed
     Error {
         timestamp: Timestamp,
-        error: WorkerError,
+        error: WorkerTrapCause,
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
     /// more predictable.
@@ -540,7 +540,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn error(error: WorkerError) -> OplogEntry {
+    pub fn error(error: WorkerTrapCause) -> OplogEntry {
         OplogEntry::Error {
             timestamp: Timestamp::now_utc(),
             error,
@@ -968,32 +968,38 @@ pub enum DurableFunctionType {
 }
 
 /// Describes the error that occurred in the worker
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum WorkerError {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode)]
+pub enum WorkerTrapCause {
     Unknown(String),
     InvalidRequest(String),
     StackOverflow,
     OutOfMemory,
 }
 
-impl WorkerError {
+impl WorkerTrapCause {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Unknown(message) => message,
+            Self::InvalidRequest(message) => message,
+            Self::StackOverflow => "Stack overflow",
+            Self::OutOfMemory => "Out of memory",
+        }
+    }
+
     pub fn to_string(&self, error_logs: &str) -> String {
+        let message = self.message();
         let error_logs = if !error_logs.is_empty() {
             format!("\n\n{error_logs}")
         } else {
             "".to_string()
         };
-        match self {
-            WorkerError::Unknown(message) => format!("{message}{error_logs}"),
-            WorkerError::InvalidRequest(message) => format!("{message}{error_logs}"),
-            WorkerError::StackOverflow => format!("Stack overflow{error_logs}"),
-            WorkerError::OutOfMemory => format!("Out of memory{error_logs}"),
-        }
+        format!("{message}{error_logs}")
     }
 }
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
+    use super::WorkerTrapCause;
     use crate::model::oplog::{IndexedResourceKey, PersistenceLevel};
 
     impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
@@ -1037,6 +1043,42 @@ mod protobuf {
                 golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistRemoteSideEffects => PersistenceLevel::PersistRemoteSideEffects,
                 golem_api_grpc::proto::golem::worker::PersistenceLevel::Smart => PersistenceLevel::Smart,
             }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::TrapCause> for WorkerTrapCause {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::TrapCause,
+        ) -> Result<Self, Self::Error> {
+            use golem_api_grpc::proto::golem::worker::trap_cause::Cause;
+            match value.cause.ok_or("no cause field")? {
+                Cause::StackOverflow(_) => Ok(Self::StackOverflow),
+                Cause::OutOfMemory(_) => Ok(Self::OutOfMemory),
+                Cause::InvalidRequest(inner) => Ok(Self::InvalidRequest(inner.details)),
+                Cause::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
+            }
+        }
+    }
+
+    impl From<WorkerTrapCause> for golem_api_grpc::proto::golem::worker::TrapCause {
+        fn from(value: WorkerTrapCause) -> Self {
+            use golem_api_grpc::proto::golem::worker as grpc_worker;
+            use golem_api_grpc::proto::golem::worker::trap_cause::Cause;
+            let cause = match value {
+                WorkerTrapCause::StackOverflow => {
+                    Cause::StackOverflow(grpc_worker::StackOverflow {})
+                }
+                WorkerTrapCause::OutOfMemory => Cause::OutOfMemory(grpc_worker::OutOfMemory {}),
+                WorkerTrapCause::InvalidRequest(details) => {
+                    Cause::InvalidRequest(grpc_worker::InvalidRequest { details })
+                }
+                WorkerTrapCause::Unknown(details) => {
+                    Cause::UnknownError(grpc_worker::UnknownError { details })
+                }
+            };
+            Self { cause: Some(cause) }
         }
     }
 }

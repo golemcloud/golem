@@ -19,12 +19,11 @@ use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::serialized::SerializableError;
-use crate::error::GolemError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, InvocationContext, LastError,
-    ListDirectoryResult, ReadFileResult, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InvocationContext, LastError, ListDirectoryResult,
+    ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
@@ -67,7 +66,7 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
-    TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
+    TimestampedUpdateDescription, UpdateDescription, WorkerResourceId, WorkerTrapCause,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{exports, PluginInstallationId};
@@ -80,6 +79,7 @@ use golem_common::model::{
 };
 use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
+use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
@@ -419,7 +419,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Exit => RetryDecision::None,
             TrapType::Error(error) => {
                 if is_worker_error_retriable(retry_config, error, previous_tries) {
-                    if error == &WorkerError::OutOfMemory {
+                    if error == &WorkerTrapCause::OutOfMemory {
                         RetryDecision::ReacquirePermits
                     } else {
                         match get_delay(retry_config, previous_tries) {
@@ -1029,7 +1029,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Jump) => (WorkerStatus::Running, None, false),
             TrapType::Interrupt(InterruptKind::Restart) => (WorkerStatus::Running, None, false),
             TrapType::Exit => (WorkerStatus::Exited, Some(OplogEntry::exited()), true),
-            TrapType::Error(WorkerError::InvalidRequest(_)) => (WorkerStatus::Running, None, true),
+            TrapType::Error(WorkerTrapCause::InvalidRequest(_)) => {
+                (WorkerStatus::Running, None, true)
+            }
             TrapType::Error(error) => {
                 let status = if is_worker_error_retriable(&retry_config, error, previous_tries) {
                     WorkerStatus::Retrying
@@ -1626,7 +1628,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                             }
                                         } else {
                                             let trap_type = TrapType::Error(
-                                                WorkerError::InvalidRequest(format!(
+                                                WorkerTrapCause::InvalidRequest(format!(
                                                     "Function {full_function_name} not found"
                                                 )),
                                             );
@@ -1643,10 +1645,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         }
                                     }
                                     Err(err) => {
-                                        let trap_type =
-                                            TrapType::Error(WorkerError::InvalidRequest(format!(
+                                        let trap_type = TrapType::Error(
+                                            WorkerTrapCause::InvalidRequest(format!(
                                                 "Function {full_function_name} not found: {err}"
-                                            )));
+                                            )),
+                                        );
 
                                         let _ = store
                                             .as_context_mut()
@@ -1695,15 +1698,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                     ))
                                                 }
                                                 TrapType::Error(error) => {
-                                                    let stderr = store
+                                                    let error_logs = store
                                                         .as_context()
                                                         .data()
                                                         .get_public_state()
                                                         .event_service()
                                                         .get_last_invocation_errors();
-                                                    break Err(GolemError::runtime(
-                                                        error.to_string(&stderr),
-                                                    ));
+                                                    break Err(GolemError::WorkerTrapped {
+                                                        error,
+                                                        error_logs,
+                                                    });
                                                 }
                                             }
                                         }
@@ -2945,7 +2949,7 @@ macro_rules! get_oplog_entry {
                 })+
                 entry if entry.is_hint() => {}
                 _ => {
-                    break Err($crate::error::GolemError::unexpected_oplog_entry(
+                    break Err(golem_service_base::error::worker_executor::GolemError::unexpected_oplog_entry(
                         stringify!($($cases |)+),
                         format!("{:?}", oplog_entry),
                     ));

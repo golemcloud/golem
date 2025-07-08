@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_service_base::error::worker_executor::GolemError;
 use golem_wasm_rpc::ValueAndType;
 use tokio::sync::broadcast::error::RecvError;
 

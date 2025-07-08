@@ -14,13 +14,9 @@
 
 pub mod cloud;
 
-use std::collections::HashSet;
-use std::sync::{Arc, RwLock, Weak};
-
-use crate::error::GolemError;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
-    ReadFileResult, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, LastError, ListDirectoryResult, ReadFileResult,
+    TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
@@ -54,8 +50,11 @@ use golem_common::model::{
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
+use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Value, ValueAndType};
+use std::collections::HashSet;
+use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;

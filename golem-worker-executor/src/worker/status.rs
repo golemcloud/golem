@@ -1,4 +1,3 @@
-use crate::error::GolemError;
 use crate::services::{HasConfig, HasOplogService};
 use crate::worker::is_worker_error_retriable;
 use async_recursion::async_recursion;
@@ -12,6 +11,7 @@ use golem_common::model::{
     TimestampedWorkerInvocation, WorkerInvocation, WorkerMetadata, WorkerResourceDescription,
     WorkerStatus, WorkerStatusRecord,
 };
+use golem_service_base::error::worker_executor::GolemError;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 /// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.
@@ -729,9 +729,6 @@ fn calculate_active_plugins(
 
 #[cfg(test)]
 mod test {
-    use test_r::test;
-
-    use crate::error::GolemError;
     use crate::model::ExecutionStatus;
     use crate::services::golem_config::GolemConfig;
     use crate::services::oplog::tests::rounded;
@@ -755,9 +752,11 @@ mod test {
         WorkerStatus, WorkerStatusRecord,
     };
     use golem_common::serialization::serialize;
+    use golem_service_base::error::worker_executor::GolemError;
     use golem_wasm_rpc::Value;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::{Arc, RwLock};
+    use test_r::test;
 
     #[test]
     async fn empty() {

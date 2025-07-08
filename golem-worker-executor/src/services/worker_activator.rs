@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
-
-use crate::error::GolemError;
 use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_service_base::error::worker_executor::GolemError;
+use std::marker::PhantomData;
+use std::sync::{Arc, Mutex};
 use tracing::{error, warn};
 
 /// Service for activating workers in the background

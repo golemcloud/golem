@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
-use crate::model::{InterruptKind, ListDirectoryResult, ReadFileResult, TrapType};
+use crate::model::{ListDirectoryResult, ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
@@ -31,12 +30,13 @@ use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextStack};
-use golem_common::model::oplog::WorkerError;
+use golem_common::model::oplog::WorkerTrapCause;
 use golem_common::model::{
     exports, ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
 };
 use golem_common::retries::get_delay;
+use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::Value;
 use std::collections::VecDeque;
@@ -581,7 +581,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     Err(error) => {
                         self.store
                             .data_mut()
-                            .on_invocation_failure(&TrapType::Error(WorkerError::Unknown(
+                            .on_invocation_failure(&TrapType::Error(WorkerTrapCause::Unknown(
                                 error.to_string(),
                             )))
                             .await;
@@ -593,7 +593,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(None) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&TrapType::Error(WorkerError::InvalidRequest(
+                    .on_invocation_failure(&TrapType::Error(WorkerTrapCause::InvalidRequest(
                         "Function not found".to_string(),
                     )))
                     .await;
@@ -603,7 +603,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Err(result) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&TrapType::Error(WorkerError::Unknown(result)))
+                    .on_invocation_failure(&TrapType::Error(WorkerTrapCause::Unknown(result)))
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }

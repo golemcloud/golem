@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use axum::body::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata};
-use golem_worker_executor::error::GolemError;
+use golem_service_base::error::worker_executor::GolemError;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{OpenOplogs, Oplog, OplogService};
 use std::collections::BTreeMap;

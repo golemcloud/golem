@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::services::component::ComponentMetadata;
 use crate::services::HasComponentService;
 use crate::worker::Worker;
@@ -21,6 +20,7 @@ use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_common::base_model::{TargetWorkerId, WorkerId};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, WorkerMetadata};
+use golem_service_base::error::worker_executor::GolemError;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;

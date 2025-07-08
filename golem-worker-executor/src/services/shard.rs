@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::sharding::*;
+use crate::model::ShardAssignmentCheck;
+use golem_common::model::{ShardAssignment, ShardId, WorkerId};
+use golem_service_base::error::worker_executor::GolemError;
+use itertools::Itertools;
 use std::collections::HashSet;
 use std::convert::identity;
 use std::sync::{Arc, RwLock};
-
-use itertools::Itertools;
 use tracing::debug;
-
-use golem_common::model::{ShardAssignment, ShardId, WorkerId};
-
-use crate::error::GolemError;
-use crate::metrics::sharding::*;
-use crate::model::ShardAssignmentCheck;
 
 /// Service for assigning shards to worker executors
 pub trait ShardService: Send + Sync {

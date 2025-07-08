@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
-use crate::model::{InterruptKind, TrapType};
+use crate::model::TrapType;
 use crate::virtual_export_compat;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
-use golem_common::model::oplog::{WorkerError, WorkerResourceId};
+use golem_common::model::oplog::{WorkerResourceId, WorkerTrapCause};
 use golem_common::model::{IdempotencyKey, WorkerStatus};
 use golem_common::virtual_exports;
+use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
 use golem_wasm_rpc::wasmtime::{
     decode_param, encode_output, type_to_analysed_type, DecodeParamResult,
 };
@@ -756,7 +756,7 @@ pub enum InvokeResult {
     /// The invoked function has failed
     Failed {
         consumed_fuel: i64,
-        error: WorkerError,
+        error: WorkerTrapCause,
     },
     /// The invoked function succeeded and produced a result
     Succeeded {

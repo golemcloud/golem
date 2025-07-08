@@ -12,15 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::{Any, TypeId};
-use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
-use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
-use std::time::Duration;
-
-use crate::error::GolemError;
 use crate::model::ExecutionStatus;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
@@ -37,8 +28,16 @@ use golem_common::model::{
     WorkerId, WorkerMetadata,
 };
 use golem_common::serialization::{serialize, try_deserialize};
+use golem_service_base::error::worker_executor::GolemError;
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
+use std::any::{Any, TypeId};
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 mod blob;
 mod compressed;

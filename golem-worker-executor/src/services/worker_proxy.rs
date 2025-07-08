@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::grpc::authorised_grpc_request;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
@@ -29,6 +28,7 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, RetryConfig, WorkerId};
+use golem_service_base::error::worker_executor::GolemError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::{Value, ValueAndType, WitValue};
 use http::Uri;

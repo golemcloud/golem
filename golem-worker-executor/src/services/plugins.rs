@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use super::golem_config::PluginServiceConfig;
-use crate::error::GolemError;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
 use golem_common::model::PluginId;
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
+use golem_service_base::error::worker_executor::GolemError;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -280,7 +280,6 @@ impl Plugins for PluginsUnavailable {
 }
 
 mod grpc {
-    use crate::error::GolemError;
     use crate::grpc::authorised_grpc_request;
     use crate::services::plugins::{Plugins, PluginsObservations};
     use applying::Apply;
@@ -298,6 +297,7 @@ mod grpc {
     use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
     use golem_common::model::RetryConfig;
     use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
+    use golem_service_base::error::worker_executor::GolemError;
     use http::Uri;
     use std::time::Duration;
     use tonic::codec::CompressionEncoding;

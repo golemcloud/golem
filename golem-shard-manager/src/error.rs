@@ -15,8 +15,8 @@
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error;
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::error::GolemError;
 use golem_common::retriable_error::IsRetriableError;
+use golem_service_base::error::worker_executor::GolemError;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 

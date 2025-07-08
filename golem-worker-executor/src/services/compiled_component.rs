@@ -12,20 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::golem_config::CompiledComponentServiceConfig;
+use crate::Engine;
+use async_trait::async_trait;
+use golem_common::model::ComponentId;
+use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-use async_trait::async_trait;
 use tokio::time::Instant;
 use tracing::debug;
 use wasmtime::component::Component;
-
-use golem_common::model::ComponentId;
-
-use crate::error::GolemError;
-use crate::services::golem_config::CompiledComponentServiceConfig;
-use crate::Engine;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 
 /// Service for storing compiled native binaries of WebAssembly components
 #[async_trait]

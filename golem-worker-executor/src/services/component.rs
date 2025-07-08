@@ -17,7 +17,6 @@ use super::golem_config::{
     ProjectServiceConfig,
 };
 use super::plugins::PluginsObservations;
-use crate::error::GolemError;
 use crate::metrics::component::record_compilation_time;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
@@ -27,6 +26,7 @@ use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
 };
+use golem_service_base::error::worker_executor::GolemError;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::testing::LocalFileSystemComponentMetadata;
 use golem_wasm_ast::analysis::AnalysedExport;
@@ -170,7 +170,6 @@ mod filesystem {
     use super::record_compilation_time;
     use super::ComponentService;
     use super::{ComponentKey, ComponentMetadata};
-    use crate::error::GolemError;
     use crate::services::compiled_component::CompiledComponentService;
     use async_lock::{RwLock, Semaphore};
     use async_trait::async_trait;
@@ -178,6 +177,7 @@ mod filesystem {
     use golem_common::cache::SimpleCache;
     use golem_common::model::component::ComponentOwner;
     use golem_common::model::{AccountId, ComponentId, ComponentVersion};
+    use golem_service_base::error::worker_executor::GolemError;
     use golem_service_base::testing::LocalFileSystemComponentMetadata;
     use std::collections::{HashMap, HashSet};
     use std::path::{Path, PathBuf};
@@ -507,7 +507,6 @@ mod filesystem {
 
 mod grpc {
     use super::{create_component_cache, ComponentKey, ComponentMetadata, ComponentService};
-    use crate::error::GolemError;
     use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
     use crate::metrics::component::record_compilation_time;
     use crate::services::compiled_component::CompiledComponentService;
@@ -528,6 +527,7 @@ mod grpc {
     use golem_common::model::{AccountId, ComponentId, ComponentVersion};
     use golem_common::model::{ProjectId, RetryConfig};
     use golem_common::retries::with_retries;
+    use golem_service_base::error::worker_executor::GolemError;
     use golem_wasm_ast::analysis::AnalysedExport;
     use http::Uri;
     use prost::Message;

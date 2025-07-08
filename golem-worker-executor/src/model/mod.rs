@@ -12,26 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::workerctx::WorkerCtx;
-use bincode::{Decode, Encode};
 use bytes::Bytes;
 use futures::Stream;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
-use golem_common::model::oplog::{PersistenceLevel, WorkerError};
+use golem_common::model::oplog::{PersistenceLevel, WorkerTrapCause};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId,
     WorkerStatusRecord,
 };
+use golem_service_base::error::worker_executor::{GolemError, InterruptKind, WorkerOutOfMemory};
 use golem_wasm_rpc::ValueAndType;
-use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -57,29 +53,6 @@ impl ShardAssignmentCheck for ShardAssignment {
         }
     }
 }
-
-#[derive(
-    Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue,
-)]
-pub enum InterruptKind {
-    Interrupt,
-    Restart,
-    Suspend,
-    Jump,
-}
-
-impl Display for InterruptKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InterruptKind::Interrupt => write!(f, "Interrupted via the Golem API"),
-            InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
-            InterruptKind::Suspend => write!(f, "Suspended"),
-            InterruptKind::Jump => write!(f, "Jumping back in time"),
-        }
-    }
-}
-
-impl Error for InterruptKind {}
 
 /// Worker-specific configuration. These values are used to initialize the worker, and they can
 /// be different for each worker.
@@ -246,7 +219,7 @@ pub enum TrapType {
     /// Called the WASI exit function
     Exit,
     /// Failed with an error
-    Error(WorkerError),
+    Error(WorkerTrapCause),
 }
 
 impl TrapType {
@@ -256,20 +229,20 @@ impl TrapType {
             None => match Ctx::is_exit(error) {
                 Some(_) => TrapType::Exit,
                 None => match error.root_cause().downcast_ref::<Trap>() {
-                    Some(&Trap::StackOverflow) => TrapType::Error(WorkerError::StackOverflow),
+                    Some(&Trap::StackOverflow) => TrapType::Error(WorkerTrapCause::StackOverflow),
                     _ => match error.root_cause().downcast_ref::<WorkerOutOfMemory>() {
-                        Some(_) => TrapType::Error(WorkerError::OutOfMemory),
+                        Some(_) => TrapType::Error(WorkerTrapCause::OutOfMemory),
                         None => match error.root_cause().downcast_ref::<GolemError>() {
                             Some(GolemError::InvalidRequest { details }) => {
-                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                                TrapType::Error(WorkerTrapCause::InvalidRequest(details.clone()))
                             }
                             Some(GolemError::ParamTypeMismatch { details }) => {
-                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                                TrapType::Error(WorkerTrapCause::InvalidRequest(details.clone()))
                             }
                             Some(GolemError::ValueMismatch { details }) => {
-                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                                TrapType::Error(WorkerTrapCause::InvalidRequest(details.clone()))
                             }
-                            _ => TrapType::Error(WorkerError::Unknown(format!("{error:#}"))),
+                            _ => TrapType::Error(WorkerTrapCause::Unknown(format!("{error:#}"))),
                         },
                     },
                 },
@@ -283,8 +256,13 @@ impl TrapType {
                 Some(GolemError::runtime("Interrupted via the Golem API"))
             }
             TrapType::Error(error) => match error {
-                WorkerError::InvalidRequest(msg) => Some(GolemError::invalid_request(msg.clone())),
-                _ => Some(GolemError::runtime(error.to_string(error_logs))),
+                WorkerTrapCause::InvalidRequest(msg) => {
+                    Some(GolemError::invalid_request(msg.clone()))
+                }
+                _ => Some(GolemError::WorkerTrapped {
+                    error: error.clone(),
+                    error_logs: error_logs.to_string(),
+                }),
             },
             TrapType::Exit => Some(GolemError::runtime("Process exited")),
             _ => None,
@@ -298,7 +276,7 @@ impl TrapType {
 /// decisions about retries/recovery.
 #[derive(Clone, Debug)]
 pub struct LastError {
-    pub error: WorkerError,
+    pub error: WorkerTrapCause,
     pub stderr: String,
     pub retry_count: u64,
 }

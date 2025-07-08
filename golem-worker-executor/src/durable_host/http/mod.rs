@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
-use crate::error::GolemError;
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use golem_common::model::oplog::DurableFunctionType;
+use golem_service_base::error::worker_executor::GolemError;
 use tracing::warn;
 
 pub mod outgoing_http;

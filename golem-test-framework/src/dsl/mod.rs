@@ -1989,6 +1989,12 @@ pub fn worker_error_message(error: &Error) -> String {
                 worker_execution_error::Error::FileSystemError(error) => {
                     format!("File system error: {}", error.reason)
                 }
+                worker_execution_error::Error::WorkerTrapped(error) => {
+                    format!(
+                        "Worker trapped: {:?}; logs: {}",
+                        error.trap_cause, error.error_logs
+                    )
+                }
             },
         },
     }

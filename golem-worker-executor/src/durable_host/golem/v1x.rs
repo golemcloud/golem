@@ -14,12 +14,10 @@
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
-use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::model::InterruptKind;
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
     ForkResult, GetWorkers, Host, HostGetWorkers, WorkerAnyFilter,
@@ -39,6 +37,7 @@ use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
+use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;

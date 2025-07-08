@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use anyhow::anyhow;
 use async_lock::Mutex;
 use futures::TryStreamExt;
 use golem_common::model::{AccountId, InitialComponentFileKey};
+use golem_service_base::error::worker_executor::GolemError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use std::collections::HashMap;
 use std::path::Path;

@@ -4344,7 +4344,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -4418,7 +4418,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -4504,7 +4504,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -4574,7 +4574,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -4666,7 +4666,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -4752,7 +4752,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -4845,7 +4845,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -4932,7 +4932,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5012,7 +5012,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5095,7 +5095,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5183,7 +5183,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5253,7 +5253,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5329,7 +5329,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5430,7 +5430,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5508,7 +5508,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5587,7 +5587,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5667,7 +5667,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5747,7 +5747,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5824,7 +5824,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5903,7 +5903,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -5969,7 +5969,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
   /v1/api/definitions/{project_id}/import:
     put:
       tags:
@@ -6044,7 +6044,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6116,7 +6116,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6189,7 +6189,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6268,7 +6268,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6355,7 +6355,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6433,7 +6433,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6492,7 +6492,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6566,7 +6566,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6637,7 +6637,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6707,7 +6707,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6794,7 +6794,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6869,7 +6869,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -6931,7 +6931,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -7002,7 +7002,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -7067,7 +7067,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -7124,7 +7124,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -7193,7 +7193,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -7264,7 +7264,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -7332,7 +7332,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalErrorLog'
       security:
       - Cookie: []
       - Token: []
@@ -9338,6 +9338,17 @@ components:
       required:
       - timestamp
       - beginIndex
+    ErrorBodyWithOptionalErrorLog:
+      title: ErrorBodyWithOptionalErrorLog
+      type: object
+      properties:
+        error:
+          type: string
+        workerErrorLogs:
+          description: Error log in case the error was caused by the worker failing
+          type: string
+      required:
+      - error
     ErrorParameters:
       title: ErrorParameters
       type: object

@@ -18,6 +18,7 @@ use golem_common::model::{
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
+use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
@@ -37,10 +38,9 @@ use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
-use golem_worker_executor::error::GolemError;
 use golem_worker_executor::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
-    ReadFileResult, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, LastError, ListDirectoryResult, ReadFileResult,
+    TrapType, WorkerConfig,
 };
 use golem_worker_executor::preview2::golem::durability;
 use golem_worker_executor::preview2::golem_api_1_x;

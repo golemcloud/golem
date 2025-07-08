@@ -33,7 +33,6 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::auth::Namespace;
-use golem_common::model::error::{GolemError, GolemErrorUnknown};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::RetryConfig;
@@ -43,6 +42,7 @@ use golem_common::model::{
     WorkerId, WorkerStatus,
 };
 use golem_service_base::clients::limit::LimitService;
+use golem_service_base::error::worker_executor::GolemError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
@@ -374,9 +374,7 @@ impl WorkerServiceDefault {
                                                                                                                 workers
                                                                                                             })),
                         } => {
-                            let workers: Vec<WorkerMetadata> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::Unknown(GolemErrorUnknown {
-                                details: "Convert response error".to_string(),
-                            }))?;
+                            let workers: Vec<WorkerMetadata> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::unknown("Convert response error"))?;
                             Ok(workers)
                         }
                         workerexecutor::v1::GetRunningWorkersMetadataResponse {
@@ -436,11 +434,9 @@ impl WorkerServiceDefault {
                             .map(|w| w.try_into())
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(|err| {
-                                GolemError::Unknown(GolemErrorUnknown {
-                                    details: format!(
-                                        "Unexpected worker metadata in response: {err}"
-                                    ),
-                                })
+                                GolemError::unknown(format!(
+                                    "Unexpected worker metadata in response: {err}"
+                                ))
                             })?;
                         Ok((cursor.map(|c| c.into()), workers))
                     }
@@ -1147,9 +1143,7 @@ impl WorkerService for WorkerServiceDefault {
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|err| {
-                            GolemError::Unknown(GolemErrorUnknown {
-                                details: format!("Unexpected oplog entries in error: {err}"),
-                            })
+                            GolemError::unknown(format!("Unexpected oplog entries in error: {err}"))
                         })?;
                     Ok(GetOplogResponse {
                         entries: entries
@@ -1217,11 +1211,7 @@ impl WorkerService for WorkerServiceDefault {
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
-                        .map_err(|err| {
-                            GolemError::Unknown(GolemErrorUnknown {
-                                details: format!("Unexpected oplog entries in error: {err}"),
-                            })
-                        })?;
+                        .map_err(|err| GolemError::unknown(format!("Unexpected oplog entries in error: {err}")))?;
                     let first_index_in_chunk =  entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
                     Ok(GetOplogResponse {
                         entries,

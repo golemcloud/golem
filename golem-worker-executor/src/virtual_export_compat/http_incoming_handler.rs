@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use bytes::Bytes;
 use golem_common::virtual_exports::http_incoming_handler::*;
 use golem_common::widen_infallible;
+use golem_service_base::error::worker_executor::GolemError;
 use golem_wasm_rpc::Value;
 use http::{HeaderName, HeaderValue};
 use http_body_util::combinators::BoxBody;

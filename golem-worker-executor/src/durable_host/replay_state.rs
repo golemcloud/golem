@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::services::oplog::{Oplog, OplogOps, OplogService};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
@@ -20,6 +19,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId};
+use golem_service_base::error::worker_executor::GolemError;
 use golem_wasm_rpc::{Value, ValueAndType};
 use metrohash::MetroHash128;
 use std::collections::HashSet;

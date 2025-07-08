@@ -12,20 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
-use std::sync::Arc;
-
+use crate::services::golem_config::{ShardManagerServiceConfig, ShardManagerServiceGrpcConfig};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::{ShardAssignment, ShardId};
 use golem_common::retries::with_retries;
+use golem_service_base::error::worker_executor::GolemError;
+use std::collections::HashSet;
+use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-
-use crate::error::GolemError;
-use crate::services::golem_config::{ShardManagerServiceConfig, ShardManagerServiceGrpcConfig};
 
 /// Service providing access to the shard manager service
 #[async_trait]

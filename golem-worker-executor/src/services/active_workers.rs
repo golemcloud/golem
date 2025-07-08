@@ -12,20 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
-
-use tracing::{debug, Instrument};
-
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::{OwnedWorkerId, WorkerId};
-
-use crate::error::GolemError;
 use crate::services::golem_config::MemoryConfig;
 use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_service_base::error::worker_executor::GolemError;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
+use tracing::{debug, Instrument};
 
 /// Holds the metadata and wasmtime structures of currently active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {

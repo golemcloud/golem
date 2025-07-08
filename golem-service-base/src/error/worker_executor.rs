@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
-
-use crate::model::InterruptKind;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::oplog::WorkerTrapCause;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
+use golem_common::SafeDisplay;
 use golem_wasm_rpc::wasmtime::EncodingError;
+use golem_wasm_rpc_derive::IntoValue;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 use tonic::Status;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
@@ -80,8 +82,14 @@ pub enum GolemError {
         expected: String,
         got: String,
     },
+    // The golem runtime encountedred an error while exeucting the user error. Difference to ComponentTrapped is that the user component did not directly error here.
     Runtime {
         details: String,
+    },
+    // The user component existed with a TrapType::Error
+    WorkerTrapped {
+        error: WorkerTrapCause,
+        error_logs: String,
     },
     InvalidShardId {
         shard_id: ShardId,
@@ -258,6 +266,9 @@ impl Display for GolemError {
             GolemError::Runtime { details } => {
                 write!(f, "Runtime error: {details}")
             }
+            GolemError::WorkerTrapped { error, error_logs } => {
+                write!(f, "Component trapped: {}", error.to_string(error_logs))
+            }
             GolemError::InvalidShardId {
                 shard_id,
                 shard_ids,
@@ -289,6 +300,12 @@ impl Display for GolemError {
     }
 }
 
+impl SafeDisplay for GolemError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl Error for GolemError {
     fn description(&self) -> &str {
         match self {
@@ -316,6 +333,7 @@ impl Error for GolemError {
             GolemError::InvalidShardId { .. } => "Invalid shard",
             GolemError::InvalidAccount => "Invalid account",
             GolemError::Runtime { .. } => "Runtime error",
+            GolemError::WorkerTrapped { .. } => "Component trapped",
             GolemError::PreviousInvocationFailed { .. } => "The previously invoked function failed",
             GolemError::PreviousInvocationExited => "The previously invoked function exited",
             GolemError::Unknown { .. } => "Unknown error",
@@ -352,6 +370,7 @@ impl TraceErrorKind for GolemError {
             GolemError::InvalidShardId { .. } => "InvalidShardId",
             GolemError::InvalidAccount => "InvalidAccount",
             GolemError::Runtime { .. } => "Runtime",
+            GolemError::WorkerTrapped { .. } => "ComponentTrapped",
             GolemError::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
             GolemError::PreviousInvocationExited => "PreviousInvocationExited",
             GolemError::Unknown { .. } => "Unknown",
@@ -382,6 +401,7 @@ impl TraceErrorKind for GolemError {
             | GolemError::UnexpectedOplogEntry { .. }
             | GolemError::InvalidAccount
             | GolemError::Runtime { .. }
+            | GolemError::WorkerTrapped { .. }
             | GolemError::PreviousInvocationFailed { .. }
             | GolemError::PreviousInvocationExited
             | GolemError::Unknown { .. }
@@ -611,6 +631,14 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                 error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
                     golem::worker::v1::RuntimeError { details },
                 )),
+            },
+            GolemError::WorkerTrapped { error, error_logs } => golem::worker::v1::WorkerExecutionError {
+                error: Some(golem::worker::v1::worker_execution_error::Error::WorkerTrapped(
+                    golem::worker::v1::WorkerTrapped {
+                        trap_cause: Some(error.into()),
+                        error_logs
+                    }
+                ))
             },
             GolemError::InvalidShardId {
                 shard_id,
@@ -850,6 +878,12 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
                 path: file_system_error.path,
                 reason: file_system_error.reason,
             }),
+            Some(golem::worker::v1::worker_execution_error::Error::WorkerTrapped(
+                inner,
+            )) => Ok(GolemError::WorkerTrapped {
+                error: inner.trap_cause.ok_or("no trap_cause field")?.try_into()?,
+                error_logs: inner.error_logs
+             })
         }
     }
 }
@@ -876,3 +910,44 @@ impl Display for WorkerOutOfMemory {
 }
 
 impl Error for WorkerOutOfMemory {}
+
+#[derive(
+    Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue,
+)]
+pub enum InterruptKind {
+    Interrupt,
+    Restart,
+    Suspend,
+    Jump,
+}
+
+impl Display for InterruptKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InterruptKind::Interrupt => write!(f, "Interrupted via the Golem API"),
+            InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
+            InterruptKind::Suspend => write!(f, "Suspended"),
+            InterruptKind::Jump => write!(f, "Jumping back in time"),
+        }
+    }
+}
+
+impl Error for InterruptKind {}
+
+#[cfg(feature = "worker-executor")]
+mod service {
+    use super::GolemError;
+    use anyhow::anyhow;
+
+    impl From<GolemError> for wasmtime_wasi::p2::StreamError {
+        fn from(value: GolemError) -> Self {
+            Self::Trap(anyhow!(value))
+        }
+    }
+
+    impl From<GolemError> for wasmtime_wasi::p2::SocketError {
+        fn from(value: GolemError) -> Self {
+            Self::trap(value)
+        }
+    }
+}

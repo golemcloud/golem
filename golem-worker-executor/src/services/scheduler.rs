@@ -12,17 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::{Add, Deref};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
-use tokio::task::JoinHandle;
-use tokio::time::Instant;
-use tracing::{error, info, span, warn, Instrument, Level};
-
-use crate::error::GolemError;
 use crate::metrics::oplog::record_scheduled_archive;
 use crate::metrics::promises::record_scheduled_promise_completed;
 use crate::services::oplog::{MultiLayerOplog, Oplog, OplogService};
@@ -36,9 +25,18 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use async_trait::async_trait;
+use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_service_base::error::worker_executor::GolemError;
 use golem_wasm_rpc::Value;
+use std::ops::{Add, Deref};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
+use tracing::{error, info, span, warn, Instrument, Level};
 
 #[async_trait]
 pub trait SchedulerService: Send + Sync {
@@ -417,18 +415,6 @@ impl SchedulerService for SchedulerServiceDefault {
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
-
-    use async_trait::async_trait;
-    use bincode::Encode;
-    use std::collections::{HashMap, HashSet};
-    use std::str::FromStr;
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use chrono::DateTime;
-
-    use crate::error::GolemError;
     use crate::services::golem_config::GolemConfig;
     use crate::services::oplog::{Oplog, OplogService, PrimaryOplogService};
     use crate::services::promise::PromiseServiceMock;
@@ -439,14 +425,23 @@ mod tests {
     use crate::services::worker::{DefaultWorkerService, WorkerService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use async_trait::async_trait;
+    use bincode::Encode;
+    use chrono::DateTime;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
         AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId,
         WorkerId,
     };
+    use golem_service_base::error::worker_executor::GolemError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use golem_wasm_rpc::Value;
+    use std::collections::{HashMap, HashSet};
+    use std::str::FromStr;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use test_r::test;
     use uuid::Uuid;
 
     struct SchedulerWorkerAccessMock;

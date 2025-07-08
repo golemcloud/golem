@@ -21,7 +21,6 @@ use crate::durable_host::wasm_rpc::serialized::{
     SerializableInvokeRequest, SerializableInvokeResult, SerializableInvokeResultV1,
 };
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
-use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
@@ -38,6 +37,7 @@ use golem_common::model::{
     TargetWorkerId, WorkerId,
 };
 use golem_common::serialization::try_deserialize;
+use golem_service_base::error::worker_executor::GolemError;
 use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, Pollable,

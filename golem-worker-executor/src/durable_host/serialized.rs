@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::services::rdbms::Error as RdbmsError;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use anyhow::anyhow;
 use bincode::{Decode, Encode};
 use chrono::{DateTime, Timelike, Utc};
+use golem_service_base::error::worker_executor::GolemError;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value};
 use golem_wasm_rpc_derive::IntoValue;
@@ -647,10 +647,9 @@ mod tests {
         SerializableDateTime, SerializableError, SerializableIpAddress, SerializableIpAddresses,
         SerializableStreamError,
     };
-    use crate::error::GolemError;
-    use crate::model::InterruptKind;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
+    use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
     use proptest::collection::vec;
     use proptest::prelude::*;
     use proptest::strategy::LazyJust;

@@ -172,7 +172,7 @@ pub mod wasm {
 
     use golem_common::metrics::api::TraceErrorKind;
 
-    use crate::error::GolemError;
+    use golem_service_base::error::worker_executor::GolemError;
 
     lazy_static! {
         static ref CREATE_WORKER_SECONDS: Histogram = register_histogram!(

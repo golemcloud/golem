@@ -12,21 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cmp::min;
-use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
-
-use async_trait::async_trait;
-use bytes::Bytes;
-use nonempty_collections::NEVec;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::oneshot::Sender;
-use tracing::{debug, error, info, warn, Instrument};
-
-use crate::error::GolemError;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::ephemeral::EphemeralOplog;
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
@@ -35,10 +20,23 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
 use crate::services::oplog::{
     downcast_oplog, CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService,
 };
+use async_trait::async_trait;
+use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, OwnedWorkerId, ScanCursor, WorkerMetadata,
 };
+use golem_service_base::error::worker_executor::GolemError;
+use nonempty_collections::NEVec;
+use std::cmp::min;
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot::Sender;
+use tracing::{debug, error, info, warn, Instrument};
 
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {

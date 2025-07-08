@@ -21,10 +21,10 @@ use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::serialized::SerializableStreamError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
-use crate::error::GolemError;
 use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
+use golem_service_base::error::worker_executor::GolemError;
 use wasmtime_wasi::p2::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
@@ -309,12 +309,6 @@ fn is_incoming_http_body_stream<Ctx: WorkerCtx>(
         .downcast_ref::<HostIncomingBodyStream>()
         .is_some()
         || stream.as_any().downcast_ref::<FailingStream>().is_some()
-}
-
-impl From<GolemError> for StreamError {
-    fn from(value: GolemError) -> Self {
-        StreamError::Trap(anyhow!(value))
-    }
 }
 
 async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(

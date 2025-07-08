@@ -14,7 +14,22 @@
 
 mod invocation;
 
-use crate::error::*;
+use crate::grpc::invocation::{CanStartWorker, GrpcInvokeRequest};
+use crate::model::event::InternalWorkerEvent;
+use crate::model::public_oplog::{
+    find_component_version_at, get_public_oplog_chunk, search_public_oplog,
+};
+use crate::model::{LastError, ListDirectoryResult, ReadFileResult};
+use crate::services::events::Event;
+use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
+use crate::services::worker_event::WorkerEventReceiver;
+use crate::services::{
+    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
+    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+};
+use crate::worker::Worker;
+use crate::workerctx::WorkerCtx;
 use futures_util::Stream;
 use futures_util::StreamExt;
 use gethostname::gethostname;
@@ -46,6 +61,7 @@ use golem_common::model::{
     WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
+use golem_service_base::error::worker_executor::*;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val;
 use std::cmp::min;
@@ -55,6 +71,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use tokio;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
@@ -62,24 +79,6 @@ use tracing::info_span;
 use tracing::{debug, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
-
-use crate::grpc::invocation::{CanStartWorker, GrpcInvokeRequest};
-use crate::model::event::InternalWorkerEvent;
-use crate::model::public_oplog::{
-    find_component_version_at, get_public_oplog_chunk, search_public_oplog,
-};
-use crate::model::{InterruptKind, LastError, ListDirectoryResult, ReadFileResult};
-use crate::services::events::Event;
-use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
-use crate::services::worker_event::WorkerEventReceiver;
-use crate::services::{
-    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
-};
-use crate::worker::Worker;
-use crate::workerctx::WorkerCtx;
-use tokio;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),

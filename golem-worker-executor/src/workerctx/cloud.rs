@@ -13,11 +13,10 @@
 // limitations under the License.
 
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
-use crate::error::GolemError;
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
-    ReadFileResult, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, LastError, ListDirectoryResult, ReadFileResult,
+    TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
@@ -55,6 +54,7 @@ use golem_common::model::{
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
+use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };

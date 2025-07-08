@@ -1,4 +1,3 @@
-use crate::error::GolemError;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
@@ -10,6 +9,7 @@ use async_trait::async_trait;
 use golem_common::model::{
     AccountId, ComponentId, ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus,
 };
+use golem_service_base::error::worker_executor::GolemError;
 use std::sync::Arc;
 use tracing::{info, Instrument};
 
