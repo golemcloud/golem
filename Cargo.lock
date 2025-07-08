@@ -3647,6 +3647,7 @@ dependencies = [
  "poem-openapi",
  "poem-openapi-derive",
  "prometheus 0.13.4",
+ "prost",
  "reqwest 0.12.18",
  "serde",
  "serde_json",

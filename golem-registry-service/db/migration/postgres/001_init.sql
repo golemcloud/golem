@@ -72,6 +72,7 @@ CREATE TABLE account_revisions
     email       TEXT      NOT NULL,
 
     created_at  TIMESTAMP NOT NULL,
+    created_by  UUID      NOT NULL,
     deleted     BOOLEAN   NOT NULL,
 
     plan_id     UUID      NOT NULL,
@@ -230,6 +231,8 @@ CREATE TABLE environment_revisions
     environment_id      UUID      NOT NULL,
     revision_id         BIGINT    NOT NULL,
 
+    hash                BYTEA     NOT NULL,
+
     created_at          TIMESTAMP NOT NULL,
     created_by          UUID      NOT NULL,
     deleted             BOOLEAN   NOT NULL,
@@ -237,7 +240,6 @@ CREATE TABLE environment_revisions
     compatibility_check BOOL      NOT NULL,
     version_check       BOOL      NOT NULL,
     security_overrides  BOOL      NOT NULL,
-    hash                BYTEA     NOT NULL,
 
     CONSTRAINT environment_revisions_pk
         PRIMARY KEY (environment_id, revision_id),
@@ -248,49 +250,73 @@ CREATE TABLE environment_revisions
 CREATE INDEX environment_revisions_latest_idx
     ON environment_revisions (environment_id, revision_id DESC);
 
+CREATE TABLE components
+(
+    component_id        UUID      NOT NULL,
+    name                TEXT      NOT NULL,
+    environment_id      UUID      NOT NULL,
+
+    created_at          TIMESTAMP NOT NULL,
+    updated_at          TIMESTAMP NOT NULL,
+    deleted_at          TIMESTAMP,
+    modified_by         UUID      NOT NULL,
+
+    current_revision_id BIGINT    NOT NULL,
+
+    CONSTRAINT components_pk
+        PRIMARY KEY (component_id),
+    CONSTRAINT components_environments_fk
+        FOREIGN KEY (environment_id) REFERENCES environments
+);
+
+CREATE UNIQUE INDEX components_name_uk
+    ON components (environment_id, name)
+    WHERE deleted_at IS NULL;
+
 CREATE TABLE component_revisions
 (
-    environment_id               UUID      NOT NULL,
     component_id                 UUID      NOT NULL,
-    name                         TEXT      NOT NULL,
     revision_id                  BIGINT    NOT NULL,
     version                      TEXT      NOT NULL,
+
+    hash                         BYTEA     NOT NULL,
+
     created_at                   TIMESTAMP NOT NULL,
     created_by                   UUID      NOT NULL,
+    deleted                      BOOLEAN   NOT NULL,
+
     component_type               INTEGER   NOT NULL,
     size                         INTEGER   NOT NULL,
     metadata                     BYTEA     NOT NULL,
-    env                          JSONB,
+    env                          JSONB     NOT NULL,
     status                       INTEGER   NOT NULL,
-    object_store_key             TEXT,
+    object_store_key             TEXT      NOT NULL,
+    binary_hash                  BYTEA     NOT NULL,
     transformed_object_store_key TEXT,
-    hash                         BYTEA     NOT NULL,
+
     CONSTRAINT component_revisions_pk
         PRIMARY KEY (component_id, revision_id),
-    CONSTRAINT component_revisions_environments_fk
-        FOREIGN KEY (environment_id) REFERENCES environments,
-    CONSTRAINT component_revisions_id_uk
-        UNIQUE (environment_id, component_id, revision_id),
-    CONSTRAINT component_revisions_name_uk
-        UNIQUE (environment_id, component_id, revision_id, name)
+    CONSTRAINT component_revisions_components_fk
+        FOREIGN KEY (component_id) REFERENCES components
 );
 
 CREATE INDEX component_revisions_latest_revision_by_id_idx
-    ON component_revisions (environment_id, component_id, revision_id DESC);
-
-CREATE INDEX component_revisions_latest_revision_by_name_idx
-    ON component_revisions (environment_id, name, revision_id DESC);
+    ON component_revisions (component_id, revision_id DESC);
 
 CREATE TABLE component_files
 (
     component_id     UUID      NOT NULL,
     revision_id      BIGINT    NOT NULL,
     file_path        TEXT      NOT NULL,
+
+    hash             BYTEA     NOT NULL,
+
     created_at       TIMESTAMP NOT NULL,
     created_by       UUID      NOT NULL,
+
     file_key         TEXT      NOT NULL,
     file_permissions TEXT      NOT NULL,
-    hash             BYTEA     NOT NULL,
+
     CONSTRAINT component_files_pk
         PRIMARY KEY (component_id, revision_id, file_path),
     CONSTRAINT component_files_components_fk
@@ -302,10 +328,14 @@ CREATE TABLE deployment_revisions
     environment_id  UUID      NOT NULL,
     revision_id     BIGINT    NOT NULL,
     version         TEXT      NOT NULL,
+
+    hash            BYTEA     NOT NULL,
+
     created_at      TIMESTAMP NOT NULL,
     created_by      UUID      NOT NULL,
+
     deployment_kind INTEGER   NOT NULL,
-    hash            BYTEA     NOT NULL,
+
     CONSTRAINT deployments_revisions_pk
         PRIMARY KEY (environment_id, revision_id),
     CONSTRAINT deployments_revisions_environments_fk
@@ -353,8 +383,8 @@ CREATE TABLE deployment_component_revisions
         FOREIGN KEY (environment_id, deployment_revision_id)
             REFERENCES deployment_revisions (environment_id, revision_id),
     CONSTRAINT deployment_component_revisions_component_fk
-        FOREIGN KEY (environment_id, component_id, component_revision_id)
-            REFERENCES component_revisions (environment_id, component_id, revision_id)
+        FOREIGN KEY (component_id, component_revision_id)
+            REFERENCES component_revisions (component_id, revision_id)
 );
 
 CREATE INDEX deployment_component_revisions_component_idx

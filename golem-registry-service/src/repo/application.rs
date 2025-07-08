@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::{AuditFields, BindFields, RevisionAuditFields};
+use crate::repo::model::application::{ApplicationRecord, ApplicationRevisionRecord};
+use crate::repo::model::audit::{AuditFields, RevisionAuditFields};
+use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures_util::future::BoxFuture;
@@ -23,29 +25,9 @@ use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, Poo
 use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
-use sqlx::{Database, FromRow};
-use std::fmt::Debug;
+use sqlx::Database;
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
-
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct ApplicationRecord {
-    pub application_id: Uuid,
-    pub name: String,
-    pub account_id: Uuid,
-    #[sqlx(flatten)]
-    pub audit: AuditFields,
-}
-
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct ApplicationRevisionRecord {
-    pub application_id: Uuid,
-    pub revision_id: i64,
-    pub name: String,
-    pub account_id: Uuid,
-    #[sqlx(flatten)]
-    pub audit: RevisionAuditFields,
-}
 
 #[async_trait]
 pub trait ApplicationRepo: Send + Sync {
@@ -81,21 +63,23 @@ pub struct LoggedApplicationRepo<Repo: ApplicationRepo> {
     repo: Repo,
 }
 
+static SPAN_NAME: &str = "application repository";
+
 impl<Repo: ApplicationRepo> LoggedApplicationRepo<Repo> {
     pub fn new(repo: Repo) -> Self {
         Self { repo }
     }
 
     fn span_name(application_name: &str) -> Span {
-        info_span!("application repository", application_name)
+        info_span!(SPAN_NAME, application_name)
     }
 
     fn span_app_id(application_id: &Uuid) -> Span {
-        info_span!("application repository", application_id=%application_id)
+        info_span!(SPAN_NAME, application_id=%application_id)
     }
 
     fn span_owner_id(owner_account_id: &Uuid) -> Span {
-        info_span!("application repository", owner_account_id=%owner_account_id)
+        info_span!(SPAN_NAME, owner_account_id=%owner_account_id)
     }
 }
 

@@ -39,13 +39,15 @@ pub struct LoggedPlanRepository<Repo: PlanRepository> {
     repo: Repo,
 }
 
+static SPAN_NAME: &str = "plan repository";
+
 impl<Repo: PlanRepository> LoggedPlanRepository<Repo> {
     pub fn new(repo: Repo) -> Self {
         Self { repo }
     }
 
     pub fn span(plan_id: &Uuid) -> Span {
-        info_span!("plan repository", plan_id=%plan_id)
+        info_span!(SPAN_NAME, plan_id=%plan_id)
     }
 }
 

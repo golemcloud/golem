@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::{AuditFields, BindFields, RevisionAuditFields};
+pub use crate::repo::model::account::AccountRecord;
+use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_service_base::db::postgres::PostgresPool;
@@ -20,30 +21,8 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo;
 use indoc::indoc;
-use sqlx::FromRow;
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
-
-#[derive(FromRow, Debug, Clone, PartialEq)]
-pub struct AccountRecord {
-    pub account_id: Uuid,
-    pub email: String,
-    #[sqlx(flatten)]
-    pub audit: AuditFields,
-    pub name: String,
-    pub plan_id: Uuid,
-}
-
-#[derive(FromRow, Debug, Clone, PartialEq)]
-pub struct AccountRevisionRecord {
-    pub account_id: Uuid,
-    pub email: String,
-    pub revision_id: i64,
-    #[sqlx(flatten)]
-    pub audit: RevisionAuditFields,
-    pub name: String,
-    pub plan_id: Uuid,
-}
 
 #[async_trait]
 pub trait AccountRepo: Send + Sync {
@@ -58,17 +37,19 @@ pub struct LoggedAccountRepo<Repo: AccountRepo> {
     repo: Repo,
 }
 
+static SPAN_NAME: &str = "account repository";
+
 impl<Repo: AccountRepo> LoggedAccountRepo<Repo> {
     pub fn new(repo: Repo) -> Self {
         Self { repo }
     }
 
     fn span_account_id(account_id: &Uuid) -> Span {
-        info_span!("account repository", account_id=%account_id)
+        info_span!(SPAN_NAME, account_id=%account_id)
     }
 
     fn span_email(email: &str) -> Span {
-        info_span!("account repository", email)
+        info_span!(SPAN_NAME, email)
     }
 }
 

@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_registry_service::repo::account::{AccountRecord, AccountRepo};
-use golem_registry_service::repo::application::{ApplicationRecord, ApplicationRepo};
-use golem_registry_service::repo::environment::{
-    EnvironmentCurrentRevisionRecord, EnvironmentRepo, EnvironmentRevisionRecord,
+use golem_registry_service::repo::account::AccountRepo;
+use golem_registry_service::repo::application::ApplicationRepo;
+use golem_registry_service::repo::environment::EnvironmentRepo;
+use golem_registry_service::repo::model::account::AccountRecord;
+use golem_registry_service::repo::model::application::ApplicationRecord;
+use golem_registry_service::repo::model::audit::{AuditFields, RevisionAuditFields};
+use golem_registry_service::repo::model::environment::{
+    EnvironmentCurrentRevisionRecord, EnvironmentRevisionRecord,
 };
-use golem_registry_service::repo::model::{AuditFields, RevisionAuditFields};
 use golem_registry_service::repo::plan::{PlanRecord, PlanRepository};
 use std::str::FromStr;
 use std::sync::Arc;

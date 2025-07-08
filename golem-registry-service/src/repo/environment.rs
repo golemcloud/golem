@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::{AuditFields, BindFields, RevisionAuditFields, SqlBlake3Hash};
+pub use crate::repo::model::environment::{
+    EnvironmentCurrentRevisionRecord, EnvironmentRecord, EnvironmentRevisionRecord,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures_util::future::BoxFuture;
@@ -23,69 +25,10 @@ use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, Poo
 use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
-use sqlx::{Database, FromRow};
+use sqlx::Database;
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
-
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct EnvironmentRecord {
-    pub environment_id: Uuid,
-    pub name: String,
-    pub application_id: Uuid,
-    #[sqlx(flatten)]
-    pub audit: AuditFields,
-    pub current_revision_id: i64,
-}
-
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct EnvironmentRevisionRecord {
-    pub environment_id: Uuid,
-    pub revision_id: i64,
-    #[sqlx(flatten)]
-    pub audit: RevisionAuditFields,
-    pub compatibility_check: bool,
-    pub version_check: bool,
-    pub security_overrides: bool,
-    pub hash: SqlBlake3Hash,
-}
-
-impl EnvironmentRevisionRecord {
-    fn deletion(created_by: Uuid, environment_id: Uuid, current_revision_id: i64) -> Self {
-        Self {
-            environment_id,
-            revision_id: current_revision_id + 1,
-            audit: RevisionAuditFields::deletion(created_by),
-            compatibility_check: false,
-            version_check: false,
-            security_overrides: false,
-            hash: blake3::hash("".as_bytes()).into(),
-        }
-    }
-
-    pub fn ensure_first(self) -> Self {
-        Self {
-            revision_id: 0,
-            audit: self.audit.ensure_new(),
-            ..self
-        }
-    }
-
-    pub fn ensure_new(self, current_revision_id: i64) -> Self {
-        Self {
-            revision_id: current_revision_id + 1,
-            audit: self.audit.ensure_new(),
-            ..self
-        }
-    }
-}
-
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct EnvironmentCurrentRevisionRecord {
-    pub name: String,
-    pub application_id: Uuid,
-    #[sqlx(flatten)]
-    pub revision: EnvironmentRevisionRecord,
-}
+use crate::repo::model::BindFields;
 
 #[async_trait]
 pub trait EnvironmentRepo: Send + Sync {
@@ -125,21 +68,23 @@ pub struct LoggedEnvironmentRepo<Repo: EnvironmentRepo> {
     repo: Repo,
 }
 
+static SPAN_NAME: &str = "environment repository";
+
 impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
     pub fn new(repo: Repo) -> Self {
         Self { repo }
     }
 
     fn span_name(application_id: &Uuid, name: &str) -> Span {
-        info_span!("environment repository", application_id = % application_id, name)
+        info_span!(SPAN_NAME, application_id = % application_id, name)
     }
 
     fn span_env_id(environment_id: &Uuid) -> Span {
-        info_span!("environment repository", environment_id = % environment_id)
+        info_span!(SPAN_NAME, environment_id = % environment_id)
     }
 
     fn span_app_id(application_id: &Uuid) -> Span {
-        info_span!("environment repository", application_id = % application_id)
+        info_span!(SPAN_NAME, application_id = % application_id)
     }
 }
 
@@ -247,13 +192,13 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         e.application_id AS application_id,
                         r.environment_id AS environment_id,
                         r.revision_id AS revision_id,
+                        r.hash AS hash,
                         r.created_at AS created_at,
                         r.created_by AS created_by,
                         r.deleted AS deleted,
                         r.compatibility_check AS compatibility_check,
                         r.version_check AS version_check,
-                        r.security_overrides AS security_overrides,
-                        r.hash AS hash
+                        r.security_overrides AS security_overrides
                     FROM environments e
                     LEFT JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
@@ -277,13 +222,13 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         e.application_id AS application_id,
                         r.environment_id AS environment_id,
                         r.revision_id AS revision_id,
+                        r.hash AS hash,
                         r.created_at AS created_at,
                         r.created_by AS created_by,
                         r.deleted AS deleted,
                         r.compatibility_check AS compatibility_check,
                         r.version_check AS version_check,
-                        r.security_overrides AS security_overrides,
-                        r.hash AS hash
+                        r.security_overrides AS security_overrides
                     FROM environments e
                     LEFT JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
@@ -401,7 +346,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         };
 
         let result: repo::Result<()> = self
-            .with_tx("update", |tx| {
+            .with_tx("delete", |tx| {
                 async move {
                     let revision: EnvironmentRevisionRecord = Self::insert_revision(
                         tx,
@@ -486,16 +431,16 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
     ) -> repo::Result<EnvironmentRevisionRecord> {
         tx.fetch_one_as(sqlx::query_as(indoc! { r#"
             INSERT INTO environment_revisions
-            (environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash)
+            (environment_id, revision_id, hash, created_at, created_by, deleted, compatibility_check, version_check, security_overrides)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            RETURNING environment_id, revision_id, created_at, created_by, deleted, compatibility_check, version_check, security_overrides, hash
+            RETURNING environment_id, revision_id, hash, created_at, created_by, deleted, compatibility_check, version_check, security_overrides
         "# })
             .bind(revision.environment_id)
             .bind(revision.revision_id)
+            .bind(revision.hash)
             .bind_revision_audit_fields(revision.audit)
             .bind(revision.compatibility_check)
             .bind(revision.version_check)
-            .bind(revision.security_overrides)
-            .bind(revision.hash)).await
+            .bind(revision.security_overrides)).await
     }
 }
