@@ -15,6 +15,7 @@
 pub use crate::repo::model::environment::{
     EnvironmentCurrentRevisionRecord, EnvironmentRecord, EnvironmentRevisionRecord,
 };
+use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures_util::future::BoxFuture;
@@ -28,7 +29,6 @@ use indoc::indoc;
 use sqlx::Database;
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
-use crate::repo::model::BindFields;
 
 #[async_trait]
 pub trait EnvironmentRepo: Send + Sync {

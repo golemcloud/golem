@@ -404,6 +404,16 @@ impl RetryConfig {
             max_jitter_factor: Some(0.15),
         }
     }
+
+    pub fn no_retries() -> RetryConfig {
+        Self {
+            max_attempts: 0,
+            min_delay: Duration::from_millis(0),
+            max_delay: Duration::from_millis(0),
+            multiplier: 1.0,
+            max_jitter_factor: None,
+        }
+    }
 }
 
 pub fn env_config_provider() -> Env {

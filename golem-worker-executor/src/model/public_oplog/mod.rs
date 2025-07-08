@@ -887,7 +887,10 @@ fn encode_host_function_request_as_value(
             let payload: SerializableHttpRequest = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem io::poll::poll" => no_payload(),
+        "golem io::poll::poll" => {
+            let count: usize = try_deserialize(bytes)?;
+            Ok(ValueAndType::new(Value::U64(count as u64), u64()))
+        }
         "golem blobstore::container::object_info" => {
             let payload: (String, String) = try_deserialize(bytes)?;
             Ok(container_and_object(payload.0, payload.1))
@@ -999,7 +1002,10 @@ fn encode_host_function_request_as_value(
         "golem_environment::initial_cwd" => no_payload(),
         "monotonic_clock::resolution" => no_payload(),
         "monotonic_clock::now" => no_payload(),
-        "monotonic_clock::subscribe_duration" => no_payload(),
+        "monotonic_clock::subscribe_duration" => {
+            let duration_ns: u64 = try_deserialize(bytes)?;
+            Ok(ValueAndType::new(Value::U64(duration_ns), u64()))
+        }
         "wall_clock::now" => no_payload(),
         "wall_clock::resolution" => no_payload(),
         "golem::api::create_promise" => no_payload(),

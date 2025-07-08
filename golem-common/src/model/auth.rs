@@ -165,6 +165,69 @@ impl TryFrom<String> for Namespace {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, EnumIter, FromRepr)]
 #[repr(i32)]
+pub enum AccountAction {
+    ViewAccount = 0,
+    UpdateAccount = 1,
+    ViewPlan = 2,
+    CreateProject = 3,
+    DeleteAccount = 4,
+    ViewAccountGrants = 5,
+    CreateAccountGrant = 6,
+    DeleteAccountGrant = 7,
+    ViewDefaultProject = 8,
+    ListProjectGrants = 9,
+    ViewLimits = 10,
+    UpdateLimits = 11,
+    ViewTokens = 12,
+    CreateToken = 13,
+    DeleteToken = 14,
+    ViewGlobalPlugins = 15,
+    CreateGlobalPlugin = 16,
+    UpdateGlobalPlugin = 17,
+    DeleteGlobalPlugin = 18,
+}
+
+impl From<AccountAction> for i32 {
+    fn from(value: AccountAction) -> Self {
+        value as i32
+    }
+}
+
+impl TryFrom<i32> for AccountAction {
+    type Error = String;
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        AccountAction::from_repr(value).ok_or_else(|| format!("Invalid account action: {value}"))
+    }
+}
+
+impl Display for AccountAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::ViewAccount => write!(f, "ViewAccount"),
+            Self::UpdateAccount => write!(f, "UpdateAccount"),
+            Self::ViewPlan => write!(f, "ViewPlan"),
+            Self::CreateProject => write!(f, "CreateProject"),
+            Self::DeleteAccount => write!(f, "DeleteAccount"),
+            Self::ViewAccountGrants => write!(f, "ViewAccountGrants"),
+            Self::CreateAccountGrant => write!(f, "CreateAccountGrant"),
+            Self::DeleteAccountGrant => write!(f, "DeleteAccountGrant"),
+            Self::ViewDefaultProject => write!(f, "ViewDefaultProject"),
+            Self::ListProjectGrants => write!(f, "ListProjectGrants"),
+            Self::ViewLimits => write!(f, "ViewLimits"),
+            Self::UpdateLimits => write!(f, "UpdateLimits"),
+            Self::ViewTokens => write!(f, "ViewTokens"),
+            Self::CreateToken => write!(f, "CreateToken"),
+            Self::DeleteToken => write!(f, "DeleteToken"),
+            Self::ViewGlobalPlugins => write!(f, "ViewGlobalPlugin"),
+            Self::CreateGlobalPlugin => write!(f, "CreateGlobalPlugin"),
+            Self::UpdateGlobalPlugin => write!(f, "UpdateGlobalPlugin"),
+            Self::DeleteGlobalPlugin => write!(f, "DeleteGlobalPlugin"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, EnumIter, FromRepr)]
+#[repr(i32)]
 pub enum ProjectAction {
     ViewComponent = 0,
     CreateComponent = 1,
@@ -194,6 +257,10 @@ pub enum ProjectAction {
     ViewApiDomain = 25,
     DeleteApiDomain = 26,
     BatchUpdatePluginInstallations = 27,
+    ViewPluginDefinition = 28,
+    CreatePluginDefinition = 29,
+    UpdatePluginDefinition = 30,
+    DeletePluginDefinition = 31,
 }
 
 impl From<ProjectAction> for i32 {
@@ -240,6 +307,10 @@ impl Display for ProjectAction {
             Self::DeleteApiDomain => write!(f, "DeleteApiDomain"),
             Self::ViewProject => write!(f, "ViewProject"),
             Self::BatchUpdatePluginInstallations => write!(f, "BatchUpdatePluginInstallations"),
+            Self::ViewPluginDefinition => write!(f, "ViewPluginDefinition"),
+            Self::CreatePluginDefinition => write!(f, "CreatePluginDefinition"),
+            Self::UpdatePluginDefinition => write!(f, "UpdatePluginDefinition"),
+            Self::DeletePluginDefinition => write!(f, "DeletePluginDefinition"),
         }
     }
 }
@@ -284,6 +355,10 @@ pub enum ProjectPermisison {
     UpsertApiDomain,
     ViewApiDomain,
     DeleteApiDomain,
+    ViewPluginDefinition,
+    CreatePluginDefinition,
+    UpdatePluginDefinition,
+    DeletePluginDefinition,
 }
 
 impl TryFrom<ProjectAction> for ProjectPermisison {
@@ -317,7 +392,11 @@ impl TryFrom<ProjectAction> for ProjectPermisison {
             ProjectAction::UpsertApiDomain => Ok(Self::UpsertApiDomain),
             ProjectAction::ViewApiDomain => Ok(Self::ViewApiDomain),
             ProjectAction::DeleteApiDomain => Ok(Self::DeleteApiDomain),
-            ProjectAction::BatchUpdatePluginInstallations | ProjectAction::ViewProject => {
+            ProjectAction::ViewPluginDefinition => Ok(Self::ViewPluginDefinition),
+            ProjectAction::CreatePluginDefinition => Ok(Self::CreatePluginDefinition),
+            ProjectAction::UpdatePluginDefinition => Ok(Self::UpdatePluginDefinition),
+            ProjectAction::DeletePluginDefinition => Ok(Self::DeletePluginDefinition),
+            ProjectAction::ViewProject | ProjectAction::BatchUpdatePluginInstallations => {
                 Err(format!("Unknown project permission: {value:?}"))
             }
         }
@@ -333,32 +412,36 @@ impl From<ProjectPermisison> for i32 {
 impl Display for ProjectPermisison {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            ProjectPermisison::ViewComponent => write!(f, "ViewComponent"),
-            ProjectPermisison::CreateComponent => write!(f, "CreateComponent"),
-            ProjectPermisison::UpdateComponent => write!(f, "UpdateComponent"),
-            ProjectPermisison::DeleteComponent => write!(f, "DeleteComponent"),
-            ProjectPermisison::ViewWorker => write!(f, "ViewWorker"),
-            ProjectPermisison::CreateWorker => write!(f, "CreateWorker"),
-            ProjectPermisison::UpdateWorker => write!(f, "UpdateWorker"),
-            ProjectPermisison::DeleteWorker => write!(f, "DeleteWorker"),
-            ProjectPermisison::ViewProjectGrants => write!(f, "ViewProjectGrants"),
-            ProjectPermisison::CreateProjectGrants => write!(f, "CreateProjectGrants"),
-            ProjectPermisison::DeleteProjectGrants => write!(f, "DeleteProjectGrants"),
-            ProjectPermisison::ViewApiDefinition => write!(f, "ViewApiDefinition"),
-            ProjectPermisison::CreateApiDefinition => write!(f, "CreateApiDefinition"),
-            ProjectPermisison::UpdateApiDefinition => write!(f, "UpdateApiDefinition"),
-            ProjectPermisison::DeleteApiDefinition => write!(f, "DeleteApiDefinition"),
-            ProjectPermisison::DeleteProject => write!(f, "DeleteProject"),
-            ProjectPermisison::ViewPluginInstallations => write!(f, "ViewPluginInstallations"),
-            ProjectPermisison::CreatePluginInstallation => write!(f, "CreatePluginInstallation"),
-            ProjectPermisison::UpdatePluginInstallation => write!(f, "UpdatePluginInstallation"),
-            ProjectPermisison::DeletePluginInstallation => write!(f, "DeletePluginInstallation"),
-            ProjectPermisison::UpsertApiDeployment => write!(f, "UpsertApiDeployment"),
-            ProjectPermisison::ViewApiDeployment => write!(f, "ViewApiDeployment"),
-            ProjectPermisison::DeleteApiDeployment => write!(f, "DeleteApiDeployment"),
-            ProjectPermisison::UpsertApiDomain => write!(f, "UpsertApiDomain"),
-            ProjectPermisison::ViewApiDomain => write!(f, "ViewApiDomain"),
-            ProjectPermisison::DeleteApiDomain => write!(f, "DeleteApiDomain"),
+            Self::ViewComponent => write!(f, "ViewComponent"),
+            Self::CreateComponent => write!(f, "CreateComponent"),
+            Self::UpdateComponent => write!(f, "UpdateComponent"),
+            Self::DeleteComponent => write!(f, "DeleteComponent"),
+            Self::ViewWorker => write!(f, "ViewWorker"),
+            Self::CreateWorker => write!(f, "CreateWorker"),
+            Self::UpdateWorker => write!(f, "UpdateWorker"),
+            Self::DeleteWorker => write!(f, "DeleteWorker"),
+            Self::ViewProjectGrants => write!(f, "ViewProjectGrants"),
+            Self::CreateProjectGrants => write!(f, "CreateProjectGrants"),
+            Self::DeleteProjectGrants => write!(f, "DeleteProjectGrants"),
+            Self::ViewApiDefinition => write!(f, "ViewApiDefinition"),
+            Self::CreateApiDefinition => write!(f, "CreateApiDefinition"),
+            Self::UpdateApiDefinition => write!(f, "UpdateApiDefinition"),
+            Self::DeleteApiDefinition => write!(f, "DeleteApiDefinition"),
+            Self::DeleteProject => write!(f, "DeleteProject"),
+            Self::ViewPluginInstallations => write!(f, "ViewPluginInstallations"),
+            Self::CreatePluginInstallation => write!(f, "CreatePluginInstallation"),
+            Self::UpdatePluginInstallation => write!(f, "UpdatePluginInstallation"),
+            Self::DeletePluginInstallation => write!(f, "DeletePluginInstallation"),
+            Self::UpsertApiDeployment => write!(f, "UpsertApiDeployment"),
+            Self::ViewApiDeployment => write!(f, "ViewApiDeployment"),
+            Self::DeleteApiDeployment => write!(f, "DeleteApiDeployment"),
+            Self::UpsertApiDomain => write!(f, "UpsertApiDomain"),
+            Self::ViewApiDomain => write!(f, "ViewApiDomain"),
+            Self::DeleteApiDomain => write!(f, "DeleteApiDomain"),
+            Self::ViewPluginDefinition => write!(f, "ViewPluginDefinition"),
+            Self::CreatePluginDefinition => write!(f, "CreatePluginDefinition"),
+            Self::UpdatePluginDefinition => write!(f, "UpdatePluginDefinition"),
+            Self::DeletePluginDefinition => write!(f, "DeletePluginDefinition"),
         }
     }
 }
@@ -368,32 +451,36 @@ impl FromStr for ProjectPermisison {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ViewComponent" => Ok(ProjectPermisison::ViewComponent),
-            "CreateComponent" => Ok(ProjectPermisison::CreateComponent),
-            "UpdateComponent" => Ok(ProjectPermisison::UpdateComponent),
-            "DeleteComponent" => Ok(ProjectPermisison::DeleteComponent),
-            "ViewWorker" => Ok(ProjectPermisison::ViewWorker),
-            "CreateWorker" => Ok(ProjectPermisison::CreateWorker),
-            "UpdateWorker" => Ok(ProjectPermisison::UpdateWorker),
-            "DeleteWorker" => Ok(ProjectPermisison::DeleteWorker),
-            "ViewProjectGrants" => Ok(ProjectPermisison::ViewProjectGrants),
-            "CreateProjectGrants" => Ok(ProjectPermisison::CreateProjectGrants),
-            "DeleteProjectGrants" => Ok(ProjectPermisison::DeleteProjectGrants),
-            "ViewApiDefinition" => Ok(ProjectPermisison::ViewApiDefinition),
-            "CreateApiDefinition" => Ok(ProjectPermisison::CreateApiDefinition),
-            "UpdateApiDefinition" => Ok(ProjectPermisison::UpdateApiDefinition),
-            "DeleteApiDefinition" => Ok(ProjectPermisison::DeleteApiDefinition),
-            "DeleteProject" => Ok(ProjectPermisison::DeleteProject),
-            "ViewPluginInstallations" => Ok(ProjectPermisison::ViewPluginInstallations),
-            "CreatePluginInstallation" => Ok(ProjectPermisison::CreatePluginInstallation),
-            "UpdatePluginInstallation" => Ok(ProjectPermisison::UpdatePluginInstallation),
-            "DeletePluginInstallation" => Ok(ProjectPermisison::DeletePluginInstallation),
-            "UpsertApiDeployment" => Ok(ProjectPermisison::UpsertApiDeployment),
-            "ViewApiDeployment" => Ok(ProjectPermisison::ViewApiDeployment),
-            "DeleteApiDeployment" => Ok(ProjectPermisison::DeleteApiDeployment),
-            "UpsertApiDomain" => Ok(ProjectPermisison::UpsertApiDomain),
-            "ViewApiDomain" => Ok(ProjectPermisison::ViewApiDomain),
-            "DeleteApiDomain" => Ok(ProjectPermisison::DeleteApiDomain),
+            "ViewComponent" => Ok(Self::ViewComponent),
+            "CreateComponent" => Ok(Self::CreateComponent),
+            "UpdateComponent" => Ok(Self::UpdateComponent),
+            "DeleteComponent" => Ok(Self::DeleteComponent),
+            "ViewWorker" => Ok(Self::ViewWorker),
+            "CreateWorker" => Ok(Self::CreateWorker),
+            "UpdateWorker" => Ok(Self::UpdateWorker),
+            "DeleteWorker" => Ok(Self::DeleteWorker),
+            "ViewProjectGrants" => Ok(Self::ViewProjectGrants),
+            "CreateProjectGrants" => Ok(Self::CreateProjectGrants),
+            "DeleteProjectGrants" => Ok(Self::DeleteProjectGrants),
+            "ViewApiDefinition" => Ok(Self::ViewApiDefinition),
+            "CreateApiDefinition" => Ok(Self::CreateApiDefinition),
+            "UpdateApiDefinition" => Ok(Self::UpdateApiDefinition),
+            "DeleteApiDefinition" => Ok(Self::DeleteApiDefinition),
+            "DeleteProject" => Ok(Self::DeleteProject),
+            "ViewPluginInstallations" => Ok(Self::ViewPluginInstallations),
+            "CreatePluginInstallation" => Ok(Self::CreatePluginInstallation),
+            "UpdatePluginInstallation" => Ok(Self::UpdatePluginInstallation),
+            "DeletePluginInstallation" => Ok(Self::DeletePluginInstallation),
+            "UpsertApiDeployment" => Ok(Self::UpsertApiDeployment),
+            "ViewApiDeployment" => Ok(Self::ViewApiDeployment),
+            "DeleteApiDeployment" => Ok(Self::DeleteApiDeployment),
+            "UpsertApiDomain" => Ok(Self::UpsertApiDomain),
+            "ViewApiDomain" => Ok(Self::ViewApiDomain),
+            "DeleteApiDomain" => Ok(Self::DeleteApiDomain),
+            "ViewPluginDefinition" => Ok(Self::ViewPluginDefinition),
+            "CreatePluginDefinition" => Ok(Self::CreatePluginDefinition),
+            "UpdatePluginDefinition" => Ok(Self::UpdatePluginDefinition),
+            "DeletePluginDefinition" => Ok(Self::DeletePluginDefinition),
             _ => Err(format!("Unknown project permission: {s}")),
         }
     }
@@ -430,6 +517,7 @@ pub struct ProjectAuthorisedActions {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
+    use super::AccountAction;
     use super::ProjectAction;
     use super::TokenSecret;
 
@@ -450,6 +538,22 @@ mod protobuf {
             Self {
                 value: Some(value.value.into()),
             }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::auth::AccountAction> for AccountAction {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::auth::AccountAction,
+        ) -> Result<Self, Self::Error> {
+            Self::try_from(value as i32)
+        }
+    }
+
+    impl From<AccountAction> for golem_api_grpc::proto::golem::auth::AccountAction {
+        fn from(value: AccountAction) -> Self {
+            Self::try_from(value as i32).expect("Encoding AccountAction as protobuf")
         }
     }
 

@@ -22,9 +22,9 @@ use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::serialized::SerializableStreamError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::error::GolemError;
+use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
-use golem_common::model::WorkerEvent;
 use wasmtime_wasi::p2::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
@@ -194,9 +194,9 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
         let output = self.table().get(&self_)?;
         let event = if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
-            Some(WorkerEvent::stdout(contents.clone()))
+            Some(InternalWorkerEvent::stdout(contents.clone()))
         } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
-            Some(WorkerEvent::stderr(contents.clone()))
+            Some(InternalWorkerEvent::stderr(contents.clone()))
         } else {
             None
         };
@@ -341,16 +341,7 @@ fn get_http_request_begin_idx<Ctx: WorkerCtx>(
             "No matching HTTP request is associated with resource handle"
         ))
     })?;
-    let begin_idx = *ctx
-        .state
-        .open_function_table
-        .get(&request_state.root_handle)
-        .ok_or_else(|| {
-            StreamError::Trap(anyhow!(
-                "No matching BeginRemoteWrite index was found for the open HTTP request"
-            ))
-        })?;
-    Ok(begin_idx)
+    Ok(request_state.begin_index)
 }
 
 fn get_http_stream_request<Ctx: WorkerCtx>(

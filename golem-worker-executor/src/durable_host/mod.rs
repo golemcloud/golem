@@ -21,6 +21,7 @@ use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::serialized::SerializableError;
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
+use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, InvocationContext, LastError,
     ListDirectoryResult, ReadFileResult, TrapType, WorkerConfig,
@@ -74,8 +75,8 @@ use golem_common::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
     FailedUpdateRecord, IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor,
-    ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
@@ -453,7 +454,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn emit_log_event(&self, event: WorkerEvent) {
+    async fn emit_log_event(&self, event: InternalWorkerEvent) {
         if let Some(entry) = event.as_oplog_entry() {
             if let OplogEntry::Log {
                 level,
@@ -1954,7 +1955,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         let entry = OplogEntry::failed_update(target_version, details.clone());
         let timestamp = entry.timestamp();
-        worker.oplog().add_and_commit(entry).await;
+        let failed_update_oplog_idx = worker.oplog().add_and_commit(entry).await;
         let metadata = worker.get_metadata()?;
         let mut status = metadata.last_known_status;
         status.failed_updates.push(FailedUpdateRecord {
@@ -1962,6 +1963,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             target_version,
             details: details.clone(),
         });
+
+        // ensure our status is in sync with the oplog idx
+        status.oplog_idx = failed_update_oplog_idx;
 
         if status.skipped_regions.is_overridden() {
             status.skipped_regions.drop_override()
@@ -2231,8 +2235,8 @@ pub(crate) enum HttpRequestCloseOwner {
 struct HttpRequestState {
     /// Who is responsible for calling end_function and removing entries from the table
     pub close_owner: HttpRequestCloseOwner,
-    /// The handle of the FutureIncomingResponse that is registered into the open_function_table
-    pub root_handle: u32,
+    /// The BeginRemoteWrite entry's index
+    pub begin_index: OplogIndex,
     /// Information about the request to be included in the oplog
     pub request: SerializableHttpRequest,
     /// SpanId
@@ -2262,7 +2266,6 @@ struct PrivateDurableWorkerState {
     overridden_retry_policy: Option<RetryConfig>,
     persistence_level: PersistenceLevel,
     assume_idempotence: bool,
-    open_function_table: HashMap<u32, OplogIndex>,
 
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
@@ -2345,7 +2348,6 @@ impl PrivateDurableWorkerState {
             overridden_retry_policy: None,
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
-            open_function_table: HashMap::new(),
             open_http_requests: HashMap::new(),
             snapshotting_mode: None,
             indexed_resources: HashMap::new(),

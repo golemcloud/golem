@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod public_oplog;
-
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::workerctx::WorkerCtx;
 use bincode::{Decode, Encode};
@@ -38,6 +36,9 @@ use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::Trap;
+
+pub mod event;
+pub mod public_oplog;
 
 pub trait ShardAssignmentCheck {
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError>;
