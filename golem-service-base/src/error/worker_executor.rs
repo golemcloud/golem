@@ -86,11 +86,6 @@ pub enum WorkerExecutorError {
     Runtime {
         details: String,
     },
-    // The user component existed with a TrapType::Error
-    WorkerTrapped {
-        error: WorkerTrapCause,
-        error_logs: String,
-    },
     InvalidShardId {
         shard_id: ShardId,
         shard_ids: Vec<ShardId>,
@@ -111,6 +106,11 @@ pub enum WorkerExecutorError {
     FileSystemError {
         path: String,
         reason: String,
+    },
+    // The user component existed with a TrapType::Error
+    WorkerTrapped {
+        error: WorkerTrapCause,
+        error_logs: String,
     },
 }
 
