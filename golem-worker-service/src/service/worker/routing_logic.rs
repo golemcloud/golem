@@ -32,7 +32,7 @@ use golem_common::model::{Pod, ShardId, TargetWorkerId, WorkerId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
 use golem_common::SafeDisplay;
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableError};
 
 use crate::service::worker::WorkerServiceError;
@@ -322,18 +322,19 @@ pub enum ResponseMapResult {
     Other(WorkerServiceError),
 }
 
-impl From<GolemError> for ResponseMapResult {
-    fn from(error: GolemError) -> Self {
+impl From<WorkerExecutorError> for ResponseMapResult {
+    fn from(error: WorkerExecutorError) -> Self {
         match error {
-            GolemError::InvalidShardId {
+            WorkerExecutorError::InvalidShardId {
                 shard_id,
                 shard_ids,
             } => ResponseMapResult::InvalidShardId {
                 shard_id,
                 shard_ids: HashSet::from_iter(shard_ids),
             },
-            GolemError::ShardingNotReady => ResponseMapResult::ShardingNotReady,
-            GolemError::WorkerNotFound { .. } | GolemError::WorkerAlreadyExists { .. } => {
+            WorkerExecutorError::ShardingNotReady => ResponseMapResult::ShardingNotReady,
+            WorkerExecutorError::WorkerNotFound { .. }
+            | WorkerExecutorError::WorkerAlreadyExists { .. } => {
                 ResponseMapResult::Expected(error.into())
             }
             other => ResponseMapResult::Other(other.into()),
@@ -352,7 +353,7 @@ impl From<WorkerExecutionError> for ResponseMapResult {
         let golem_error = error
             .clone()
             .try_into()
-            .unwrap_or_else(|_| GolemError::unknown("Unknown worker execution error"));
+            .unwrap_or_else(|_| WorkerExecutorError::unknown("Unknown worker execution error"));
         let response_map_result = golem_error.clone().into();
         trace!(
             error = format!("{:?}", error),

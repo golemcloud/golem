@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::Value;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
@@ -53,7 +53,7 @@ pub trait SchedulerWorkerAccess {
     async fn open_oplog(
         &self,
         owned_worker_id: &OwnedWorkerId,
-    ) -> Result<Arc<dyn Oplog>, GolemError>;
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
 
     // enqueue and invocation to the worker
     async fn enqueue_invocation(
@@ -63,7 +63,7 @@ pub trait SchedulerWorkerAccess {
         full_function_name: String,
         function_input: Vec<Value>,
         invocation_context: InvocationContextStack,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 #[async_trait]
@@ -75,7 +75,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
     async fn open_oplog(
         &self,
         owned_worker_id: &OwnedWorkerId,
-    ) -> Result<Arc<dyn Oplog>, GolemError> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let worker = self
             .get_or_create_suspended(owned_worker_id, None, None, None, None)
             .await?;
@@ -89,7 +89,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         full_function_name: String,
         function_input: Vec<Value>,
         invocation_context: InvocationContextStack,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         let worker = self
             .get_or_create_suspended(owned_worker_id, None, None, None, None)
             .await?;
@@ -434,7 +434,7 @@ mod tests {
         AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId,
         WorkerId,
     };
-    use golem_service_base::error::worker_executor::GolemError;
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use golem_wasm_rpc::Value;
     use std::collections::{HashMap, HashSet};
@@ -452,7 +452,7 @@ mod tests {
         async fn open_oplog(
             &self,
             _owned_worker_id: &OwnedWorkerId,
-        ) -> Result<Arc<dyn Oplog>, GolemError> {
+        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
             unimplemented!()
         }
         async fn enqueue_invocation(
@@ -462,7 +462,7 @@ mod tests {
             _full_function_name: String,
             _function_input: Vec<Value>,
             _invocation_context: InvocationContextStack,
-        ) -> Result<(), GolemError> {
+        ) -> Result<(), WorkerExecutorError> {
             unimplemented!()
         }
     }

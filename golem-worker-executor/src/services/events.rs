@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::{IdempotencyKey, WorkerId};
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::ValueAndType;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -77,10 +77,10 @@ pub enum Event {
     InvocationCompleted {
         worker_id: WorkerId,
         idempotency_key: IdempotencyKey,
-        result: Result<Option<ValueAndType>, GolemError>,
+        result: Result<Option<ValueAndType>, WorkerExecutorError>,
     },
     WorkerLoaded {
         worker_id: WorkerId,
-        result: Result<(), GolemError>,
+        result: Result<(), WorkerExecutorError>,
     },
 }

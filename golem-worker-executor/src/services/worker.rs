@@ -28,7 +28,7 @@ use golem_common::model::{
     ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, warn};
 
@@ -39,7 +39,7 @@ pub trait WorkerService: Send + Sync {
         &self,
         worker_metadata: &WorkerMetadata,
         component_type: ComponentType,
-    ) -> Result<Arc<RwLock<ExecutionStatus>>, GolemError>;
+    ) -> Result<Arc<RwLock<ExecutionStatus>>, WorkerExecutorError>;
 
     async fn get(&self, owned_worker_id: &OwnedWorkerId) -> Option<WorkerMetadata>;
 
@@ -118,7 +118,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         worker_metadata: &WorkerMetadata,
         component_type: ComponentType,
-    ) -> Result<Arc<RwLock<ExecutionStatus>>, GolemError> {
+    ) -> Result<Arc<RwLock<ExecutionStatus>>, WorkerExecutorError> {
         record_worker_call("add");
 
         let worker_id = &worker_metadata.worker_id;

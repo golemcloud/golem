@@ -15,7 +15,7 @@
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentId, ComponentVersion, PromiseId, WorkerId};
-use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::Value;
 use golem_worker_executor::durable_host::http::serialized::{
     SerializableDnsErrorPayload, SerializableErrorCode, SerializableFieldSizePayload,
@@ -351,7 +351,7 @@ impl FromValue for SerializableStreamError {
     }
 }
 
-impl FromValue for GolemError {
+impl FromValue for WorkerExecutorError {
     fn from_value(value: &Value) -> Result<Self, String>
     where
         Self: Sized,
@@ -369,7 +369,7 @@ impl FromValue for GolemError {
 
                         let error = &errors[0];
                         let error_str = String::from_value(error)?;
-                        Ok(GolemError::invalid_request(error_str))
+                        Ok(WorkerExecutorError::invalid_request(error_str))
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -383,7 +383,7 @@ impl FromValue for GolemError {
 
                         let worker_id_val = &values[0];
                         let worker_id = WorkerId::from_value(worker_id_val)?;
-                        Ok(GolemError::worker_already_exists(worker_id))
+                        Ok(WorkerExecutorError::worker_already_exists(worker_id))
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -397,7 +397,7 @@ impl FromValue for GolemError {
 
                         let worker_id_val = &values[0];
                         let worker_id = WorkerId::from_value(worker_id_val)?;
-                        Ok(GolemError::worker_not_found(worker_id))
+                        Ok(WorkerExecutorError::worker_not_found(worker_id))
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -412,7 +412,9 @@ impl FromValue for GolemError {
                         let details_val = &values[1];
                         let worker_id = WorkerId::from_value(worker_id_val)?;
                         let details = String::from_value(details_val)?;
-                        Ok(GolemError::worker_creation_failed(worker_id, details))
+                        Ok(WorkerExecutorError::worker_creation_failed(
+                            worker_id, details,
+                        ))
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -427,11 +429,15 @@ impl FromValue for GolemError {
                         let worker_id_val = &values[0];
                         let details_val = &values[1];
                         let worker_id = WorkerId::from_value(worker_id_val)?;
-                        let golem_error = GolemError::from_value(details_val).or_else(|_| {
-                            String::from_value(details_val).map(GolemError::unknown)
-                        })?;
+                        let golem_error =
+                            WorkerExecutorError::from_value(details_val).or_else(|_| {
+                                String::from_value(details_val).map(WorkerExecutorError::unknown)
+                            })?;
 
-                        Ok(GolemError::failed_to_resume_worker(worker_id, golem_error))
+                        Ok(WorkerExecutorError::failed_to_resume_worker(
+                            worker_id,
+                            golem_error,
+                        ))
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -450,7 +456,7 @@ impl FromValue for GolemError {
                         let component_version = u64::from_value(component_version)?;
                         let reason = String::from_value(reason)?;
 
-                        Ok(GolemError::component_download_failed(
+                        Ok(WorkerExecutorError::component_download_failed(
                             component_id,
                             component_version,
                             reason,
@@ -473,7 +479,7 @@ impl FromValue for GolemError {
                         let component_version = u64::from_value(component_version)?;
                         let reason = String::from_value(reason)?;
 
-                        Ok(GolemError::ComponentParseFailed {
+                        Ok(WorkerExecutorError::ComponentParseFailed {
                             component_id,
                             component_version,
                             reason,
@@ -494,7 +500,7 @@ impl FromValue for GolemError {
                         let component_id = ComponentId::from_value(component_id)?;
                         let reason = String::from_value(reason)?;
 
-                        Ok(GolemError::GetLatestVersionOfComponentFailed {
+                        Ok(WorkerExecutorError::GetLatestVersionOfComponentFailed {
                             component_id,
                             reason,
                         })
@@ -512,7 +518,7 @@ impl FromValue for GolemError {
                         let promise_id_val = &values[0];
                         let promise_id = PromiseId::from_value(promise_id_val)?;
 
-                        Ok(GolemError::PromiseNotFound { promise_id })
+                        Ok(WorkerExecutorError::PromiseNotFound { promise_id })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -526,7 +532,7 @@ impl FromValue for GolemError {
                         let promise_id_val = &values[0];
                         let promise_id = PromiseId::from_value(promise_id_val)?;
 
-                        Ok(GolemError::PromiseDropped { promise_id })
+                        Ok(WorkerExecutorError::PromiseDropped { promise_id })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -540,7 +546,7 @@ impl FromValue for GolemError {
                         let promise_id_val = &values[0];
                         let promise_id = PromiseId::from_value(promise_id_val)?;
 
-                        Ok(GolemError::PromiseAlreadyCompleted { promise_id })
+                        Ok(WorkerExecutorError::PromiseAlreadyCompleted { promise_id })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -555,7 +561,7 @@ impl FromValue for GolemError {
                         let interrupt_kind_val = &values[0];
                         let kind = InterruptKind::from_value(interrupt_kind_val)?;
 
-                        Ok(GolemError::Interrupted { kind })
+                        Ok(WorkerExecutorError::Interrupted { kind })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -568,12 +574,12 @@ impl FromValue for GolemError {
 
                         let details = String::from_value(&values[0])?;
 
-                        Ok(GolemError::ParamTypeMismatch { details })
+                        Ok(WorkerExecutorError::ParamTypeMismatch { details })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
                 },
-                (13, None) => Ok(GolemError::NoValueInMessage),
+                (13, None) => Ok(WorkerExecutorError::NoValueInMessage),
                 (14, Some(error)) => match error.deref() {
                     Value::Record(values) => {
                         if values.len() != 1 {
@@ -582,7 +588,7 @@ impl FromValue for GolemError {
 
                         let details = String::from_value(&values[0])?;
 
-                        Ok(GolemError::ValueMismatch { details })
+                        Ok(WorkerExecutorError::ValueMismatch { details })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -599,7 +605,7 @@ impl FromValue for GolemError {
                         let expected = String::from_value(expected)?;
                         let got = String::from_value(got)?;
 
-                        Ok(GolemError::UnexpectedOplogEntry { expected, got })
+                        Ok(WorkerExecutorError::UnexpectedOplogEntry { expected, got })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -612,7 +618,7 @@ impl FromValue for GolemError {
 
                         let details = String::from_value(&values[0])?;
 
-                        Ok(GolemError::Runtime { details })
+                        Ok(WorkerExecutorError::Runtime { details })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -628,12 +634,12 @@ impl FromValue for GolemError {
                         let expected = String::from_value(expected)?;
                         let got = String::from_value(got)?;
 
-                        Ok(GolemError::UnexpectedOplogEntry { expected, got })
+                        Ok(WorkerExecutorError::UnexpectedOplogEntry { expected, got })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
                 },
-                (18, None) => Ok(GolemError::InvalidAccount),
+                (18, None) => Ok(WorkerExecutorError::InvalidAccount),
                 (19, Some(error)) => match error.deref() {
                     Value::Record(values) => {
                         if values.len() != 1 {
@@ -642,12 +648,12 @@ impl FromValue for GolemError {
 
                         let details = String::from_value(&values[0])?;
 
-                        Ok(GolemError::PreviousInvocationFailed { details })
+                        Ok(WorkerExecutorError::PreviousInvocationFailed { details })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
                 },
-                (20, None) => Ok(GolemError::PreviousInvocationExited),
+                (20, None) => Ok(WorkerExecutorError::PreviousInvocationExited),
                 (21, Some(error)) => match error.deref() {
                     Value::Record(values) => {
                         if values.len() != 1 {
@@ -656,28 +662,33 @@ impl FromValue for GolemError {
 
                         let details = String::from_value(&values[0])?;
 
-                        Ok(GolemError::Unknown { details })
+                        Ok(WorkerExecutorError::Unknown { details })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
                 },
-                (22, None) => Ok(GolemError::ShardingNotReady),
-                (23, Some(error)) => match error.deref() {
-                    Value::Record(values) => {
-                        if values.len() != 2 {
-                            return Err("Failed to get GolemError".to_string());
+                (22, None) => Ok(WorkerExecutorError::ShardingNotReady),
+                (23, Some(error)) => {
+                    match error.deref() {
+                        Value::Record(values) => {
+                            if values.len() != 2 {
+                                return Err("Failed to get GolemError".to_string());
+                            }
+
+                            let path = &values[0];
+                            let reason = &values[1];
+                            let path = String::from_value(path)?;
+                            let reason = String::from_value(reason)?;
+
+                            Ok(WorkerExecutorError::InitialComponentFileDownloadFailed {
+                                path,
+                                reason,
+                            })
                         }
 
-                        let path = &values[0];
-                        let reason = &values[1];
-                        let path = String::from_value(path)?;
-                        let reason = String::from_value(reason)?;
-
-                        Ok(GolemError::InitialComponentFileDownloadFailed { path, reason })
+                        _ => Err("Failed to get GolemError. Not a Record".to_string()),
                     }
-
-                    _ => Err("Failed to get GolemError. Not a Record".to_string()),
-                },
+                }
                 (24, Some(error)) => match error.deref() {
                     Value::Record(values) => {
                         if values.len() != 2 {
@@ -689,7 +700,7 @@ impl FromValue for GolemError {
                         let path = String::from_value(path)?;
                         let reason = String::from_value(reason)?;
 
-                        Ok(GolemError::FileSystemError { path, reason })
+                        Ok(WorkerExecutorError::FileSystemError { path, reason })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
@@ -734,7 +745,7 @@ impl FromValue for WorkerProxyError {
                     Ok(WorkerProxyError::AlreadyExists(errors))
                 }
                 (5, Some(errors)) => {
-                    let errors: GolemError = GolemError::from_value(errors)?;
+                    let errors: WorkerExecutorError = WorkerExecutorError::from_value(errors)?;
                     Ok(WorkerProxyError::InternalError(errors))
                 }
 
@@ -761,7 +772,7 @@ impl FromValue for SerializableError {
                     Ok(SerializableError::FsError { code: error })
                 }
                 (2, Some(golem_error_value)) => {
-                    let error = GolemError::from_value(golem_error_value)?;
+                    let error = WorkerExecutorError::from_value(golem_error_value)?;
                     Ok(SerializableError::Golem { error })
                 }
                 (3, Some(payload)) => {

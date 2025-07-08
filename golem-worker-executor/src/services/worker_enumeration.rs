@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use golem_common::model::{
     AccountId, ComponentId, ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus,
 };
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tracing::{info, Instrument};
 
@@ -19,7 +19,7 @@ pub trait RunningWorkerEnumerationService: Send + Sync {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-    ) -> Result<Vec<WorkerMetadata>, GolemError>;
+    ) -> Result<Vec<WorkerMetadata>, WorkerExecutorError>;
 }
 
 #[derive(Clone)]
@@ -35,7 +35,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-    ) -> Result<Vec<WorkerMetadata>, GolemError> {
+    ) -> Result<Vec<WorkerMetadata>, WorkerExecutorError> {
         info!(
             "Get workers - filter: {}",
             filter
@@ -77,7 +77,7 @@ pub trait WorkerEnumerationService: Send + Sync {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError>;
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError>;
 }
 
 #[derive(Clone)]
@@ -108,7 +108,7 @@ impl DefaultWorkerEnumerationService {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
         let mut workers: Vec<WorkerMetadata> = vec![];
 
         let (new_cursor, keys) = self
@@ -179,7 +179,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
         info!(
             "Get workers - filter: {}, cursor: {}, count: {}, precise: {}",
             filter

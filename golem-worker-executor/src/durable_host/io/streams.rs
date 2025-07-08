@@ -24,7 +24,7 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequ
 use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime_wasi::p2::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
@@ -315,7 +315,7 @@ async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: u32,
     result: &Result<T, StreamError>,
-) -> Result<(), GolemError> {
+) -> Result<(), WorkerExecutorError> {
     if matches!(result, Err(StreamError::Closed)) {
         if let Some(state) = ctx.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {

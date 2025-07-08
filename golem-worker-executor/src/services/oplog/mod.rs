@@ -28,7 +28,7 @@ use golem_common::model::{
     WorkerId, WorkerMetadata,
 };
 use golem_common::serialization::{serialize, try_deserialize};
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
@@ -134,7 +134,7 @@ pub trait OplogService: Debug + Send + Sync {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError>;
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError>;
 
     /// Uploads a big oplog payload and returns a reference to it
     async fn upload_payload(

@@ -42,7 +42,7 @@ use golem_common::model::{
     WorkerId, WorkerStatus,
 };
 use golem_service_base::clients::limit::LimitService;
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
@@ -374,7 +374,7 @@ impl WorkerServiceDefault {
                                                                                                                 workers
                                                                                                             })),
                         } => {
-                            let workers: Vec<WorkerMetadata> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::unknown("Convert response error"))?;
+                            let workers: Vec<WorkerMetadata> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| WorkerExecutorError::unknown("Convert response error"))?;
                             Ok(workers)
                         }
                         workerexecutor::v1::GetRunningWorkersMetadataResponse {
@@ -434,7 +434,7 @@ impl WorkerServiceDefault {
                             .map(|w| w.try_into())
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(|err| {
-                                GolemError::unknown(format!(
+                                WorkerExecutorError::unknown(format!(
                                     "Unexpected worker metadata in response: {err}"
                                 ))
                             })?;
@@ -1143,7 +1143,9 @@ impl WorkerService for WorkerServiceDefault {
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|err| {
-                            GolemError::unknown(format!("Unexpected oplog entries in error: {err}"))
+                            WorkerExecutorError::unknown(format!(
+                                "Unexpected oplog entries in error: {err}"
+                            ))
                         })?;
                     Ok(GetOplogResponse {
                         entries: entries
@@ -1211,7 +1213,7 @@ impl WorkerService for WorkerServiceDefault {
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
-                        .map_err(|err| GolemError::unknown(format!("Unexpected oplog entries in error: {err}")))?;
+                        .map_err(|err| WorkerExecutorError::unknown(format!("Unexpected oplog entries in error: {err}")))?;
                     let first_index_in_chunk =  entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
                     Ok(GetOplogResponse {
                         entries,
@@ -1324,7 +1326,7 @@ impl WorkerService for WorkerServiceDefault {
                 WorkerServiceError::Internal("Protocal violation".to_string()),
             ),
             Some(workerexecutor::v1::get_file_contents_response::Result::Failure(err)) => {
-                let converted = GolemError::try_from(err).map_err(|err| {
+                let converted = WorkerExecutorError::try_from(err).map_err(|err| {
                     WorkerServiceError::Internal(format!("Failed converting errors {err}"))
                 })?;
                 Err(converted.into())
@@ -1360,7 +1362,7 @@ impl WorkerService for WorkerServiceDefault {
                     Ok(Bytes::from(bytes))
                 }
                 workerexecutor::v1::get_file_contents_response::Result::Failure(err) => {
-                    let converted = GolemError::try_from(err)
+                    let converted = WorkerExecutorError::try_from(err)
                         .map_err(|err| {
                             WorkerServiceError::Internal(format!("Failed converting errors {err}"))
                         })?

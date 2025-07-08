@@ -8,7 +8,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::OplogIndex;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_wasm_rpc::{ValueAndType, WitValue};
@@ -54,7 +54,7 @@ impl WorkerProxy for TestWorkerProxy {
         _invocation_context_stack: InvocationContextStack,
     ) -> Result<Option<ValueAndType>, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
-            GolemError::unknown(
+            WorkerExecutorError::unknown(
                 "Not implemented in tests as debug service is not expected to call invoke and await through proxy",
             )
         ))
@@ -72,7 +72,7 @@ impl WorkerProxy for TestWorkerProxy {
         _invocation_context_stack: InvocationContextStack,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
-            GolemError::unknown(
+            WorkerExecutorError::unknown(
                 "Not implemented in tests as debug service is not expected to call invoke and await through proxy",
             )
         ))
@@ -85,7 +85,7 @@ impl WorkerProxy for TestWorkerProxy {
         _mode: UpdateMode,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
-            GolemError::unknown(
+            WorkerExecutorError::unknown(
                 "Not implemented in tests as debug service is not expected to call invoke and await through proxy",
             )
         ))
@@ -100,7 +100,7 @@ impl WorkerProxy for TestWorkerProxy {
                 .worker_executor
                 .client()
                 .await
-                .map_err(|e| WorkerProxyError::InternalError(GolemError::from(e)))?
+                .map_err(|e| WorkerProxyError::InternalError(WorkerExecutorError::from(e)))?
                 .resume_worker(workerexecutor::v1::ResumeWorkerRequest {
                     worker_id: Some(worker_id.clone()),
                     account_id: Some(AccountId {
@@ -121,12 +121,12 @@ impl WorkerProxy for TestWorkerProxy {
         let result = result?.into_inner();
 
         match result.result {
-            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
-                "No result in resume worker response",
-            ))),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("No result in resume worker response"),
+            )),
             Some(workerexecutor::v1::resume_worker_response::Result::Success(_)) => Ok(()),
             Some(workerexecutor::v1::resume_worker_response::Result::Failure(error)) => Err(
-                WorkerProxyError::InternalError(GolemError::try_from(error).unwrap()),
+                WorkerProxyError::InternalError(WorkerExecutorError::try_from(error).unwrap()),
             ),
         }
     }
@@ -141,7 +141,7 @@ impl WorkerProxy for TestWorkerProxy {
             .worker_executor
             .client()
             .await
-            .map_err(|e| WorkerProxyError::InternalError(GolemError::from(e)))?
+            .map_err(|e| WorkerProxyError::InternalError(WorkerExecutorError::from(e)))?
             .fork_worker(ForkWorkerRequest {
                 account_id: Some(AccountId {
                     name: "test-account".to_string(),
@@ -155,12 +155,12 @@ impl WorkerProxy for TestWorkerProxy {
             .result;
 
         match result {
-            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
-                "No result in fork worker response",
-            ))),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("No result in fork worker response"),
+            )),
             Some(fork_worker_response::Result::Success(_)) => Ok(()),
             Some(fork_worker_response::Result::Failure(error)) => Err(
-                WorkerProxyError::InternalError(GolemError::try_from(error).unwrap()),
+                WorkerProxyError::InternalError(WorkerExecutorError::try_from(error).unwrap()),
             ),
         }
     }
@@ -174,7 +174,7 @@ impl WorkerProxy for TestWorkerProxy {
             .worker_executor
             .client()
             .await
-            .map_err(|e| WorkerProxyError::InternalError(GolemError::from(e)))?
+            .map_err(|e| WorkerProxyError::InternalError(WorkerExecutorError::from(e)))?
             .revert_worker(RevertWorkerRequest {
                 worker_id: Some(worker_id.into()),
                 account_id: Some(AccountId {
@@ -187,12 +187,12 @@ impl WorkerProxy for TestWorkerProxy {
             .result;
 
         match result {
-            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
-                "No result in revert worker response",
-            ))),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("No result in revert worker response"),
+            )),
             Some(revert_worker_response::Result::Success(_)) => Ok(()),
             Some(revert_worker_response::Result::Failure(error)) => Err(
-                WorkerProxyError::InternalError(GolemError::try_from(error).unwrap()),
+                WorkerProxyError::InternalError(WorkerExecutorError::try_from(error).unwrap()),
             ),
         }
     }

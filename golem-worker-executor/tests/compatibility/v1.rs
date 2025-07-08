@@ -35,7 +35,7 @@ use golem_common::model::{
     WorkerId, WorkerInvocation, WorkerResourceDescription, WorkerStatus,
 };
 use golem_common::serialization::{deserialize, serialize};
-use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_ast::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
     TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption,
@@ -898,74 +898,74 @@ pub fn golem_error() {
         oplog_idx: OplogIndex::from_u64(100),
     };
 
-    let g1 = GolemError::InvalidRequest {
+    let g1 = WorkerExecutorError::InvalidRequest {
         details: "invalid request".to_string(),
     };
-    let g2 = GolemError::WorkerAlreadyExists {
+    let g2 = WorkerExecutorError::WorkerAlreadyExists {
         worker_id: wid.clone(),
     };
-    let g3 = GolemError::WorkerNotFound {
+    let g3 = WorkerExecutorError::WorkerNotFound {
         worker_id: wid.clone(),
     };
-    let g4 = GolemError::WorkerCreationFailed {
+    let g4 = WorkerExecutorError::WorkerCreationFailed {
         worker_id: wid.clone(),
         details: "details".to_string(),
     };
-    let g5 = GolemError::FailedToResumeWorker {
+    let g5 = WorkerExecutorError::FailedToResumeWorker {
         worker_id: wid.clone(),
-        reason: Box::new(GolemError::InvalidRequest {
+        reason: Box::new(WorkerExecutorError::InvalidRequest {
             details: "invalid request".to_string(),
         }),
     };
-    let g6 = GolemError::ComponentDownloadFailed {
+    let g6 = WorkerExecutorError::ComponentDownloadFailed {
         component_id: wid.component_id.clone(),
         component_version: 0,
         reason: "reason".to_string(),
     };
-    let g7 = GolemError::ComponentParseFailed {
+    let g7 = WorkerExecutorError::ComponentParseFailed {
         component_id: wid.component_id.clone(),
         component_version: 0,
         reason: "reason".to_string(),
     };
-    let g8 = GolemError::GetLatestVersionOfComponentFailed {
+    let g8 = WorkerExecutorError::GetLatestVersionOfComponentFailed {
         component_id: wid.component_id.clone(),
         reason: "reason".to_string(),
     };
-    let g9 = GolemError::PromiseNotFound {
+    let g9 = WorkerExecutorError::PromiseNotFound {
         promise_id: pid.clone(),
     };
-    let g10 = GolemError::PromiseDropped {
+    let g10 = WorkerExecutorError::PromiseDropped {
         promise_id: pid.clone(),
     };
-    let g11 = GolemError::PromiseAlreadyCompleted {
+    let g11 = WorkerExecutorError::PromiseAlreadyCompleted {
         promise_id: pid.clone(),
     };
-    let g12 = GolemError::Interrupted {
+    let g12 = WorkerExecutorError::Interrupted {
         kind: InterruptKind::Interrupt,
     };
-    let g13 = GolemError::ParamTypeMismatch {
+    let g13 = WorkerExecutorError::ParamTypeMismatch {
         details: "details".to_string(),
     };
-    let g14 = GolemError::NoValueInMessage;
-    let g15 = GolemError::ValueMismatch {
+    let g14 = WorkerExecutorError::NoValueInMessage;
+    let g15 = WorkerExecutorError::ValueMismatch {
         details: "details".to_string(),
     };
-    let g16 = GolemError::UnexpectedOplogEntry {
+    let g16 = WorkerExecutorError::UnexpectedOplogEntry {
         expected: "expected".to_string(),
         got: "actual".to_string(),
     };
-    let g17 = GolemError::Runtime {
+    let g17 = WorkerExecutorError::Runtime {
         details: "details".to_string(),
     };
-    let g18 = GolemError::InvalidShardId {
+    let g18 = WorkerExecutorError::InvalidShardId {
         shard_id: ShardId::new(1),
         shard_ids: vec![ShardId::new(1)],
     };
-    let g19 = GolemError::InvalidAccount;
-    let g20 = GolemError::PreviousInvocationFailed {
+    let g19 = WorkerExecutorError::InvalidAccount;
+    let g20 = WorkerExecutorError::PreviousInvocationFailed {
         details: "details".to_string(),
     };
-    let g21 = GolemError::Unknown {
+    let g21 = WorkerExecutorError::Unknown {
         details: "details".to_string(),
     };
 
@@ -1026,7 +1026,7 @@ pub fn worker_proxy_error() {
     let wpe3 = WorkerProxyError::LimitExceeded("limit exceeded".to_string());
     let wpe4 = WorkerProxyError::NotFound("not found".to_string());
     let wpe5 = WorkerProxyError::AlreadyExists("already exists".to_string());
-    let wpe6 = WorkerProxyError::InternalError(GolemError::unknown("internal error"));
+    let wpe6 = WorkerProxyError::InternalError(WorkerExecutorError::unknown("internal error"));
 
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_proxy_error_bad_request", &mut mint, wpe1);
@@ -1044,7 +1044,7 @@ pub fn serializable_error() {
         message: "hello world".to_string(),
     };
     let se3 = SerializableError::Golem {
-        error: GolemError::Interrupted {
+        error: WorkerExecutorError::Interrupted {
             kind: InterruptKind::Restart,
         },
     };

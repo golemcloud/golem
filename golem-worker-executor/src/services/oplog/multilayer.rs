@@ -26,7 +26,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, OwnedWorkerId, ScanCursor, WorkerMetadata,
 };
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use nonempty_collections::NEVec;
 use std::cmp::min;
 use std::collections::BTreeMap;
@@ -63,7 +63,7 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError>;
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError>;
 
     /// Gets the last stored oplog entry's id in the archive
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
@@ -142,7 +142,7 @@ impl MultiLayerOplogService {
         &self,
         unfiltered_ids: Vec<OwnedWorkerId>,
         from: usize,
-    ) -> Result<Vec<OwnedWorkerId>, GolemError> {
+    ) -> Result<Vec<OwnedWorkerId>, WorkerExecutorError> {
         let mut ids = Vec::new();
         for id in unfiltered_ids {
             let mut exists_in_lower = false;
@@ -408,7 +408,7 @@ impl OplogService for MultiLayerOplogService {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         match cursor.layer {
             0 => {
                 let (new_cursor, unfiltered_ids) = self
@@ -464,7 +464,7 @@ impl OplogService for MultiLayerOplogService {
                     Ok((new_cursor, ids))
                 }
             }
-            layer => Err(GolemError::unknown(format!(
+            layer => Err(WorkerExecutorError::unknown(format!(
                 "Invalid oplog layer in scan cursor: {layer}"
             ))),
         }

@@ -28,7 +28,7 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, RetryConfig, WorkerId};
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::{Value, ValueAndType, WitValue};
 use http::Uri;
@@ -98,17 +98,19 @@ pub enum WorkerProxyError {
     LimitExceeded(String),
     NotFound(String),
     AlreadyExists(String),
-    InternalError(GolemError),
+    InternalError(WorkerExecutorError),
 }
 
-impl From<WorkerProxyError> for GolemError {
+impl From<WorkerProxyError> for WorkerExecutorError {
     fn from(value: WorkerProxyError) -> Self {
         match value {
-            WorkerProxyError::BadRequest(errors) => GolemError::invalid_request(errors.join(", ")),
-            WorkerProxyError::Unauthorized(error) => GolemError::unknown(error),
-            WorkerProxyError::LimitExceeded(error) => GolemError::unknown(error),
-            WorkerProxyError::NotFound(error) => GolemError::unknown(error),
-            WorkerProxyError::AlreadyExists(error) => GolemError::unknown(error),
+            WorkerProxyError::BadRequest(errors) => {
+                WorkerExecutorError::invalid_request(errors.join(", "))
+            }
+            WorkerProxyError::Unauthorized(error) => WorkerExecutorError::unknown(error),
+            WorkerProxyError::LimitExceeded(error) => WorkerExecutorError::unknown(error),
+            WorkerProxyError::NotFound(error) => WorkerExecutorError::unknown(error),
+            WorkerProxyError::AlreadyExists(error) => WorkerExecutorError::unknown(error),
             WorkerProxyError::InternalError(error) => error,
         }
     }
@@ -131,7 +133,7 @@ impl Display for WorkerProxyError {
 
 impl From<tonic::transport::Error> for WorkerProxyError {
     fn from(value: tonic::transport::Error) -> Self {
-        Self::InternalError(GolemError::unknown(format!(
+        Self::InternalError(WorkerExecutorError::unknown(format!(
             "gRPC Transport error: {value}"
         )))
     }
@@ -139,7 +141,7 @@ impl From<tonic::transport::Error> for WorkerProxyError {
 
 impl From<tonic::Status> for WorkerProxyError {
     fn from(value: tonic::Status) -> Self {
-        Self::InternalError(GolemError::unknown(format!("gRPC error: {value}")))
+        Self::InternalError(WorkerExecutorError::unknown(format!("gRPC error: {value}")))
     }
 }
 
@@ -161,18 +163,20 @@ impl From<WorkerError> for WorkerProxyError {
             }
             Some(worker_error::Error::InternalError(worker_executor_error)) => {
                 WorkerProxyError::InternalError(worker_executor_error.try_into().unwrap_or(
-                    GolemError::unknown("Unknown error from the worker executor".to_string()),
+                    WorkerExecutorError::unknown(
+                        "Unknown error from the worker executor".to_string(),
+                    ),
                 ))
             }
-            None => WorkerProxyError::InternalError(GolemError::unknown(
+            None => WorkerProxyError::InternalError(WorkerExecutorError::unknown(
                 "Empty error response from the worker API".to_string(),
             )),
         }
     }
 }
 
-impl From<GolemError> for WorkerProxyError {
-    fn from(value: GolemError) -> Self {
+impl From<WorkerExecutorError> for WorkerProxyError {
+    fn from(value: WorkerExecutorError) -> Self {
         WorkerProxyError::InternalError(value)
     }
 }
@@ -264,15 +268,17 @@ impl WorkerProxy for RemoteWorkerProxy {
                     .result
                     .map(|tav| {
                         tav.type_annotated_value
-                            .ok_or(WorkerProxyError::InternalError(GolemError::unknown(
-                                "Missing type_annotated_value in the worker API response"
-                                    .to_string(),
-                            )))
+                            .ok_or(WorkerProxyError::InternalError(
+                                WorkerExecutorError::unknown(
+                                    "Missing type_annotated_value in the worker API response"
+                                        .to_string(),
+                                ),
+                            ))
                             .and_then(|tav| {
                                 ValueAndType::try_from(tav).map_err(|e| {
-                                    WorkerProxyError::InternalError(GolemError::unknown(format!(
-                                        "Failed to parse invocation result value: {e}"
-                                    )))
+                                    WorkerProxyError::InternalError(WorkerExecutorError::unknown(
+                                        format!("Failed to parse invocation result value: {e}"),
+                                    ))
                                 })
                             })
                     })
@@ -280,9 +286,9 @@ impl WorkerProxy for RemoteWorkerProxy {
                 Ok(result)
             }
             Some(invoke_and_await_typed_response::Result::Error(error)) => Err(error.into()),
-            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
-                "Empty response through the worker API".to_string(),
-            ))),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
+            )),
         }
     }
 
@@ -335,9 +341,9 @@ impl WorkerProxy for RemoteWorkerProxy {
         match response.result {
             Some(invoke_response::Result::Success(_)) => Ok(()),
             Some(invoke_response::Result::Error(error)) => Err(error.into()),
-            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
-                "Empty response through the worker API".to_string(),
-            ))),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
+            )),
         }
     }
 
@@ -367,9 +373,9 @@ impl WorkerProxy for RemoteWorkerProxy {
         match response.result {
             Some(update_worker_response::Result::Success(_)) => Ok(()),
             Some(update_worker_response::Result::Error(error)) => Err(error.into()),
-            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
-                "Empty response through the worker API".to_string(),
-            ))),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
+            )),
         }
     }
 
@@ -393,9 +399,9 @@ impl WorkerProxy for RemoteWorkerProxy {
         match response.result {
             Some(resume_worker_response::Result::Success(_)) => Ok(()),
             Some(resume_worker_response::Result::Error(error)) => Err(error.into()),
-            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
-                "Empty response through the worker API".to_string(),
-            ))),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
+            )),
         }
     }
 
@@ -425,9 +431,11 @@ impl WorkerProxy for RemoteWorkerProxy {
         match response.result {
             Some(fork_worker_response::Result::Success(_)) => Ok(()),
             Some(fork_worker_response::Result::Error(error)) => Err(error.into()),
-            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
-                "Empty response through the worker API during fork".to_string(),
-            ))),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown(
+                    "Empty response through the worker API during fork".to_string(),
+                ),
+            )),
         }
     }
 
@@ -453,9 +461,9 @@ impl WorkerProxy for RemoteWorkerProxy {
         match response.result {
             Some(revert_worker_response::Result::Success(_)) => Ok(()),
             Some(revert_worker_response::Result::Error(error)) => Err(error.into()),
-            None => Err(WorkerProxyError::InternalError(GolemError::unknown(
-                "Empty response through the worker API".to_string(),
-            ))),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
+            )),
         }
     }
 }

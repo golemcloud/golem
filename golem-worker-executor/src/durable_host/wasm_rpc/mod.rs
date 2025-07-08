@@ -37,7 +37,7 @@ use golem_common::model::{
     TargetWorkerId, WorkerId,
 };
 use golem_common::serialization::try_deserialize;
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, Pollable,
@@ -177,12 +177,17 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             result.map(|value_and_type| value_and_type.map(WitValue::from))
         } else {
             let (bytes, _oplog_entry_version) = durability.replay_raw(self).await?;
-            let typed_value: Result<Result<Option<ValueAndType>, SerializableError>, GolemError> =
-                try_deserialize(&bytes)
-                    .map_err(|err| {
-                        GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
-                    })
-                    .map(|ok| ok.expect("Empty payload"));
+            let typed_value: Result<
+                Result<Option<ValueAndType>, SerializableError>,
+                WorkerExecutorError,
+            > = try_deserialize(&bytes)
+                .map_err(|err| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "ImportedFunctionInvoked payload",
+                        err,
+                    )
+                })
+                .map(|ok| ok.expect("Empty payload"));
 
             match typed_value {
                 Ok(Ok(value_and_type)) => Ok(value_and_type.map(WitValue::from)),
@@ -464,7 +469,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<golem_wasm_rpc::golem_rpc_0_2_x::types::WitValue>,
     ) -> anyhow::Result<Resource<CancellationToken>> {
-        let durability = Durability::<SerializableScheduleId, GolemError>::new(
+        let durability = Durability::<SerializableScheduleId, WorkerExecutorError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "schedule_invocation",
@@ -535,7 +540,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             serializable_schedule_id
         } else {
             durability
-                .replay::<SerializableScheduleId, GolemError>(self)
+                .replay::<SerializableScheduleId, WorkerExecutorError>(self)
                 .await?
         };
 
@@ -923,10 +928,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 Err(err) => Err(err),
             }
         } else if self.state.persistence_level == PersistenceLevel::PersistNothing {
-            Err(
-                GolemError::runtime("Trying to replay an RPC call in a PersistNothing block")
-                    .into(),
+            Err(WorkerExecutorError::runtime(
+                "Trying to replay an RPC call in a PersistNothing block",
             )
+            .into())
         } else {
             let (_, oplog_entry) =
                 get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked)
@@ -1039,7 +1044,7 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
             data: entry.schedule_id.clone(),
         };
 
-        let durability = Durability::<(), GolemError>::new(
+        let durability = Durability::<(), WorkerExecutorError>::new(
             self,
             "golem::rpc::cancellation-token",
             "cancel",
@@ -1056,7 +1061,7 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
                 .persist_serializable(self, schedule_id, Ok(()))
                 .await?;
         } else {
-            durability.replay::<(), GolemError>(self).await?;
+            durability.replay::<(), WorkerExecutorError>(self).await?;
         };
 
         Ok(())

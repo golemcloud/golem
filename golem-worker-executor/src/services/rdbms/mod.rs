@@ -23,7 +23,7 @@ use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_common::model::WorkerId;
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 use golem_wasm_rpc_derive::IntoValue;
@@ -454,8 +454,8 @@ impl Display for Error {
     }
 }
 
-impl From<GolemError> for Error {
-    fn from(value: GolemError) -> Self {
+impl From<WorkerExecutorError> for Error {
+    fn from(value: WorkerExecutorError) -> Self {
         Self::other_response_failure(value)
     }
 }

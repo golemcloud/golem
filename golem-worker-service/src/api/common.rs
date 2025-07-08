@@ -30,7 +30,7 @@ use golem_common::{safe, SafeDisplay};
 use golem_service_base::clients::auth::AuthServiceError;
 use golem_service_base::clients::limit::LimitError;
 use golem_service_base::clients::project::ProjectError;
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Tags};
 use serde::{Deserialize, Serialize};
@@ -201,11 +201,11 @@ impl From<CallWorkerExecutorError> for ApiEndpointError {
     }
 }
 
-impl From<GolemError> for ApiEndpointError {
-    fn from(error: GolemError) -> Self {
+impl From<WorkerExecutorError> for ApiEndpointError {
+    fn from(error: WorkerExecutorError) -> Self {
         match error {
-            GolemError::WorkerNotFound { .. } => Self::not_found(error),
-            GolemError::WorkerTrapped { error, error_logs } => {
+            WorkerExecutorError::WorkerNotFound { .. } => Self::not_found(error),
+            WorkerExecutorError::WorkerTrapped { error, error_logs } => {
                 Self::InternalError(Json(ErrorBodyWithOptionalErrorLog {
                     error: error.message().to_string(),
                     worker_error_logs: Some(error_logs),

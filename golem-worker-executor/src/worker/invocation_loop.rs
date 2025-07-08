@@ -36,7 +36,7 @@ use golem_common::model::{
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
 };
 use golem_common::retries::get_delay;
-use golem_service_base::error::worker_executor::{GolemError, InterruptKind};
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::Value;
 use std::collections::VecDeque;
@@ -492,7 +492,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: &str,
         function_input: &[Value],
-    ) -> Result<InvokeResult, GolemError> {
+    ) -> Result<InvokeResult, WorkerExecutorError> {
         self.store
             .data_mut()
             .set_current_idempotency_key(idempotency_key.clone())
@@ -619,9 +619,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         output: Option<Value>,
         consumed_fuel: i64,
         function_result: Option<AnalysedFunctionResult>,
-    ) -> Result<CommandOutcome, GolemError> {
+    ) -> Result<CommandOutcome, WorkerExecutorError> {
         let result = interpret_function_result(output, function_result).map_err(|e| {
-            GolemError::ValueMismatch {
+            WorkerExecutorError::ValueMismatch {
                 details: e.join(", "),
             }
         });
@@ -660,7 +660,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// The logic handling a worker invocation that did not succeed.
     async fn exported_function_invocation_failed(
         &mut self,
-        result: Result<InvokeResult, GolemError>,
+        result: Result<InvokeResult, WorkerExecutorError>,
     ) -> CommandOutcome {
         let trap_type = match result {
             Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
@@ -811,7 +811,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn list_directory(
         &self,
         path: ComponentFilePath,
-        sender: Sender<Result<ListDirectoryResult, GolemError>>,
+        sender: Sender<Result<ListDirectoryResult, WorkerExecutorError>>,
     ) {
         let result = self.store.data().list_directory(&path).await;
         let _ = sender.send(result);
@@ -824,7 +824,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn read_file(
         &self,
         path: ComponentFilePath,
-        sender: Sender<Result<ReadFileResult, GolemError>>,
+        sender: Sender<Result<ReadFileResult, WorkerExecutorError>>,
     ) {
         let result = self.store.data().read_file(&path).await;
         match result {

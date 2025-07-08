@@ -27,7 +27,7 @@ use golem_common::metrics::external_calls::record_external_call_response_size_by
 use golem_common::model::AccountId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::Uri;
 use prost::Message;
 use std::cmp::{max, min};
@@ -46,7 +46,11 @@ pub trait ResourceLimits: Send + Sync {
     /// fuel the worker can consume at once.
     /// If the worker runs out of fuel, it can try borrowing more fuel with the same function.
     /// If the worker finishes running it can give back the remaining fuel with `return_fuel`.
-    async fn borrow_fuel(&self, account_id: &AccountId, amount: i64) -> Result<i64, GolemError>;
+    async fn borrow_fuel(
+        &self,
+        account_id: &AccountId,
+        amount: i64,
+    ) -> Result<i64, WorkerExecutorError>;
 
     /// Sync version of `borrow_fuel` to be used from the epoch callback.
     /// This only works if the ResourceLimits implementation is already has a cached resource limit
@@ -54,7 +58,11 @@ pub trait ResourceLimits: Send + Sync {
     fn borrow_fuel_sync(&self, account_id: &AccountId, amount: i64) -> Option<i64>;
 
     /// Returns some unused fuel for a given user
-    async fn return_fuel(&self, account_id: &AccountId, remaining: i64) -> Result<(), GolemError>;
+    async fn return_fuel(
+        &self,
+        account_id: &AccountId,
+        remaining: i64,
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Updates the last known resource limits for a given account
     ///
@@ -64,9 +72,9 @@ pub trait ResourceLimits: Send + Sync {
         &self,
         account_id: &AccountId,
         last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 
-    async fn get_max_memory(&self, account_id: &AccountId) -> Result<usize, GolemError>;
+    async fn get_max_memory(&self, account_id: &AccountId) -> Result<usize, WorkerExecutorError>;
 }
 
 #[derive(Debug, Clone)]
@@ -88,7 +96,10 @@ pub struct ResourceLimitsGrpc {
 }
 
 impl ResourceLimitsGrpc {
-    async fn send_batch_updates(&self, updates: HashMap<AccountId, i64>) -> Result<(), GolemError> {
+    async fn send_batch_updates(
+        &self,
+        updates: HashMap<AccountId, i64>,
+    ) -> Result<(), WorkerExecutorError> {
         let body = BatchUpdateResourceLimits {
             updates: updates.into_iter().map(|(k, v)| (k.value, v)).collect(),
         };
@@ -129,13 +140,13 @@ impl ResourceLimitsGrpc {
             is_grpc_retriable,
         )
         .await
-        .map_err(|_| GolemError::InvalidAccount) // TODO: provide more info in the error result?
+        .map_err(|_| WorkerExecutorError::InvalidAccount) // TODO: provide more info in the error result?
     }
 
     async fn fetch_resource_limits(
         &self,
         account_id: &AccountId,
-    ) -> Result<CurrentResourceLimits, GolemError> {
+    ) -> Result<CurrentResourceLimits, WorkerExecutorError> {
         with_retries(
             "resource_limits",
             "fetch",
@@ -172,7 +183,7 @@ impl ResourceLimitsGrpc {
             is_grpc_retriable,
         )
         .await
-        .map_err(|_| GolemError::InvalidAccount) // TODO: provide more info in the error result?
+        .map_err(|_| WorkerExecutorError::InvalidAccount) // TODO: provide more info in the error result?
     }
 
     /// Takes all recorded fuel updates and resets them to 0
@@ -233,7 +244,11 @@ impl Drop for ResourceLimitsGrpc {
 
 #[async_trait]
 impl ResourceLimits for ResourceLimitsGrpc {
-    async fn borrow_fuel(&self, account_id: &AccountId, amount: i64) -> Result<i64, GolemError> {
+    async fn borrow_fuel(
+        &self,
+        account_id: &AccountId,
+        amount: i64,
+    ) -> Result<i64, WorkerExecutorError> {
         loop {
             let borrowed = self.borrow_fuel_sync(account_id, amount);
 
@@ -266,7 +281,11 @@ impl ResourceLimits for ResourceLimitsGrpc {
         borrowed
     }
 
-    async fn return_fuel(&self, account_id: &AccountId, remaining: i64) -> Result<(), GolemError> {
+    async fn return_fuel(
+        &self,
+        account_id: &AccountId,
+        remaining: i64,
+    ) -> Result<(), WorkerExecutorError> {
         self.current_limits
             .entry(account_id.clone())
             .and_modify(|entry| {
@@ -281,7 +300,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
         &self,
         account_id: &AccountId,
         last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.current_limits
             .entry(account_id.clone())
             .and_modify(|entry| {
@@ -295,7 +314,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
         Ok(())
     }
 
-    async fn get_max_memory(&self, account_id: &AccountId) -> Result<usize, GolemError> {
+    async fn get_max_memory(&self, account_id: &AccountId) -> Result<usize, WorkerExecutorError> {
         loop {
             match self
                 .current_limits
@@ -331,7 +350,11 @@ impl ResourceLimitsDisabled {
 
 #[async_trait]
 impl ResourceLimits for ResourceLimitsDisabled {
-    async fn borrow_fuel(&self, _account_id: &AccountId, amount: i64) -> Result<i64, GolemError> {
+    async fn borrow_fuel(
+        &self,
+        _account_id: &AccountId,
+        amount: i64,
+    ) -> Result<i64, WorkerExecutorError> {
         Ok(amount)
     }
 
@@ -343,7 +366,7 @@ impl ResourceLimits for ResourceLimitsDisabled {
         &self,
         _account_id: &AccountId,
         _remaining: i64,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
 
@@ -351,11 +374,11 @@ impl ResourceLimits for ResourceLimitsDisabled {
         &self,
         _account_id: &AccountId,
         _last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
 
-    async fn get_max_memory(&self, _account_id: &AccountId) -> Result<usize, GolemError> {
+    async fn get_max_memory(&self, _account_id: &AccountId) -> Result<usize, WorkerExecutorError> {
         Ok(usize::MAX)
     }
 }
@@ -395,7 +418,11 @@ impl ResourceLimitsMock {
 #[cfg(test)]
 #[async_trait]
 impl ResourceLimits for ResourceLimitsMock {
-    async fn borrow_fuel(&self, _account_id: &AccountId, _amount: i64) -> Result<i64, GolemError> {
+    async fn borrow_fuel(
+        &self,
+        _account_id: &AccountId,
+        _amount: i64,
+    ) -> Result<i64, WorkerExecutorError> {
         unimplemented!()
     }
 
@@ -407,7 +434,7 @@ impl ResourceLimits for ResourceLimitsMock {
         &self,
         _account_id: &AccountId,
         _remaining: i64,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         unimplemented!()
     }
 
@@ -415,11 +442,11 @@ impl ResourceLimits for ResourceLimitsMock {
         &self,
         _account_id: &AccountId,
         _last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         unimplemented!()
     }
 
-    async fn get_max_memory(&self, _account_id: &AccountId) -> Result<usize, GolemError> {
+    async fn get_max_memory(&self, _account_id: &AccountId) -> Result<usize, WorkerExecutorError> {
         unimplemented!()
     }
 }

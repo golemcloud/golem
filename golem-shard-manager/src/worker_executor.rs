@@ -21,7 +21,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::Wo
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
 use golem_common::retries::with_retriable_errors;
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::time::error::Elapsed;
@@ -226,7 +226,9 @@ impl WorkerExecutorServiceDefault {
                 result:
                     Some(golem::workerexecutor::v1::assign_shards_response::Result::Failure(failure)),
             } => Err(ShardManagerError::WorkerExecutionError(
-                failure.try_into().unwrap_or_else(GolemError::unknown),
+                failure
+                    .try_into()
+                    .unwrap_or_else(WorkerExecutorError::unknown),
             )),
             golem::workerexecutor::v1::AssignShardsResponse { result: None } => {
                 Err(ShardManagerError::NoResult)
@@ -266,7 +268,9 @@ impl WorkerExecutorServiceDefault {
                 result:
                     Some(golem::workerexecutor::v1::revoke_shards_response::Result::Failure(failure)),
             } => Err(ShardManagerError::WorkerExecutionError(
-                failure.try_into().unwrap_or_else(GolemError::unknown),
+                failure
+                    .try_into()
+                    .unwrap_or_else(WorkerExecutorError::unknown),
             )),
             golem::workerexecutor::v1::RevokeShardsResponse { result: None } => {
                 Err(ShardManagerError::NoResult)

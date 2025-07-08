@@ -22,7 +22,7 @@ use bincode::{Decode, Encode};
 use dashmap::DashMap;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{PromiseId, WorkerId};
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 #[cfg(test)]
 use std::collections::HashSet;
 use std::ops::DerefMut;
@@ -35,11 +35,15 @@ use tracing::debug;
 pub trait PromiseService: Send + Sync {
     async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId;
 
-    async fn wait_for(&self, promise_id: PromiseId) -> Result<Vec<u8>, GolemError>;
+    async fn wait_for(&self, promise_id: PromiseId) -> Result<Vec<u8>, WorkerExecutorError>;
 
-    async fn poll(&self, promise_id: PromiseId) -> Result<Option<Vec<u8>>, GolemError>;
+    async fn poll(&self, promise_id: PromiseId) -> Result<Option<Vec<u8>>, WorkerExecutorError>;
 
-    async fn complete(&self, promise_id: PromiseId, data: Vec<u8>) -> Result<bool, GolemError>;
+    async fn complete(
+        &self,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+    ) -> Result<bool, WorkerExecutorError>;
 
     async fn delete(&self, promise_id: PromiseId);
 }
@@ -111,9 +115,9 @@ impl PromiseService for DefaultPromiseService {
         promise_id
     }
 
-    async fn wait_for(&self, promise_id: PromiseId) -> Result<Vec<u8>, GolemError> {
+    async fn wait_for(&self, promise_id: PromiseId) -> Result<Vec<u8>, WorkerExecutorError> {
         if !self.exists(&promise_id).await {
-            Err(GolemError::PromiseNotFound { promise_id })
+            Err(WorkerExecutorError::PromiseNotFound { promise_id })
         } else {
             let response: Option<RedisPromiseState> = self
                 .key_value_storage
@@ -151,7 +155,7 @@ impl PromiseService for DefaultPromiseService {
                             let receiver = mutex_guard.deref_mut();
                             let data = receiver
                                 .await
-                                .map_err(|_| GolemError::PromiseDropped { promise_id })?;
+                                .map_err(|_| WorkerExecutorError::PromiseDropped { promise_id })?;
                             Ok(data)
                         }
                         PromiseState::Complete(data) => Ok(data.clone()),
@@ -161,9 +165,9 @@ impl PromiseService for DefaultPromiseService {
         }
     }
 
-    async fn poll(&self, promise_id: PromiseId) -> Result<Option<Vec<u8>>, GolemError> {
+    async fn poll(&self, promise_id: PromiseId) -> Result<Option<Vec<u8>>, WorkerExecutorError> {
         if !self.exists(&promise_id).await {
-            Err(GolemError::PromiseNotFound { promise_id })
+            Err(WorkerExecutorError::PromiseNotFound { promise_id })
         } else {
             let response: Option<RedisPromiseState> = self
                 .key_value_storage
@@ -184,7 +188,11 @@ impl PromiseService for DefaultPromiseService {
         }
     }
 
-    async fn complete(&self, promise_id: PromiseId, data: Vec<u8>) -> Result<bool, GolemError> {
+    async fn complete(
+        &self,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+    ) -> Result<bool, WorkerExecutorError> {
         let key = get_promise_result_redis_key(&promise_id);
 
         let written: bool = self
@@ -199,7 +207,7 @@ impl PromiseService for DefaultPromiseService {
             .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
 
         if !self.exists(&promise_id).await {
-            Err(GolemError::PromiseNotFound { promise_id })
+            Err(WorkerExecutorError::PromiseNotFound { promise_id })
         } else if written {
             let complete = PromiseState::Complete(data.clone());
             self.insert_if_empty(promise_id.clone(), complete);
@@ -216,12 +224,12 @@ impl PromiseService for DefaultPromiseService {
                     let owned_sender =
                         mutex_guard
                             .take()
-                            .ok_or(GolemError::PromiseAlreadyCompleted {
+                            .ok_or(WorkerExecutorError::PromiseAlreadyCompleted {
                                 promise_id: promise_id.clone(),
                             })?;
                     owned_sender
                         .send(data)
-                        .map_err(|_| GolemError::PromiseDropped { promise_id })?;
+                        .map_err(|_| WorkerExecutorError::PromiseDropped { promise_id })?;
                     Ok(true)
                 }
                 _ => Ok(true),
@@ -299,15 +307,19 @@ impl PromiseService for PromiseServiceMock {
         unimplemented!()
     }
 
-    async fn wait_for(&self, _promise_id: PromiseId) -> Result<Vec<u8>, GolemError> {
+    async fn wait_for(&self, _promise_id: PromiseId) -> Result<Vec<u8>, WorkerExecutorError> {
         unimplemented!()
     }
 
-    async fn poll(&self, _promise_id: PromiseId) -> Result<Option<Vec<u8>>, GolemError> {
+    async fn poll(&self, _promise_id: PromiseId) -> Result<Option<Vec<u8>>, WorkerExecutorError> {
         unimplemented!()
     }
 
-    async fn complete(&self, promise_id: PromiseId, _data: Vec<u8>) -> Result<bool, GolemError> {
+    async fn complete(
+        &self,
+        promise_id: PromiseId,
+        _data: Vec<u8>,
+    ) -> Result<bool, WorkerExecutorError> {
         self.completed.lock().await.insert(promise_id);
         Ok(true)
     }

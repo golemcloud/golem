@@ -42,7 +42,7 @@ use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRang
 use golem_common::model::{AccountId, Timestamp, WorkerMetadata, WorkerStatusRecord};
 use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_common::serialization::serialize;
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::runtime::Handle;
@@ -54,14 +54,14 @@ pub trait WorkerForkService: Send + Sync {
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 
     async fn fork_and_write_fork_result(
         &self,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
@@ -355,11 +355,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<(OwnedWorkerId, OwnedWorkerId), GolemError> {
+    ) -> Result<(OwnedWorkerId, OwnedWorkerId), WorkerExecutorError> {
         let second_index = OplogIndex::INITIAL.next();
 
         if oplog_index_cut_off < second_index {
-            return Err(GolemError::invalid_request(
+            return Err(WorkerExecutorError::invalid_request(
                 "oplog_index_cut_off must be at least 2",
             ));
         }
@@ -370,7 +370,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         // We allow forking only if the target worker does not exist
         if target_metadata.is_some() {
-            return Err(GolemError::worker_already_exists(target_worker_id.clone()));
+            return Err(WorkerExecutorError::worker_already_exists(
+                target_worker_id.clone(),
+            ));
         }
 
         // We assume the source worker belongs to this executor
@@ -381,7 +383,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         self.worker_service
             .get(&owned_source_worker_id)
             .await
-            .ok_or(GolemError::worker_not_found(source_worker_id.clone()))?;
+            .ok_or(WorkerExecutorError::worker_not_found(
+                source_worker_id.clone(),
+            ))?;
 
         Ok((owned_source_worker_id, owned_target_worker_id))
     }
@@ -391,7 +395,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<Arc<dyn Oplog>, GolemError> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_worker_call("fork");
 
         let (owned_source_worker_id, owned_target_worker_id) = self
@@ -431,7 +435,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // Update the oplog initial entry with the new worker
         let target_initial_oplog_entry = initial_oplog_entry
             .update_worker_id(&target_worker_id)
-            .ok_or(GolemError::unknown(
+            .ok_or(WorkerExecutorError::unknown(
                 "Failed to update worker id in oplog entry",
             ))?;
 
@@ -467,7 +471,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
             .copy_source_oplog(source_worker_id, target_worker_id, oplog_index_cut_off)
             .await?;
@@ -482,7 +486,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             .resume(target_worker_id, true)
             .await
             .map_err(|err| {
-                GolemError::failed_to_resume_worker(target_worker_id.clone(), err.into())
+                WorkerExecutorError::failed_to_resume_worker(target_worker_id.clone(), err.into())
             })?;
 
         Ok(())
@@ -493,7 +497,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
             .copy_source_oplog(source_worker_id, target_worker_id, oplog_index_cut_off)
             .await?;
@@ -502,12 +506,12 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // we write an alternative version of that entry to the new oplog, so it is going to return with
         // ForkResult::Forked in the other worker
         let serialized_input = serialize(&target_worker_id.worker_name).map_err(|err| {
-            GolemError::runtime(format!("failed to serialize worker name for persisting durable function invocation: {err}"))
+            WorkerExecutorError::runtime(format!("failed to serialize worker name for persisting durable function invocation: {err}"))
         })?.to_vec();
 
         let forked: Result<ForkResult, SerializableError> = Ok(ForkResult::Forked);
         let serialized_response = serialize(&forked).map_err(|err| {
-            GolemError::runtime(format!("failed to serialize fork result for persisting durable function invocation: {err}"))
+            WorkerExecutorError::runtime(format!("failed to serialize fork result for persisting durable function invocation: {err}"))
         })?.to_vec();
 
         let _ = new_oplog
@@ -519,7 +523,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             )
             .await
             .map_err(|err| {
-                GolemError::runtime(format!(
+                WorkerExecutorError::runtime(format!(
                     "failed to serialize and store durable function invocation: {err}"
                 ))
             });
@@ -534,7 +538,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             .resume(target_worker_id, true)
             .await
             .map_err(|err| {
-                GolemError::failed_to_resume_worker(target_worker_id.clone(), err.into())
+                WorkerExecutorError::failed_to_resume_worker(target_worker_id.clone(), err.into())
             })?;
 
         Ok(())

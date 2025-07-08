@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
-use golem_service_base::error::worker_executor::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
 };
@@ -119,7 +119,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
         component_id: &ComponentId,
         cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         if cursor.cursor == 0 {
             let blob_storage = self.blob_storage.with("blob_oplog", "scan_for_component");
             let owned_worker_ids = if blob_storage.exists(
@@ -130,7 +130,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
                 },
                 Path::new(""),
             ).await.map_err(|err| {
-                GolemError::unknown(format!("Failed to check if compressed oplog root for component {component_id} exists in blob storage: {err}"))
+                WorkerExecutorError::unknown(format!("Failed to check if compressed oplog root for component {component_id} exists in blob storage: {err}"))
             })? == ExistsResult::Directory
             {
                 let paths = blob_storage
@@ -142,7 +142,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
                 },
                 Path::new(""),
             ).await.map_err(|err| {
-                GolemError::unknown(format!("Failed to list entries of compressed oplog for component {component_id} in blob storage: {err}"))
+                WorkerExecutorError::unknown(format!("Failed to list entries of compressed oplog for component {component_id} in blob storage: {err}"))
             })?;
 
                 paths
@@ -170,7 +170,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
                 owned_worker_ids,
             ))
         } else {
-            Err(GolemError::unknown(
+            Err(WorkerExecutorError::unknown(
                 "Cannot use cursor with blob oplog archive",
             ))
         }
