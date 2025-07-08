@@ -21,125 +21,116 @@ async fn main() {
         .nth(1)
         .unwrap_or_else(|| "shopping-cart".to_string());
 
-    // Using REPL itself to discover agent definitions
-    let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
+    let wasm_path = deps.component_directory().join(format!("{component_name}.wasm"));
+
+    let repl_config = RibReplConfig {
         history_file: None,
         dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
         worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
         printer: None,
         component_source: Some(ComponentSource {
-            component_name: component_name.to_string(),
-            source_path: deps
-                .component_directory()
-                .join(format!("{component_name}.wasm")),
+            component_name: component_name.clone(),
+            source_path: wasm_path.clone(),
         }),
         prompt: None,
         command_registry: None,
-    })
-    .await
-    .expect("Failed to bootstrap REPL");
-
-    rib_repl.execute(
-        "let x = instance()"
-    ).await.expect("Failed to execute command");
-
-    let result = rib_repl.execute(
-        "x.discover-agent-definitions()"
-    ).await.expect("Failed to execute command").unwrap();
-
-    let mut analysed_functions = vec![];
-
-    match result  {
-        RibResult::Val(value_and_type) => {
-           match value_and_type.value {
-               Value::List(values) => {
-                   let typ = value_and_type.typ;
-                   match typ {
-                       AnalysedType::List(typed_list) => {
-                           match typed_list.inner.as_ref() {
-                               AnalysedType::Record(typed_record) => {
-                                   let method_info = typed_record.fields.iter().enumerate().find(
-                                       |(_, field)| field.name == "methods"
-                                   );
-
-                                   let (name_index, _) = typed_record.fields.iter().enumerate().find(
-                                       |(_, field)| field.name == "agent-name"
-                                   ).expect("Expected 'name' field in record");
-
-
-
-                                   let (index, name_type) =
-                                       method_info.expect("Expected 'methods' field in record");
-
-                                   // Each value is an agent
-                                   for agent in values {
-                                       match agent {
-                                             Value::Record(values) => {
-                                                  let methods = values.get(index)
-                                                    .expect("Expected value for 'methods' field");
-
-                                                    let agent_name = values.get(name_index).expect("Expected value for 'name' field");
-                                                    let resource_name = get_agent_resource_analysed_function(agent_name);
-                                                    let agent_methods = get_agent_methods(methods, &name_type.typ).iter().map(|agent_method_info|
-                                                        get_agent_resource_method_analysed_function(get_str(agent_name), agent_method_info)
-                                                    ).collect::<Vec<_>>();
-
-                                                    analysed_functions.push(resource_name);
-                                                    analysed_functions.extend(agent_methods);
-                                             }
-
-                                             _ => {
-                                                  panic!("Expected a record type, got: {:?}", agent);
-                                             }
-                                       }
-                                   }
-
-                               }
-
-                               _ => {
-                                   panic!("Expected a record type, got: {:?}", typed_list.inner);
-                               }
-                           }
-                       }
-
-                          _ => panic!("Expected a list type, got: {:?}", typ),
-                   }
-
-               }
-
-               _ => {}
-           }
-
-        }
-
-        _ => panic!("Expected a value result, got: {:?}", result),
-    }
-
-    let exports = AnalysedInstance {
-        name: "golem:agentic/simulated-agents".to_string(),
-        functions: analysed_functions,
     };
 
-
-    // Re-run REPL
-    let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
-        history_file: None,
-        dependency_manager: Arc::new(TestRibReplStaticDependencyManager::new(deps.clone(), vec![AnalysedExport::Instance(exports)])),
-        worker_function_invoke: Arc::new(TestRibReplAgenticWorkerFunctionInvoke::new(deps.clone())),
-        printer: None,
-        component_source: Some(ComponentSource {
-            component_name: component_name.to_string(),
-            source_path: deps
-                .component_directory()
-                .join(format!("{component_name}.wasm")),
-        }),
-        prompt: None,
-        command_registry: None,
-    })
+    let mut rib_repl = RibRepl::bootstrap(repl_config)
         .await
         .expect("Failed to bootstrap REPL");
 
-    rib_repl.run().await
+    if let Err(_) = rib_repl.execute("let x = instance()").await {
+        eprintln!("Failed to execute instance()");
+        rib_repl.run().await;
+        return;
+    }
+
+    match rib_repl.execute("x.discover-agent-definitions()").await {
+        Ok(Some(result)) => {
+            let analysed_functions = extract_agent_definitions(result);
+
+            let exports = AnalysedInstance {
+                name: "golem:agentic/simulated-agents".to_string(),
+                functions: analysed_functions,
+            };
+
+            let repl_config_with_exports = RibReplConfig {
+                history_file: None,
+                dependency_manager: Arc::new(TestRibReplStaticDependencyManager::new(
+                    deps.clone(),
+                    vec![AnalysedExport::Instance(exports)],
+                )),
+                worker_function_invoke: Arc::new(TestRibReplAgenticWorkerFunctionInvoke::new(deps.clone())),
+                printer: None,
+                component_source: Some(ComponentSource {
+                    component_name,
+                    source_path: wasm_path,
+                }),
+                prompt: None,
+                command_registry: None,
+            };
+
+            let mut rib_repl = RibRepl::bootstrap(repl_config_with_exports)
+                .await
+                .expect("Failed to bootstrap REPL with exports");
+
+            rib_repl.run().await;
+        }
+
+        _ => {
+            eprintln!("Falling back to default REPL (agent discovery failed)");
+            rib_repl.run().await;
+        }
+    }
+}
+
+
+fn extract_agent_definitions(result: RibResult) -> Vec<AnalysedFunction> {
+    match result {
+        RibResult::Val(value_and_type) => match value_and_type.value {
+            Value::List(values) => match value_and_type.typ {
+                AnalysedType::List(inner_type) => match inner_type.inner.as_ref() {
+                    AnalysedType::Record(record_type) => {
+                        let methods_index = record_type.fields.iter().position(|f| f.name == "methods")
+                            .expect("Expected 'methods' field");
+                        let name_index = record_type.fields.iter().position(|f| f.name == "agent-name")
+                            .expect("Expected 'agent-name' field");
+                        let methods_type = &record_type.fields[methods_index].typ;
+
+                        let mut functions = Vec::new();
+
+                        for agent in values {
+                            match agent {
+                                Value::Record(fields) => {
+                                    let agent_name_val = fields.get(name_index)
+                                        .expect("Missing 'agent-name' value");
+                                    let methods_val = fields.get(methods_index)
+                                        .expect("Missing 'methods' value");
+
+                                    let resource_fn = get_agent_resource_analysed_function(agent_name_val);
+                                    let method_fns = get_agent_methods(methods_val, methods_type)
+                                        .iter()
+                                        .map(|info| get_agent_resource_method_analysed_function(get_str(agent_name_val), info))
+                                        .collect::<Vec<_>>();
+
+                                    functions.push(resource_fn);
+                                    functions.extend(method_fns);
+                                }
+                                _ => panic!("Expected agent record, got: {:?}", agent),
+                            }
+                        }
+
+                        functions
+                    }
+                    _ => panic!("Expected record type inside list, got: {:?}", inner_type.inner),
+                },
+                _ => panic!("Expected list type, got: {:?}", value_and_type.typ),
+            },
+            _ => panic!("Expected list value, got: {:?}", value_and_type.value),
+        },
+        _ => panic!("Expected value result, got: {:?}", result),
+    }
 }
 
 fn get_str(value: &Value) -> String {
