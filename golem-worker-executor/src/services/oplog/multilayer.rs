@@ -139,6 +139,28 @@ impl MultiLayerOplogService {
             max_operations_before_commit_ephemeral,
         }
     }
+
+    async fn filter_ids_existing_on_lower_layers(
+        &self,
+        unfiltered_ids: Vec<OwnedWorkerId>,
+        from: usize,
+    ) -> Result<Vec<OwnedWorkerId>, GolemError> {
+        let mut ids = Vec::new();
+        for id in unfiltered_ids {
+            let mut exists_in_lower = false;
+            for lower_layer in &self.lower.iter().as_slice()[from..] {
+                if lower_layer.exists(&id).await {
+                    exists_in_lower = true;
+                    break;
+                }
+            }
+
+            if !exists_in_lower {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
+    }
 }
 
 impl Clone for MultiLayerOplogService {
@@ -391,10 +413,15 @@ impl OplogService for MultiLayerOplogService {
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
         match cursor.layer {
             0 => {
-                let (new_cursor, ids) = self
+                let (new_cursor, unfiltered_ids) = self
                     .primary
                     .scan_for_component(account_id, component_id, cursor, count)
                     .await?;
+
+                let ids = self
+                    .filter_ids_existing_on_lower_layers(unfiltered_ids, 0)
+                    .await?;
+
                 if new_cursor.is_active_layer_finished() {
                     // Continuing with the first lower layer
                     Ok((
@@ -410,8 +437,11 @@ impl OplogService for MultiLayerOplogService {
                 }
             }
             layer if layer <= self.lower.len().get() => {
-                let (new_cursor, ids) = self.lower[layer - 1]
+                let (new_cursor, unfiltered_ids) = self.lower[layer - 1]
                     .scan_for_component(account_id, component_id, cursor, count)
+                    .await?;
+                let ids = self
+                    .filter_ids_existing_on_lower_layers(unfiltered_ids, layer)
                     .await?;
                 if new_cursor.is_active_layer_finished() && (layer + 1) <= self.lower.len().get() {
                     // Continuing with the next lower layer
