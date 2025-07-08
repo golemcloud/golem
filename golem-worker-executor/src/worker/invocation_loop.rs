@@ -579,6 +579,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 {
                     Ok(outcome) => outcome,
                     Err(error) => {
+                        println!("boom: {}", error);
                         self.store
                             .data_mut()
                             .on_invocation_failure(&TrapType::Error(WorkerTrapCause::Unknown(
@@ -601,6 +602,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
 
             Err(result) => {
+                println!("boom2: {}", result);
                 self.store
                     .data_mut()
                     .on_invocation_failure(&TrapType::Error(WorkerTrapCause::Unknown(result)))

@@ -290,7 +290,7 @@ pub trait InvocationHooks {
     ) -> Result<(), WorkerExecutorError>;
 
     /// Called when a worker invocation fails
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision;
+    async fn on_invocation_failure(&mut self, result: Result<&TrapType, WorkerExecutorError>) -> RetryDecision;
 
     /// Called when a worker invocation succeeds
     /// Arguments:

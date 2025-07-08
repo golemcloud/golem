@@ -3213,6 +3213,8 @@ async fn stderr_returned_for_failed_component(
 
     let expected_stderr = "\n\nthread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
 
+    println!("here:\n{}", worker_error_message(&result2.clone().err().unwrap()));
+
     check!(worker_error_message(&result2.clone().err().unwrap()).ends_with(&expected_stderr));
     check!(worker_error_message(&result3.clone().err().unwrap()).ends_with(&expected_stderr));
 
