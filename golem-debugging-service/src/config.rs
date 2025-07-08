@@ -15,7 +15,7 @@
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
-use golem_service_base::clients::RemoteCloudServiceConfig;
+use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_worker_executor::services::golem_config::{
     ActiveWorkersConfig, CompiledComponentServiceConfig, ComponentCacheConfig,
@@ -54,7 +54,7 @@ pub struct DebugConfig {
     pub http_port: u16,
 
     // debug service specific fields
-    pub cloud_service: RemoteCloudServiceConfig,
+    pub cloud_service: RemoteServiceConfig,
     pub component_service: ComponentServiceGrpcConfig,
     pub component_cache: ComponentCacheConfig,
     pub project_service: ProjectServiceConfig,
@@ -119,7 +119,7 @@ impl Default for DebugConfig {
             port: default_golem_config.port,
             http_address: default_golem_config.http_address,
             http_port: default_golem_config.http_port,
-            cloud_service: RemoteCloudServiceConfig::default(),
+            cloud_service: RemoteServiceConfig::default(),
             component_cache: ComponentCacheConfig::default(),
             component_service: ComponentServiceGrpcConfig::default(),
             project_service: ProjectServiceConfig::default(),

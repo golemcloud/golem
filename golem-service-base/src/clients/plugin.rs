@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::authorised_request;
-use super::RemoteCloudServiceConfig;
+use super::RemoteServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_error::Error;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
@@ -55,7 +55,7 @@ pub struct PluginServiceClientDefault {
 }
 
 impl PluginServiceClientDefault {
-    pub fn new(config: &RemoteCloudServiceConfig) -> Self {
+    pub fn new(config: &RemoteServiceConfig) -> Self {
         let plugin_service_client = GrpcClient::new(
             "plugin",
             |channel| {
