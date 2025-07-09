@@ -1539,6 +1539,16 @@ fn http_worker_metadata_to_grpc(
                 value: Some(id.into()),
             })
             .collect(),
+        skipped_regions: worker_metadata
+            .skipped_regions
+            .into_iter()
+            .map(|region| region.into())
+            .collect(),
+        deleted_regions: worker_metadata
+            .deleted_regions
+            .into_iter()
+            .map(|region| region.into())
+            .collect(),
     }
 }
 
