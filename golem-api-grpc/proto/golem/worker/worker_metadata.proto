@@ -24,6 +24,8 @@ message WorkerMetadata {
   uint64 total_linear_memory_size = 13;
   map<uint64, ResourceMetadata> owned_resources = 14;
   repeated golem.common.PluginInstallationId active_plugins = 15;
+  repeated OplogRegion skipped_regions = 16;
+  repeated OplogRegion deleted_regions = 17;
 }
 
 message UpdateRecord {
@@ -54,4 +56,9 @@ message ResourceMetadata {
 message IndexedResourceMetadata {
   string resource_name = 1;
   repeated string resource_params = 2;
+}
+
+message OplogRegion {
+  uint64 start = 1;
+  uint64 end = 2;
 }

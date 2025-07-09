@@ -434,7 +434,10 @@ impl AuthService for AuthServiceDefault {
         auth: &AccountAuthorisation,
         project_id: &ProjectId,
     ) -> Result<ProjectAuthorisedActions, AuthServiceError> {
-        tracing::info!("Get project authorisations for project: {}", project_id);
+        tracing::info!(
+            project_id = %project_id,
+            "Get project authorisations for project",
+        );
         let project = self.project_repo.get(&project_id.0).await?;
 
         let project = if let Some(project) = project {

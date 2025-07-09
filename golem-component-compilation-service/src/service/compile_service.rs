@@ -74,9 +74,9 @@ impl CompilationService for ComponentCompilationServiceImpl {
         sender: Option<StaticComponentServiceConfig>,
     ) -> Result<(), CompilationError> {
         tracing::info!(
-            "Enqueueing compilation for component {}@{}",
-            component_id,
-            component_version
+            component_id = component_id.to_string(),
+            component_version = component_version.to_string(),
+            "Enqueueing compilation for component",
         );
         let request = CompilationRequest {
             component: ComponentWithVersion {

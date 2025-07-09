@@ -6135,6 +6135,8 @@ components:
       - totalLinearMemorySize
       - ownedResources
       - activePlugins
+      - skippedRegions
+      - deletedRegions
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
@@ -6183,6 +6185,19 @@ components:
           items:
             type: string
             format: uuid
+        skippedRegions:
+          type: array
+          description: |-
+            Oplog regions that are skipped during the worker's state recovery, but describe
+            the history of the worker. For example if an atomic region gets restarted, its partially
+            recorded oplog entries will be skipped on retry.
+          items:
+            $ref: '#/components/schemas/OplogRegion'
+        deletedRegions:
+          type: array
+          description: Oplog regions permanently deleted from the workers using the revert functionality.
+          items:
+            $ref: '#/components/schemas/OplogRegion'
     WorkerNameFilter:
       type: object
       title: WorkerNameFilter

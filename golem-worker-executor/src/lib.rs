@@ -75,6 +75,7 @@ use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use humansize::{ISizeFormatter, BINARY};
+use log::debug;
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
@@ -138,8 +139,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .accept_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Gzip);
 
-        info!("Starting gRPC server on port {grpc_port}");
-
         join_set.spawn(
             async move {
                 Server::builder()
@@ -153,6 +152,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             }
             .in_current_span(),
         );
+
+        info!("Started worker service on ports: grpc: {grpc_port}");
 
         Ok(grpc_port)
     }
@@ -227,7 +228,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         runtime: Handle,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> anyhow::Result<RunDetails> {
-        info!("Golem Worker Executor starting up...");
+        debug!("Initializing worker executor");
 
         let total_system_memory = golem_config.memory.total_system_memory();
         let system_memory = golem_config.memory.system_memory();

@@ -85,16 +85,14 @@ impl ShardManagerServiceImpl {
             health_check,
         };
 
-        info!("Starting health check process...");
         shard_manager_service.start_health_check();
-        info!("Shard Manager is fully operational.");
 
         Ok(shard_manager_service)
     }
 
     async fn get_routing_table_internal(&self) -> RoutingTable {
         let routing_table = self.shard_management.current_snapshot().await;
-        info!("Shard Manager providing routing table: {}", routing_table);
+        debug!("Providing routing table: {}", routing_table);
         routing_table
     }
 
@@ -106,7 +104,7 @@ impl ShardManagerServiceImpl {
         let source_ip = source_ip.ok_or(ShardManagerError::NoSourceIpForPod)?.ip();
 
         let pod = Pod::from_register_request(source_ip, request)?;
-        info!("Shard Manager received request to register pod: {}", pod);
+        debug!("Received request to register pod: {}", pod);
         self.shard_management.register_pod(pod).await;
         Ok(())
     }
@@ -131,9 +129,9 @@ impl ShardManagerServiceImpl {
         shard_management: ShardManagement,
         health_check: Arc<dyn HealthCheck + Send + Sync>,
     ) {
-        debug!("Shard Manager scheduled to conduct health check");
+        debug!("Scheduled to conduct health check");
         let routing_table = shard_management.current_snapshot().await;
-        debug!("Shard Manager checking health of registered pods...");
+        debug!("Checking health of registered pods...");
         let failed_pods = get_unhealthy_pods(health_check, &routing_table.get_pods()).await;
         if failed_pods.is_empty() {
             debug!("All registered pods are healthy")
@@ -147,7 +145,7 @@ impl ShardManagerServiceImpl {
             }
         }
 
-        debug!("Golem Shard Manager finished checking health of registered pods");
+        debug!("Finished checking health of registered pods");
     }
 }
 
@@ -219,6 +217,8 @@ pub async fn run(
     registry: Registry,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> anyhow::Result<RunDetails> {
+    debug!("Initializing shard manager");
+
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
         .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
@@ -227,8 +227,6 @@ pub async fn run(
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
         .build_v1()?;
-
-    info!("Golem Shard Manager starting up...");
 
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
         SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), shard_manager_config.http_port),
@@ -296,7 +294,7 @@ pub async fn run(
 
     let shard_manager_port_str =
         env::var("GOLEM_SHARD_MANAGER_PORT").unwrap_or(shard_manager_config.grpc_port.to_string());
-    info!("The port read from env is {}", shard_manager_port_str);
+    debug!("The port read from env is {}", shard_manager_port_str);
     let configured_port = shard_manager_port_str.parse::<u16>()?;
     let listener = TcpListener::bind(SocketAddrV4::new(
         Ipv4Addr::new(0, 0, 0, 0),
@@ -322,7 +320,7 @@ pub async fn run(
         .in_current_span(),
     );
 
-    info!("Server started on port {}", grpc_port);
+    info!("Started shard manager on ports: grpc: {grpc_port}");
 
     Ok(RunDetails {
         http_port,
