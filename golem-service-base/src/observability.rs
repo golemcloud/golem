@@ -46,7 +46,7 @@ pub async fn start_health_and_metrics_server(
         .in_current_span(),
     );
 
-    info!("Http server started on {local_addr}");
+    info!("Health and metrics server started on ports: http: {local_addr}");
 
     Ok(local_addr.port())
 }

@@ -46,7 +46,6 @@ use prometheus::Registry;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use tracing::info;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
@@ -234,7 +233,6 @@ pub async fn run(
     runtime: Handle,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<RunDetails, anyhow::Error> {
-    info!("Golem Worker Executor starting up...");
     ServerBootstrap {}
         .run(golem_config, prometheus_registry, runtime, join_set)
         .await

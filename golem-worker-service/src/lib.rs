@@ -51,7 +51,7 @@ use poem::{EndpointExt, Route};
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::task::JoinSet;
-use tracing::Instrument;
+use tracing::{info, Instrument};
 
 #[cfg(test)]
 test_r::enable!();
@@ -115,6 +115,11 @@ impl WorkerService {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_http_server(join_set).await?;
         let custom_request_port = self.start_api_gateway_server(join_set).await?;
+
+        info!(
+            "Started worker service on ports: http: {}, grpc: {}, gateway: {}",
+            http_port, grpc_port, custom_request_port
+        );
 
         Ok(RunDetails {
             http_port,
