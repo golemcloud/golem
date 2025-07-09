@@ -47,7 +47,7 @@ pub enum ApiTags {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
-pub struct ErrorBodyWithOptionalErrorLog {
+pub struct ErrorBodyWithOptionalWorkerError {
     pub error: String,
     /// Error log in case the error was caused by the worker failing
     pub worker_error_logs: Option<String>,
@@ -68,7 +68,7 @@ pub enum ApiEndpointError {
     #[oai(status = 409)]
     AlreadyExists(Json<ErrorBody>),
     #[oai(status = 500)]
-    InternalError(Json<ErrorBodyWithOptionalErrorLog>),
+    InternalError(Json<ErrorBodyWithOptionalWorkerError>),
 }
 
 impl TraceErrorKind for ApiEndpointError {
@@ -111,7 +111,7 @@ impl ApiEndpointError {
     }
 
     pub fn internal<T: SafeDisplay>(error: T) -> Self {
-        Self::InternalError(Json(ErrorBodyWithOptionalErrorLog {
+        Self::InternalError(Json(ErrorBodyWithOptionalWorkerError {
             error: error.to_safe_string(),
             worker_error_logs: None,
         }))
@@ -206,7 +206,7 @@ impl From<WorkerExecutorError> for ApiEndpointError {
         match error {
             WorkerExecutorError::WorkerNotFound { .. } => Self::not_found(error),
             WorkerExecutorError::WorkerTrapped { error, error_logs } => {
-                Self::InternalError(Json(ErrorBodyWithOptionalErrorLog {
+                Self::InternalError(Json(ErrorBodyWithOptionalWorkerError {
                     error: error.message().to_string(),
                     worker_error_logs: Some(error_logs),
                 }))
@@ -328,10 +328,7 @@ impl From<ProjectError> for ApiEndpointError {
                     errors: errors.errors.clone(),
                 })),
                 Some(Error::InternalError(error)) => {
-                    ApiEndpointError::InternalError(Json(ErrorBodyWithOptionalErrorLog {
-                        error: error.error.clone(),
-                        worker_error_logs: None,
-                    }))
+                    ApiEndpointError::internal(safe(error.error.to_string()))
                 }
                 Some(Error::NotFound(error)) => ApiEndpointError::NotFound(Json(ErrorBody {
                     error: error.error.clone(),

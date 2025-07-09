@@ -25,7 +25,7 @@ use goldenfile::Mint;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, OplogPayload,
-    PayloadId, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId, WorkerTrapCause,
+    PayloadId, TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
@@ -569,10 +569,10 @@ pub fn wrapped_function_type() {
 
 #[test]
 pub fn worker_error() {
-    let we1 = WorkerTrapCause::OutOfMemory;
-    let we2 = WorkerTrapCause::InvalidRequest("invalid request".to_string());
-    let we3 = WorkerTrapCause::StackOverflow;
-    let we4 = WorkerTrapCause::Unknown("unknown".to_string());
+    let we1 = WorkerError::OutOfMemory;
+    let we2 = WorkerError::InvalidRequest("invalid request".to_string());
+    let we3 = WorkerError::StackOverflow;
+    let we4 = WorkerError::Unknown("unknown".to_string());
 
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_error_out_of_memory", &mut mint, we1);
@@ -707,7 +707,7 @@ pub fn oplog_entry() {
 
     let oe6 = OplogEntry::Error {
         timestamp: Timestamp::from(1724701938466),
-        error: WorkerTrapCause::OutOfMemory,
+        error: WorkerError::OutOfMemory,
     };
 
     let oe7 = OplogEntry::NoOp {

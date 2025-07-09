@@ -15,7 +15,7 @@
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem;
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::oplog::WorkerTrapCause;
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::wasmtime::EncodingError;
@@ -109,7 +109,7 @@ pub enum WorkerExecutorError {
     },
     // The user component existed with a TrapType::Error
     WorkerTrapped {
-        error: WorkerTrapCause,
+        error: WorkerError,
         error_logs: String,
     },
 }

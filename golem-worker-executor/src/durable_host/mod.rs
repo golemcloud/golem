@@ -66,7 +66,7 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
-    TimestampedUpdateDescription, UpdateDescription, WorkerResourceId, WorkerTrapCause,
+    TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{exports, PluginInstallationId};
@@ -409,18 +409,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     fn get_recovery_decision_on_trap(
         retry_config: &RetryConfig,
         previous_tries: u64,
-        result: Result<&TrapType, WorkerExecutorError>,
+        trap_type: &TrapType,
     ) -> RetryDecision {
-        match result {
-            Ok(TrapType::Interrupt(InterruptKind::Interrupt)) => RetryDecision::None,
-            Ok(TrapType::Interrupt(InterruptKind::Suspend)) => RetryDecision::None,
-            Ok(TrapType::Interrupt(InterruptKind::Restart)) => RetryDecision::Immediate,
-            Ok(TrapType::Interrupt(InterruptKind::Jump)) => RetryDecision::Immediate,
-            Ok(TrapType::Exit) => RetryDecision::None,
-            Ok(TrapType::Error(WorkerTrapCause::OutOfMemory)) => RetryDecision::ReacquirePermits,
-            Ok(TrapType::Error(WorkerTrapCause::InvalidRequest(_))) => RetryDecision::None,
-            Ok(TrapType::Error(WorkerTrapCause::StackOverflow)) => RetryDecision::None,
-            Ok(TrapType::Error(WorkerTrapCause::Unknown(_))) | Err(_) => {
+        match trap_type {
+            TrapType::Interrupt(InterruptKind::Interrupt) => RetryDecision::None,
+            TrapType::Interrupt(InterruptKind::Suspend) => RetryDecision::None,
+            TrapType::Interrupt(InterruptKind::Restart) => RetryDecision::Immediate,
+            TrapType::Interrupt(InterruptKind::Jump) => RetryDecision::Immediate,
+            TrapType::Exit => RetryDecision::None,
+            TrapType::Error(WorkerError::OutOfMemory) => RetryDecision::ReacquirePermits,
+            TrapType::Error(WorkerError::InvalidRequest(_)) => RetryDecision::None,
+            TrapType::Error(WorkerError::StackOverflow) => RetryDecision::None,
+            TrapType::Error(WorkerError::Unknown(_)) => {
                 let retryable = previous_tries < (retry_config.max_attempts as u64);
                 if retryable {
                     match get_delay(retry_config, previous_tries) {
@@ -1002,7 +1002,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn on_invocation_failure(&mut self, result: Result<&TrapType, WorkerExecutorError>) -> RetryDecision {
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
         let previous_tries = self.trailing_error_count().await;
         let default_retry_config = &self.state.config.retry;
         let retry_config = self
@@ -1012,39 +1012,27 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .unwrap_or(default_retry_config)
             .clone();
         let decision =
-            Self::get_recovery_decision_on_trap(&retry_config, previous_tries, result);
+            Self::get_recovery_decision_on_trap(&retry_config, previous_tries, trap_type);
 
         debug!(
             "Recovery decision after {} tries: {:?}",
             previous_tries, decision
         );
-        let (updated_worker_status, oplog_entry, store_result) = match result {
-            Ok(TrapType::Interrupt(InterruptKind::Interrupt)) => (
+        let (updated_worker_status, oplog_entry, store_result) = match trap_type {
+            TrapType::Interrupt(InterruptKind::Interrupt) => (
                 WorkerStatus::Interrupted,
                 Some(OplogEntry::interrupted()),
                 true,
             ),
-            Ok(TrapType::Interrupt(InterruptKind::Suspend)) => {
+            TrapType::Interrupt(InterruptKind::Suspend) => {
                 (WorkerStatus::Suspended, Some(OplogEntry::suspend()), false)
             }
-            Ok(TrapType::Interrupt(InterruptKind::Jump)) => (WorkerStatus::Running, None, false),
-            Ok(TrapType::Interrupt(InterruptKind::Restart)) => (WorkerStatus::Running, None, false),
-            Ok(TrapType::Exit) => (WorkerStatus::Exited, Some(OplogEntry::exited()), true),
-            Ok(TrapType::Error(WorkerTrapCause::InvalidRequest(_))) => {
-                (WorkerStatus::Running, None, true)
-            }
-            Ok(TrapType::Error(error)) => {
+            TrapType::Interrupt(InterruptKind::Jump) => (WorkerStatus::Running, None, false),
+            TrapType::Interrupt(InterruptKind::Restart) => (WorkerStatus::Running, None, false),
+            TrapType::Exit => (WorkerStatus::Exited, Some(OplogEntry::exited()), true),
+            TrapType::Error(WorkerError::InvalidRequest(_)) => (WorkerStatus::Running, None, true),
+            TrapType::Error(error) => {
                 let status = if is_worker_error_retriable(&retry_config, error, previous_tries) {
-                    WorkerStatus::Retrying
-                } else {
-                    WorkerStatus::Failed
-                };
-                let store_error = status == WorkerStatus::Failed;
-                (status, Some(OplogEntry::error(error.clone())), store_error)
-            }
-            Err(err) => {
-                let retryable = previous_tries < (retry_config.max_attempts as u64);
-                let status = if retryable {
                     WorkerStatus::Retrying
                 } else {
                     WorkerStatus::Failed
@@ -1641,7 +1629,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                             }
                                         } else {
                                             let trap_type = TrapType::Error(
-                                                WorkerTrapCause::InvalidRequest(format!(
+                                                WorkerError::InvalidRequest(format!(
                                                     "Function {full_function_name} not found"
                                                 )),
                                             );
@@ -1649,7 +1637,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                             let _ = store
                                                 .as_context_mut()
                                                 .data_mut()
-                                                .on_invocation_failure(Ok(&trap_type))
+                                                .on_invocation_failure(&trap_type)
                                                 .await;
 
                                             break Err(WorkerExecutorError::invalid_request(
@@ -1658,16 +1646,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         }
                                     }
                                     Err(err) => {
-                                        let trap_type = TrapType::Error(
-                                            WorkerTrapCause::InvalidRequest(format!(
+                                        let trap_type =
+                                            TrapType::Error(WorkerError::InvalidRequest(format!(
                                                 "Function {full_function_name} not found: {err}"
-                                            )),
-                                        );
+                                            )));
 
                                         let _ = store
                                             .as_context_mut()
                                             .data_mut()
-                                            .on_invocation_failure(Ok(&trap_type))
+                                            .on_invocation_failure(&trap_type)
                                             .await;
 
                                         break Err(WorkerExecutorError::invalid_request(format!(
@@ -1690,7 +1677,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         let decision = store
                                             .as_context_mut()
                                             .data_mut()
-                                            .on_invocation_failure(Ok(&trap_type))
+                                            .on_invocation_failure(&trap_type)
                                             .await;
 
                                         if decision == RetryDecision::None {

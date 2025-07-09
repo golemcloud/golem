@@ -30,7 +30,7 @@ use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextStack};
-use golem_common::model::oplog::WorkerTrapCause;
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     exports, ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
@@ -579,10 +579,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 {
                     Ok(outcome) => outcome,
                     Err(error) => {
-                        println!("boom: {}", error);
                         self.store
                             .data_mut()
-                            .on_invocation_failure(&TrapType::Error(WorkerTrapCause::Unknown(
+                            .on_invocation_failure(&TrapType::Error(WorkerError::Unknown(
                                 error.to_string(),
                             )))
                             .await;
@@ -594,18 +593,19 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(None) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&TrapType::Error(WorkerTrapCause::InvalidRequest(
+                    .on_invocation_failure(&TrapType::Error(WorkerError::InvalidRequest(
                         "Function not found".to_string(),
                     )))
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
 
-            Err(result) => {
-                println!("boom2: {}", result);
+            Err(err) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&TrapType::Error(WorkerTrapCause::Unknown(result)))
+                    .on_invocation_failure(&TrapType::Error(WorkerError::InvalidRequest(format!(
+                        "Failed analysing function: {err}"
+                    ))))
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }

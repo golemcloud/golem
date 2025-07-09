@@ -17,7 +17,7 @@ use crate::model::TrapType;
 use crate::virtual_export_compat;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
-use golem_common::model::oplog::{WorkerResourceId, WorkerTrapCause};
+use golem_common::model::oplog::{WorkerError, WorkerResourceId};
 use golem_common::model::{IdempotencyKey, WorkerStatus};
 use golem_common::virtual_exports;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -756,7 +756,7 @@ pub enum InvokeResult {
     /// The invoked function has failed
     Failed {
         consumed_fuel: i64,
-        error: WorkerTrapCause,
+        error: WorkerError,
     },
     /// The invoked function succeeded and produced a result
     Succeeded {

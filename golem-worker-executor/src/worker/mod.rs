@@ -43,7 +43,7 @@ use anyhow::anyhow;
 use futures::channel::oneshot;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerTrapCause,
+    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::RetryConfig;
@@ -1826,14 +1826,14 @@ enum WorkerCommand {
 
 pub fn is_worker_error_retriable(
     retry_config: &RetryConfig,
-    error: &WorkerTrapCause,
+    error: &WorkerError,
     retry_count: u64,
 ) -> bool {
     match error {
-        WorkerTrapCause::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
-        WorkerTrapCause::InvalidRequest(_) => false,
-        WorkerTrapCause::StackOverflow => false,
-        WorkerTrapCause::OutOfMemory => true,
+        WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
+        WorkerError::InvalidRequest(_) => false,
+        WorkerError::StackOverflow => false,
+        WorkerError::OutOfMemory => true,
     }
 }
 

@@ -23,7 +23,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use golem_common::config::RedisConfig;
-use golem_common::model::oplog::{LogLevel, SpanData, WorkerTrapCause};
+use golem_common::model::oplog::{LogLevel, SpanData, WorkerError};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentType, WorkerStatusRecord};
 use golem_common::redis::RedisPool;
@@ -971,7 +971,7 @@ async fn read_from_archive_impl(use_blob: bool) {
         .map(|i| {
             rounded(OplogEntry::Error {
                 timestamp,
-                error: WorkerTrapCause::Unknown(i.to_string()),
+                error: WorkerError::Unknown(i.to_string()),
             })
         })
         .collect();
@@ -1214,7 +1214,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .map(|i| {
             rounded(OplogEntry::Error {
                 timestamp,
-                error: WorkerTrapCause::Unknown(i.to_string()),
+                error: WorkerError::Unknown(i.to_string()),
             })
         })
         .collect();
@@ -1284,7 +1284,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .map(|i| {
             rounded(OplogEntry::Error {
                 timestamp,
-                error: WorkerTrapCause::Unknown(i.to_string()),
+                error: WorkerError::Unknown(i.to_string()),
             })
         })
         .collect();
@@ -1354,7 +1354,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     oplog
         .add(rounded(OplogEntry::Error {
             timestamp,
-            error: WorkerTrapCause::Unknown("last".to_string()),
+            error: WorkerError::Unknown("last".to_string()),
         }))
         .await;
     oplog.commit(CommitLevel::Always).await;
@@ -1382,28 +1382,28 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         entry1.get(&OplogIndex::INITIAL).unwrap().clone(),
         rounded(OplogEntry::Error {
             timestamp,
-            error: WorkerTrapCause::Unknown("0".to_string()),
+            error: WorkerError::Unknown("0".to_string()),
         })
     );
     assert_eq!(
         entry2.get(&OplogIndex::from_u64(100)).unwrap().clone(),
         rounded(OplogEntry::Error {
             timestamp,
-            error: WorkerTrapCause::Unknown("99".to_string()),
+            error: WorkerError::Unknown("99".to_string()),
         })
     );
     assert_eq!(
         entry3.get(&OplogIndex::from_u64(1000)).unwrap().clone(),
         rounded(OplogEntry::Error {
             timestamp,
-            error: WorkerTrapCause::Unknown("999".to_string()),
+            error: WorkerError::Unknown("999".to_string()),
         })
     );
     assert_eq!(
         entry4.get(&OplogIndex::from_u64(1001)).unwrap().clone(),
         rounded(OplogEntry::Error {
             timestamp,
-            error: WorkerTrapCause::Unknown("last".to_string()),
+            error: WorkerError::Unknown("last".to_string()),
         })
     );
 }
@@ -1475,7 +1475,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
             .map(|i| {
                 rounded(OplogEntry::Error {
                     timestamp,
-                    error: WorkerTrapCause::Unknown(i.to_string()),
+                    error: WorkerError::Unknown(i.to_string()),
                 })
             })
             .collect();
@@ -1571,7 +1571,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .map(|i| {
             rounded(OplogEntry::Error {
                 timestamp,
-                error: WorkerTrapCause::Unknown(i.to_string()),
+                error: WorkerError::Unknown(i.to_string()),
             })
         })
         .collect();

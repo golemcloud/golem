@@ -316,7 +316,7 @@ pub enum OplogEntry {
     /// Worker failed
     Error {
         timestamp: Timestamp,
-        error: WorkerTrapCause,
+        error: WorkerError,
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
     /// more predictable.
@@ -540,7 +540,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn error(error: WorkerTrapCause) -> OplogEntry {
+    pub fn error(error: WorkerError) -> OplogEntry {
         OplogEntry::Error {
             timestamp: Timestamp::now_utc(),
             error,
@@ -969,14 +969,14 @@ pub enum DurableFunctionType {
 
 /// Describes the error that occurred in the worker
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode)]
-pub enum WorkerTrapCause {
+pub enum WorkerError {
     Unknown(String),
     InvalidRequest(String),
     StackOverflow,
     OutOfMemory,
 }
 
-impl WorkerTrapCause {
+impl WorkerError {
     pub fn message(&self) -> &str {
         match self {
             Self::Unknown(message) => message,
@@ -999,7 +999,7 @@ impl WorkerTrapCause {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use super::WorkerTrapCause;
+    use super::WorkerError;
     use crate::model::oplog::{IndexedResourceKey, PersistenceLevel};
 
     impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
@@ -1046,7 +1046,7 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::worker::TrapCause> for WorkerTrapCause {
+    impl TryFrom<golem_api_grpc::proto::golem::worker::TrapCause> for WorkerError {
         type Error = String;
 
         fn try_from(
@@ -1062,19 +1062,17 @@ mod protobuf {
         }
     }
 
-    impl From<WorkerTrapCause> for golem_api_grpc::proto::golem::worker::TrapCause {
-        fn from(value: WorkerTrapCause) -> Self {
+    impl From<WorkerError> for golem_api_grpc::proto::golem::worker::TrapCause {
+        fn from(value: WorkerError) -> Self {
             use golem_api_grpc::proto::golem::worker as grpc_worker;
             use golem_api_grpc::proto::golem::worker::trap_cause::Cause;
             let cause = match value {
-                WorkerTrapCause::StackOverflow => {
-                    Cause::StackOverflow(grpc_worker::StackOverflow {})
-                }
-                WorkerTrapCause::OutOfMemory => Cause::OutOfMemory(grpc_worker::OutOfMemory {}),
-                WorkerTrapCause::InvalidRequest(details) => {
+                WorkerError::StackOverflow => Cause::StackOverflow(grpc_worker::StackOverflow {}),
+                WorkerError::OutOfMemory => Cause::OutOfMemory(grpc_worker::OutOfMemory {}),
+                WorkerError::InvalidRequest(details) => {
                     Cause::InvalidRequest(grpc_worker::InvalidRequest { details })
                 }
-                WorkerTrapCause::Unknown(details) => {
+                WorkerError::Unknown(details) => {
                     Cause::UnknownError(grpc_worker::UnknownError { details })
                 }
             };

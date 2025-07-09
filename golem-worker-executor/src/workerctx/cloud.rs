@@ -231,8 +231,8 @@ impl InvocationHooks for Context {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, error: &TrapType) -> RetryDecision {
-        self.durable_ctx.on_invocation_failure(error).await
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
+        self.durable_ctx.on_invocation_failure(trap_type).await
     }
 
     async fn on_invocation_success(
