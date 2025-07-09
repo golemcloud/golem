@@ -71,17 +71,24 @@ impl MessageWithFields for WorkerCreateView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkerGetView(pub WorkerMetadataView);
-
-impl From<WorkerMetadata> for WorkerGetView {
-    fn from(value: WorkerMetadata) -> Self {
-        WorkerMetadataView::from(value).into()
-    }
+pub struct WorkerGetView {
+    pub metadata: WorkerMetadataView,
+    pub precise: bool,
 }
 
-impl From<WorkerMetadataView> for WorkerGetView {
-    fn from(value: WorkerMetadataView) -> Self {
-        Self(value)
+impl WorkerGetView {
+    pub fn from_metadata(metadata: WorkerMetadata, precise: bool) -> Self {
+        Self {
+            metadata: WorkerMetadataView::from(metadata),
+            precise,
+        }
+    }
+
+    pub fn from_metadata_view(metadata: WorkerMetadataView) -> Self {
+        Self {
+            metadata,
+            precise: false,
+        }
     }
 }
 
@@ -89,7 +96,7 @@ impl MessageWithFields for WorkerGetView {
     fn message(&self) -> String {
         format!(
             "Got metadata for worker {}",
-            format_message_highlight(&self.0.worker_name)
+            format_message_highlight(&self.metadata.worker_name)
         )
     }
 
@@ -97,7 +104,7 @@ impl MessageWithFields for WorkerGetView {
         let mut fields = FieldsBuilder::new();
 
         let mut update_history = String::new();
-        for update in &self.0.updates {
+        for update in &self.metadata.updates {
             match update {
                 UpdateRecord::PendingUpdate(update) => {
                     let _ = writeln!(
@@ -143,38 +150,65 @@ impl MessageWithFields for WorkerGetView {
         }
 
         fields
-            .fmt_field("Component name", &self.0.component_name, format_id)
-            .fmt_field("Component version", &self.0.component_version, format_id)
-            .fmt_field("Worker name", &self.0.worker_name, format_main_id)
-            .field("Created at", &self.0.created_at)
-            .fmt_field("Component size", &self.0.component_size, format_binary_size)
+            .fmt_field("Component name", &self.metadata.component_name, format_id)
             .fmt_field(
-                "Total linear memory size",
-                &self.0.total_linear_memory_size,
+                "Component version",
+                &self.metadata.component_version,
+                format_id,
+            )
+            .fmt_field("Worker name", &self.metadata.worker_name, format_main_id)
+            .field("Created at", &self.metadata.created_at)
+            .fmt_field(
+                "Component size",
+                &self.metadata.component_size,
                 format_binary_size,
             )
-            .fmt_field_optional("Arguments", &self.0.args, !self.0.args.is_empty(), |args| {
-                args.join(" ")
-            })
+            .fmt_field(
+                "Total linear memory size",
+                &self.metadata.total_linear_memory_size,
+                format_binary_size,
+            )
+            .fmt_field_optional(
+                "Arguments",
+                &self.metadata.args,
+                !self.metadata.args.is_empty(),
+                |args| args.join(" "),
+            )
             .fmt_field_optional(
                 "Environment variables",
-                &self.0.env,
-                !self.0.env.is_empty(),
+                &self.metadata.env,
+                !self.metadata.env.is_empty(),
                 |env| {
                     env.iter()
                         .map(|(k, v)| format!("{}={}", k, v.bold()))
                         .join(";")
                 },
             )
-            .fmt_field("Status", &self.0.status, format_status)
-            .fmt_field("Retry count", &self.0.retry_count, format_retry_count)
+            .fmt_field_optional("Status", &self.metadata.status, self.precise, format_status)
+            .fmt_field_optional(
+                "Retry count",
+                &self.metadata.retry_count,
+                self.precise,
+                format_retry_count,
+            )
             .fmt_field_optional(
                 "Pending invocation count",
-                &self.0.pending_invocation_count,
-                self.0.pending_invocation_count > 0,
+                &self.metadata.pending_invocation_count,
+                self.metadata.pending_invocation_count > 0,
                 |n| n.to_string(),
             )
-            .fmt_field_option("Last error", &self.0.last_error, |err| format_stack(err));
+            .fmt_field_optional(
+                "Last error",
+                &self.metadata.last_error,
+                self.metadata.last_error.is_some() && self.precise,
+                |err| format_stack(err.as_ref().unwrap()),
+            )
+            .fmt_field_optional(
+                "WARNING",
+                "The presented worker metadata may not be up-to-date",
+                !self.precise,
+                format_warn,
+            );
 
         fields.build()
     }

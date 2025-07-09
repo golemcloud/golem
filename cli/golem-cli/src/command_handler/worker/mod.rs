@@ -808,7 +808,7 @@ impl WorkerCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&WorkerGetView::from(result));
+            .log_view(&WorkerGetView::from_metadata(result, true));
 
         Ok(())
     }
