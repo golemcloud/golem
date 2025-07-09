@@ -35,7 +35,7 @@ message WorkerExecutionError {
     ShardingNotReady sharding_not_ready = 23;
     InitialComponentFileDownloadFailed initial_component_file_download_failed = 24;
     FileSystemError file_system_error = 25;
-    WorkerTrapped worker_trapped = 26;
+    InvocationFailed invocation_failed = 26;
     PreviousInvocationFailedV2 previous_invocation_failed_v2 = 27;
   }
 }
@@ -143,7 +143,7 @@ message FileSystemError {
   string reason = 2;
 }
 
-message WorkerTrapped {
+message InvocationFailed {
   TrapCause error = 1;
   string stderr = 2;
 }

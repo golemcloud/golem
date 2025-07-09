@@ -1139,7 +1139,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             stderr,
                         }),
                     ..
-                } => LookupResult::Complete(Err(WorkerExecutorError::WorkerTrapped {
+                } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed {
                     error,
                     stderr,
                 })),

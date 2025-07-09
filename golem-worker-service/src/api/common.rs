@@ -214,13 +214,13 @@ impl From<WorkerExecutorError> for ApiEndpointError {
     fn from(error: WorkerExecutorError) -> Self {
         match error {
             WorkerExecutorError::WorkerNotFound { .. } => Self::not_found(error),
-            WorkerExecutorError::WorkerTrapped { error, stderr } => {
+            WorkerExecutorError::InvocationFailed { error, stderr } => {
                 Self::InternalError(Json(ErrorBodyWithOptionalWorkerError {
-                    error: "Worker Trapped".to_string(),
+                    error: "Invocation Failed".to_string(),
                     worker_error: Some(WorkerErrorDetails {
                         cause: error.message().to_string(),
-                        stderr: stderr,
-                     }),
+                        stderr,
+                    }),
                 }))
             }
             WorkerExecutorError::PreviousInvocationFailedV2 { error, stderr } => {
@@ -228,8 +228,8 @@ impl From<WorkerExecutorError> for ApiEndpointError {
                     error: "Previous Invocation Failed".to_string(),
                     worker_error: Some(WorkerErrorDetails {
                         cause: error.message().to_string(),
-                        stderr: stderr,
-                     }),
+                        stderr,
+                    }),
                 }))
             }
             _ => Self::internal(error),

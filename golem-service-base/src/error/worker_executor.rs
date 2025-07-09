@@ -107,11 +107,12 @@ pub enum WorkerExecutorError {
         path: String,
         reason: String,
     },
-    // The user component existed with a TrapType::Error
-    WorkerTrapped {
+    // The worker failed with a TrapType::Error
+    InvocationFailed {
         error: WorkerError,
         stderr: String,
     },
+    // The worker failed with a TrapType::Error in a previous attempt
     PreviousInvocationFailedV2 {
         error: WorkerError,
         stderr: String,
@@ -297,7 +298,7 @@ impl Display for WorkerExecutorError {
                     "Failed to access file in worker filesystem {path}: {reason}"
                 )
             }
-            Self::WorkerTrapped { error, stderr } => {
+            Self::InvocationFailed { error, stderr } => {
                 write!(f, "Component trapped: {}", error.to_string(stderr))
             }
             Self::PreviousInvocationFailedV2 { error, stderr } => {
@@ -338,13 +339,13 @@ impl Error for WorkerExecutorError {
             Self::InvalidShardId { .. } => "Invalid shard",
             Self::InvalidAccount => "Invalid account",
             Self::Runtime { .. } => "Runtime error",
-            Self::WorkerTrapped { .. } => "Component trapped",
+            Self::InvocationFailed { .. } => "The invoked function failed",
             Self::PreviousInvocationFailed { .. } => "The previously invoked function failed",
             Self::PreviousInvocationExited => "The previously invoked function exited",
             Self::Unknown { .. } => "Unknown error",
             Self::ShardingNotReady => "Sharding not ready",
             Self::FileSystemError { .. } => "File system error",
-            Self::PreviousInvocationFailedV2 { .. } => "The previously invoked function failed"
+            Self::PreviousInvocationFailedV2 { .. } => "The previously invoked function failed",
         }
     }
 }
@@ -372,7 +373,7 @@ impl TraceErrorKind for WorkerExecutorError {
             Self::InvalidShardId { .. } => "InvalidShardId",
             Self::InvalidAccount => "InvalidAccount",
             Self::Runtime { .. } => "Runtime",
-            Self::WorkerTrapped { .. } => "ComponentTrapped",
+            Self::InvocationFailed { .. } => "InvocationFailed",
             Self::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
             Self::PreviousInvocationExited => "PreviousInvocationExited",
             Self::Unknown { .. } => "Unknown",
@@ -404,14 +405,13 @@ impl TraceErrorKind for WorkerExecutorError {
             | Self::UnexpectedOplogEntry { .. }
             | Self::InvalidAccount
             | Self::Runtime { .. }
-            | Self::WorkerTrapped { .. }
+            | Self::InvocationFailed { .. }
             | Self::PreviousInvocationFailed { .. }
             | Self::PreviousInvocationExited
             | Self::Unknown { .. }
             | Self::ShardingNotReady
             | Self::FileSystemError { .. }
-            | Self::PreviousInvocationFailedV2 { .. }
-            => false,
+            | Self::PreviousInvocationFailedV2 { .. } => false,
         }
     }
 }
@@ -628,14 +628,6 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::RuntimeError { details },
                 )),
             },
-            WorkerExecutorError::WorkerTrapped { error, stderr } => Self {
-                error: Some(golem::worker::v1::worker_execution_error::Error::WorkerTrapped(
-                    golem::worker::v1::WorkerTrapped {
-                        error: Some(error.into()),
-                        stderr
-                    }
-                ))
-            },
             WorkerExecutorError::InvalidShardId {
                 shard_id,
                 shard_ids,
@@ -695,6 +687,14 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
             WorkerExecutorError::PreviousInvocationFailedV2 { error, stderr } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailedV2(
                     golem::worker::v1::PreviousInvocationFailedV2 {
+                        error: Some(error.into()),
+                        stderr
+                    }
+                ))
+            },
+            WorkerExecutorError::InvocationFailed { error, stderr } => Self {
+                error: Some(golem::worker::v1::worker_execution_error::Error::InvocationFailed(
+                    golem::worker::v1::InvocationFailed {
                         error: Some(error.into()),
                         stderr
                     }
@@ -880,15 +880,15 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 path: file_system_error.path,
                 reason: file_system_error.reason,
             }),
-            Some(golem::worker::v1::worker_execution_error::Error::WorkerTrapped(
+            Some(golem::worker::v1::worker_execution_error::Error::InvocationFailed(
                 inner,
-            )) => Ok(Self::WorkerTrapped {
+            )) => Ok(Self::InvocationFailed {
                 error: inner.error.ok_or("no trap_cause field")?.try_into()?,
                 stderr: inner.stderr
              }),
             Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailedV2(
                 inner,
-            )) => Ok(Self::WorkerTrapped {
+            )) => Ok(Self::PreviousInvocationFailedV2 {
                 error: inner.error.ok_or("no trap_cause field")?.try_into()?,
                 stderr: inner.stderr
              })

@@ -31,7 +31,8 @@ use golem_common::model::{
 };
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
-    drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events, worker_error_logs, worker_error_message, TestDslUnsafe
+    drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
+    worker_error_logs, worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType, TypeStr};
@@ -3214,8 +3215,12 @@ async fn stderr_returned_for_failed_component(
 
     println!("result3: {result3:?}");
 
-    check!(worker_error_logs(&result2.clone().err().unwrap()).unwrap().ends_with(&expected_stderr));
-    check!(worker_error_logs(&result3.clone().err().unwrap()).unwrap().ends_with(&expected_stderr));
+    check!(worker_error_logs(&result2.clone().err().unwrap())
+        .unwrap()
+        .ends_with(&expected_stderr));
+    check!(worker_error_logs(&result3.clone().err().unwrap())
+        .unwrap()
+        .ends_with(&expected_stderr));
 
     check!(metadata.last_known_status.status == WorkerStatus::Failed);
     check!(last_error.is_some());

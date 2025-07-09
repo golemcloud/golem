@@ -264,7 +264,7 @@ impl TrapType {
                 WorkerError::InvalidRequest(msg) => {
                     Some(WorkerExecutorError::invalid_request(msg.clone()))
                 }
-                _ => Some(WorkerExecutorError::WorkerTrapped {
+                _ => Some(WorkerExecutorError::InvocationFailed {
                     error: error.clone(),
                     stderr: error_logs.to_string(),
                 }),

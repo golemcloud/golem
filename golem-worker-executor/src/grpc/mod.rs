@@ -213,10 +213,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 )
                 .await;
                 if let Some(last_error) = error_and_retry_count {
-                    Err(WorkerExecutorError::PreviousInvocationFailed {
-                        details: last_error.error.to_string(&last_error.stderr),
+                    Err(WorkerExecutorError::PreviousInvocationFailedV2 {
+                        error: last_error.error,
+                        stderr: last_error.stderr,
                     })
                 } else {
+                    // TODO: In what cases can we reach here?
                     Err(WorkerExecutorError::PreviousInvocationFailed {
                         details: "".to_string(),
                     })

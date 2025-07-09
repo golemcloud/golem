@@ -794,6 +794,7 @@ mod tests {
             Just(WorkerExecutorError::PreviousInvocationExited),
             ".*".prop_map(|details| WorkerExecutorError::Unknown { details }),
             (".*", ".*").prop_map(|(path, reason)| WorkerExecutorError::InitialComponentFileDownloadFailed { path, reason }),
+            (".*", ".*").prop_map(|(path, reason)| WorkerExecutorError::FileSystemError { path, reason }),
         }
     }
 

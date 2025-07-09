@@ -1705,7 +1705,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                         .event_service()
                                                         .get_last_invocation_errors();
                                                     break Err(
-                                                        WorkerExecutorError::WorkerTrapped {
+                                                        WorkerExecutorError::InvocationFailed {
                                                             error,
                                                             stderr,
                                                         },
