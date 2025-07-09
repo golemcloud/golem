@@ -649,7 +649,7 @@ mod tests {
         SerializableDateTime, SerializableError, SerializableIpAddress, SerializableIpAddresses,
         SerializableStreamError,
     };
-    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::oplog::{OplogIndex, WorkerError};
     use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
     use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
     use proptest::collection::vec;
@@ -768,6 +768,15 @@ mod tests {
         any::<i64>().prop_map(ShardId::new)
     }
 
+    fn workererror_strat() -> impl Strategy<Value = WorkerError> {
+        prop_oneof! {
+            Just(WorkerError::OutOfMemory),
+            Just(WorkerError::StackOverflow),
+            ".*".prop_map(WorkerError::InvalidRequest),
+            ".*".prop_map(WorkerError::Unknown),
+        }
+    }
+
     fn golemerror_strat() -> impl Strategy<Value = WorkerExecutorError> {
         prop_oneof! {
             ".*".prop_map(|details| WorkerExecutorError::InvalidRequest { details }),
@@ -795,6 +804,8 @@ mod tests {
             ".*".prop_map(|details| WorkerExecutorError::Unknown { details }),
             (".*", ".*").prop_map(|(path, reason)| WorkerExecutorError::InitialComponentFileDownloadFailed { path, reason }),
             (".*", ".*").prop_map(|(path, reason)| WorkerExecutorError::FileSystemError { path, reason }),
+            (workererror_strat(), ".*").prop_map(|(error, stderr)| WorkerExecutorError::InvocationFailed { error, stderr }),
+            (workererror_strat(), ".*").prop_map(|(error, stderr)| WorkerExecutorError::PreviousInvocationFailedV2 { error, stderr }),
         }
     }
 

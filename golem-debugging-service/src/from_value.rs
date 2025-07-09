@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_api_grpc::proto::golem::worker::UpdateMode;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogIndex, WorkerError};
 use golem_common::model::{ComponentId, ComponentVersion, PromiseId, WorkerId};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::Value;
@@ -347,6 +347,49 @@ impl FromValue for SerializableStreamError {
             }
         } else {
             Err("Failed to get SerializableStreamError from value".to_string())
+        }
+    }
+}
+
+impl FromValue for WorkerError {
+    fn from_value(value: &Value) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match value {
+            Value::Variant {
+                case_idx,
+                case_value,
+            } => match (case_idx, case_value) {
+                (0, Some(error)) => match error.deref() {
+                    Value::Record(errors) => {
+                        if errors.len() != 1 {
+                            return Err("Failed to get WorkerError".to_string());
+                        }
+
+                        let details = String::from_value(&errors[0])?;
+                        Ok(WorkerError::Unknown(details))
+                    }
+
+                    _ => Err("Failed to get WorkerError. Not a Record".to_string()),
+                },
+                (1, Some(error)) => match error.deref() {
+                    Value::Record(errors) => {
+                        if errors.len() != 1 {
+                            return Err("Failed to get WorkerError".to_string());
+                        }
+
+                        let details = String::from_value(&errors[0])?;
+                        Ok(WorkerError::InvalidRequest(details))
+                    }
+
+                    _ => Err("Failed to get WorkerError. Not a Record".to_string()),
+                },
+                (2, None) => Ok(WorkerError::StackOverflow),
+                (3, None) => Ok(WorkerError::OutOfMemory),
+                _ => Err("Failed to get WorkerError. Invalid case.".to_string()),
+            },
+            _ => Err("failed to get WorkerError".to_string()),
         }
     }
 }
@@ -701,6 +744,20 @@ impl FromValue for WorkerExecutorError {
                         let reason = String::from_value(reason)?;
 
                         Ok(WorkerExecutorError::FileSystemError { path, reason })
+                    }
+
+                    _ => Err("Failed to get GolemError. Not a Record".to_string()),
+                },
+                (25, Some(error)) => match error.deref() {
+                    Value::Record(values) => {
+                        if values.len() != 2 {
+                            return Err("Failed to get GolemError".to_string());
+                        }
+
+                        let error = WorkerError::from_value(&values[0])?;
+                        let stderr = String::from_value(&values[1])?;
+
+                        Ok(WorkerExecutorError::InvocationFailed { error, stderr })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),
