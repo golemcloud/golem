@@ -37,9 +37,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     ListDirectoryRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
-use golem_api_grpc::proto::golem::worker::{
-    log_event, worker_error, LogEvent, StdErrLog, StdOutLog, UpdateMode,
-};
+use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
 use golem_client::model::Account;
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, RawComponentMetadata,
@@ -1967,21 +1965,8 @@ pub fn worker_error_message(error: &Error) -> String {
                     "Invalid shard id: {:?}; ids: {:?}",
                     error.shard_id, error.shard_ids
                 ),
-                worker_execution_error::Error::PreviousInvocationFailed(error) => {
-                    let cause = match error
-                        .error
-                        .clone()
-                        .expect("no trap_cause field")
-                        .error
-                        .expect("no error field")
-                    {
-                        worker_error::Error::InvalidRequest(inner) => inner.details,
-                        worker_error::Error::UnknownError(inner) => inner.details,
-                        worker_error::Error::StackOverflow(_) => "Stack Overflow".to_string(),
-                        worker_error::Error::OutOfMemory(_) => "Out of memory".to_string(),
-                    };
-
-                    format!("Previous invocation failed: {cause}")
+                worker_execution_error::Error::PreviousInvocationFailed(_) => {
+                    "Previous invocation failed".to_string()
                 }
                 worker_execution_error::Error::Unknown(error) => {
                     format!("Unknown error: {}", error.details)
@@ -2004,24 +1989,28 @@ pub fn worker_error_message(error: &Error) -> String {
                 worker_execution_error::Error::FileSystemError(error) => {
                     format!("File system error: {}", error.reason)
                 }
-                worker_execution_error::Error::InvocationFailed(error) => {
-                    let cause = match error
-                        .error
-                        .clone()
-                        .expect("no trap_cause field")
-                        .error
-                        .expect("no error field")
-                    {
-                        worker_error::Error::InvalidRequest(inner) => inner.details,
-                        worker_error::Error::UnknownError(inner) => inner.details,
-                        worker_error::Error::StackOverflow(_) => "Stack Overflow".to_string(),
-                        worker_error::Error::OutOfMemory(_) => "Out of memory".to_string(),
-                    };
-
-                    format!("Invocation failed: {cause}")
+                worker_execution_error::Error::InvocationFailed(_) => {
+                    "Invocation failed".to_string()
                 }
             },
         },
+    }
+}
+
+pub fn worker_error_underlying_error(
+    error: &Error,
+) -> Option<golem_common::model::oplog::WorkerError> {
+    match error {
+        Error::InternalError(error) => match &error.error {
+            Some(worker_execution_error::Error::InvocationFailed(error)) => {
+                Some(error.error.clone().unwrap().try_into().unwrap())
+            }
+            Some(worker_execution_error::Error::PreviousInvocationFailed(error)) => {
+                Some(error.error.clone().unwrap().try_into().unwrap())
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
