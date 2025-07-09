@@ -45,6 +45,7 @@ pub enum ApiTags {
     Worker,
 }
 
+/// Detail in case the error was caused by the worker failing
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerErrorDetails {
@@ -58,7 +59,6 @@ pub struct WorkerErrorDetails {
 #[oai(rename_all = "camelCase")]
 pub struct ErrorBodyWithOptionalWorkerError {
     pub error: String,
-    /// Detail in case the error was caused by the worker failing
     pub worker_error: Option<WorkerErrorDetails>,
 }
 
