@@ -86,7 +86,7 @@ pub async fn test_dependencies(_tracing: &Tracing) -> RegularWorkerExecutorTestD
 pub fn get_golem_config(
     redis_public_port: u16,
     redis_prefix: String,
-    server_port: u16, // This can be grpc port for regular worker executor or http port for debug worker executor
+    grpc_port: u16,
     http_port: u16,
 ) -> GolemConfig {
     GolemConfig {
@@ -99,7 +99,7 @@ pub fn get_golem_config(
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
             root: Path::new("data/blobs").to_path_buf(),
         }),
-        port: server_port,
+        port: grpc_port,
         http_port,
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
@@ -109,7 +109,7 @@ pub fn get_golem_config(
         ),
         public_worker_api: WorkerServiceGrpcConfig {
             host: "localhost".to_string(),
-            port: server_port,
+            port: grpc_port,
             access_token: "03494299-B515-4427-8C37-4C1C915679B7".to_string(),
             retries: RetryConfig::max_attempts_5(),
             connect_timeout: Duration::from_secs(120),

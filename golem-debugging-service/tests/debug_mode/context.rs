@@ -19,7 +19,7 @@ impl DebugExecutorTestContext {
         self.regular_worker_executor_context.clone()
     }
 
-    pub fn debug_server_port(&self) -> u16 {
+    pub fn grpc_port(&self) -> u16 {
         8050 + (self.regular_worker_executor_context.unique_id * 3)
     }
 

@@ -48,8 +48,6 @@ pub struct DebugConfig {
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
     pub rdbms: RdbmsConfig,
-    pub grpc_address: String,
-    pub port: u16,
     pub http_address: String,
     pub http_port: u16,
 
@@ -64,6 +62,7 @@ pub struct DebugConfig {
 
 impl DebugConfig {
     pub fn into_golem_config(self) -> GolemConfig {
+        let default_golem_config = GolemConfig::default();
         GolemConfig {
             tracing: self.tracing,
             tracing_file_name_with_port: self.tracing_file_name_with_port,
@@ -85,8 +84,10 @@ impl DebugConfig {
             component_service: ComponentServiceConfig::Grpc(self.component_service),
             component_cache: self.component_cache,
             project_service: Default::default(),
-            grpc_address: self.grpc_address,
-            port: self.port,
+            // unused
+            grpc_address: default_golem_config.grpc_address,
+            // unused
+            port: default_golem_config.port,
             http_address: self.http_address,
             http_port: self.http_port,
             shard_manager_service: ShardManagerServiceConfig::SingleShard(
@@ -116,8 +117,6 @@ impl Default for DebugConfig {
             public_worker_api: default_golem_config.public_worker_api,
             memory: default_golem_config.memory,
             rdbms: default_golem_config.rdbms,
-            grpc_address: default_golem_config.grpc_address,
-            port: default_golem_config.port,
             http_address: default_golem_config.http_address,
             http_port: default_golem_config.http_port,
             cloud_service: RemoteCloudServiceConfig::default(),
