@@ -1648,6 +1648,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             total_linear_memory_size: latest_status.total_linear_memory_size,
             owned_resources,
             active_plugins: active_plugins.into_iter().map(|id| id.into()).collect(),
+            skipped_regions: latest_status
+                .skipped_regions
+                .into_regions()
+                .map(|region| region.into())
+                .collect(),
+            deleted_regions: latest_status
+                .deleted_regions
+                .into_regions()
+                .map(|region| region.into())
+                .collect(),
         }
     }
 }

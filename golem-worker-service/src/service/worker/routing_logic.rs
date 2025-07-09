@@ -529,7 +529,7 @@ impl<'a> RetryState<'a> {
             attempt = self.attempt,
             executor_kind = executor_kind,
             op = self.op,
-            "Call on executor - start attempt"
+            "Attempting to call executor"
         );
         RetrySpan::new(executor_kind, self.attempt)
     }
@@ -553,7 +553,7 @@ impl<'a> RetryState<'a> {
                     ?pod,
                     delay_ms = delay.as_millis(),
                     op = self.op,
-                    "Call on executor - retry"
+                    "Retry calling executor after delay"
                 );
                 sleep(delay).await;
                 Ok(None)
@@ -567,7 +567,7 @@ impl<'a> RetryState<'a> {
                     pod = format_pod(pod),
                     delay_ms = delay.as_millis(),
                     op = self.op,
-                    "Call on executor - retry - resetting retry attempts"
+                    "Retry calling executor reached the maximum attempts"
                 );
                 Ok(None)
             }
@@ -583,7 +583,7 @@ impl<'a> RetryState<'a> {
             error = error.to_string(),
             pod = format_pod(pod),
             op = self.op,
-            "Call on executor - non retriable expected error"
+            "Expected executor error, not retrying"
         );
         Err(error)
     }
@@ -597,7 +597,7 @@ impl<'a> RetryState<'a> {
             error = error.to_string(),
             pod = format_pod(pod),
             op = self.op,
-            "Call on executor - non retriable error"
+            "Non retryable executor error"
         );
         Err(error)
     }
@@ -607,7 +607,7 @@ impl<'a> RetryState<'a> {
             duration_ms = self.started_at.elapsed().as_millis(),
             pod = format_pod(pod),
             op = self.op,
-            "Call on executor - success"
+            "Call to executor succeeded"
         );
     }
 }

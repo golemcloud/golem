@@ -21,7 +21,7 @@ use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing::info;
+use tracing::debug;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -69,7 +69,7 @@ impl PlanService for PlanServiceDefault {
     async fn create_initial_plan(&self) -> Result<Plan, PlanError> {
         let default_plan: Plan = self.plans_config.default.clone().into();
 
-        info!("Create initial plan {}", default_plan.plan_id);
+        debug!("Create initial plan {}", default_plan.plan_id);
 
         let record: PlanRecord = default_plan.clone().into();
 
@@ -81,7 +81,7 @@ impl PlanService for PlanServiceDefault {
     async fn get_default_plan(&self) -> Result<Plan, PlanError> {
         let plan_id = self.plans_config.default.plan_id;
 
-        info!("Getting default plan {}", plan_id);
+        debug!("Getting default plan {}", plan_id);
 
         let plan = self.plan_repo.get(&plan_id).await?;
 
@@ -92,7 +92,7 @@ impl PlanService for PlanServiceDefault {
     }
 
     async fn get(&self, plan_id: &PlanId) -> Result<Option<Plan>, PlanError> {
-        info!("Getting plan {}", plan_id);
+        debug!("Getting plan {}", plan_id);
         let result = self.plan_repo.get(&plan_id.0).await?;
         Ok(result.map(|p| p.into()))
     }

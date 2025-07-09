@@ -64,6 +64,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "OplogCursor",
                 "golem_common::model::public_oplog::OplogCursor",
             ),
+            ("OplogRegion", "golem_common::model::regions::OplogRegion"),
             (
                 "ProjectActions",
                 "golem_common::model::auth::ProjectActions",
