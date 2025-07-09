@@ -799,13 +799,12 @@ mod tests {
             ".*".prop_map(|details| WorkerExecutorError::Runtime { details }),
             (shardid_strat(), vec(shardid_strat(), 0..100)).prop_map(|(shard_id, shard_ids)| WorkerExecutorError::InvalidShardId { shard_id, shard_ids }),
             Just(WorkerExecutorError::InvalidAccount),
-            ".*".prop_map(|details| WorkerExecutorError::PreviousInvocationFailed { details }),
+            (workererror_strat(), ".*").prop_map(|(error, stderr)| WorkerExecutorError::PreviousInvocationFailed { error, stderr }),
             Just(WorkerExecutorError::PreviousInvocationExited),
             ".*".prop_map(|details| WorkerExecutorError::Unknown { details }),
             (".*", ".*").prop_map(|(path, reason)| WorkerExecutorError::InitialComponentFileDownloadFailed { path, reason }),
             (".*", ".*").prop_map(|(path, reason)| WorkerExecutorError::FileSystemError { path, reason }),
             (workererror_strat(), ".*").prop_map(|(error, stderr)| WorkerExecutorError::InvocationFailed { error, stderr }),
-            (workererror_strat(), ".*").prop_map(|(error, stderr)| WorkerExecutorError::PreviousInvocationFailedV2 { error, stderr }),
         }
     }
 

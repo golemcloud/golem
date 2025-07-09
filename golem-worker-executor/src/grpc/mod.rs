@@ -213,15 +213,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 )
                 .await;
                 if let Some(last_error) = error_and_retry_count {
-                    Err(WorkerExecutorError::PreviousInvocationFailedV2 {
+                    Err(WorkerExecutorError::PreviousInvocationFailed {
                         error: last_error.error,
                         stderr: last_error.stderr,
                     })
                 } else {
                     // TODO: In what cases can we reach here?
-                    Err(WorkerExecutorError::PreviousInvocationFailed {
-                        details: "".to_string(),
-                    })
+                    Err(WorkerExecutorError::runtime(
+                        "Previous invocation failed, but failed to get error details",
+                    ))
                 }
             }
             WorkerStatus::Exited => Err(WorkerExecutorError::PreviousInvocationExited),
@@ -235,7 +235,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 debug!("Last error and retry count: {:?}", error_and_retry_count);
                 if let Some(last_error) = error_and_retry_count {
                     Err(WorkerExecutorError::PreviousInvocationFailed {
-                        details: last_error.error.to_string(&last_error.stderr),
+                        error: last_error.error,
+                        stderr: last_error.stderr,
                     })
                 } else {
                     Ok(())

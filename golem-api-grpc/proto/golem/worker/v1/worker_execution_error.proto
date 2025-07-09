@@ -6,7 +6,7 @@ import "golem/worker/promise_id.proto";
 import "golem/shardmanager/shard_id.proto";
 import "golem/component/component_id.proto";
 import "golem/worker/worker_id.proto";
-import "golem/worker/trap_cause.proto";
+import "golem/worker/worker_error.proto";
 
 message WorkerExecutionError {
   oneof error {
@@ -36,7 +36,6 @@ message WorkerExecutionError {
     InitialComponentFileDownloadFailed initial_component_file_download_failed = 24;
     FileSystemError file_system_error = 25;
     InvocationFailed invocation_failed = 26;
-    PreviousInvocationFailedV2 previous_invocation_failed_v2 = 27;
   }
 }
 
@@ -116,7 +115,8 @@ message InvalidShardId {
 }
 
 message PreviousInvocationFailed {
-  string details = 1;
+  WorkerError error = 1;
+  string stderr = 2;
 }
 
 message PreviousInvocationExited {}
@@ -144,11 +144,6 @@ message FileSystemError {
 }
 
 message InvocationFailed {
-  TrapCause error = 1;
-  string stderr = 2;
-}
-
-message PreviousInvocationFailedV2 {
-  TrapCause error = 1;
+  WorkerError error = 1;
   string stderr = 2;
 }

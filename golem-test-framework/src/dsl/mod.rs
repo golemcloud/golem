@@ -38,7 +38,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{
-    log_event, trap_cause, LogEvent, StdErrLog, StdOutLog, UpdateMode,
+    log_event, worker_error, LogEvent, StdErrLog, StdOutLog, UpdateMode,
 };
 use golem_client::model::Account;
 use golem_common::model::component_metadata::{
@@ -1968,7 +1968,20 @@ pub fn worker_error_message(error: &Error) -> String {
                     error.shard_id, error.shard_ids
                 ),
                 worker_execution_error::Error::PreviousInvocationFailed(error) => {
-                    format!("Previous invocation failed: {}", error.details)
+                    let cause = match error
+                        .error
+                        .clone()
+                        .expect("no trap_cause field")
+                        .error
+                        .expect("no error field")
+                    {
+                        worker_error::Error::InvalidRequest(inner) => inner.details,
+                        worker_error::Error::UnknownError(inner) => inner.details,
+                        worker_error::Error::StackOverflow(_) => "Stack Overflow".to_string(),
+                        worker_error::Error::OutOfMemory(_) => "Out of memory".to_string(),
+                    };
+
+                    format!("Previous invocation failed: {cause}")
                 }
                 worker_execution_error::Error::Unknown(error) => {
                     format!("Unknown error: {}", error.details)
@@ -1996,32 +2009,16 @@ pub fn worker_error_message(error: &Error) -> String {
                         .error
                         .clone()
                         .expect("no trap_cause field")
-                        .cause
-                        .expect("no cause field")
-                    {
-                        trap_cause::Cause::InvalidRequest(inner) => inner.details,
-                        trap_cause::Cause::UnknownError(inner) => inner.details,
-                        trap_cause::Cause::StackOverflow(_) => "Stack Overflow".to_string(),
-                        trap_cause::Cause::OutOfMemory(_) => "Out of memory".to_string(),
-                    };
-
-                    format!("Worker trapped: {cause}")
-                }
-                worker_execution_error::Error::PreviousInvocationFailedV2(error) => {
-                    let cause = match error
                         .error
-                        .clone()
-                        .expect("no trap_cause field")
-                        .cause
-                        .expect("no cause field")
+                        .expect("no error field")
                     {
-                        trap_cause::Cause::InvalidRequest(inner) => inner.details,
-                        trap_cause::Cause::UnknownError(inner) => inner.details,
-                        trap_cause::Cause::StackOverflow(_) => "Stack Overflow".to_string(),
-                        trap_cause::Cause::OutOfMemory(_) => "Out of memory".to_string(),
+                        worker_error::Error::InvalidRequest(inner) => inner.details,
+                        worker_error::Error::UnknownError(inner) => inner.details,
+                        worker_error::Error::StackOverflow(_) => "Stack Overflow".to_string(),
+                        worker_error::Error::OutOfMemory(_) => "Out of memory".to_string(),
                     };
 
-                    format!("Worker trapped: {cause}")
+                    format!("Invocation failed: {cause}")
                 }
             },
         },
@@ -2034,7 +2031,7 @@ pub fn worker_error_logs(error: &Error) -> Option<String> {
             Some(worker_execution_error::Error::InvocationFailed(error)) => {
                 Some(error.stderr.clone())
             }
-            Some(worker_execution_error::Error::PreviousInvocationFailedV2(error)) => {
+            Some(worker_execution_error::Error::PreviousInvocationFailed(error)) => {
                 Some(error.stderr.clone())
             }
             _ => None,

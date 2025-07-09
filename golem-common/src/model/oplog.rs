@@ -1046,37 +1046,37 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::worker::TrapCause> for WorkerError {
+    impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerError> for WorkerError {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::worker::TrapCause,
+            value: golem_api_grpc::proto::golem::worker::WorkerError,
         ) -> Result<Self, Self::Error> {
-            use golem_api_grpc::proto::golem::worker::trap_cause::Cause;
-            match value.cause.ok_or("no cause field")? {
-                Cause::StackOverflow(_) => Ok(Self::StackOverflow),
-                Cause::OutOfMemory(_) => Ok(Self::OutOfMemory),
-                Cause::InvalidRequest(inner) => Ok(Self::InvalidRequest(inner.details)),
-                Cause::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
+            use golem_api_grpc::proto::golem::worker::worker_error::Error;
+            match value.error.ok_or("no error field")? {
+                Error::StackOverflow(_) => Ok(Self::StackOverflow),
+                Error::OutOfMemory(_) => Ok(Self::OutOfMemory),
+                Error::InvalidRequest(inner) => Ok(Self::InvalidRequest(inner.details)),
+                Error::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
             }
         }
     }
 
-    impl From<WorkerError> for golem_api_grpc::proto::golem::worker::TrapCause {
+    impl From<WorkerError> for golem_api_grpc::proto::golem::worker::WorkerError {
         fn from(value: WorkerError) -> Self {
             use golem_api_grpc::proto::golem::worker as grpc_worker;
-            use golem_api_grpc::proto::golem::worker::trap_cause::Cause;
-            let cause = match value {
-                WorkerError::StackOverflow => Cause::StackOverflow(grpc_worker::StackOverflow {}),
-                WorkerError::OutOfMemory => Cause::OutOfMemory(grpc_worker::OutOfMemory {}),
+            use golem_api_grpc::proto::golem::worker::worker_error::Error;
+            let error = match value {
+                WorkerError::StackOverflow => Error::StackOverflow(grpc_worker::StackOverflow {}),
+                WorkerError::OutOfMemory => Error::OutOfMemory(grpc_worker::OutOfMemory {}),
                 WorkerError::InvalidRequest(details) => {
-                    Cause::InvalidRequest(grpc_worker::InvalidRequest { details })
+                    Error::InvalidRequest(grpc_worker::InvalidRequest { details })
                 }
                 WorkerError::Unknown(details) => {
-                    Cause::UnknownError(grpc_worker::UnknownError { details })
+                    Error::UnknownError(grpc_worker::UnknownError { details })
                 }
             };
-            Self { cause: Some(cause) }
+            Self { error: Some(error) }
         }
     }
 }

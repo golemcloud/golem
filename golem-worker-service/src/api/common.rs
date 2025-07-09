@@ -223,7 +223,7 @@ impl From<WorkerExecutorError> for ApiEndpointError {
                     }),
                 }))
             }
-            WorkerExecutorError::PreviousInvocationFailedV2 { error, stderr } => {
+            WorkerExecutorError::PreviousInvocationFailed { error, stderr } => {
                 Self::InternalError(Json(ErrorBodyWithOptionalWorkerError {
                     error: "Previous Invocation Failed".to_string(),
                     worker_error: Some(WorkerErrorDetails {

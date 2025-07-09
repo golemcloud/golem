@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package golem.worker;
 
-message TrapCause {
-  oneof cause {
+message WorkerError {
+  oneof error {
     StackOverflow stack_overflow = 1;
     OutOfMemory out_of_memory = 2;
     InvalidRequest invalid_request = 3;

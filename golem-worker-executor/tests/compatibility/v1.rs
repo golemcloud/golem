@@ -963,10 +963,25 @@ pub fn golem_error() {
     };
     let g19 = WorkerExecutorError::InvalidAccount;
     let g20 = WorkerExecutorError::PreviousInvocationFailed {
+        error: WorkerError::Unknown("cause".to_string()),
+        stderr: "stderr".to_string(),
+    };
+    let g21 = WorkerExecutorError::PreviousInvocationExited;
+    let g22 = WorkerExecutorError::Unknown {
         details: "details".to_string(),
     };
-    let g21 = WorkerExecutorError::Unknown {
-        details: "details".to_string(),
+    let g23 = WorkerExecutorError::ShardingNotReady;
+    let g24 = WorkerExecutorError::InitialComponentFileDownloadFailed {
+        path: "path".to_string(),
+        reason: "reason".to_string(),
+    };
+    let g25 = WorkerExecutorError::FileSystemError {
+        path: "path".to_string(),
+        reason: "reason".to_string(),
+    };
+    let g26 = WorkerExecutorError::InvocationFailed {
+        error: WorkerError::Unknown("cause".to_string()),
+        stderr: "stderr".to_string(),
     };
 
     let mut mint = Mint::new("tests/goldenfiles");
@@ -994,7 +1009,16 @@ pub fn golem_error() {
     backward_compatible("golem_error_invalid_shard_id", &mut mint, g18);
     backward_compatible("golem_error_invalid_account", &mut mint, g19);
     backward_compatible("golem_error_previous_invocation_failed", &mut mint, g20);
-    backward_compatible("golem_error_unknown", &mut mint, g21);
+    backward_compatible("golem_error_previous_invocation_exited", &mut mint, g21);
+    backward_compatible("golem_error_unknown", &mut mint, g22);
+    backward_compatible("golem_error_sharding_not_ready", &mut mint, g23);
+    backward_compatible(
+        "golem_error_initial_component_file_download_failed",
+        &mut mint,
+        g24,
+    );
+    backward_compatible("golem_error_file_system_error", &mut mint, g25);
+    backward_compatible("golem_error_invocation_failed", &mut mint, g26);
 }
 
 #[test]

@@ -261,9 +261,6 @@ pub fn error_to_status(error: WorkerError) -> Status {
                 worker_execution_error::Error::InvocationFailed(_) => {
                     "Invocation Failed".to_string()
                 }
-                worker_execution_error::Error::PreviousInvocationFailedV2(_) => {
-                    "Previous Invocation Failed".to_string()
-                }
             };
             Status::internal(message)
         }

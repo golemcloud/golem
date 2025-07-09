@@ -685,13 +685,14 @@ impl FromValue for WorkerExecutorError {
                 (18, None) => Ok(WorkerExecutorError::InvalidAccount),
                 (19, Some(error)) => match error.deref() {
                     Value::Record(values) => {
-                        if values.len() != 1 {
+                        if values.len() != 2 {
                             return Err("Failed to get GolemError".to_string());
                         }
 
-                        let details = String::from_value(&values[0])?;
+                        let error = WorkerError::from_value(&values[0])?;
+                        let stderr = String::from_value(&values[1])?;
 
-                        Ok(WorkerExecutorError::PreviousInvocationFailed { details })
+                        Ok(WorkerExecutorError::PreviousInvocationFailed { error, stderr })
                     }
 
                     _ => Err("Failed to get GolemError. Not a Record".to_string()),

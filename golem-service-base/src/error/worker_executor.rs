@@ -82,7 +82,7 @@ pub enum WorkerExecutorError {
         expected: String,
         got: String,
     },
-    // The golem runtime encountedred an error while exeucting the user error. Difference to ComponentTrapped is that the user component did not directly error here.
+    /// The golem runtime encountered an error while exeucting the user error. Difference to ComponentTrapped is that the user component did not directly error here.
     Runtime {
         details: String,
     },
@@ -91,8 +91,10 @@ pub enum WorkerExecutorError {
         shard_ids: Vec<ShardId>,
     },
     InvalidAccount,
+    /// The worker failed with a TrapType::Error in a previous attempt
     PreviousInvocationFailed {
-        details: String,
+        error: WorkerError,
+        stderr: String,
     },
     PreviousInvocationExited,
     Unknown {
@@ -107,13 +109,8 @@ pub enum WorkerExecutorError {
         path: String,
         reason: String,
     },
-    // The worker failed with a TrapType::Error
+    /// The worker failed with a TrapType::Error
     InvocationFailed {
-        error: WorkerError,
-        stderr: String,
-    },
-    // The worker failed with a TrapType::Error in a previous attempt
-    PreviousInvocationFailedV2 {
         error: WorkerError,
         stderr: String,
     },
@@ -280,8 +277,8 @@ impl Display for WorkerExecutorError {
             Self::InvalidAccount => {
                 write!(f, "Invalid account")
             }
-            Self::PreviousInvocationFailed { details } => {
-                write!(f, "The previously invoked function failed: {details}")
+            Self::PreviousInvocationFailed { error, stderr } => {
+                write!(f, "Previous invocation failed: {}", error.to_string(stderr))
             }
             Self::PreviousInvocationExited => {
                 write!(f, "The previously invoked function exited")
@@ -300,9 +297,6 @@ impl Display for WorkerExecutorError {
             }
             Self::InvocationFailed { error, stderr } => {
                 write!(f, "Component trapped: {}", error.to_string(stderr))
-            }
-            Self::PreviousInvocationFailedV2 { error, stderr } => {
-                write!(f, "Previous invocation failed: {}", error.to_string(stderr))
             }
         }
     }
@@ -345,7 +339,6 @@ impl Error for WorkerExecutorError {
             Self::Unknown { .. } => "Unknown error",
             Self::ShardingNotReady => "Sharding not ready",
             Self::FileSystemError { .. } => "File system error",
-            Self::PreviousInvocationFailedV2 { .. } => "The previously invoked function failed",
         }
     }
 }
@@ -379,7 +372,6 @@ impl TraceErrorKind for WorkerExecutorError {
             Self::Unknown { .. } => "Unknown",
             Self::ShardingNotReady => "ShardingNotReady",
             Self::FileSystemError { .. } => "FileSystemError",
-            Self::PreviousInvocationFailedV2 { .. } => "PreviousInvocationFailed",
         }
     }
 
@@ -410,8 +402,7 @@ impl TraceErrorKind for WorkerExecutorError {
             | Self::PreviousInvocationExited
             | Self::Unknown { .. }
             | Self::ShardingNotReady
-            | Self::FileSystemError { .. }
-            | Self::PreviousInvocationFailedV2 { .. } => false,
+            | Self::FileSystemError { .. } => false,
         }
     }
 }
@@ -651,13 +642,14 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            WorkerExecutorError::PreviousInvocationFailed { details } => Self {
-                    error: Some(
-                        golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailed(
-                            golem::worker::v1::PreviousInvocationFailed { details },
-                        ),
-                    ),
-                },
+            WorkerExecutorError::PreviousInvocationFailed { error, stderr } => Self {
+                error: Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailed(
+                    golem::worker::v1::PreviousInvocationFailed {
+                        error: Some(error.into()),
+                        stderr
+                    }
+                ))
+            },
             WorkerExecutorError::PreviousInvocationExited => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::PreviousInvocationExited(
@@ -683,14 +675,6 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                         golem::worker::v1::FileSystemError { path, reason },
                     ),
                 ),
-            },
-            WorkerExecutorError::PreviousInvocationFailedV2 { error, stderr } => Self {
-                error: Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailedV2(
-                    golem::worker::v1::PreviousInvocationFailedV2 {
-                        error: Some(error.into()),
-                        stderr
-                    }
-                ))
             },
             WorkerExecutorError::InvocationFailed { error, stderr } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::InvocationFailed(
@@ -853,10 +837,11 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 })
             }
             Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailed(
-                previous_invocation_failed,
+                inner,
             )) => Ok(Self::PreviousInvocationFailed {
-                details: previous_invocation_failed.details,
-            }),
+                error: inner.error.ok_or("no trap_cause field")?.try_into()?,
+                stderr: inner.stderr
+             }),
             Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationExited(_)) => {
                 Ok(Self::PreviousInvocationExited)
             }
@@ -886,12 +871,6 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 error: inner.error.ok_or("no trap_cause field")?.try_into()?,
                 stderr: inner.stderr
              }),
-            Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailedV2(
-                inner,
-            )) => Ok(Self::PreviousInvocationFailedV2 {
-                error: inner.error.ok_or("no trap_cause field")?.try_into()?,
-                stderr: inner.stderr
-             })
         }
     }
 }
