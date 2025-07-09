@@ -37,7 +37,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     ListDirectoryRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
-use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{log_event, trap_cause, LogEvent, StdErrLog, StdOutLog, UpdateMode};
 use golem_client::model::Account;
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, RawComponentMetadata,
@@ -1990,13 +1990,42 @@ pub fn worker_error_message(error: &Error) -> String {
                     format!("File system error: {}", error.reason)
                 }
                 worker_execution_error::Error::WorkerTrapped(error) => {
-                    format!(
-                        "Worker trapped: {:?}; logs: {}",
-                        error.trap_cause, error.error_logs
-                    )
+                    let cause = match error.error.clone().expect("no trap_cause field").cause.expect("no cause field") {
+                        trap_cause::Cause::InvalidRequest(inner) => inner.details,
+                        trap_cause::Cause::UnknownError(inner) => inner.details,
+                        trap_cause::Cause::StackOverflow(_) => "Stack Overflow".to_string(),
+                        trap_cause::Cause::OutOfMemory(_) => "Out of memory".to_string()
+                    };
+
+                    format!("Worker trapped: {cause}")
+                }
+                worker_execution_error::Error::PreviousInvocationFailedV2(error) => {
+                    let cause = match error.error.clone().expect("no trap_cause field").cause.expect("no cause field") {
+                        trap_cause::Cause::InvalidRequest(inner) => inner.details,
+                        trap_cause::Cause::UnknownError(inner) => inner.details,
+                        trap_cause::Cause::StackOverflow(_) => "Stack Overflow".to_string(),
+                        trap_cause::Cause::OutOfMemory(_) => "Out of memory".to_string()
+                    };
+
+                    format!("Worker trapped: {cause}")
                 }
             },
         },
+    }
+}
+
+pub fn worker_error_logs(error: &Error) -> Option<String> {
+    match error {
+        Error::InternalError(error) => match &error.error {
+            Some(worker_execution_error::Error::WorkerTrapped(error)) => {
+                Some(error.stderr.clone())
+            },
+            Some(worker_execution_error::Error::PreviousInvocationFailedV2(error)) => {
+                Some(error.stderr.clone())
+            },
+            _ => None
+        },
+        _ => None
     }
 }
 

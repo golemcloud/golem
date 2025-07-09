@@ -47,10 +47,19 @@ pub enum ApiTags {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
+pub struct WorkerErrorDetails {
+    /// Error that caused to worker to fail
+    pub cause: String,
+    /// Error log of the worker
+    pub stderr: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 pub struct ErrorBodyWithOptionalWorkerError {
     pub error: String,
-    /// Error log in case the error was caused by the worker failing
-    pub worker_error_logs: Option<String>,
+    /// Detail in case the error was caused by the worker failing
+    pub worker_error: Option<WorkerErrorDetails>,
 }
 
 #[derive(ApiResponse, Debug, Clone)]
@@ -113,7 +122,7 @@ impl ApiEndpointError {
     pub fn internal<T: SafeDisplay>(error: T) -> Self {
         Self::InternalError(Json(ErrorBodyWithOptionalWorkerError {
             error: error.to_safe_string(),
-            worker_error_logs: None,
+            worker_error: None,
         }))
     }
 
@@ -205,10 +214,22 @@ impl From<WorkerExecutorError> for ApiEndpointError {
     fn from(error: WorkerExecutorError) -> Self {
         match error {
             WorkerExecutorError::WorkerNotFound { .. } => Self::not_found(error),
-            WorkerExecutorError::WorkerTrapped { error, error_logs } => {
+            WorkerExecutorError::WorkerTrapped { error, stderr } => {
                 Self::InternalError(Json(ErrorBodyWithOptionalWorkerError {
-                    error: error.message().to_string(),
-                    worker_error_logs: Some(error_logs),
+                    error: "Worker Trapped".to_string(),
+                    worker_error: Some(WorkerErrorDetails {
+                        cause: error.message().to_string(),
+                        stderr: stderr,
+                     }),
+                }))
+            }
+            WorkerExecutorError::PreviousInvocationFailedV2 { error, stderr } => {
+                Self::InternalError(Json(ErrorBodyWithOptionalWorkerError {
+                    error: "Previous Invocation Failed".to_string(),
+                    worker_error: Some(WorkerErrorDetails {
+                        cause: error.message().to_string(),
+                        stderr: stderr,
+                     }),
                 }))
             }
             _ => Self::internal(error),

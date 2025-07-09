@@ -1141,7 +1141,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ..
                 } => LookupResult::Complete(Err(WorkerExecutorError::WorkerTrapped {
                     error,
-                    error_logs: stderr,
+                    stderr,
                 })),
                 InvocationResult::Cached {
                     result:

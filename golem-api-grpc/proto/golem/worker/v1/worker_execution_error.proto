@@ -36,6 +36,7 @@ message WorkerExecutionError {
     InitialComponentFileDownloadFailed initial_component_file_download_failed = 24;
     FileSystemError file_system_error = 25;
     WorkerTrapped worker_trapped = 26;
+    PreviousInvocationFailedV2 previous_invocation_failed_v2 = 27;
   }
 }
 
@@ -143,6 +144,11 @@ message FileSystemError {
 }
 
 message WorkerTrapped {
-  TrapCause trap_cause = 1;
-  string error_logs = 2;
+  TrapCause error = 1;
+  string stderr = 2;
+}
+
+message PreviousInvocationFailedV2 {
+  TrapCause error = 1;
+  string stderr = 2;
 }

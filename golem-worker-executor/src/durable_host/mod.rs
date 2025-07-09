@@ -1698,7 +1698,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                     ))
                                                 }
                                                 TrapType::Error(error) => {
-                                                    let error_logs = store
+                                                    let stderr = store
                                                         .as_context()
                                                         .data()
                                                         .get_public_state()
@@ -1707,7 +1707,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                     break Err(
                                                         WorkerExecutorError::WorkerTrapped {
                                                             error,
-                                                            error_logs,
+                                                            stderr,
                                                         },
                                                     );
                                                 }

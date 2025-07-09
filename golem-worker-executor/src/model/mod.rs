@@ -266,7 +266,7 @@ impl TrapType {
                 }
                 _ => Some(WorkerExecutorError::WorkerTrapped {
                     error: error.clone(),
-                    error_logs: error_logs.to_string(),
+                    stderr: error_logs.to_string(),
                 }),
             },
             TrapType::Exit => Some(WorkerExecutorError::runtime("Process exited")),
