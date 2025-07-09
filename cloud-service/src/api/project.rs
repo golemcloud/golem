@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ApiError, ApiResult, ApiTags};
+use super::{ApiError, ApiResult};
 use crate::model::*;
 use crate::service::api_mapper::ApiMapper;
 use crate::service::auth::AuthService;
@@ -23,6 +23,7 @@ use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
 use golem_common::model::{Empty, PluginInstallationId, ProjectId};
 use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::dto;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_service_base::model::BatchPluginInstallationUpdates;

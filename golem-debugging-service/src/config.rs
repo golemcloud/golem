@@ -59,6 +59,7 @@ pub struct DebugConfig {
     pub component_cache: ComponentCacheConfig,
     pub project_service: ProjectServiceConfig,
     pub resource_limits: ResourceLimitsConfig,
+    pub cors_origin_regex: String,
 }
 
 impl DebugConfig {
@@ -124,6 +125,7 @@ impl Default for DebugConfig {
             component_service: ComponentServiceGrpcConfig::default(),
             project_service: ProjectServiceConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
+            cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
     }
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api::common::{ApiEndpointError, ApiTags};
+use crate::api::common::ApiEndpointError;
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment;
 use crate::gateway_api_deployment::ApiSiteString;
@@ -26,6 +26,7 @@ use golem_common::model::auth::ProjectAction;
 use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe, SafeDisplay};
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;

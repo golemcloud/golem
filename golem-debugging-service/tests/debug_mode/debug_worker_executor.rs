@@ -81,7 +81,7 @@ impl DebugWorkerExecutorClient {
     }
 
     pub async fn connect(port: u16) -> Result<Self, anyhow::Error> {
-        let server_url = format!("ws://127.0.0.1:{port}/ws");
+        let server_url = format!("ws://127.0.0.1:{port}/v1/debugger");
 
         // Connect to the WebSocket server
         let ws_stream = connect_async(server_url)

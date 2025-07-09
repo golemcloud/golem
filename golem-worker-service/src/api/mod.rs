@@ -20,11 +20,9 @@ mod api_security;
 pub mod common;
 mod custom_http_request;
 pub mod dto;
-mod healthcheck;
 mod worker;
 
 use self::custom_http_request::CustomHttpRequestApi;
-use self::healthcheck::HealthcheckApi;
 use crate::api::api_certificate::ApiCertificateApi;
 use crate::api::api_definition::ApiDefinitionApi;
 use crate::api::api_deployment::ApiDeploymentApi;
@@ -32,6 +30,7 @@ use crate::api::api_domain::ApiDomainApi;
 use crate::api::api_security::SecuritySchemeApi;
 use crate::api::worker::WorkerApi;
 use crate::service::Services;
+use golem_service_base::api::HealthcheckApi;
 use poem_openapi::OpenApiService;
 
 pub type Apis = (

@@ -1,4 +1,5 @@
 ## Generated from default config
+cors_origin_regex = "https://*.golem.cloud"
 grpc_address = "0.0.0.0"
 http_address = "0.0.0.0"
 http_port = 8082
@@ -222,6 +223,7 @@ without_time = false
 
 
 ## Generated from example config: default-debug-config
+# cors_origin_regex = "https://*.golem.cloud"
 # grpc_address = "0.0.0.0"
 # http_address = "0.0.0.0"
 # http_port = 8082
