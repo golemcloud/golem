@@ -31,17 +31,7 @@ use golem_service_base::clients::auth::AuthServiceError;
 use golem_service_base::clients::limit::LimitError;
 use golem_service_base::clients::project::ProjectError;
 use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, Object, Tags, Union};
-
-#[allow(clippy::enum_variant_names)]
-#[derive(Tags)]
-pub enum ApiTags {
-    ApiDefinition,
-    ApiDeployment,
-    ApiDomain,
-    ApiCertificate,
-    Worker,
-}
+use poem_openapi::{ApiResponse, Object, Union};
 
 #[derive(Union, Debug, Clone)]
 #[oai(discriminator_name = "type", one_of = true)]

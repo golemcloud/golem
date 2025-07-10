@@ -572,7 +572,7 @@ async fn start_debug_executor(
         .unwrap_or_else(|e| {
             panic!(
                 "Failed to start debug executor at port {}: {}",
-                context.debug_server_port(),
+                context.grpc_port(),
                 e
             )
         })

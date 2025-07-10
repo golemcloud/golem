@@ -271,7 +271,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     }
 }
 
-async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>(
+pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>(
     golem_config: GolemConfig,
     bootstrap: &A,
     runtime: Handle,
