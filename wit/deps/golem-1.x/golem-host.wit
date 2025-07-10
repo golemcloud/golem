@@ -150,7 +150,7 @@ interface host {
 
 
     resource remote-agent {
-        constructor(agent: agent-dependency, agent-id: string);
+        get-id: func() -> string;
 
         invoke: func(method-name: string, input: list<string>) -> status-update;
     }
@@ -277,6 +277,10 @@ interface host {
     /// and this worker continues running as well. The return value is going to be different in this worker and
     /// the forked worker.
     fork: func(new-name: string) -> fork-result;
+
+    create-remote-agent: func(dependency: agent-dependency) -> result<remote-agent, string>;
+
+    connect-to-agent: func(agent-id: string) -> result<remote-agent, string>;
 
     discover-agent-definitions: func() -> list<agent-definition>;
 
