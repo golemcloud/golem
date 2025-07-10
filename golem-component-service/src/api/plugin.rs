@@ -14,7 +14,7 @@
 
 use super::ComponentError;
 use crate::api::dto;
-use crate::api::{ApiTags, Result};
+use crate::api::Result;
 use crate::authed::plugin::AuthedPluginService;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::error::ErrorBody;
@@ -22,6 +22,7 @@ use golem_common::model::plugin::PluginDefinition;
 use golem_common::model::plugin::PluginScope;
 use golem_common::model::{AccountId, Empty};
 use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;

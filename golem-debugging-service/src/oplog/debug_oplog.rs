@@ -14,7 +14,7 @@
 
 use crate::debug_session::{DebugSessionId, DebugSessions};
 use async_trait::async_trait;
-use axum::body::Bytes;
+use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::WorkerMetadata;
 use golem_worker_executor::model::ExecutionStatus;
@@ -25,15 +25,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct DebugOplog {
-    pub inner: Arc<dyn Oplog + Send + Sync>,
+    pub inner: Arc<dyn Oplog>,
     pub oplog_state: DebugOplogState,
 }
 
 impl DebugOplog {
     pub fn new(
-        inner: Arc<dyn Oplog + Send + Sync>,
+        inner: Arc<dyn Oplog>,
         debug_session_id: DebugSessionId,
-        debug_session: Arc<dyn DebugSessions + Send + Sync>,
+        debug_session: Arc<dyn DebugSessions>,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         initial_worker_metadata: WorkerMetadata,
     ) -> Self {
