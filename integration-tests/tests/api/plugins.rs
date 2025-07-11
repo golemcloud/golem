@@ -21,8 +21,11 @@ use axum::Router;
 use base64::Engine;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
 use golem_client::api::{ComponentClient, PluginClient};
+use golem_client::model::BatchPluginInstallationUpdates;
 use golem_common::model::plugin::{
-    AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition, OplogProcessorDefinition, PluginInstallationAction, PluginInstallationCreation, PluginInstallationUpdateWithId, PluginTypeSpecificDefinition, PluginUninstallation
+    AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
+    OplogProcessorDefinition, PluginInstallationAction, PluginInstallationCreation,
+    PluginInstallationUpdateWithId, PluginTypeSpecificDefinition, PluginUninstallation,
 };
 use golem_common::model::plugin::{PluginScope, ProjectPluginScope};
 use golem_common::model::{ComponentFilePermissions, Empty, ScanCursor};
@@ -40,7 +43,6 @@ use test_r::{inherit_test_dep, tag, test};
 use tracing::{debug, info};
 use wac_graph::types::Package;
 use wac_graph::{plug, CompositionGraph, EncodeOptions, Processor};
-use golem_client::model::BatchPluginInstallationUpdates;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -1484,69 +1486,61 @@ async fn install_component_plugin_in_shared_project(
 #[test]
 async fn batch_update_plugin_installations(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let user = deps.user().await;
-    let component_id = user
-        .component("app_and_library_app")
-        .unique()
-        .store()
-        .await;
+    let component_id = user.component("app_and_library_app").unique().store().await;
 
     let plugin_wasm_key = user.add_plugin_wasm("app_and_library_library").await;
 
-    user
-        .create_plugin(PluginDefinitionCreation {
-            name: "library-plugin-1".to_string(),
-            version: "v1".to_string(),
-            description: "A test".to_string(),
-            icon: vec![],
-            homepage: "none".to_string(),
-            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-                blob_storage_key: plugin_wasm_key.clone(),
-            }),
-            scope: PluginScope::Global(Empty {}),
-        })
-        .await;
+    user.create_plugin(PluginDefinitionCreation {
+        name: "library-plugin-1".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+            blob_storage_key: plugin_wasm_key.clone(),
+        }),
+        scope: PluginScope::Global(Empty {}),
+    })
+    .await;
 
-    user
-        .create_plugin(PluginDefinitionCreation {
-            name: "library-plugin-2".to_string(),
-            version: "v1".to_string(),
-            description: "A test".to_string(),
-            icon: vec![],
-            homepage: "none".to_string(),
-            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-                blob_storage_key: plugin_wasm_key.clone(),
-            }),
-            scope: PluginScope::Global(Empty {}),
-        })
-        .await;
+    user.create_plugin(PluginDefinitionCreation {
+        name: "library-plugin-2".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+            blob_storage_key: plugin_wasm_key.clone(),
+        }),
+        scope: PluginScope::Global(Empty {}),
+    })
+    .await;
 
-    user
-        .create_plugin(PluginDefinitionCreation {
-            name: "library-plugin-3".to_string(),
-            version: "v1".to_string(),
-            description: "A test".to_string(),
-            icon: vec![],
-            homepage: "none".to_string(),
-            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-                blob_storage_key: plugin_wasm_key.clone(),
-            }),
-            scope: PluginScope::Global(Empty {}),
-        })
-        .await;
+    user.create_plugin(PluginDefinitionCreation {
+        name: "library-plugin-3".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+            blob_storage_key: plugin_wasm_key.clone(),
+        }),
+        scope: PluginScope::Global(Empty {}),
+    })
+    .await;
 
-    user
-        .create_plugin(PluginDefinitionCreation {
-            name: "library-plugin-4".to_string(),
-            version: "v1".to_string(),
-            description: "A test".to_string(),
-            icon: vec![],
-            homepage: "none".to_string(),
-            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-                blob_storage_key: plugin_wasm_key,
-            }),
-            scope: PluginScope::Global(Empty {}),
-        })
-        .await;
+    user.create_plugin(PluginDefinitionCreation {
+        name: "library-plugin-4".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+            blob_storage_key: plugin_wasm_key,
+        }),
+        scope: PluginScope::Global(Empty {}),
+    })
+    .await;
 
     let installation_id_1 = user
         .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
@@ -1557,11 +1551,10 @@ async fn batch_update_plugin_installations(deps: &EnvBasedTestDependencies, _tra
         .await;
 
     let installation_id_3 = user
-        .install_plugin_to_component(&component_id, "library-plugin-3", "v1", 1, HashMap::new())
+        .install_plugin_to_component(&component_id, "library-plugin-3", "v1", 2, HashMap::new())
         .await;
 
-    deps
-        .component_service()
+    deps.component_service()
         .component_http_client(&user.token)
         .await
         .batch_update_installed_plugins(
@@ -1573,43 +1566,58 @@ async fn batch_update_plugin_installations(deps: &EnvBasedTestDependencies, _tra
                     }),
                     PluginInstallationAction::Update(PluginInstallationUpdateWithId {
                         installation_id: installation_id_3.clone(),
-                        priority: 2,
-                        parameters: HashMap::from_iter(vec![("foo".to_string(), "bar".to_string())])
+                        priority: 3,
+                        parameters: HashMap::from_iter(vec![(
+                            "foo".to_string(),
+                            "bar".to_string(),
+                        )]),
                     }),
                     PluginInstallationAction::Install(PluginInstallationCreation {
                         name: "library-plugin-4".to_string(),
                         version: "v1".to_string(),
-                        priority: 3,
-                        parameters: HashMap::new()
+                        priority: 4,
+                        parameters: HashMap::new(),
                     }),
-
-                ]
-            }
+                ],
+            },
         )
         .await
         .unwrap();
+
+    let latest_version = deps
+        .component_service()
+        .component_http_client(&user.token)
+        .await
+        .get_latest_component_metadata(&component_id.0)
+        .await
+        .unwrap()
+        .versioned_component_id
+        .version;
 
     let installed_plugins = deps
         .component_service()
         .component_http_client(&user.token)
         .await
-        .get_installed_plugins(
-            &component_id.0,
-            "2",
-        )
+        .get_installed_plugins(&component_id.0, &latest_version.to_string())
         .await
         .unwrap();
 
-    assert_eq!(installed_plugins.len(), 2);
+    assert_eq!(installed_plugins.len(), 3);
     {
-        let mut priorities = installed_plugins.iter().map(|ip| ip.priority).collect::<Vec<_>>();
+        let mut priorities = installed_plugins
+            .iter()
+            .map(|ip| ip.priority)
+            .collect::<Vec<_>>();
         priorities.sort();
-        assert_eq!(priorities, vec![2, 3]);
+        assert_eq!(priorities, vec![0, 3, 4]);
     }
     {
-        let installation_ids = installed_plugins.iter().map(|ip| ip.id).collect::<HashSet<_>>();
-        assert!(installation_ids.contains(&installation_id_1.0));
+        let installation_ids = installed_plugins
+            .iter()
+            .map(|ip| ip.id)
+            .collect::<HashSet<_>>();
+        assert!(installation_ids.contains(&installation_id_1.0)); // untouched
         assert!(!installation_ids.contains(&installation_id_2.0)); // uninstalled
-        assert!(!installation_ids.contains(&installation_id_3.0)); // updated
+        assert!(installation_ids.contains(&installation_id_3.0)); // updated
     }
 }

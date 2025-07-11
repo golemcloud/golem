@@ -980,6 +980,7 @@ impl ComponentServiceDefault {
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         let result = self.component_repo.create(&record).await;
+
         match result {
             Err(RepoError::UniqueViolation(_)) => Err(ComponentError::ConcurrentUpdate {
                 component_id: component_id.clone(),
@@ -1015,7 +1016,7 @@ impl ComponentServiceDefault {
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
         self.object_store
-            .put(&component.protected_object_store_key(), data)
+            .put(&component.transformed_object_store_key(), data)
             .await
             .map_err(|e| {
                 ComponentError::component_store_error("Failed to upload protected component", e)
@@ -1400,7 +1401,7 @@ impl ComponentService for ComponentServiceDefault {
             info!(owner = %owner, component_id = %component.versioned_component_id, "Download component");
 
             self.object_store
-                .get(&component.protected_object_store_key())
+                .get(&component.transformed_object_store_key())
                 .await
                 .tap_err(|e| error!(owner = %owner, "Error downloading component - error: {}", e))
                 .map_err(|e| {
@@ -1432,7 +1433,7 @@ impl ComponentService for ComponentServiceDefault {
         };
 
         if let Some(component) = component {
-            let protected_object_store_key = component.protected_object_store_key();
+            let protected_object_store_key = component.transformed_object_store_key();
 
             info!(
                 owner = %owner,
@@ -1669,7 +1670,7 @@ impl ComponentService for ComponentServiceDefault {
         let mut object_store_keys = Vec::new();
 
         for component in components {
-            object_store_keys.push(component.protected_object_store_key());
+            object_store_keys.push(component.transformed_object_store_key());
             object_store_keys.push(component.user_object_store_key());
         }
 
@@ -1914,10 +1915,8 @@ impl ComponentService for ComponentServiceDefault {
                         })?
                     };
 
-                    existing.id = PluginInstallationId::new_v4();
                     existing.priority = update.priority;
                     existing.parameters = update.parameters.clone();
-
                     result.push(None);
                 }
                 PluginInstallationAction::Uninstall(uninstallation) => {
@@ -1949,7 +1948,7 @@ impl ComponentService for ComponentServiceDefault {
         let (component, transformed_data) = self.apply_transformations(component, data).await?;
 
         self.object_store
-            .put(&component.protected_object_store_key(), transformed_data)
+            .put(&component.transformed_object_store_key(), transformed_data)
             .await
             .map_err(|e| {
                 ComponentError::component_store_error("Failed to upload protected component", e)
