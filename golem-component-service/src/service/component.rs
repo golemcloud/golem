@@ -1914,6 +1914,7 @@ impl ComponentService for ComponentServiceDefault {
                         })?
                     };
 
+                    existing.id = PluginInstallationId::new_v4();
                     existing.priority = update.priority;
                     existing.parameters = update.parameters.clone();
 

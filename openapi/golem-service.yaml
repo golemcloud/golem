@@ -1950,7 +1950,7 @@ paths:
       tags:
       - Project
       summary: Applies a batch of changes to the installed plugins of a component
-      operationId: bath_update_installed_plugins_of_project
+      operationId: batch_update_installed_plugins_of_project
       parameters:
       - in: path
         name: project_id
@@ -3650,7 +3650,7 @@ paths:
       tags:
       - Component
       summary: Applies a batch of changes to the installed plugins of a component
-      operationId: bath_update_installed_plugins
+      operationId: batch_update_installed_plugins
       parameters:
       - in: path
         name: component_id

@@ -20,10 +20,9 @@ use axum::routing::post;
 use axum::Router;
 use base64::Engine;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
-use golem_client::api::PluginClient;
+use golem_client::api::{ComponentClient, PluginClient};
 use golem_common::model::plugin::{
-    AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
-    OplogProcessorDefinition, PluginTypeSpecificDefinition,
+    AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition, OplogProcessorDefinition, PluginInstallationAction, PluginInstallationUpdateWithId, PluginTypeSpecificDefinition
 };
 use golem_common::model::plugin::{PluginScope, ProjectPluginScope};
 use golem_common::model::{ComponentFilePermissions, Empty, ScanCursor};
@@ -41,6 +40,7 @@ use test_r::{inherit_test_dep, tag, test};
 use tracing::{debug, info};
 use wac_graph::types::Package;
 use wac_graph::{plug, CompositionGraph, EncodeOptions, Processor};
+use golem_client::model::BatchPluginInstallationUpdates;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -1479,4 +1479,66 @@ async fn install_component_plugin_in_shared_project(
         .await;
 
     assert_eq!(response, Ok(vec![Value::U64(2)]))
+}
+
+#[test]
+async fn plugin_update_via_batch_endpoint(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let admin = deps.admin();
+    let component_id = admin
+        .component("app_and_library_app")
+        .unique()
+        .store()
+        .await;
+
+    let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_library").await;
+
+    admin
+        .create_plugin(PluginDefinitionCreation {
+            name: "library-plugin-1".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+                blob_storage_key: plugin_wasm_key,
+            }),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
+
+    let installation_id = admin
+        .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
+        .await;
+
+    deps
+        .component_service()
+        .component_http_client(&admin.token)
+        .await
+        .batch_update_installed_plugins(
+            &component_id.0,
+            &BatchPluginInstallationUpdates {
+                actions: vec![PluginInstallationAction::Update(PluginInstallationUpdateWithId {
+                    installation_id,
+                    priority: 1,
+                    parameters: HashMap::from_iter(vec![("foo".to_string(), "bar".to_string())])
+                })]
+            }
+        )
+        .await
+        .unwrap();
+
+    let mut installed_plugins = deps
+        .component_service()
+        .component_http_client(&admin.token)
+        .await
+        .get_installed_plugins(
+            &component_id.0,
+            "2",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(installed_plugins.len(), 1);
+    let updated_plugin_installation = installed_plugins.swap_remove(0);
+    assert_eq!(updated_plugin_installation.priority, 1);
 }

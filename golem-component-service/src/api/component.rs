@@ -706,9 +706,9 @@ impl ComponentApi {
     #[oai(
         path = "/:component_id/versions/latest/plugins/installs/batch",
         method = "post",
-        operation_id = "bath_update_installed_plugins"
+        operation_id = "batch_update_installed_plugins"
     )]
-    async fn bath_update_installed_plugins(
+    async fn batch_update_installed_plugins(
         &self,
         component_id: Path<ComponentId>,
         updates: Json<BatchPluginInstallationUpdates>,
