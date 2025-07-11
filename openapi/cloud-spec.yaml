@@ -2015,7 +2015,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: bath_update_installed_plugins_of_project
+      operationId: batch_update_installed_plugins_of_project
   /v1/projects/{project_id}/grants:
     get:
       tags:

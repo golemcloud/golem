@@ -483,9 +483,9 @@ impl ProjectApi {
     #[oai(
         path = "/:project_id/latest/plugins/installs/batch",
         method = "post",
-        operation_id = "bath_update_installed_plugins_of_project"
+        operation_id = "batch_update_installed_plugins_of_project"
     )]
-    async fn bath_update_installed_plugins(
+    async fn batch_update_installed_plugins(
         &self,
         project_id: Path<ProjectId>,
         updates: Json<BatchPluginInstallationUpdates>,
