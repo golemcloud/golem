@@ -69,6 +69,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "ProjectActions",
                 "golem_common::model::auth::ProjectActions",
             ),
+            (
+                "ProjectPermission",
+                "golem_common::model::auth::ProjectPermission",
+            ),
             ("PromiseId", "golem_common::model::PromiseId"),
             (
                 "PublicOplogEntry",
