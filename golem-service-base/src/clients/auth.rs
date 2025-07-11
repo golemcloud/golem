@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::authorised_request;
-use super::RemoteCloudServiceConfig;
+use super::RemoteServiceConfig;
 use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
 use golem_api_grpc::proto::golem::auth::v1::{
     authorize_account_action_response, authorize_project_action_response, get_account_response,
@@ -41,7 +41,7 @@ pub struct AuthService {
 }
 
 impl AuthService {
-    pub fn new(config: &RemoteCloudServiceConfig) -> Self {
+    pub fn new(config: &RemoteServiceConfig) -> Self {
         let auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>> = GrpcClient::new(
             "auth",
             |channel| {

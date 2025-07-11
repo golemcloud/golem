@@ -136,7 +136,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -257,7 +257,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -332,7 +332,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -421,7 +421,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -516,7 +516,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -606,7 +606,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -702,7 +702,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -793,7 +793,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -877,7 +877,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -964,7 +964,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -1057,7 +1057,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -1131,7 +1131,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -1211,7 +1211,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -1315,7 +1315,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -1396,7 +1396,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -1478,7 +1478,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -1561,7 +1561,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -1644,7 +1644,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -1725,7 +1725,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -1807,7 +1807,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -1877,7 +1877,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       operationId: worker_connect
   /v1/api/definitions/{project_id}/import:
     put:
@@ -1957,7 +1957,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2036,7 +2036,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2112,7 +2112,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2203,7 +2203,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2284,7 +2284,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2365,7 +2365,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2430,7 +2430,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2509,7 +2509,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2584,7 +2584,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2658,7 +2658,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2747,7 +2747,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2816,7 +2816,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2895,7 +2895,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -2970,7 +2970,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -3034,7 +3034,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -3103,7 +3103,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -3176,7 +3176,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -3251,7 +3251,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -3324,7 +3324,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
@@ -3963,6 +3963,16 @@ components:
       properties:
         error:
           type: string
+    ErrorBodyWithOptionalWorkerError:
+      type: object
+      title: ErrorBodyWithOptionalWorkerError
+      required:
+      - error
+      properties:
+        error:
+          type: string
+        workerError:
+          $ref: '#/components/schemas/WorkerErrorDetails'
     ErrorParameters:
       type: object
       title: ErrorParameters
@@ -5999,6 +6009,20 @@ components:
           $ref: '#/components/schemas/StringFilterComparator'
         value:
           type: string
+    WorkerErrorDetails:
+      type: object
+      title: WorkerErrorDetails
+      description: Detail in case the error was caused by the worker failing
+      required:
+      - cause
+      - stderr
+      properties:
+        cause:
+          type: string
+          description: Error that caused to worker to fail
+        stderr:
+          type: string
+          description: Error log of the worker
     WorkerFilter:
       type: object
       oneOf:

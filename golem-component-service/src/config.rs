@@ -15,7 +15,7 @@
 use golem_common::config::{ConfigExample, ConfigLoader, DbConfig, HasConfigExamples};
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
-use golem_service_base::clients::RemoteCloudServiceConfig;
+use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,7 @@ pub struct ComponentServiceConfig {
     pub grpc_port: u16,
     pub db: DbConfig,
     pub compilation: ComponentCompilationConfig,
-    pub cloud_service: RemoteCloudServiceConfig,
+    pub cloud_service: RemoteServiceConfig,
     pub blob_storage: BlobStorageConfig,
     pub plugin_transformations: PluginTransformationsConfig,
     pub cors_origin_regex: String,
@@ -47,7 +47,7 @@ impl Default for ComponentServiceConfig {
             grpc_port: 9091,
             db: DbConfig::default(),
             compilation: ComponentCompilationConfig::default(),
-            cloud_service: RemoteCloudServiceConfig::default(),
+            cloud_service: RemoteServiceConfig::default(),
             blob_storage: BlobStorageConfig::default(),
             plugin_transformations: PluginTransformationsConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),

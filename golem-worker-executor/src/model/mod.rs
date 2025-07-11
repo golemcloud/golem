@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::workerctx::WorkerCtx;
-use bincode::{Decode, Encode};
 use bytes::Bytes;
 use futures::Stream;
 use golem_common::model::invocation_context::{
@@ -26,12 +24,12 @@ use golem_common::model::{
     ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId,
     WorkerStatusRecord,
 };
+use golem_service_base::error::worker_executor::{
+    InterruptKind, WorkerExecutorError, WorkerOutOfMemory,
+};
 use golem_wasm_rpc::ValueAndType;
-use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -41,45 +39,22 @@ pub mod event;
 pub mod public_oplog;
 
 pub trait ShardAssignmentCheck {
-    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError>;
+    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), WorkerExecutorError>;
 }
 
 impl ShardAssignmentCheck for ShardAssignment {
-    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError> {
+    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), WorkerExecutorError> {
         let shard_id = ShardId::from_worker_id(worker_id, self.number_of_shards);
         if self.shard_ids.contains(&shard_id) {
             Ok(())
         } else {
-            Err(GolemError::invalid_shard_id(
+            Err(WorkerExecutorError::invalid_shard_id(
                 shard_id,
                 self.shard_ids.clone(),
             ))
         }
     }
 }
-
-#[derive(
-    Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue,
-)]
-pub enum InterruptKind {
-    Interrupt,
-    Restart,
-    Suspend,
-    Jump,
-}
-
-impl Display for InterruptKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InterruptKind::Interrupt => write!(f, "Interrupted via the Golem API"),
-            InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
-            InterruptKind::Suspend => write!(f, "Suspended"),
-            InterruptKind::Jump => write!(f, "Jumping back in time"),
-        }
-    }
-}
-
-impl Error for InterruptKind {}
 
 /// Worker-specific configuration. These values are used to initialize the worker, and they can
 /// be different for each worker.
@@ -259,17 +234,20 @@ impl TrapType {
                     Some(&Trap::StackOverflow) => TrapType::Error(WorkerError::StackOverflow),
                     _ => match error.root_cause().downcast_ref::<WorkerOutOfMemory>() {
                         Some(_) => TrapType::Error(WorkerError::OutOfMemory),
-                        None => match error.root_cause().downcast_ref::<GolemError>() {
-                            Some(GolemError::InvalidRequest { details }) => {
+                        None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
+                            Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 TrapType::Error(WorkerError::InvalidRequest(details.clone()))
                             }
-                            Some(GolemError::ParamTypeMismatch { details }) => {
+                            Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
                                 TrapType::Error(WorkerError::InvalidRequest(details.clone()))
                             }
-                            Some(GolemError::ValueMismatch { details }) => {
+                            Some(WorkerExecutorError::ValueMismatch { details }) => {
                                 TrapType::Error(WorkerError::InvalidRequest(details.clone()))
                             }
-                            _ => TrapType::Error(WorkerError::Unknown(format!("{error:#}"))),
+                            _ => {
+                                println!("boom3: {error:?}");
+                                TrapType::Error(WorkerError::Unknown(format!("{error:#}")))
+                            }
                         },
                     },
                 },
@@ -277,16 +255,21 @@ impl TrapType {
         }
     }
 
-    pub fn as_golem_error(&self, error_logs: &str) -> Option<GolemError> {
+    pub fn as_golem_error(&self, error_logs: &str) -> Option<WorkerExecutorError> {
         match self {
-            TrapType::Interrupt(InterruptKind::Interrupt) => {
-                Some(GolemError::runtime("Interrupted via the Golem API"))
-            }
+            TrapType::Interrupt(InterruptKind::Interrupt) => Some(WorkerExecutorError::runtime(
+                "Interrupted via the Golem API",
+            )),
             TrapType::Error(error) => match error {
-                WorkerError::InvalidRequest(msg) => Some(GolemError::invalid_request(msg.clone())),
-                _ => Some(GolemError::runtime(error.to_string(error_logs))),
+                WorkerError::InvalidRequest(msg) => {
+                    Some(WorkerExecutorError::invalid_request(msg.clone()))
+                }
+                _ => Some(WorkerExecutorError::InvocationFailed {
+                    error: error.clone(),
+                    stderr: error_logs.to_string(),
+                }),
             },
-            TrapType::Exit => Some(GolemError::runtime("Process exited")),
+            TrapType::Exit => Some(WorkerExecutorError::runtime("Process exited")),
             _ => None,
         }
     }
@@ -351,7 +334,7 @@ pub enum LookupResult {
     New,
     Pending,
     Interrupted,
-    Complete(Result<Option<ValueAndType>, GolemError>),
+    Complete(Result<Option<ValueAndType>, WorkerExecutorError>),
 }
 
 #[derive(Clone, Debug)]
@@ -362,7 +345,7 @@ pub enum ListDirectoryResult {
 }
 
 pub enum ReadFileResult {
-    Ok(Pin<Box<dyn Stream<Item = Result<Bytes, GolemError>> + Send + 'static>>),
+    Ok(Pin<Box<dyn Stream<Item = Result<Bytes, WorkerExecutorError>> + Send + 'static>>),
     NotFound,
     NotAFile,
 }

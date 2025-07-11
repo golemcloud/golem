@@ -12,25 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
-use std::sync::Arc;
-
+use crate::services::golem_config::{ShardManagerServiceConfig, ShardManagerServiceGrpcConfig};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::{ShardAssignment, ShardId};
 use golem_common::retries::with_retries;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::collections::HashSet;
+use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-
-use crate::error::GolemError;
-use crate::services::golem_config::{ShardManagerServiceConfig, ShardManagerServiceGrpcConfig};
 
 /// Service providing access to the shard manager service
 #[async_trait]
 pub trait ShardManagerService: Send + Sync {
-    async fn register(&self, host: String, port: u16) -> Result<ShardAssignment, GolemError>;
+    async fn register(
+        &self,
+        host: String,
+        port: u16,
+    ) -> Result<ShardAssignment, WorkerExecutorError>;
 }
 
 pub fn configured(config: &ShardManagerServiceConfig) -> Arc<dyn ShardManagerService> {
@@ -72,7 +74,11 @@ impl ShardManagerServiceGrpc {
 
 #[async_trait]
 impl ShardManagerService for ShardManagerServiceGrpc {
-    async fn register(&self, host: String, port: u16) -> Result<ShardAssignment, GolemError> {
+    async fn register(
+        &self,
+        host: String,
+        port: u16,
+    ) -> Result<ShardAssignment, WorkerExecutorError> {
         let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
         with_retries(
             "shard_manager",
@@ -94,7 +100,7 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                         })
                         .await
                         .map_err(|err| {
-                            GolemError::unknown(format!(
+                            WorkerExecutorError::unknown(format!(
                                 "Registering with shard manager failed with {err}"
                             ))
                         })?;
@@ -111,10 +117,10 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                         shardmanager::v1::RegisterResponse {
                             result:
                                 Some(shardmanager::v1::register_response::Result::Failure(failure)),
-                        } => Err(GolemError::unknown(format!(
+                        } => Err(WorkerExecutorError::unknown(format!(
                             "Registering with shard manager failed with shard manager error {failure:?}"
                         ))),
-                        shardmanager::v1::RegisterResponse { .. } => Err(GolemError::unknown(
+                        shardmanager::v1::RegisterResponse { .. } => Err(WorkerExecutorError::unknown(
                             "Registering with shard manager failed with unknown error",
                         )),
                     }
@@ -142,7 +148,11 @@ impl ShardManagerServiceSingleShard {
 
 #[async_trait]
 impl ShardManagerService for ShardManagerServiceSingleShard {
-    async fn register(&self, _host: String, _port: u16) -> Result<ShardAssignment, GolemError> {
+    async fn register(
+        &self,
+        _host: String,
+        _port: u16,
+    ) -> Result<ShardAssignment, WorkerExecutorError> {
         Ok(ShardAssignment::new(
             1,
             HashSet::from_iter(vec![ShardId::new(0)]),

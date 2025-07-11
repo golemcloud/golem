@@ -15,7 +15,6 @@
 pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
-pub mod error;
 pub mod grpc;
 pub mod metrics;
 pub mod model;

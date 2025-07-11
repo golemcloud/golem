@@ -3737,6 +3737,7 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
+ "wasmtime-wasi",
 ]
 
 [[package]]

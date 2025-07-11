@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
@@ -38,6 +37,7 @@ use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PluginInstallationId,
     ScanCursor, ShardId, TargetWorkerId, WorkerId, WorkerMetadata,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{IntoValue, Value};
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -56,9 +56,9 @@ pub trait OplogProcessorPlugin: Send + Sync {
         plugin_installation_id: &PluginInstallationId,
         initial_oplog_index: OplogIndex,
         entries: Vec<PublicOplogEntry>,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 
-    async fn on_shard_assignment_changed(&self) -> Result<(), GolemError>;
+    async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError>;
 }
 
 /// An implementation of the `OplogProcessorPlugin` trait that runs a single instance of each
@@ -103,7 +103,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         component_id: &ComponentId,
         component_version: ComponentVersion,
         plugin_installation_id: &PluginInstallationId,
-    ) -> Result<RunningPlugin, GolemError> {
+    ) -> Result<RunningPlugin, WorkerExecutorError> {
         let (installation, definition) = self
             .plugins
             .get(
@@ -150,7 +150,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
     async fn generate_worker_id_for(
         &self,
         plugin_component_id: &ComponentId,
-    ) -> Result<WorkerId, GolemError> {
+    ) -> Result<WorkerId, WorkerExecutorError> {
         let target_worker_id = TargetWorkerId {
             component_id: plugin_component_id.clone(),
             worker_name: None,
@@ -167,13 +167,15 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
 
     fn get_oplog_processor_component_id(
         definition: &PluginDefinition,
-    ) -> Result<(ComponentId, ComponentVersion), GolemError> {
+    ) -> Result<(ComponentId, ComponentVersion), WorkerExecutorError> {
         match &definition.specs {
             PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
                 component_id,
                 component_version,
             }) => Ok((component_id.clone(), *component_version)),
-            _ => Err(GolemError::runtime("Plugin is not an oplog processor")),
+            _ => Err(WorkerExecutorError::runtime(
+                "Plugin is not an oplog processor",
+            )),
         }
     }
 }
@@ -186,7 +188,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         plugin_installation_id: &PluginInstallationId,
         initial_oplog_index: OplogIndex,
         entries: Vec<PublicOplogEntry>,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         let running_plugin = self
             .resolve_plugin_worker(
                 &worker_metadata.account_id,
@@ -256,7 +258,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         Ok(())
     }
 
-    async fn on_shard_assignment_changed(&self) -> Result<(), GolemError> {
+    async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {
         let new_assignment = self.shard_service.current_assignment()?;
 
         let mut workers = self.workers.write().await;
@@ -532,7 +534,7 @@ impl OplogService for ForwardingOplogService {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         self.inner
             .scan_for_component(account_id, component_id, cursor, count)
             .await
@@ -733,7 +735,7 @@ impl ForwardingOplogState {
         metadata: WorkerMetadata,
         initial_oplog_index: OplogIndex,
         entries: &[OplogEntry],
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         let mut public_entries = Vec::new();
 
         for entry in entries {
@@ -747,7 +749,7 @@ impl ForwardingOplogState {
             )
             .await
             .map_err(|err| {
-                GolemError::runtime(format!(
+                WorkerExecutorError::runtime(format!(
                     "Failed to enrich oplog entry for oplog processors: {err}"
                 ))
             })?;
