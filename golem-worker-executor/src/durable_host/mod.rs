@@ -2483,14 +2483,14 @@ impl PrivateDurableWorkerState {
         handler: impl RemoteTransactionHandler<Tx, Err>,
     ) -> Result<(OplogIndex, Tx), Err>
     where
-        Err: From<GolemError>,
+        Err: From<WorkerExecutorError>,
     {
         if self.is_live() {
             let (tx_id, tx) = handler.create_new().await?;
             self.oplog
                 .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
                 .await
-                .map_err(GolemError::runtime)?;
+                .map_err(WorkerExecutorError::runtime)?;
             let begin_index = self.oplog.current_oplog_index().await;
             Ok((begin_index, tx))
         } else {
@@ -2527,7 +2527,7 @@ impl PrivateDurableWorkerState {
                     transaction_id,
                 }
             )
-            .map_err(|_| GolemError::runtime("Unexpected oplog entry"))?;
+            .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
 
             let (tx_id, tx) = handler.create_replay(&tx_id).await?;
 
@@ -2569,7 +2569,7 @@ impl PrivateDurableWorkerState {
                 self.oplog
                     .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
                     .await
-                    .map_err(GolemError::runtime)?;
+                    .map_err(WorkerExecutorError::runtime)?;
 
                 Ok((begin_index, tx))
             } else {
@@ -2581,12 +2581,12 @@ impl PrivateDurableWorkerState {
     pub async fn pre_commit_transaction_function(
         &mut self,
         begin_index: OplogIndex,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
             self.oplog
                 .add_and_commit_safe(OplogEntry::pre_commit_remote_transaction(begin_index))
                 .await
-                .map_err(GolemError::runtime)?;
+                .map_err(WorkerExecutorError::runtime)?;
             Ok(())
         } else {
             let (_, _) =
@@ -2598,12 +2598,12 @@ impl PrivateDurableWorkerState {
     pub async fn pre_rollback_transaction_function(
         &mut self,
         begin_index: OplogIndex,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
             self.oplog
                 .add_and_commit_safe(OplogEntry::pre_rollback_remote_transaction(begin_index))
                 .await
-                .map_err(GolemError::runtime)?;
+                .map_err(WorkerExecutorError::runtime)?;
             Ok(())
         } else {
             let (_, _) = crate::get_oplog_entry!(
@@ -2617,12 +2617,12 @@ impl PrivateDurableWorkerState {
     pub async fn committed_transaction_function(
         &mut self,
         begin_index: OplogIndex,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
             self.oplog
                 .add_and_commit_safe(OplogEntry::committed_remote_transaction(begin_index))
                 .await
-                .map_err(GolemError::runtime)?;
+                .map_err(WorkerExecutorError::runtime)?;
             Ok(())
         } else {
             let (_, _) =
@@ -2634,12 +2634,12 @@ impl PrivateDurableWorkerState {
     pub async fn rolled_back_transaction_function(
         &mut self,
         begin_index: OplogIndex,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
             self.oplog
                 .add_and_commit_safe(OplogEntry::rolled_back_remote_transaction(begin_index))
                 .await
-                .map_err(GolemError::runtime)?;
+                .map_err(WorkerExecutorError::runtime)?;
             Ok(())
         } else {
             let (_, _) = crate::get_oplog_entry!(
@@ -3116,7 +3116,7 @@ fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<P
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
 /// replay, while skipping hint entries.
-/// The macro expression's type is `Result<OplogEntry, GolemError>` and it fails if the next non-hint
+/// The macro expression's type is `Result<OplogEntry, WorkerExecutorError>` and it fails if the next non-hint
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {
@@ -3142,7 +3142,7 @@ macro_rules! get_oplog_entry {
 #[async_trait]
 pub trait RemoteTransactionHandler<Tx, Err>
 where
-    Err: From<GolemError>,
+    Err: From<WorkerExecutorError>,
 {
     async fn create_new(&self) -> Result<(String, Tx), Err>;
 
