@@ -36,12 +36,6 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-#[ignore]
-// Todo Fix - Error
-// api::component::get_components_many_component
-// (called `Result::unwrap()` on an `Err` value:
-// Failed to get plugin id during conversion)
-// Happens only on http mode, and not on grpc mode
 async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
     let user = deps.user().await;
 
