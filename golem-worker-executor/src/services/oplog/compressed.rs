@@ -12,23 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cmp::min;
-use std::collections::BTreeMap;
-use std::sync::Arc;
-
-use async_trait::async_trait;
-use bincode::{Decode, Encode};
-use evicting_cache_map::EvictingCacheMap;
-use tokio::sync::RwLock;
-
-use crate::error::GolemError;
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
-use golem_common::serialization::{deserialize, serialize};
-
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::services::oplog::PrimaryOplogService;
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
+use async_trait::async_trait;
+use bincode::{Decode, Encode};
+use evicting_cache_map::EvictingCacheMap;
+use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
+use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::cmp::min;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Debug)]
 pub struct CompressedOplogArchiveService {
@@ -101,7 +98,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         let ScanCursor { cursor, layer } = cursor;
         let (cursor, keys) = self
             .indexed_storage

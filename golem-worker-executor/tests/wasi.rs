@@ -20,6 +20,7 @@ use axum::routing::{get, post};
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures_util::stream;
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
     IdempotencyKey, WorkerStatus,
@@ -27,7 +28,8 @@ use golem_common::model::{
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
-    drain_connection, stderr_events, stdout_events, worker_error_message, TestDslUnsafe,
+    drain_connection, stderr_events, stdout_events, worker_error_logs, worker_error_message,
+    worker_error_underlying_error, TestDslUnsafe,
 };
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use http::{HeaderMap, StatusCode};
@@ -1426,11 +1428,22 @@ async fn failing_worker(
     check!(result1.is_ok());
     check!(result2.is_err());
     check!(result3.is_err());
-    check!(worker_error_message(&result2.clone().err().unwrap())
-        .starts_with("Runtime error: error while executing at wasm backtrace:"));
-    check!(worker_error_message(&result2.err().unwrap())
-        .contains("failing_component.wasm!golem:component/api#add"));
-    check!(worker_error_message(&result3.err().unwrap()).starts_with("Previous invocation failed"));
+
+    let result2_err = result2.err().unwrap();
+    assert_eq!(worker_error_message(&result2_err), "Invocation failed");
+    assert!(
+        matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:") && error.contains("failing_component.wasm!golem:component/api#add"))
+    );
+    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    let result3_err = result3.err().unwrap();
+    assert_eq!(
+        worker_error_message(&result3_err),
+        "Previous invocation failed"
+    );
+    assert!(
+        matches!(worker_error_underlying_error(&result3_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:") && error.contains("failing_component.wasm!golem:component/api#add"))
+    );
+    assert_eq!(worker_error_logs(&result3_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
 }
 
 #[test]

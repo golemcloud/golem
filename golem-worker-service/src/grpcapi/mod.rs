@@ -258,6 +258,9 @@ pub fn error_to_status(error: WorkerError) -> Status {
                 worker_execution_error::Error::FileSystemError(_) => {
                     "Failed accessing worker filesystem".to_string()
                 }
+                worker_execution_error::Error::InvocationFailed(_) => {
+                    "Invocation Failed".to_string()
+                }
             };
             Status::internal(message)
         }

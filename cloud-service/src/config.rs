@@ -18,7 +18,7 @@ use golem_common::config::DbConfig;
 use golem_common::model::auth::Role;
 use golem_common::model::{Empty, PlanId};
 use golem_common::tracing::TracingConfig;
-use golem_service_base::clients::RemoteCloudServiceConfig;
+use golem_service_base::clients::RemoteServiceConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -36,7 +36,7 @@ pub struct CloudServiceConfig {
     pub plans: PlansConfig,
     pub accounts: AccountsConfig,
     pub login: LoginConfig,
-    pub component_service: RemoteCloudServiceConfig,
+    pub component_service: RemoteServiceConfig,
     pub cors_origin_regex: String,
 }
 
@@ -52,7 +52,7 @@ impl Default for CloudServiceConfig {
             plans: PlansConfig::default(),
             accounts: AccountsConfig::default(),
             login: LoginConfig::default(),
-            component_service: RemoteCloudServiceConfig::default(),
+            component_service: RemoteServiceConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
     }

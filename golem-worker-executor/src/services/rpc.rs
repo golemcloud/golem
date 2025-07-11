@@ -17,7 +17,6 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use super::file_loader::FileLoader;
-use crate::error::GolemError;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::plugins::Plugins;
@@ -40,6 +39,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
 use tokio::runtime::Handle;
@@ -76,7 +76,7 @@ pub trait Rpc: Send + Sync {
     async fn generate_unique_local_worker_id(
         &self,
         target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, GolemError>;
+    ) -> Result<WorkerId, WorkerExecutorError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
@@ -118,16 +118,16 @@ impl From<tonic::Status> for RpcError {
     }
 }
 
-impl From<GolemError> for RpcError {
-    fn from(value: GolemError) -> Self {
+impl From<WorkerExecutorError> for RpcError {
+    fn from(value: WorkerExecutorError) -> Self {
         match value {
-            GolemError::WorkerAlreadyExists { worker_id } => RpcError::Denied {
+            WorkerExecutorError::WorkerAlreadyExists { worker_id } => RpcError::Denied {
                 details: format!("Worker {worker_id} already exists"),
             },
-            GolemError::WorkerNotFound { worker_id } => RpcError::NotFound {
+            WorkerExecutorError::WorkerNotFound { worker_id } => RpcError::NotFound {
                 details: format!("Worker {worker_id} not found"),
             },
-            GolemError::InvalidAccount => RpcError::Denied {
+            WorkerExecutorError::InvalidAccount => RpcError::Denied {
                 details: "Invalid account".to_string(),
             },
             _ => RpcError::RemoteInternalError {
@@ -263,7 +263,7 @@ impl Rpc for RemoteInvocationRpc {
     async fn generate_unique_local_worker_id(
         &self,
         target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, GolemError> {
+    ) -> Result<WorkerId, WorkerExecutorError> {
         let current_assignment = self.shard_service.current_assignment()?;
         Ok(target_worker_id.into_worker_id(
             &current_assignment.shard_ids,
@@ -680,7 +680,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn generate_unique_local_worker_id(
         &self,
         target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, GolemError> {
+    ) -> Result<WorkerId, WorkerExecutorError> {
         self.remote_rpc
             .generate_unique_local_worker_id(target_worker_id)
             .await

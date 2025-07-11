@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
-use crate::error::GolemError;
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use golem_common::model::oplog::DurableFunctionType;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use tracing::warn;
 
 pub mod outgoing_http;
@@ -28,7 +28,7 @@ pub mod types;
 pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     current_handle: u32,
-) -> Result<(), GolemError> {
+) -> Result<(), WorkerExecutorError> {
     if let Some(state) = ctx.state.open_http_requests.remove(&current_handle) {
         ctx.end_durable_function(
             &DurableFunctionType::WriteRemoteBatched(None),
