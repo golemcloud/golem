@@ -513,12 +513,34 @@ fn create_response_with_schema(
     if status_code != 204 {
         if let Some(schema) = response_schema {
             let mut content = indexmap::IndexMap::new();
+
+            // Add the primary content type with the specific schema
             let media = openapiv3::MediaType {
                 schema: Some(openapiv3::ReferenceOr::Item(schema)),
                 ..Default::default()
             };
-
             content.insert(content_type.to_string(), media);
+
+            // Add */* content type with string schema for other possible responses
+            let string_schema = openapiv3::Schema {
+                schema_data: Default::default(),
+                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
+                    openapiv3::StringType {
+                        format: openapiv3::VariantOrUnknownOrEmpty::Empty,
+                        pattern: None,
+                        enumeration: vec![],
+                        min_length: None,
+                        max_length: None,
+                    },
+                )),
+            };
+
+            let string_media = openapiv3::MediaType {
+                schema: Some(openapiv3::ReferenceOr::Item(string_schema)),
+                ..Default::default()
+            };
+            content.insert("*/*".to_string(), string_media);
+
             response.content = content;
         }
     }

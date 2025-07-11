@@ -229,7 +229,6 @@ async fn test_cors_preflight_response_formatting() {
 }
 
 // Test 3: SwaggerUI binding type
-// Ajay Other binding types should go here
 #[tokio::test]
 async fn test_swagger_ui_binding() {
     // Create a compiled route with SwaggerUI binding
@@ -1698,7 +1697,7 @@ paths:
     get:
       responses:
         '200':
-          description: OK
+          description: OK  
         default:
           description: OK
       x-golem-api-gateway-binding:
@@ -1740,6 +1739,9 @@ paths:
                   - name
                   - price
                   - quantity
+            '*/*':
+              schema:
+                type: string
         default:
           description: Created
           content:
@@ -1765,6 +1767,9 @@ paths:
                   - name
                   - price
                   - quantity
+            '*/*':
+              schema:
+                type: string
       x-golem-api-gateway-binding:
         binding-type: default
         component-name: shopping-cart
@@ -1994,10 +1999,16 @@ async fn test_path_query_header_parameter_combinations() {
                 application/json:
                   schema:
                     type: string
+                '*/*':
+                  schema:
+                    type: string
             '200':
               description: OK
               content:
                 application/json:
+                  schema:
+                    type: string
+                '*/*':
                   schema:
                     type: string
           x-golem-api-gateway-binding:
@@ -2071,10 +2082,16 @@ async fn test_path_query_header_parameter_combinations() {
                 application/json:
                   schema:
                     type: string
+                '*/*':
+                  schema:
+                    type: string
             '200':
               description: OK
               content:
                 application/json:
+                  schema:
+                    type: string
+                '*/*':
                   schema:
                     type: string
           x-golem-api-gateway-binding:
@@ -2572,6 +2589,9 @@ paths:
                   required:
                   - name
                   - count
+            '*/*':
+              schema:
+                type: string
         '201':
           description: Created
           content:
@@ -2590,6 +2610,9 @@ paths:
                   required:
                   - name
                   - count
+            '*/*':
+              schema:
+                type: string
       x-golem-api-gateway-binding:
         binding-type: default
         component-name: parameter-test-api
@@ -2638,6 +2661,9 @@ paths:
                   type: integer
                   format: int32
                   minimum: 0
+            '*/*':
+              schema:
+                type: string
         '201':
           description: Created
           content:
@@ -2648,6 +2674,9 @@ paths:
                   type: integer
                   format: int32
                   minimum: 0
+            '*/*':
+              schema:
+                type: string
       x-golem-api-gateway-binding:
         binding-type: default
         component-name: swagger-api
@@ -2718,6 +2747,9 @@ paths:
                   required:
                   - id
                   - status
+            '*/*':
+              schema:
+                type: string
         '201':
           description: Created
           content:
@@ -2739,6 +2771,9 @@ paths:
                   required:
                   - id
                   - status
+            '*/*':
+              schema:
+                type: string
       x-golem-api-gateway-binding:
         binding-type: default
         component-name: delay-echo
@@ -2791,6 +2826,9 @@ paths:
                 - success
                 - warning
                 - error
+            '*/*':
+              schema:
+                type: string
         '201':
           description: Created
           content:
@@ -2801,6 +2839,9 @@ paths:
                 - success
                 - warning
                 - error
+            '*/*':
+              schema:
+                type: string
       x-golem-api-gateway-binding:
         binding-type: default
         component-name: empty-api
@@ -2825,6 +2866,9 @@ paths:
                 required:
                 - api_version
                 - supported_types
+            '*/*':
+              schema:
+                type: string
         '200':
           description: OK
           content:
@@ -2841,6 +2885,9 @@ paths:
                 required:
                 - api_version
                 - supported_types
+            '*/*':
+              schema:
+                type: string
       x-golem-api-gateway-binding:
         binding-type: default
         component-name: comprehensive-types-api
@@ -2878,6 +2925,9 @@ paths:
               schema:
                 type: number
                 format: float
+            '*/*':
+              schema:
+                type: string
         '201':
           description: Created
           content:
@@ -2885,6 +2935,9 @@ paths:
               schema:
                 type: number
                 format: float
+            '*/*':
+              schema:
+                type: string
       x-golem-api-gateway-binding:
         binding-type: default
         component-name: secure-api
@@ -2939,12 +2992,18 @@ paths:
             application/json:
               schema:
                 type: boolean
+            '*/*':
+              schema:
+                type: string
         '201':
           description: Created
           content:
             application/json:
               schema:
                 type: boolean
+            '*/*':
+              schema:
+                type: string
       x-golem-api-gateway-binding:
         binding-type: default
         component-name: api-with-cors
@@ -2994,6 +3053,9 @@ paths:
                 required:
                 - result_id
                 - message
+            '*/*':
+              schema:
+                type: string
         '201':
           description: Created
           content:
@@ -3010,6 +3072,9 @@ paths:
                 required:
                 - result_id
                 - message
+            '*/*':
+              schema:
+                type: string
       x-golem-api-gateway-binding:
         binding-type: default
         component-name: test-worker-api
@@ -3062,6 +3127,9 @@ paths:
                       type: string
                   required:
                   - err
+            '*/*':
+              schema:
+                type: string
         '201':
           description: Created
           content:
@@ -3082,6 +3150,9 @@ paths:
                       type: string
                   required:
                   - err
+            '*/*':
+              schema:
+                type: string
       x-golem-api-gateway-binding:
         binding-type: default
         component-name: simple-echo
@@ -3135,6 +3206,9 @@ paths:
                       type: string
                   required:
                   - error
+            '*/*':
+              schema:
+                type: string
         '201':
           description: Created
           content:
@@ -3153,6 +3227,9 @@ paths:
                       type: string
                   required:
                   - error
+            '*/*':
+              schema:
+                type: string
       x-golem-api-gateway-binding:
         binding-type: default
         component-name: todo-list
