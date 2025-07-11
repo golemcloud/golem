@@ -19,7 +19,7 @@ use conditional_trait_gen::trait_gen;
 use futures::{future, TryFutureExt};
 use golem_common::model::ProjectId;
 use golem_common::repo::PluginOwnerRow;
-use golem_service_base::db::Pool;
+use golem_service_base::db::{LabelledPoolTransaction, Pool};
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
 };
@@ -182,10 +182,7 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
 
         transaction.execute(query).await?;
 
-        self.db_pool
-            .with_rw("project", "create")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(())
     }
@@ -336,10 +333,7 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
             .execute(sqlx::query("DELETE FROM projects WHERE project_id = $1").bind(project_id))
             .await?;
 
-        self.db_pool
-            .with_rw("project", "delete")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(())
     }
