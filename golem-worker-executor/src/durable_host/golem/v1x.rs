@@ -329,7 +329,76 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent for DurableWorkerCtx<C
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn connect_to_agent(
         &mut self,
-        agent_id: wasmtime::component::__internal::String,
+        agent_id: String,
+    ) -> wasmtime::Result<Result<wasmtime::component::Resource<WasmRpcEntry>, String>> {
+        self.observe_function_call("golem::host::remote-agent", "new");
+
+        let self_metadata = Host::get_self_metadata(self).await?;
+
+        let component_id = self_metadata.worker_id.component_id;
+
+        let worker_id: WorkerId = WorkerId {
+            component_id: ComponentId(Uuid::from_u64_pair(
+                component_id.uuid.high_bits,
+                component_id.uuid.low_bits,
+            )),
+            worker_name: agent_id.clone(),
+        };
+
+        let remote_worker_id = worker_id.clone().into_target_worker_id();
+
+        let remote_worker_id = self
+            .generate_unique_local_worker_id(remote_worker_id.clone())
+            .await?;
+
+        let span = create_rpc_connection_span(self, &remote_worker_id).await?;
+
+        let remote_worker_id =
+            OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
+
+        let demand = self.rpc().create_demand(&remote_worker_id).await;
+
+        let entry = self.table().push(WasmRpcEntry {
+            payload: Box::new(WasmRpcEntryPayload::Interface {
+                demand,
+                remote_worker_id: remote_worker_id.clone(),
+                span_id: span.span_id().clone(),
+            }),
+        })?;
+
+        let remote_agent_resource = HostWasmRpc::invoke_and_await(
+            self,
+            entry,
+            "golem:agentic-guest/guest.{agent.new}".to_string(),
+            vec![],
+        )
+        .await?;
+
+        let resource = remote_agent_resource?;
+
+        let remote_agent_constructor_result: Value = resource.into();
+
+        let (resource_uri, resource_id) =
+            unwrap_constructor_result(remote_agent_constructor_result)?;
+
+        let demand = self.rpc().create_demand(&remote_worker_id).await;
+
+        let entry = self.table().push(WasmRpcEntry {
+            payload: Box::new(WasmRpcEntryPayload::Resource {
+                demand,
+                remote_worker_id,
+                resource_uri,
+                resource_id,
+                span_id: span.span_id().clone(),
+            }),
+        })?;
+
+        Ok(Ok(entry))
+    }
+
+    async fn create_remote_agent(
+        &mut self,
+        dependency: AgentDependency,
     ) -> wasmtime::Result<
         Result<
             wasmtime::component::Resource<WasmRpcEntry>,
@@ -408,20 +477,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         //     Ok(entry)
 
-        Err(anyhow!(
-            "connect_to_agent is not implemented in the durable host",
-        ))
-    }
-
-    async fn create_remote_agent(
-        &mut self,
-        dependency: AgentDependency,
-    ) -> wasmtime::Result<
-        Result<
-            wasmtime::component::Resource<WasmRpcEntry>,
-            wasmtime::component::__internal::String,
-        >,
-    > {
         Err(anyhow!(
             "connect_to_agent is not implemented in the durable host",
         ))
