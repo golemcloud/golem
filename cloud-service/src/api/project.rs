@@ -18,7 +18,7 @@ use crate::service::api_mapper::ApiMapper;
 use crate::service::auth::AuthService;
 use crate::service::project::ProjectService;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use golem_common::model::auth::{AccountAction, ProjectAction, ProjectPermisison};
+use golem_common::model::auth::{AccountAction, ProjectAction, ProjectPermission};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
 use golem_common::model::{Empty, PluginInstallationId, ProjectId};
@@ -259,7 +259,7 @@ impl ProjectApi {
         &self,
         project_id: Path<ProjectId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Vec<ProjectPermisison>>> {
+    ) -> ApiResult<Json<Vec<ProjectPermission>>> {
         let record = recorded_http_api_request!(
             "get_project_actions",
             project_id = project_id.0.to_string(),
@@ -276,7 +276,7 @@ impl ProjectApi {
         &self,
         project_id: ProjectId,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Vec<ProjectPermisison>>> {
+    ) -> ApiResult<Json<Vec<ProjectPermission>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let result = self
             .auth_service
