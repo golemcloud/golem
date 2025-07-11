@@ -6512,7 +6512,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       security:
       - Cookie: []
       - Token: []
