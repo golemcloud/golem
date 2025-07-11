@@ -1626,7 +1626,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ProjectPermisison'
+                  $ref: '#/components/schemas/ProjectPermission'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -7691,7 +7691,7 @@ components:
         actions:
           type: array
           items:
-            $ref: '#/components/schemas/ProjectPermisison'
+            $ref: '#/components/schemas/ProjectPermission'
       required:
       - actions
     ProjectData:
@@ -7770,12 +7770,12 @@ components:
         projectActions:
           type: array
           items:
-            $ref: '#/components/schemas/ProjectPermisison'
+            $ref: '#/components/schemas/ProjectPermission'
         projectPolicyName:
           type: string
       required:
       - projectActions
-    ProjectPermisison:
+    ProjectPermission:
       type: string
       enum:
       - ViewComponent

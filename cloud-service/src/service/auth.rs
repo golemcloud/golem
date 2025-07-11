@@ -24,7 +24,7 @@ use crate::service::token::{TokenService, TokenServiceError};
 use async_trait::async_trait;
 use golem_common::model::auth::AccountAction;
 use golem_common::model::auth::{
-    ProjectAction, ProjectActions, ProjectAuthorisedActions, ProjectPermisison, Role, TokenSecret,
+    ProjectAction, ProjectActions, ProjectAuthorisedActions, ProjectPermission, Role, TokenSecret,
 };
 use golem_common::model::{AccountId, ProjectId};
 use golem_common::SafeDisplay;
@@ -341,18 +341,18 @@ impl AuthService for AuthServiceDefault {
                 actions
                     .actions
                     .actions
-                    .contains(&ProjectPermisison::CreatePluginInstallation)
+                    .contains(&ProjectPermission::CreatePluginInstallation)
                     && actions
                         .actions
                         .actions
-                        .contains(&ProjectPermisison::UpdatePluginInstallation)
+                        .contains(&ProjectPermission::UpdatePluginInstallation)
                     && actions
                         .actions
                         .actions
-                        .contains(&ProjectPermisison::DeletePluginInstallation)
+                        .contains(&ProjectPermission::DeletePluginInstallation)
             }
             other => {
-                let converted = ProjectPermisison::try_from(other.clone()).map_err(|_| {
+                let converted = ProjectPermission::try_from(other.clone()).map_err(|_| {
                     AuthServiceError::ProjectActionForbidden {
                         project_id: project_id.clone(),
                         requested_action: other.clone(),
