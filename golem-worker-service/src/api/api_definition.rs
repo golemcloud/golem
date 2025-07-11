@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::dto::{HttpApiDefinitionRequest, HttpApiDefinitionResponseData};
-use crate::api::common::{ApiEndpointError};
+use crate::api::common::ApiEndpointError;
 use crate::gateway_api_definition::http::api_oas_convert::OpenApiHttpApiDefinitionResponse;
 use crate::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
 use crate::gateway_api_definition::http::OpenApiHttpApiDefinition;
