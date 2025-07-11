@@ -22,7 +22,7 @@ use base64::Engine;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
 use golem_client::api::{ComponentClient, PluginClient};
 use golem_common::model::plugin::{
-    AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition, OplogProcessorDefinition, PluginInstallationAction, PluginInstallationUpdateWithId, PluginTypeSpecificDefinition
+    AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition, OplogProcessorDefinition, PluginInstallationAction, PluginInstallationCreation, PluginInstallationUpdateWithId, PluginTypeSpecificDefinition, PluginUninstallation
 };
 use golem_common::model::plugin::{PluginScope, ProjectPluginScope};
 use golem_common::model::{ComponentFilePermissions, Empty, ScanCursor};
@@ -35,7 +35,7 @@ use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use reqwest::StatusCode;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use test_r::{inherit_test_dep, tag, test};
 use tracing::{debug, info};
 use wac_graph::types::Package;
@@ -1482,19 +1482,61 @@ async fn install_component_plugin_in_shared_project(
 }
 
 #[test]
-async fn plugin_update_via_batch_endpoint(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
-    let component_id = admin
+async fn batch_update_plugin_installations(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let user = deps.user().await;
+    let component_id = user
         .component("app_and_library_app")
         .unique()
         .store()
         .await;
 
-    let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_library").await;
+    let plugin_wasm_key = user.add_plugin_wasm("app_and_library_library").await;
 
-    admin
+    user
         .create_plugin(PluginDefinitionCreation {
             name: "library-plugin-1".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+                blob_storage_key: plugin_wasm_key.clone(),
+            }),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
+
+    user
+        .create_plugin(PluginDefinitionCreation {
+            name: "library-plugin-2".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+                blob_storage_key: plugin_wasm_key.clone(),
+            }),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
+
+    user
+        .create_plugin(PluginDefinitionCreation {
+            name: "library-plugin-3".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+                blob_storage_key: plugin_wasm_key.clone(),
+            }),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
+
+    user
+        .create_plugin(PluginDefinitionCreation {
+            name: "library-plugin-4".to_string(),
             version: "v1".to_string(),
             description: "A test".to_string(),
             icon: vec![],
@@ -1506,30 +1548,50 @@ async fn plugin_update_via_batch_endpoint(deps: &EnvBasedTestDependencies, _trac
         })
         .await;
 
-    let installation_id = admin
+    let installation_id_1 = user
         .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
+        .await;
+
+    let installation_id_2 = user
+        .install_plugin_to_component(&component_id, "library-plugin-2", "v1", 1, HashMap::new())
+        .await;
+
+    let installation_id_3 = user
+        .install_plugin_to_component(&component_id, "library-plugin-3", "v1", 1, HashMap::new())
         .await;
 
     deps
         .component_service()
-        .component_http_client(&admin.token)
+        .component_http_client(&user.token)
         .await
         .batch_update_installed_plugins(
             &component_id.0,
             &BatchPluginInstallationUpdates {
-                actions: vec![PluginInstallationAction::Update(PluginInstallationUpdateWithId {
-                    installation_id,
-                    priority: 1,
-                    parameters: HashMap::from_iter(vec![("foo".to_string(), "bar".to_string())])
-                })]
+                actions: vec![
+                    PluginInstallationAction::Uninstall(PluginUninstallation {
+                        installation_id: installation_id_2.clone(),
+                    }),
+                    PluginInstallationAction::Update(PluginInstallationUpdateWithId {
+                        installation_id: installation_id_3.clone(),
+                        priority: 2,
+                        parameters: HashMap::from_iter(vec![("foo".to_string(), "bar".to_string())])
+                    }),
+                    PluginInstallationAction::Install(PluginInstallationCreation {
+                        name: "library-plugin-4".to_string(),
+                        version: "v1".to_string(),
+                        priority: 3,
+                        parameters: HashMap::new()
+                    }),
+
+                ]
             }
         )
         .await
         .unwrap();
 
-    let mut installed_plugins = deps
+    let installed_plugins = deps
         .component_service()
-        .component_http_client(&admin.token)
+        .component_http_client(&user.token)
         .await
         .get_installed_plugins(
             &component_id.0,
@@ -1538,7 +1600,16 @@ async fn plugin_update_via_batch_endpoint(deps: &EnvBasedTestDependencies, _trac
         .await
         .unwrap();
 
-    assert_eq!(installed_plugins.len(), 1);
-    let updated_plugin_installation = installed_plugins.swap_remove(0);
-    assert_eq!(updated_plugin_installation.priority, 1);
+    assert_eq!(installed_plugins.len(), 2);
+    {
+        let mut priorities = installed_plugins.iter().map(|ip| ip.priority).collect::<Vec<_>>();
+        priorities.sort();
+        assert_eq!(priorities, vec![2, 3]);
+    }
+    {
+        let installation_ids = installed_plugins.iter().map(|ip| ip.id).collect::<HashSet<_>>();
+        assert!(installation_ids.contains(&installation_id_1.0));
+        assert!(!installation_ids.contains(&installation_id_2.0)); // uninstalled
+        assert!(!installation_ids.contains(&installation_id_3.0)); // updated
+    }
 }
