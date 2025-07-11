@@ -32,18 +32,8 @@ use golem_service_base::clients::limit::LimitError;
 use golem_service_base::clients::project::ProjectError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, Tags};
+use poem_openapi::ApiResponse;
 use serde::{Deserialize, Serialize};
-
-#[allow(clippy::enum_variant_names)]
-#[derive(Tags)]
-pub enum ApiTags {
-    ApiDefinition,
-    ApiDeployment,
-    ApiDomain,
-    ApiCertificate,
-    Worker,
-}
 
 /// Detail in case the error was caused by the worker failing
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]

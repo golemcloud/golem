@@ -38,7 +38,7 @@ use std::time::Duration;
 use tracing::{error, info};
 
 #[async_trait]
-pub trait DebugService {
+pub trait DebugService: Send + Sync {
     async fn connect(
         &self,
         authentication_context: &AuthCtx,
@@ -721,7 +721,7 @@ impl DebugService for DebugServiceDefault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Bytes;
+    use bytes::Bytes;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
     use golem_common::model::Timestamp;

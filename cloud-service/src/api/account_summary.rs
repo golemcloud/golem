@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api::ApiTags;
 use crate::model::*;
 use crate::service::account_summary::{AccountSummaryService, AccountSummaryServiceError};
 use crate::service::auth::{AuthService, AuthServiceError};
@@ -20,6 +19,7 @@ use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::ErrorBody;
 use golem_common::recorded_http_api_request;
 use golem_common::SafeDisplay;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
