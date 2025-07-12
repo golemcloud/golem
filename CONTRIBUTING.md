@@ -163,11 +163,3 @@ and the login system is enabled. In addition to the [requirements for regular ru
     GITHUB_CLIENT_SECRET: Client secret created in step (4)
 
 After it is started you can configure the cli to use the local instance using `golem profile new --component-url http://localhost:9881/  cloud cloud-local`.
-
-### Using the Single Golem Executable
-
-Golem now contains a **single executable** crate, called `golem`, that links all the services into a single binary. This binary is built using a regular `cargo make build` run and can be executed with
-
-```shell
-cargo run -p golem
-```
