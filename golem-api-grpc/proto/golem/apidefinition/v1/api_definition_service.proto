@@ -44,3 +44,21 @@ message DeleteApiDefinitionRequest {
 }
 
 message GetAllApiDefinitionsRequest {}
+
+message ExportOpenapiSpecRequest {
+  ApiDefinitionId api_definition_id = 1;
+  string version = 2;
+}
+
+message ExportOpenapiSpecResponse {
+  oneof result {
+    OpenApiHttpApiDefinitionResponse success = 1;
+    string openapi = 2;
+  }
+}
+
+message OpenApiHttpApiDefinitionResponse {
+  ApiDefinitionId id = 1;
+  string version = 2;
+  string openapi_yaml = 3;
+}

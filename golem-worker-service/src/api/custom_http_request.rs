@@ -23,6 +23,7 @@ use crate::gateway_execution::gateway_http_input_executor::{
 };
 use crate::gateway_execution::gateway_session::GatewaySession;
 use crate::gateway_execution::http_handler_binding_handler::HttpHandlerBindingHandler;
+use crate::gateway_execution::swagger_binding_handler::DefaultSwaggerBindingHandler;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_rib_interpreter::DefaultRibInterpreter;
 use crate::gateway_security::DefaultIdentityProvider;
@@ -46,12 +47,14 @@ impl CustomHttpRequestApi {
         ));
 
         let auth_call_back_binding_handler = Arc::new(DefaultAuthCallBack);
+        let swagger_binding_handler = Arc::new(DefaultSwaggerBindingHandler::new());
 
         let gateway_http_input_executor = Arc::new(DefaultGatewayInputExecutor {
             evaluator,
             file_server_binding_handler,
             auth_call_back_binding_handler,
             http_handler_binding_handler,
+            swagger_binding_handler,
             api_definition_lookup_service,
             gateway_session_store,
             identity_provider: Arc::new(DefaultIdentityProvider),

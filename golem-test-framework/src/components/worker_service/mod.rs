@@ -36,6 +36,9 @@ use golem_api_grpc::proto::golem::apidefinition::v1::{
     ApiDefinitionRequest, CreateApiDefinitionRequest, DeleteApiDefinitionRequest,
     GetApiDefinitionRequest, GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
 };
+use golem_api_grpc::proto::golem::apidefinition::v1::{
+    export_openapi_spec_response, ExportOpenapiSpecRequest, ExportOpenapiSpecResponse,
+};
 use golem_api_grpc::proto::golem::apidefinition::{
     static_binding, ApiDefinition, ApiDefinitionId, CorsPreflight, GatewayBinding,
     GatewayBindingType, HttpApiDefinition, HttpMethod, HttpRoute, StaticBinding,
@@ -1222,6 +1225,42 @@ pub trait WorkerService: Send + Sync {
         }
     }
 
+    async fn export_openapi_spec(
+        &self,
+        token: &Uuid,
+        project_id: &ProjectId,
+        request: ExportOpenapiSpecRequest,
+    ) -> crate::Result<ExportOpenapiSpecResponse> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("export_openapi_spec"),
+            GolemClientProtocol::Http => {
+                let client = self.api_definition_http_client(token).await;
+
+                match client
+                    .export_definition(
+                        &project_id.0,
+                        &request.api_definition_id.unwrap().value,
+                        &request.version,
+                    )
+                    .await
+                {
+                    Ok(result) => Ok(ExportOpenapiSpecResponse {
+                        result: Some(export_openapi_spec_response::Result::Success(
+                            golem_api_grpc::proto::golem::apidefinition::v1::OpenApiHttpApiDefinitionResponse {
+                                id: Some(golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId {
+                                    value: result.id,
+                                }),
+                                version: result.version,
+                                openapi_yaml: result.openapi_yaml,
+                            }
+                        )),
+                    }),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+        }
+    }
+
     async fn create_or_update_api_deployment(
         &self,
         token: &Uuid,
@@ -1738,6 +1777,9 @@ async fn http_api_definition_to_grpc(
                                 golem_client::model::GatewayBindingType::HttpHandler => {
                                     GatewayBindingType::HttpHandler
                                 }
+                                golem_client::model::GatewayBindingType::SwaggerUi => {
+                                    GatewayBindingType::SwaggerUi
+                                }
                                 golem_client::model::GatewayBindingType::CorsPreflight => {
                                     GatewayBindingType::CorsPreflight
                                 }
@@ -1812,6 +1854,9 @@ async fn grpc_api_definition_request_to_http(
                                         }
                                         GatewayBindingType::FileServer => {
                                             golem_client::model::GatewayBindingType::FileServer
+                                        }
+                                        GatewayBindingType::SwaggerUi => {
+                                            panic!("SwaggerUi is not supported on HTTP API")
                                         }
                                         GatewayBindingType::CorsPreflight => {
                                             golem_client::model::GatewayBindingType::CorsPreflight
