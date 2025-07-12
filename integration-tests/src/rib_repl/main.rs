@@ -36,6 +36,7 @@ async fn main() {
         command_registry: None,
     };
 
+
     let mut rib_repl = RibRepl::bootstrap(repl_config)
         .await
         .expect("Failed to bootstrap REPL");
