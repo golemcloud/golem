@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) use self::http_handler_binding::*;
+pub use self::http_handler_binding::*;
 pub use self::worker_binding::*;
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
