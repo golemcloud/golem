@@ -15,6 +15,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::model::auth::Namespace;
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_service_base::model::ComponentName;
 use golem_worker_service::gateway_api_definition::http::api_oas_convert::OpenApiHttpApiDefinitionResponse;
@@ -22,11 +23,15 @@ use golem_worker_service::gateway_api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
 };
 use golem_worker_service::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use golem_worker_service::gateway_binding::FileServerBindingCompiled;
 use golem_worker_service::gateway_binding::{
-    gateway_binding_compiled::GatewayBindingCompiled, StaticBinding, SwaggerUiBinding,
+    gateway_binding_compiled::GatewayBindingCompiled, HttpHandlerBindingCompiled,
+    ResponseMappingCompiled, StaticBinding, SwaggerUiBinding, WorkerNameCompiled,
 };
 use golem_worker_service::gateway_middleware::HttpCors;
 use golem_worker_service::service::gateway::{ComponentView, ConversionContext};
+use rib::{Expr, RibByteCode, RibInputTypeInfo};
+use std::collections::HashMap;
 use std::str::FromStr;
 
 // Helper function to create test namespace
@@ -146,12 +151,38 @@ async fn test_simple_conversion() {
     let yaml_value: serde_yaml::Value =
         serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
-    // Verify basic properties
-    assert_basic_openapi_properties(&yaml_value, "shopping-cart", "0.0.1");
+    // Verify all basic OpenAPI 3.0.0 structure
+    assert_eq!(yaml_value["openapi"], "3.0.0");
 
-    // Verify empty paths
+    // Verify info section
+    assert!(yaml_value["info"].is_mapping());
+    assert_eq!(yaml_value["info"]["title"], "shopping-cart");
+    assert_eq!(yaml_value["info"]["version"], "0.0.1");
+
+    // Verify Golem extensions
+    assert_eq!(yaml_value["x-golem-api-definition-id"], "shopping-cart");
+    assert_eq!(yaml_value["x-golem-api-definition-version"], "0.0.1");
+
+    // Verify paths section exists and is empty
     assert!(yaml_value["paths"].is_mapping());
     assert!(yaml_value["paths"].as_mapping().unwrap().is_empty());
+
+    // Verify components section exists
+    assert!(yaml_value["components"].is_mapping());
+
+    // Verify no security schemes when there are no routes
+    let components = yaml_value["components"].as_mapping().unwrap();
+    if components.contains_key("securitySchemes") {
+        assert!(components["securitySchemes"]
+            .as_mapping()
+            .unwrap()
+            .is_empty());
+    }
+
+    // Verify no global security when there are no routes
+    if yaml_value.as_mapping().unwrap().contains_key("security") {
+        assert!(yaml_value["security"].as_sequence().unwrap().is_empty());
+    }
 }
 
 // Test 2: CORS preflight route
@@ -228,14 +259,66 @@ async fn test_cors_preflight_response_formatting() {
         .contains_key("content"));
 }
 
-// Test 3: SwaggerUI binding type
+// Test 3: SwaggerUI, FileServer, HttpHandler binding types
 #[tokio::test]
-async fn test_swagger_ui_binding() {
+async fn test_other_binding_types() {
     // Create a compiled route with SwaggerUI binding
-    let route = CompiledRoute {
+    let swagger_ui_route = CompiledRoute {
         method: MethodPattern::Get,
         path: AllPathPatterns::from_str("/v0.1.0/swagger-ui").unwrap(),
         binding: GatewayBindingCompiled::SwaggerUi(SwaggerUiBinding::default()),
+        middlewares: None,
+    };
+
+    let file_server_route = CompiledRoute {
+        method: MethodPattern::Get,
+        path: AllPathPatterns::from_str("/v0.1.0/fileserver").unwrap(),
+        binding: GatewayBindingCompiled::FileServer(Box::new(FileServerBindingCompiled {
+            component_id: VersionedComponentId {
+                component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440002")
+                    .unwrap(),
+                version: 1,
+            },
+            worker_name_compiled: Some(WorkerNameCompiled {
+                worker_name: Expr::literal("file-server-worker"),
+                compiled_worker_name: RibByteCode::default(),
+                rib_input_type_info: RibInputTypeInfo {
+                    types: HashMap::new(),
+                },
+            }),
+            idempotency_key_compiled: None,
+            response_compiled: ResponseMappingCompiled {
+                response_mapping_expr: Expr::literal("\"file-content\""),
+                response_mapping_compiled: RibByteCode::default(),
+                rib_input: RibInputTypeInfo {
+                    types: HashMap::new(),
+                },
+                worker_calls: None,
+                rib_output: None,
+            },
+            invocation_context_compiled: None,
+        })),
+        middlewares: None,
+    };
+
+    let http_handler_route = CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/v0.1.0/http-handler").unwrap(),
+        binding: GatewayBindingCompiled::HttpHandler(Box::new(HttpHandlerBindingCompiled {
+            component_id: VersionedComponentId {
+                component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440002")
+                    .unwrap(),
+                version: 1,
+            },
+            worker_name_compiled: Some(WorkerNameCompiled {
+                worker_name: Expr::literal("http-handler-worker"),
+                compiled_worker_name: RibByteCode::default(),
+                rib_input_type_info: RibInputTypeInfo {
+                    types: HashMap::new(),
+                },
+            }),
+            idempotency_key_compiled: None,
+        })),
         middlewares: None,
     };
 
@@ -243,7 +326,7 @@ async fn test_swagger_ui_binding() {
     let compiled_api_definition = CompiledHttpApiDefinition {
         id: ApiDefinitionId("swagger-api".to_string()),
         version: ApiVersion("0.1.0".to_string()),
-        routes: vec![route],
+        routes: vec![swagger_ui_route, file_server_route, http_handler_route],
         draft: false,
         created_at: Utc::now(),
         namespace: test_namespace(),
@@ -272,31 +355,69 @@ async fn test_swagger_ui_binding() {
         &yaml_value["paths"]["/v0.1.0/swagger-ui"]["get"]["x-golem-api-gateway-binding"];
     assert_eq!(swagger_binding["binding-type"], "swagger-ui");
 
-    // Verify the response structure matches GET 200
+    // Verify the response structure matches GET 200 and default
     let responses = &yaml_value["paths"]["/v0.1.0/swagger-ui"]["get"]["responses"];
     assert!(responses.is_mapping());
     assert!(responses["200"].is_mapping());
     assert_eq!(responses["200"]["description"], "OK");
+    assert!(responses["default"].is_mapping());
+    assert_eq!(responses["default"]["description"], "OK");
 
     // SwaggerUI responses should not have content since there's no response body schema
     assert!(!responses["200"]
         .as_mapping()
         .unwrap()
         .contains_key("content"));
+
+    // Verify file server binding
+    let file_server_binding =
+        &yaml_value["paths"]["/v0.1.0/fileserver"]["get"]["x-golem-api-gateway-binding"];
+    assert_eq!(file_server_binding["binding-type"], "file-server");
+    assert_eq!(file_server_binding["component-name"], "swagger-api");
+    assert_eq!(file_server_binding["component-version"], 1);
+    assert_eq!(file_server_binding["response"], "\"\"file-content\"\"");
+    assert_eq!(file_server_binding["worker-name"], "\"file-server-worker\"");
+
+    // Verify file server responses
+    let file_server_responses = &yaml_value["paths"]["/v0.1.0/fileserver"]["get"]["responses"];
+    assert!(file_server_responses.is_mapping());
+    assert!(file_server_responses["200"].is_mapping());
+    assert_eq!(file_server_responses["200"]["description"], "OK");
+    assert!(file_server_responses["default"].is_mapping());
+    assert_eq!(file_server_responses["default"]["description"], "OK");
+
+    // Verify http handler binding
+    let http_handler_binding =
+        &yaml_value["paths"]["/v0.1.0/http-handler"]["post"]["x-golem-api-gateway-binding"];
+    assert_eq!(http_handler_binding["binding-type"], "http-handler");
+    assert_eq!(http_handler_binding["component-name"], "swagger-api");
+    assert_eq!(http_handler_binding["component-version"], 1);
+    assert_eq!(
+        http_handler_binding["worker-name"],
+        "\"http-handler-worker\""
+    );
+
+    // Verify http handler responses
+    let http_handler_responses = &yaml_value["paths"]["/v0.1.0/http-handler"]["post"]["responses"];
+    assert!(http_handler_responses.is_mapping());
+    assert!(http_handler_responses["201"].is_mapping());
+    assert_eq!(http_handler_responses["201"]["description"], "Created");
+    assert!(http_handler_responses["default"].is_mapping());
+    assert_eq!(http_handler_responses["default"]["description"], "Created");
 }
 
-// Test 4: Basic worker binding with path parameters
+// Test 4: Multiple component binding
 #[tokio::test]
-async fn test_basic_worker_binding_with_path_parameters() {
+async fn test_multi_component_binding() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
+    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
-    use rib::{Expr, RibByteCode, RibInputTypeInfo};
+    use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo};
     use std::collections::HashMap;
     use std::str::FromStr;
 
-    // Create RIB input type info for worker name (path parameters)
+    // Route 1: Path parameter (user), component shopping-cart
     let worker_name_input = RibInputTypeInfo {
         types: {
             let mut types = HashMap::new();
@@ -316,43 +437,105 @@ async fn test_basic_worker_binding_with_path_parameters() {
             types
         },
     };
-
-    // Create response mapping compiled
-    let response_compiled = ResponseMappingCompiled {
+    let response_compiled_shopping_cart = ResponseMappingCompiled {
         response_mapping_expr: Expr::literal("{status: 200, body: \"success\"}"),
         response_mapping_compiled: RibByteCode::default(),
         rib_input: worker_name_input,
         worker_calls: None,
         rib_output: None,
     };
-
-    // Create component ID using a UUID
-    let component_id = VersionedComponentId {
+    let component_id_shopping_cart = VersionedComponentId {
         component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
         version: 0,
     };
-
-    // Create worker binding
-    let worker_binding = WorkerBindingCompiled {
-        component_id,
+    let worker_binding_shopping_cart = WorkerBindingCompiled {
+        component_id: component_id_shopping_cart,
         idempotency_key_compiled: None,
-        response_compiled,
+        response_compiled: response_compiled_shopping_cart,
         invocation_context_compiled: None,
     };
-
-    // Create a compiled route with worker binding
-    let route = CompiledRoute {
+    let route_shopping_cart = CompiledRoute {
         method: MethodPattern::Post,
         path: AllPathPatterns::from_str("/v0.1.0/{user}/action").unwrap(),
-        binding: GatewayBindingCompiled::Worker(Box::new(worker_binding)),
+        binding: GatewayBindingCompiled::Worker(Box::new(worker_binding_shopping_cart)),
         middlewares: None,
     };
 
-    // Create a CompiledHttpApiDefinition
+    // Route 2: Path parameter (user) and query parameter (echo), component delay-echo
+    let query_input = RibInputTypeInfo {
+        types: {
+            let mut types = HashMap::new();
+            let path_record = AnalysedType::Record(TypeRecord {
+                fields: vec![NameTypePair {
+                    name: "user".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                }],
+            });
+            let query_record = AnalysedType::Record(TypeRecord {
+                fields: vec![NameTypePair {
+                    name: "echo".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                }],
+            });
+            let request_record = AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "path".to_string(),
+                        typ: path_record,
+                    },
+                    NameTypePair {
+                        name: "query".to_string(),
+                        typ: query_record,
+                    },
+                ],
+            });
+            types.insert("request".to_string(), request_record);
+            types
+        },
+    };
+    let response_output = RibOutputTypeInfo {
+        analysed_type: AnalysedType::Record(TypeRecord {
+            fields: vec![
+                NameTypePair {
+                    name: "status".to_string(),
+                    typ: AnalysedType::U32(TypeU32),
+                },
+                NameTypePair {
+                    name: "body".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+            ],
+        }),
+    };
+    let response_compiled_delay_echo = ResponseMappingCompiled {
+        response_mapping_expr: Expr::literal("{status: 200, body: result}"),
+        response_mapping_compiled: RibByteCode::default(),
+        rib_input: query_input,
+        worker_calls: None,
+        rib_output: Some(response_output),
+    };
+    let component_id_delay_echo = VersionedComponentId {
+        component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440007").unwrap(),
+        version: 1,
+    };
+    let worker_binding_delay_echo = WorkerBindingCompiled {
+        component_id: component_id_delay_echo,
+        idempotency_key_compiled: None,
+        response_compiled: response_compiled_delay_echo,
+        invocation_context_compiled: None,
+    };
+    let route_delay_echo = CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/v0.2.0/{user}/echo-query").unwrap(),
+        binding: GatewayBindingCompiled::Worker(Box::new(worker_binding_delay_echo)),
+        middlewares: None,
+    };
+
+    // Create a CompiledHttpApiDefinition with both routes
     let compiled_api_definition = CompiledHttpApiDefinition {
-        id: ApiDefinitionId("test-worker-api".to_string()),
-        version: ApiVersion("0.1.0".to_string()),
-        routes: vec![route],
+        id: ApiDefinitionId("test-multi-component-api".to_string()),
+        version: ApiVersion("0.2.0".to_string()),
+        routes: vec![route_shopping_cart, route_delay_echo],
         draft: false,
         created_at: Utc::now(),
         namespace: test_namespace(),
@@ -374,94 +557,56 @@ async fn test_basic_worker_binding_with_path_parameters() {
         serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
     // Verify basic properties
-    assert_basic_openapi_properties(&yaml_value, "test-worker-api", "0.1.0");
+    assert_basic_openapi_properties(&yaml_value, "test-multi-component-api", "0.2.0");
 
-    // Verify path exists
+    // --- Route 1 assertions ---
     assert!(yaml_value["paths"]["/v0.1.0/{user}/action"].is_mapping());
+    let post_op_shopping_cart = &yaml_value["paths"]["/v0.1.0/{user}/action"]["post"];
+    assert!(post_op_shopping_cart.is_mapping());
+    let parameters_shopping_cart = &post_op_shopping_cart["parameters"];
+    assert!(parameters_shopping_cart.is_sequence());
+    assert_eq!(parameters_shopping_cart.as_sequence().unwrap().len(), 1);
+    assert_eq!(parameters_shopping_cart[0]["name"], "user");
+    assert_eq!(parameters_shopping_cart[0]["in"], "path");
+    assert_eq!(parameters_shopping_cart[0]["required"], true);
+    assert_eq!(parameters_shopping_cart[0]["schema"]["type"], "string");
+    let binding_shopping_cart = &post_op_shopping_cart["x-golem-api-gateway-binding"];
+    assert_eq!(binding_shopping_cart["binding-type"], "default");
+    assert_eq!(binding_shopping_cart["component-name"], "shopping-cart");
+    assert_eq!(binding_shopping_cart["component-version"], 0);
+    assert_eq!(
+        binding_shopping_cart["response"],
+        "\"{status: 200, body: \"success\"}\""
+    );
 
-    // Verify POST operation
-    let post_op = &yaml_value["paths"]["/v0.1.0/{user}/action"]["post"];
-    assert!(post_op.is_mapping());
-
-    // Verify path parameters
-    let parameters = &post_op["parameters"];
-    assert!(parameters.is_sequence());
-    assert_eq!(parameters[0]["name"], "user");
-    assert_eq!(parameters[0]["in"], "path");
-    assert_eq!(parameters[0]["required"], true);
-    assert_eq!(parameters[0]["schema"]["type"], "string");
-
-    // Verify binding information
-    let binding = &post_op["x-golem-api-gateway-binding"];
-    assert_eq!(binding["binding-type"], "default");
-    assert_eq!(binding["component-name"], "shopping-cart");
-    assert_eq!(binding["component-version"], 0);
-    assert_eq!(binding["response"], "\"{status: 200, body: \"success\"}\"");
+    // --- Route 2 assertions ---
+    assert!(yaml_value["paths"]["/v0.2.0/{user}/echo-query"].is_mapping());
+    let post_op_delay_echo = &yaml_value["paths"]["/v0.2.0/{user}/echo-query"]["post"];
+    assert!(post_op_delay_echo.is_mapping());
+    let parameters_delay_echo = &post_op_delay_echo["parameters"];
+    assert!(parameters_delay_echo.is_sequence());
+    assert_eq!(parameters_delay_echo.as_sequence().unwrap().len(), 2);
+    // user path param
+    assert_eq!(parameters_delay_echo[0]["name"], "user");
+    assert_eq!(parameters_delay_echo[0]["in"], "path");
+    assert_eq!(parameters_delay_echo[0]["required"], true);
+    assert_eq!(parameters_delay_echo[0]["schema"]["type"], "string");
+    // echo query param
+    assert_eq!(parameters_delay_echo[1]["name"], "echo");
+    assert_eq!(parameters_delay_echo[1]["in"], "query");
+    assert_eq!(parameters_delay_echo[1]["required"], true);
+    assert_eq!(parameters_delay_echo[1]["schema"]["type"], "string");
+    let binding_delay_echo = &post_op_delay_echo["x-golem-api-gateway-binding"];
+    assert_eq!(binding_delay_echo["binding-type"], "default");
+    assert_eq!(binding_delay_echo["component-name"], "delay-echo");
+    assert_eq!(binding_delay_echo["component-version"], 1);
+    // Response schema (should be string, as in test_query_parameter_conversion)
+    let response_schema_delay_echo =
+        &post_op_delay_echo["responses"]["201"]["content"]["application/json"]["schema"];
+    assert_eq!(response_schema_delay_echo["type"], "string");
 }
 
-// Test 5: Empty routes but with verification of all basic OpenAPI structure
-#[tokio::test]
-async fn test_empty_api_with_complete_structure_verification() {
-    // Create a simple CompiledHttpApiDefinition with no routes
-    let compiled_api_definition = CompiledHttpApiDefinition {
-        id: ApiDefinitionId("empty-api".to_string()),
-        version: ApiVersion("1.0.0".to_string()),
-        routes: vec![],
-        draft: true, // Test with draft = true
-        created_at: Utc::now(),
-        namespace: test_namespace(),
-    };
-
-    // Create dummy conversion context
-    let conversion_ctx = DummyConversionContext.boxed();
-
-    // Convert to OpenAPI
-    let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
-        &compiled_api_definition,
-        &conversion_ctx,
-    )
-    .await
-    .unwrap();
-
-    // Parse the YAML to verify the structure
-    let yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
-
-    // Verify all basic OpenAPI 3.0.0 structure
-    assert_eq!(yaml_value["openapi"], "3.0.0");
-
-    // Verify info section
-    assert!(yaml_value["info"].is_mapping());
-    assert_eq!(yaml_value["info"]["title"], "empty-api");
-    assert_eq!(yaml_value["info"]["version"], "1.0.0");
-
-    // Verify Golem extensions
-    assert_eq!(yaml_value["x-golem-api-definition-id"], "empty-api");
-    assert_eq!(yaml_value["x-golem-api-definition-version"], "1.0.0");
-
-    // Verify paths section exists and is empty
-    assert!(yaml_value["paths"].is_mapping());
-    assert!(yaml_value["paths"].as_mapping().unwrap().is_empty());
-
-    // Verify components section exists
-    assert!(yaml_value["components"].is_mapping());
-
-    // Verify no security schemes when there are no routes
-    let components = yaml_value["components"].as_mapping().unwrap();
-    if components.contains_key("securitySchemes") {
-        assert!(components["securitySchemes"]
-            .as_mapping()
-            .unwrap()
-            .is_empty());
-    }
-
-    // Verify no global security when there are no routes
-    if yaml_value.as_mapping().unwrap().contains_key("security") {
-        assert!(yaml_value["security"].as_sequence().unwrap().is_empty());
-    }
-}
-
-// Test 6: Basic types and record conversion
+// Test 5: Basic types and record conversion
 #[tokio::test]
 async fn test_basic_types_and_record_conversion() {
     use golem_common::base_model::ComponentId;
@@ -734,7 +879,7 @@ async fn test_basic_types_and_record_conversion() {
     assert!(enum_values.contains(&serde_yaml::Value::String("high".to_string())));
 }
 
-// Test 7: Complete todo structure with optional and oneOf
+// Test 6: Complete todo structure with optional and oneOf
 #[tokio::test]
 async fn test_complete_todo_structure_with_optional_and_oneof() {
     use golem_common::base_model::ComponentId;
@@ -957,429 +1102,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
     assert_eq!(err_case["properties"]["err"]["type"], "string");
 }
 
-// Test 8: Multiple path parameters (user and time)
-#[tokio::test]
-async fn test_user_time_conversion() {
-    use golem_common::base_model::ComponentId;
-    use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
-    use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
-    use rib::{Expr, RibByteCode, RibInputTypeInfo};
-    use std::collections::HashMap;
-    use std::str::FromStr;
-
-    // Create RIB input with both user and time path parameters
-    let path_input = RibInputTypeInfo {
-        types: {
-            let mut types = HashMap::new();
-            let path_record = AnalysedType::Record(TypeRecord {
-                fields: vec![
-                    NameTypePair {
-                        name: "user".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
-                    },
-                    NameTypePair {
-                        name: "time".to_string(),
-                        typ: AnalysedType::U32(TypeU32),
-                    },
-                ],
-            });
-            let request_record = AnalysedType::Record(TypeRecord {
-                fields: vec![NameTypePair {
-                    name: "path".to_string(),
-                    typ: path_record,
-                }],
-            });
-            types.insert("request".to_string(), request_record);
-            types
-        },
-    };
-
-    // Create worker binding
-    let worker_binding = WorkerBindingCompiled {
-        component_id: VersionedComponentId {
-            component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
-            version: 0,
-        },
-        idempotency_key_compiled: None,
-        response_compiled: ResponseMappingCompiled {
-            response_mapping_expr: Expr::literal("{status: 200, body: \"delayed response\"}"),
-            response_mapping_compiled: RibByteCode::default(),
-            rib_input: path_input,
-            worker_calls: None,
-            rib_output: None,
-        },
-        invocation_context_compiled: None,
-    };
-
-    // Create route
-    let route = CompiledRoute {
-        method: MethodPattern::Post,
-        path: AllPathPatterns::from_str("/v0.0.1/{user}/{time}/delay-echo").unwrap(),
-        binding: GatewayBindingCompiled::Worker(Box::new(worker_binding)),
-        middlewares: None,
-    };
-
-    // Create API definition
-    let compiled_api_definition = CompiledHttpApiDefinition {
-        id: ApiDefinitionId("delay-echo".to_string()),
-        version: ApiVersion("0.0.1".to_string()),
-        routes: vec![route],
-        draft: false,
-        created_at: Utc::now(),
-        namespace: test_namespace(),
-    };
-
-    // Create dummy conversion context
-    let conversion_ctx = DummyConversionContext.boxed();
-
-    // Convert to OpenAPI
-    let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
-        &compiled_api_definition,
-        &conversion_ctx,
-    )
-    .await
-    .unwrap();
-
-    // Parse the YAML to verify the structure
-    let yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
-
-    // Verify basic properties
-    assert_basic_openapi_properties(&yaml_value, "delay-echo", "0.0.1");
-
-    // Verify POST operation exists
-    let post_op = &yaml_value["paths"]["/v0.0.1/{user}/{time}/delay-echo"]["post"];
-    assert!(post_op.is_mapping());
-
-    // Verify both path parameters
-    let parameters = &post_op["parameters"];
-    assert!(parameters.is_sequence());
-    assert_eq!(parameters.as_sequence().unwrap().len(), 2);
-
-    // Verify user parameter
-    assert_eq!(parameters[0]["name"], "user");
-    assert_eq!(parameters[0]["in"], "path");
-    assert_eq!(parameters[0]["required"], true);
-    assert_eq!(parameters[0]["schema"]["type"], "string");
-
-    // Verify time parameter
-    assert_eq!(parameters[1]["name"], "time");
-    assert_eq!(parameters[1]["in"], "path");
-    assert_eq!(parameters[1]["required"], true);
-    assert_eq!(parameters[1]["schema"]["type"], "integer");
-    assert_eq!(parameters[1]["schema"]["format"], "int32");
-
-    // Verify binding information
-    let binding = &post_op["x-golem-api-gateway-binding"];
-    assert_eq!(binding["binding-type"], "default");
-    assert_eq!(binding["component-name"], "shopping-cart");
-    assert_eq!(binding["component-version"], 0);
-}
-
-// Test 9: Query parameter conversion
-#[tokio::test]
-async fn test_query_parameter_conversion() {
-    use golem_common::base_model::ComponentId;
-    use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
-    use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
-    use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo};
-    use std::collections::HashMap;
-    use std::str::FromStr;
-
-    // Create RIB input with query parameter
-    let query_input = RibInputTypeInfo {
-        types: {
-            let mut types = HashMap::new();
-            let query_record = AnalysedType::Record(TypeRecord {
-                fields: vec![NameTypePair {
-                    name: "echo".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
-                }],
-            });
-            let request_record = AnalysedType::Record(TypeRecord {
-                fields: vec![NameTypePair {
-                    name: "query".to_string(),
-                    typ: query_record,
-                }],
-            });
-            types.insert("request".to_string(), request_record);
-            types
-        },
-    };
-
-    // Create response output
-    let response_output = RibOutputTypeInfo {
-        analysed_type: AnalysedType::Record(TypeRecord {
-            fields: vec![
-                NameTypePair {
-                    name: "status".to_string(),
-                    typ: AnalysedType::U32(TypeU32),
-                },
-                NameTypePair {
-                    name: "body".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
-                },
-            ],
-        }),
-    };
-
-    // Create worker binding
-    let worker_binding = WorkerBindingCompiled {
-        component_id: VersionedComponentId {
-            component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
-            version: 0,
-        },
-        idempotency_key_compiled: None,
-        response_compiled: ResponseMappingCompiled {
-            response_mapping_expr: Expr::literal("{status: 200, body: result}"),
-            response_mapping_compiled: RibByteCode::default(),
-            rib_input: query_input,
-            worker_calls: None,
-            rib_output: Some(response_output),
-        },
-        invocation_context_compiled: None,
-    };
-
-    // Create route
-    let route = CompiledRoute {
-        method: MethodPattern::Post,
-        path: AllPathPatterns::from_str("/v0.0.3/echo-query").unwrap(),
-        binding: GatewayBindingCompiled::Worker(Box::new(worker_binding)),
-        middlewares: None,
-    };
-
-    // Create API definition
-    let compiled_api_definition = CompiledHttpApiDefinition {
-        id: ApiDefinitionId("delay-echo".to_string()),
-        version: ApiVersion("0.0.3".to_string()),
-        routes: vec![route],
-        draft: false,
-        created_at: Utc::now(),
-        namespace: test_namespace(),
-    };
-
-    // Create dummy conversion context
-    let conversion_ctx = DummyConversionContext.boxed();
-
-    // Convert to OpenAPI
-    let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
-        &compiled_api_definition,
-        &conversion_ctx,
-    )
-    .await
-    .unwrap();
-
-    // Parse the YAML to verify the structure
-    let yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
-
-    // Verify basic properties
-    assert_basic_openapi_properties(&yaml_value, "delay-echo", "0.0.3");
-
-    // Verify POST operation exists
-    let post_op = &yaml_value["paths"]["/v0.0.3/echo-query"]["post"];
-    assert!(post_op.is_mapping());
-
-    // Verify query parameter
-    let parameters = &post_op["parameters"];
-    assert!(parameters.is_sequence());
-    assert_eq!(parameters.as_sequence().unwrap().len(), 1);
-
-    // Verify echo query parameter
-    assert_eq!(parameters[0]["name"], "echo");
-    assert_eq!(parameters[0]["in"], "query");
-    assert_eq!(parameters[0]["required"], true);
-    assert_eq!(parameters[0]["schema"]["type"], "string");
-
-    // Verify binding information
-    let binding = &post_op["x-golem-api-gateway-binding"];
-    assert_eq!(binding["binding-type"], "default");
-
-    // Verify response schema
-    let response_schema = &post_op["responses"]["201"]["content"]["application/json"]["schema"];
-    assert_eq!(response_schema["type"], "string");
-}
-
-// Test 10: Security conversion
-#[tokio::test]
-async fn test_security_conversion() {
-    use golem_common::base_model::ComponentId;
-    use golem_common::model::component::VersionedComponentId;
-    use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled}; // WorkerNameCompiled
-    use golem_worker_service::gateway_middleware::{
-        HttpAuthenticationMiddleware, HttpMiddleware, HttpMiddlewares,
-    };
-    use golem_worker_service::gateway_security::{
-        Provider, SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata,
-    };
-    use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
-    use rib::{Expr, RibByteCode, RibInputTypeInfo};
-    use std::collections::HashMap;
-    use std::str::FromStr;
-
-    // Create worker binding for secure route
-    // todo
-    let create_secure_binding = |_worker_name: &str| -> WorkerBindingCompiled {
-        WorkerBindingCompiled {
-            component_id: VersionedComponentId {
-                component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440000")
-                    .unwrap(),
-                version: 1,
-            },
-            idempotency_key_compiled: None,
-            response_compiled: ResponseMappingCompiled {
-                response_mapping_expr: Expr::literal("{status: 200, body: \"secure data\"}"),
-                response_mapping_compiled: RibByteCode::default(),
-                rib_input: RibInputTypeInfo {
-                    types: HashMap::new(),
-                },
-                worker_calls: None,
-                rib_output: None,
-            },
-            invocation_context_compiled: None,
-        }
-    };
-
-    // Create minimal security scheme for testing
-    let create_security_scheme = |scheme_name: &str| -> SecurityScheme {
-        SecurityScheme::new(
-            Provider::Google,
-            SecuritySchemeIdentifier::new(scheme_name.to_string()),
-            ClientId::new("test-client-id".to_string()),
-            ClientSecret::new("test-client-secret".to_string()),
-            RedirectUrl::new("http://localhost:8080/auth/callback".to_string()).unwrap(),
-            vec![Scope::new("openid".to_string())],
-        )
-    };
-
-    // Create routes without middleware first, then add middleware using HttpMiddlewares
-    let mut routes = Vec::new();
-
-    // First secure route with api-key-auth
-    let api_key_auth_scheme = create_security_scheme("api-key-auth");
-    let api_key_middleware = HttpAuthenticationMiddleware {
-        security_scheme_with_metadata: SecuritySchemeWithProviderMetadata {
-            security_scheme: api_key_auth_scheme,
-            provider_metadata: serde_json::from_str(
-                r#"{
-                "issuer": "https://accounts.google.com",
-                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
-                "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
-                "response_types_supported": ["code"],
-                "subject_types_supported": ["public"],
-                "id_token_signing_alg_values_supported": ["RS256"]
-            }"#,
-            )
-            .unwrap(),
-        },
-    };
-
-    let route1 = CompiledRoute {
-        method: MethodPattern::Get,
-        path: AllPathPatterns::from_str("/v0.1.0/secure-resource").unwrap(),
-        binding: GatewayBindingCompiled::Worker(Box::new(create_secure_binding("secure-worker"))),
-        middlewares: Some(HttpMiddlewares(vec![HttpMiddleware::authenticate_request(
-            api_key_middleware.security_scheme_with_metadata,
-        )])),
-    };
-    routes.push(route1);
-
-    // Second secure route with jwt-auth
-    let jwt_auth_scheme = create_security_scheme("jwt-auth");
-    let jwt_middleware = HttpAuthenticationMiddleware {
-        security_scheme_with_metadata: SecuritySchemeWithProviderMetadata {
-            security_scheme: jwt_auth_scheme,
-            provider_metadata: serde_json::from_str(
-                r#"{
-                "issuer": "https://accounts.google.com",
-                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
-                "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
-                "response_types_supported": ["code"],
-                "subject_types_supported": ["public"],
-                "id_token_signing_alg_values_supported": ["RS256"]
-            }"#,
-            )
-            .unwrap(),
-        },
-    };
-
-    let route2 = CompiledRoute {
-        method: MethodPattern::Post,
-        path: AllPathPatterns::from_str("/v0.1.0/another-secure-resource").unwrap(),
-        binding: GatewayBindingCompiled::Worker(Box::new(create_secure_binding("secure-worker"))),
-        middlewares: Some(HttpMiddlewares(vec![HttpMiddleware::authenticate_request(
-            jwt_middleware.security_scheme_with_metadata,
-        )])),
-    };
-    routes.push(route2);
-
-    // Create API definition
-    let compiled_api_definition = CompiledHttpApiDefinition {
-        id: ApiDefinitionId("secure-api".to_string()),
-        version: ApiVersion("0.1.0".to_string()),
-        routes,
-        draft: false,
-        created_at: Utc::now(),
-        namespace: test_namespace(),
-    };
-
-    // Create dummy conversion context
-    let conversion_ctx = DummyConversionContext.boxed();
-
-    // Convert to OpenAPI
-    let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
-        &compiled_api_definition,
-        &conversion_ctx,
-    )
-    .await
-    .unwrap();
-
-    // Parse the YAML to verify the structure
-    let yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
-
-    // Verify basic properties
-    assert_basic_openapi_properties(&yaml_value, "secure-api", "0.1.0");
-
-    // Verify security schemes in components
-    let security_schemes = &yaml_value["components"]["securitySchemes"];
-    assert!(security_schemes.is_mapping());
-
-    // Verify api-key-auth scheme
-    assert_eq!(security_schemes["api-key-auth"]["type"], "apiKey");
-    assert_eq!(security_schemes["api-key-auth"]["in"], "header");
-    assert_eq!(security_schemes["api-key-auth"]["name"], "Authorization");
-
-    // Verify jwt-auth scheme
-    assert_eq!(security_schemes["jwt-auth"]["type"], "apiKey");
-    assert_eq!(security_schemes["jwt-auth"]["in"], "header");
-    assert_eq!(security_schemes["jwt-auth"]["name"], "Authorization");
-
-    // Verify operation-level security
-    let get_operation = &yaml_value["paths"]["/v0.1.0/secure-resource"]["get"];
-    assert!(get_operation["security"].is_sequence());
-    let get_security = get_operation["security"].as_sequence().unwrap();
-    assert_eq!(get_security.len(), 1);
-    assert!(get_security[0]["api-key-auth"].is_sequence());
-
-    let post_operation = &yaml_value["paths"]["/v0.1.0/another-secure-resource"]["post"];
-    assert!(post_operation["security"].is_sequence());
-    let post_security = post_operation["security"].as_sequence().unwrap();
-    assert_eq!(post_security.len(), 1);
-    assert!(post_security[0]["jwt-auth"].is_sequence());
-
-    // Verify global security
-    let global_security = &yaml_value["security"];
-    assert!(global_security.is_sequence());
-    let global_security_array = global_security.as_sequence().unwrap();
-    assert_eq!(global_security_array.len(), 2);
-    assert!(global_security_array[0]["api-key-auth"].is_sequence());
-    assert!(global_security_array[1]["jwt-auth"].is_sequence());
-}
-
-// Test 11: Variant output structure
+// Test 7: Variant output structure
 #[tokio::test]
 async fn test_variant_output_structure() {
     use golem_common::base_model::ComponentId;
@@ -1536,7 +1259,7 @@ async fn test_variant_output_structure() {
         .contains(&serde_yaml::Value::String("rand3".to_string())));
 }
 
-// Test 12: Complete integration test with full YAML comparison
+// Test 8: Complete integration test with full YAML comparison
 #[tokio::test]
 async fn test_oas_conversion_full_structure_shopping_cart() {
     use golem_common::base_model::ComponentId;
@@ -1800,7 +1523,7 @@ x-golem-api-definition-version: 0.0.1
     assert_eq!(actual_yaml, expected_yaml);
 }
 
-// Test 13: Path, Query, and Header Parameter Combinations Test
+// Test 9: Path, Query, and Header Parameter Combinations Test
 #[tokio::test]
 async fn test_path_query_header_parameter_combinations() {
     use golem_common::base_model::ComponentId;
@@ -2115,7 +1838,7 @@ async fn test_path_query_header_parameter_combinations() {
     assert_eq!(actual_yaml, expected_yaml);
 }
 
-// Test 14: Comprehensive AnalysedType Coverage Test (10 Routes)
+// Test 10: Comprehensive AnalysedType Coverage Test (10 Routes)
 #[tokio::test]
 async fn test_comprehensive_analysed_type_coverage() {
     use golem_common::base_model::ComponentId;
