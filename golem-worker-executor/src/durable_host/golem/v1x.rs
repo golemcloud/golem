@@ -326,74 +326,98 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent for DurableWorkerCtx<C
     }
 }
 
+fn parse_agent_id(agent_id: &str) -> anyhow::Result<String> {
+    // agent-id is of the format of {worker-name}-{agent-name}-{instance-number}
+    let parts: Vec<&str> = agent_id.split('-').collect();
+    if parts.len() < 3 {
+        return Err(anyhow!(
+            "Invalid agent_id format: {}. Expected format is {{worker_name}}-{{agent_name}}-{{instance_number}}",
+            agent_id
+        ));
+    }
+
+    // return just the agent name part
+    Ok(parts[1].to_string())
+}
+
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn connect_to_agent(
         &mut self,
         agent_id: String,
     ) -> wasmtime::Result<Result<wasmtime::component::Resource<WasmRpcEntry>, String>> {
-        self.observe_function_call("golem::host::remote-agent", "new");
+        // self.observe_function_call("golem::host::remote-agent", "new");
+        //
+        // // agent-id holds the information about the agent
+        //
+        // let agent_name = parse_agent_id(&agent_id)?;
+        //
+        // let self_metadata = Host::get_self_metadata(self).await?;
+        //
+        // let component_id = self_metadata.worker_id.component_id;
+        //
+        // let worker_id: WorkerId = WorkerId {
+        //     component_id: ComponentId(Uuid::from_u64_pair(
+        //         component_id.uuid.high_bits,
+        //         component_id.uuid.low_bits,
+        //     )),
+        //     worker_name: agent_id.clone(),
+        // };
+        //
+        // let remote_worker_id = worker_id.clone().into_target_worker_id();
+        //
+        // let remote_worker_id = self
+        //     .generate_unique_local_worker_id(remote_worker_id.clone())
+        //     .await?;
+        //
+        // let span = create_rpc_connection_span(self, &remote_worker_id).await?;
+        //
+        // let remote_worker_id =
+        //     OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
+        //
+        // let demand = self.rpc().create_demand(&remote_worker_id).await;
+        //
+        // let entry = self.table().push(WasmRpcEntry {
+        //     payload: Box::new(WasmRpcEntryPayload::Interface {
+        //         demand,
+        //         remote_worker_id: remote_worker_id.clone(),
+        //         span_id: span.span_id().clone(),
+        //     }),
+        // })?;
+        //
+        // let agent_id = WitValue::from(ValueAndType::new(Value::String(agent_id), str()));
+        //
+        // let remote_agent_resource = HostWasmRpc::invoke_and_await(
+        //     self,
+        //     entry,
+        //     "golem:agentic-guest/guest.{agent.new}".to_string(),
+        //     vec![agent_id],
+        // )
+        // .await?;
+        //
+        // let resource = remote_agent_resource?;
+        //
+        // let remote_agent_constructor_result: Value = resource.into();
+        //
+        // let (resource_uri, resource_id) =
+        //     unwrap_constructor_result(remote_agent_constructor_result)?;
+        //
+        // let demand = self.rpc().create_demand(&remote_worker_id).await;
+        //
+        // let entry = self.table().push(WasmRpcEntry {
+        //     payload: Box::new(WasmRpcEntryPayload::Resource {
+        //         demand,
+        //         remote_worker_id,
+        //         resource_uri,
+        //         resource_id,
+        //         span_id: span.span_id().clone(),
+        //     }),
+        // })?;
+        //
+        // Ok(Ok(entry))
 
-        let self_metadata = Host::get_self_metadata(self).await?;
-
-        let component_id = self_metadata.worker_id.component_id;
-
-        let worker_id: WorkerId = WorkerId {
-            component_id: ComponentId(Uuid::from_u64_pair(
-                component_id.uuid.high_bits,
-                component_id.uuid.low_bits,
-            )),
-            worker_name: agent_id.clone(),
-        };
-
-        let remote_worker_id = worker_id.clone().into_target_worker_id();
-
-        let remote_worker_id = self
-            .generate_unique_local_worker_id(remote_worker_id.clone())
-            .await?;
-
-        let span = create_rpc_connection_span(self, &remote_worker_id).await?;
-
-        let remote_worker_id =
-            OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
-
-        let demand = self.rpc().create_demand(&remote_worker_id).await;
-
-        let entry = self.table().push(WasmRpcEntry {
-            payload: Box::new(WasmRpcEntryPayload::Interface {
-                demand,
-                remote_worker_id: remote_worker_id.clone(),
-                span_id: span.span_id().clone(),
-            }),
-        })?;
-
-        let remote_agent_resource = HostWasmRpc::invoke_and_await(
-            self,
-            entry,
-            "golem:agentic-guest/guest.{agent.new}".to_string(),
-            vec![],
-        )
-        .await?;
-
-        let resource = remote_agent_resource?;
-
-        let remote_agent_constructor_result: Value = resource.into();
-
-        let (resource_uri, resource_id) =
-            unwrap_constructor_result(remote_agent_constructor_result)?;
-
-        let demand = self.rpc().create_demand(&remote_worker_id).await;
-
-        let entry = self.table().push(WasmRpcEntry {
-            payload: Box::new(WasmRpcEntryPayload::Resource {
-                demand,
-                remote_worker_id,
-                resource_uri,
-                resource_id,
-                span_id: span.span_id().clone(),
-            }),
-        })?;
-
-        Ok(Ok(entry))
+        Err(anyhow!(
+            "connect_to_agent is not implemented in the durable host"
+        ))
     }
 
     async fn create_remote_agent(
@@ -401,85 +425,79 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dependency: AgentDependency,
     ) -> wasmtime::Result<
         Result<
-            wasmtime::component::Resource<WasmRpcEntry>,
-            wasmtime::component::__internal::String,
+            Resource<WasmRpcEntry>,
+            String,
         >,
     > {
-        //     self.observe_function_call("golem::host::remote-agent", "new");
+            self.observe_function_call("golem::host::remote-agent", "new");
 
-        //     let self_metadata = Host::get_self_metadata(self).await?;
+            // Single component, but with dependency we can search for a component
+            let self_metadata = Host::get_self_metadata(self).await?;
 
-        //     let component_id = self_metadata.worker_id.component_id;
+            let component_id = self_metadata.worker_id.component_id;
 
-        //     let agent_name = agent.agent_name;
+            let agent_name = dependency.agent_name;
 
-        //     let worker_id: WorkerId = WorkerId {
-        //         component_id: ComponentId(Uuid::from_u64_pair(
-        //             component_id.uuid.high_bits,
-        //             component_id.uuid.low_bits,
-        //         )),
-        //         worker_name: agent_id.clone(),
-        //     };
+            // Currently we don't allow users to have container-id
+            let remote_worker_id: TargetWorkerId = TargetWorkerId {
+                component_id: ComponentId(Uuid::from_u64_pair(
+                    component_id.uuid.high_bits,
+                    component_id.uuid.low_bits,
+                )),
+                worker_name: None  // we can have optional container-id to allow users to control this. This is already in spec
+            };
 
-        //     let remote_worker_id = worker_id.clone().into_target_worker_id();
+            let remote_worker_id = self
+                .generate_unique_local_worker_id(remote_worker_id.clone())
+                .await?;
 
-        //     let remote_worker_id = self
-        //         .generate_unique_local_worker_id(remote_worker_id.clone())
-        //         .await?;
+            let span = create_rpc_connection_span(self, &remote_worker_id).await?;
 
-        //     let span = create_rpc_connection_span(self, &remote_worker_id).await?;
+            let remote_worker_id =
+                OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
 
-        //     let remote_worker_id =
-        //         OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
+            let demand = self.rpc().create_demand(&remote_worker_id).await;
 
-        //     let demand = self.rpc().create_demand(&remote_worker_id).await;
+            let entry = self.table().push(WasmRpcEntry {
+                payload: Box::new(WasmRpcEntryPayload::Interface {
+                    demand,
+                    remote_worker_id: remote_worker_id.clone(),
+                    span_id: span.span_id().clone(),
+                }),
+            })?;
 
-        //     let entry = self.table().push(WasmRpcEntry {
-        //         payload: Box::new(WasmRpcEntryPayload::Interface {
-        //             demand,
-        //             remote_worker_id: remote_worker_id.clone(),
-        //             span_id: span.span_id().clone(),
-        //         }),
-        //     })?;
+            let agent_name = ValueAndType::new(Value::String(agent_name.to_string()), str());
 
-        //     let agent_name = ValueAndType::new(Value::String(agent_name.to_string()), str());
-        //     let agent_id = ValueAndType::new(Value::String(agent_id), str());
+            let wit_value_agent_name = WitValue::from(agent_name);
 
-        //     let wit_value_agent_name = WitValue::from(agent_name);
-        //     let wit_value_agent_id = WitValue::from(agent_id);
+            let remote_agent_resource = HostWasmRpc::invoke_and_await(
+                self,
+                entry,
+                "golem:agentic-guest/guest.{agent.new}".to_string(),
+                vec![wit_value_agent_name],
+            )
+            .await?;
 
-        //     let remote_agent_resource = HostWasmRpc::invoke_and_await(
-        //         self,
-        //         entry,
-        //         "golem:agentic-guest/guest.{agent.new}".to_string(),
-        //         vec![wit_value_agent_name, wit_value_agent_id],
-        //     )
-        //     .await?;
+            let resource = remote_agent_resource?;
 
-        //     let resource = remote_agent_resource?;
+            let remote_agent_constructor_result: Value = resource.into();
 
-        //     let remote_agent_constructor_result: Value = resource.into();
+            let (resource_uri, resource_id) =
+                unwrap_constructor_result(remote_agent_constructor_result)?;
 
-        //     let (resource_uri, resource_id) =
-        //         unwrap_constructor_result(remote_agent_constructor_result)?;
+            let demand = self.rpc().create_demand(&remote_worker_id).await;
 
-        //     let demand = self.rpc().create_demand(&remote_worker_id).await;
+            let entry = self.table().push(WasmRpcEntry {
+                payload: Box::new(WasmRpcEntryPayload::Resource {
+                    demand,
+                    remote_worker_id,
+                    resource_uri,
+                    resource_id,
+                    span_id: span.span_id().clone(),
+                }),
+            })?;
 
-        //     let entry = self.table().push(WasmRpcEntry {
-        //         payload: Box::new(WasmRpcEntryPayload::Resource {
-        //             demand,
-        //             remote_worker_id,
-        //             resource_uri,
-        //             resource_id,
-        //             span_id: span.span_id().clone(),
-        //         }),
-        //     })?;
-
-        //     Ok(entry)
-
-        Err(anyhow!(
-            "connect_to_agent is not implemented in the durable host",
-        ))
+            Ok(Ok(entry))
     }
 
     async fn discover_agent_definitions(
