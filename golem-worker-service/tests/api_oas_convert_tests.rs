@@ -406,7 +406,183 @@ async fn test_other_binding_types() {
     assert_eq!(http_handler_responses["default"]["description"], "Created");
 }
 
-// Test 4: Multiple component binding
+// Test 4: Security conversion
+#[tokio::test]
+async fn test_security_conversion() {
+    use golem_common::base_model::ComponentId;
+    use golem_common::model::component::VersionedComponentId;
+    use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled}; // WorkerNameCompiled
+    use golem_worker_service::gateway_middleware::{
+        HttpAuthenticationMiddleware, HttpMiddleware, HttpMiddlewares,
+    };
+    use golem_worker_service::gateway_security::{
+        Provider, SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata,
+    };
+    use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
+    use rib::{Expr, RibByteCode, RibInputTypeInfo};
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
+    // Create worker binding for secure route
+    let create_secure_binding = |_worker_name: &str| -> WorkerBindingCompiled {
+        WorkerBindingCompiled {
+            component_id: VersionedComponentId {
+                component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440000")
+                    .unwrap(),
+                version: 1,
+            },
+            idempotency_key_compiled: None,
+            response_compiled: ResponseMappingCompiled {
+                response_mapping_expr: Expr::literal("{status: 200, body: \"secure data\"}"),
+                response_mapping_compiled: RibByteCode::default(),
+                rib_input: RibInputTypeInfo {
+                    types: HashMap::new(),
+                },
+                worker_calls: None,
+                rib_output: None,
+            },
+            invocation_context_compiled: None,
+        }
+    };
+
+    // Create minimal security scheme for testing
+    let create_security_scheme = |scheme_name: &str| -> SecurityScheme {
+        SecurityScheme::new(
+            Provider::Google,
+            SecuritySchemeIdentifier::new(scheme_name.to_string()),
+            ClientId::new("test-client-id".to_string()),
+            ClientSecret::new("test-client-secret".to_string()),
+            RedirectUrl::new("http://localhost:8080/auth/callback".to_string()).unwrap(),
+            vec![Scope::new("openid".to_string())],
+        )
+    };
+
+    // Create routes without middleware first, then add middleware using HttpMiddlewares
+    let mut routes = Vec::new();
+
+    // First secure route with api-key-auth
+    let api_key_auth_scheme = create_security_scheme("api-key-auth");
+    let api_key_middleware = HttpAuthenticationMiddleware {
+        security_scheme_with_metadata: SecuritySchemeWithProviderMetadata {
+            security_scheme: api_key_auth_scheme,
+            provider_metadata: serde_json::from_str(
+                r#"{
+                "issuer": "https://accounts.google.com",
+                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+                "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+                "response_types_supported": ["code"],
+                "subject_types_supported": ["public"],
+                "id_token_signing_alg_values_supported": ["RS256"]
+            }"#,
+            )
+            .unwrap(),
+        },
+    };
+
+    let route1 = CompiledRoute {
+        method: MethodPattern::Get,
+        path: AllPathPatterns::from_str("/v0.1.0/secure-resource").unwrap(),
+        binding: GatewayBindingCompiled::Worker(Box::new(create_secure_binding("secure-worker"))),
+        middlewares: Some(HttpMiddlewares(vec![HttpMiddleware::authenticate_request(
+            api_key_middleware.security_scheme_with_metadata,
+        )])),
+    };
+    routes.push(route1);
+
+    // Second secure route with jwt-auth
+    let jwt_auth_scheme = create_security_scheme("jwt-auth");
+    let jwt_middleware = HttpAuthenticationMiddleware {
+        security_scheme_with_metadata: SecuritySchemeWithProviderMetadata {
+            security_scheme: jwt_auth_scheme,
+            provider_metadata: serde_json::from_str(
+                r#"{
+                "issuer": "https://accounts.google.com",
+                "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+                "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+                "response_types_supported": ["code"],
+                "subject_types_supported": ["public"],
+                "id_token_signing_alg_values_supported": ["RS256"]
+            }"#,
+            )
+            .unwrap(),
+        },
+    };
+
+    let route2 = CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/v0.1.0/another-secure-resource").unwrap(),
+        binding: GatewayBindingCompiled::Worker(Box::new(create_secure_binding("secure-worker"))),
+        middlewares: Some(HttpMiddlewares(vec![HttpMiddleware::authenticate_request(
+            jwt_middleware.security_scheme_with_metadata,
+        )])),
+    };
+    routes.push(route2);
+
+    // Create API definition
+    let compiled_api_definition = CompiledHttpApiDefinition {
+        id: ApiDefinitionId("secure-api".to_string()),
+        version: ApiVersion("0.1.0".to_string()),
+        routes,
+        draft: false,
+        created_at: Utc::now(),
+        namespace: test_namespace(),
+    };
+
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
+    // Convert to OpenAPI
+    let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
+        &compiled_api_definition,
+        &conversion_ctx,
+    )
+    .await
+    .unwrap();
+
+    // Parse the YAML to verify the structure
+    let yaml_value: serde_yaml::Value =
+        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
+
+    // Verify basic properties
+    assert_basic_openapi_properties(&yaml_value, "secure-api", "0.1.0");
+
+    // Verify security schemes in components
+    let security_schemes = &yaml_value["components"]["securitySchemes"];
+    assert!(security_schemes.is_mapping());
+
+    // Verify api-key-auth scheme
+    assert_eq!(security_schemes["api-key-auth"]["type"], "apiKey");
+    assert_eq!(security_schemes["api-key-auth"]["in"], "header");
+    assert_eq!(security_schemes["api-key-auth"]["name"], "Authorization");
+
+    // Verify jwt-auth scheme
+    assert_eq!(security_schemes["jwt-auth"]["type"], "apiKey");
+    assert_eq!(security_schemes["jwt-auth"]["in"], "header");
+    assert_eq!(security_schemes["jwt-auth"]["name"], "Authorization");
+
+    // Verify operation-level security
+    let get_operation = &yaml_value["paths"]["/v0.1.0/secure-resource"]["get"];
+    assert!(get_operation["security"].is_sequence());
+    let get_security = get_operation["security"].as_sequence().unwrap();
+    assert_eq!(get_security.len(), 1);
+    assert!(get_security[0]["api-key-auth"].is_sequence());
+
+    let post_operation = &yaml_value["paths"]["/v0.1.0/another-secure-resource"]["post"];
+    assert!(post_operation["security"].is_sequence());
+    let post_security = post_operation["security"].as_sequence().unwrap();
+    assert_eq!(post_security.len(), 1);
+    assert!(post_security[0]["jwt-auth"].is_sequence());
+
+    // Verify global security
+    let global_security = &yaml_value["security"];
+    assert!(global_security.is_sequence());
+    let global_security_array = global_security.as_sequence().unwrap();
+    assert_eq!(global_security_array.len(), 2);
+    assert!(global_security_array[0]["api-key-auth"].is_sequence());
+    assert!(global_security_array[1]["jwt-auth"].is_sequence());
+}
+
+// Test 5: Multiple component binding
 #[tokio::test]
 async fn test_multi_component_binding() {
     use golem_common::base_model::ComponentId;
@@ -606,7 +782,7 @@ async fn test_multi_component_binding() {
     assert_eq!(response_schema_delay_echo["type"], "string");
 }
 
-// Test 5: Basic types and record conversion
+// Test 6: Basic types and record conversion
 #[tokio::test]
 async fn test_basic_types_and_record_conversion() {
     use golem_common::base_model::ComponentId;
@@ -657,7 +833,6 @@ async fn test_basic_types_and_record_conversion() {
     };
 
     // Create path parameter input (user parameter)
-    // todo
     let _path_input = RibInputTypeInfo {
         types: {
             let mut types = HashMap::new();
@@ -879,7 +1054,7 @@ async fn test_basic_types_and_record_conversion() {
     assert!(enum_values.contains(&serde_yaml::Value::String("high".to_string())));
 }
 
-// Test 6: Complete todo structure with optional and oneOf
+// Test 7: Complete todo structure with optional and oneOf
 #[tokio::test]
 async fn test_complete_todo_structure_with_optional_and_oneof() {
     use golem_common::base_model::ComponentId;
@@ -1102,7 +1277,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
     assert_eq!(err_case["properties"]["err"]["type"], "string");
 }
 
-// Test 7: Variant output structure
+// Test 8: Variant output structure
 #[tokio::test]
 async fn test_variant_output_structure() {
     use golem_common::base_model::ComponentId;
@@ -1259,7 +1434,7 @@ async fn test_variant_output_structure() {
         .contains(&serde_yaml::Value::String("rand3".to_string())));
 }
 
-// Test 8: Complete integration test with full YAML comparison
+// Test 9: Complete integration test with full YAML comparison
 #[tokio::test]
 async fn test_oas_conversion_full_structure_shopping_cart() {
     use golem_common::base_model::ComponentId;
@@ -1523,7 +1698,7 @@ x-golem-api-definition-version: 0.0.1
     assert_eq!(actual_yaml, expected_yaml);
 }
 
-// Test 9: Path, Query, and Header Parameter Combinations Test
+// Test 10: Path, Query, and Header Parameter Combinations Test
 #[tokio::test]
 async fn test_path_query_header_parameter_combinations() {
     use golem_common::base_model::ComponentId;
@@ -1838,7 +2013,7 @@ async fn test_path_query_header_parameter_combinations() {
     assert_eq!(actual_yaml, expected_yaml);
 }
 
-// Test 10: Comprehensive AnalysedType Coverage Test (10 Routes)
+// Test 11: Comprehensive AnalysedType Coverage Test (10 Routes)
 #[tokio::test]
 async fn test_comprehensive_analysed_type_coverage() {
     use golem_common::base_model::ComponentId;
