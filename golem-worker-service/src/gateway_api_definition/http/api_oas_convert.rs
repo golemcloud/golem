@@ -37,7 +37,6 @@ const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
 
 // OpenApiHttpApiDefinitionResponse is a wrapper id, version and open api schema as yaml string
 // OpenApiHttpApiDefinition struct is defined using crate openapiv3 as OPENAPI+GOLEMEXTENSIONS
-// openapiv3 does not have Json(T) trait, so we convert to yaml string and wrap it
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
 pub struct OpenApiHttpApiDefinitionResponse {
     pub id: ApiDefinitionId,
@@ -877,24 +876,6 @@ fn add_operation_to_path_item(
     Ok(())
 }
 
-// Helper function: Creates a default schema for unknown/unhandled types1
-// This should never get triggered since we don't support Handle(_)
-fn create_default_schema() -> openapiv3::Schema {
-    openapiv3::Schema {
-        schema_data: openapiv3::SchemaData {
-            description: Some("Default schema for unknown type".to_string()),
-            ..Default::default()
-        },
-        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(openapiv3::ObjectType {
-            properties: indexmap::IndexMap::new(),
-            required: Vec::new(),
-            additional_properties: Some(openapiv3::AdditionalProperties::Any(true)),
-            min_properties: None,
-            max_properties: None,
-        })),
-    }
-}
-
 // Helper function: Creates an integer schema
 fn create_integer_schema(
     format: openapiv3::IntegerFormat,
@@ -1299,6 +1280,6 @@ fn create_schema_from_analysed_type(
         }
         // Handle(_) => todo!()
         // This will not trigger for any case since Handle(_) is todo!()
-        _ => create_default_schema(),
+        _ => todo!(),
     }
 }
