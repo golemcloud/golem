@@ -34,10 +34,8 @@ use golem_api_grpc::proto::golem::apidefinition::api_definition::Definition;
 use golem_api_grpc::proto::golem::apidefinition::v1::{
     api_definition_request, create_api_definition_request, update_api_definition_request,
     ApiDefinitionRequest, CreateApiDefinitionRequest, DeleteApiDefinitionRequest,
-    GetApiDefinitionRequest, GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
-};
-use golem_api_grpc::proto::golem::apidefinition::v1::{
-    export_openapi_spec_response, ExportOpenapiSpecRequest, ExportOpenapiSpecResponse,
+    ExportOpenapiSpecRequest, GetApiDefinitionRequest, GetApiDefinitionVersionsRequest,
+    UpdateApiDefinitionRequest,
 };
 use golem_api_grpc::proto::golem::apidefinition::{
     static_binding, ApiDefinition, ApiDefinitionId, CorsPreflight, GatewayBinding,
@@ -87,7 +85,8 @@ use golem_client::api::ApiSecurityClientLive as ApiSecurityServiceHttpClientLive
 use golem_client::api::WorkerClient as WorkerServiceHttpClient;
 use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
 use golem_client::model::{
-    ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, SecuritySchemeData,
+    ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, OpenApiHttpApiDefinitionResponse,
+    SecuritySchemeData,
 };
 use golem_client::{Context, Security};
 use golem_common::model::ProjectId;
@@ -1230,33 +1229,21 @@ pub trait WorkerService: Send + Sync {
         token: &Uuid,
         project_id: &ProjectId,
         request: ExportOpenapiSpecRequest,
-    ) -> crate::Result<ExportOpenapiSpecResponse> {
+    ) -> crate::Result<OpenApiHttpApiDefinitionResponse> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => not_available_on_grpc_api("export_openapi_spec"),
             GolemClientProtocol::Http => {
                 let client = self.api_definition_http_client(token).await;
 
-                match client
+                let result = client
                     .export_definition(
                         &project_id.0,
                         &request.api_definition_id.unwrap().value,
                         &request.version,
                     )
-                    .await
-                {
-                    Ok(result) => Ok(ExportOpenapiSpecResponse {
-                        result: Some(export_openapi_spec_response::Result::Success(
-                            golem_api_grpc::proto::golem::apidefinition::v1::OpenApiHttpApiDefinitionResponse {
-                                id: Some(golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId {
-                                    value: result.id,
-                                }),
-                                version: result.version,
-                                openapi_yaml: result.openapi_yaml,
-                            }
-                        )),
-                    }),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
+                    .await?;
+
+                Ok(result)
             }
         }
     }

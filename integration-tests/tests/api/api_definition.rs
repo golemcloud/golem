@@ -15,10 +15,10 @@
 use crate::{to_grpc_rib_expr, Tracing};
 use assert2::{assert, check};
 use golem_api_grpc::proto::golem::apidefinition::v1::{
-    api_definition_request, create_api_definition_request, export_openapi_spec_response,
-    update_api_definition_request, ApiDefinitionRequest, CreateApiDefinitionRequest,
-    DeleteApiDefinitionRequest, ExportOpenapiSpecRequest, GetApiDefinitionRequest,
-    GetApiDefinitionVersionsRequest, OpenApiHttpApiDefinitionResponse, UpdateApiDefinitionRequest,
+    api_definition_request, create_api_definition_request, update_api_definition_request,
+    ApiDefinitionRequest, CreateApiDefinitionRequest, DeleteApiDefinitionRequest,
+    ExportOpenapiSpecRequest, GetApiDefinitionRequest, GetApiDefinitionVersionsRequest,
+    UpdateApiDefinitionRequest,
 };
 use golem_api_grpc::proto::golem::apidefinition::{
     api_definition, static_binding, ApiDefinition, ApiDefinitionId, GatewayBinding,
@@ -937,26 +937,11 @@ async fn test_export_openapi_spec_simple(deps: &EnvBasedTestDependencies) {
     };
 
     // Export the API definition
-    let export_response = deps
+    let export_data = deps
         .worker_service()
         .export_openapi_spec(&admin.token, &project, export_request)
         .await
         .unwrap();
-
-    // Verify the export response contains valid data
-    let export_data = match export_response.result.unwrap() {
-        export_openapi_spec_response::Result::Success(data) => data,
-        export_openapi_spec_response::Result::Openapi(yaml) => {
-            // Handle case where response is directly OpenAPI YAML
-            OpenApiHttpApiDefinitionResponse {
-                id: Some(ApiDefinitionId {
-                    value: api_id.clone(),
-                }),
-                version: "1.0".to_string(),
-                openapi_yaml: yaml,
-            }
-        }
-    };
 
     // Validate that there is YAML content
     assert!(
@@ -1055,7 +1040,7 @@ async fn test_roundtrip_api_definition(deps: &EnvBasedTestDependencies) {
     check_equal_api_definition_request_and_response(&request, &original_api_definition);
 
     // 3. Export the API definition to OpenAPI format
-    let export_response = deps
+    let export_data = deps
         .worker_service()
         .export_openapi_spec(
             &admin.token,
@@ -1069,21 +1054,6 @@ async fn test_roundtrip_api_definition(deps: &EnvBasedTestDependencies) {
         )
         .await
         .unwrap();
-
-    // Verify the export response contains valid data
-    let export_data = match export_response.result.unwrap() {
-        export_openapi_spec_response::Result::Success(data) => data,
-        export_openapi_spec_response::Result::Openapi(yaml) => {
-            // Handle case where response is directly OpenAPI YAML
-            OpenApiHttpApiDefinitionResponse {
-                id: Some(ApiDefinitionId {
-                    value: api_id.clone(),
-                }),
-                version: "1.0".to_string(),
-                openapi_yaml: yaml,
-            }
-        }
-    };
 
     // Validate that there is YAML content
     assert!(
