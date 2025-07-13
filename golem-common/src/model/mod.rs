@@ -1901,9 +1901,6 @@ pub struct ComponentFileSystemNode {
     pub details: ComponentFileSystemNodeDetails,
 }
 
-// GatewayBindingType::WitWorker is now GatewayBindingType::Default
-// As we no longer use wit-worker gateway binding type,
-// and it is not in any examples, this does break backward compatibility
 // Custom Deserialize is replaced with Simple Deserialize
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Default)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]

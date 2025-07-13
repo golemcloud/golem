@@ -1857,7 +1857,7 @@ async fn grpc_api_definition_request_to_http(
                                             golem_client::model::GatewayBindingType::FileServer
                                         }
                                         GatewayBindingType::SwaggerUi => {
-                                            panic!("SwaggerUi is not supported on HTTP API")
+                                            golem_client::model::GatewayBindingType::SwaggerUi
                                         }
                                         GatewayBindingType::CorsPreflight => {
                                             golem_client::model::GatewayBindingType::CorsPreflight
