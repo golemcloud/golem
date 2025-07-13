@@ -5,6 +5,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionCompletedParameters, PublicOplogEntry};
 use golem_common::model::{Timestamp, WorkerId};
 use golem_debugging_service::model::params::PlaybackOverride;
+use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_ast::analysis::analysed_type::{record, str, variant};
 use golem_wasm_ast::analysis::{NameOptionTypePair, NameTypePair};
@@ -24,7 +25,7 @@ async fn test_connect_non_invoked_worker(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await;
+    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
 
     let debug_context = DebugExecutorTestContext::from(&context);
 
@@ -38,7 +39,7 @@ async fn test_connect_non_invoked_worker(
     let worker_id = regular_worker_executor
         .start_worker(&component, "shopping-cart")
         .await
-        .unwrap_or_else(|e| panic!("Failed to start a regular worker: {}", e));
+        .unwrap_or_else(|e| panic!("Failed to start a regular worker: {e}"));
 
     let connect_result = debug_executor
         .connect(&worker_id)
@@ -59,7 +60,7 @@ async fn test_connect_invoked_worker(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await;
+    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -115,7 +116,7 @@ async fn test_connect_and_playback(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await;
+    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -164,7 +165,7 @@ async fn test_connect_and_playback_to_middle_of_invocation(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await;
+    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -216,7 +217,7 @@ async fn test_playback_from_breakpoint(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await;
+    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -290,7 +291,7 @@ async fn test_playback_and_rewind(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await;
+    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -349,7 +350,7 @@ async fn test_playback_and_fork(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await;
+    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -441,7 +442,7 @@ async fn test_playback_with_overrides(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await;
+    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -514,7 +515,11 @@ async fn test_playback_with_overrides(
 
     let entry = oplogs_in_forked_worker.last();
 
-    if let Some(PublicOplogEntry::ExportedFunctionCompleted(completed)) = entry {
+    if let Some(PublicOplogEntryWithIndex {
+        entry: PublicOplogEntry::ExportedFunctionCompleted(completed),
+        oplog_index: _,
+    }) = entry
+    {
         assert_eq!(
             completed.response,
             Some(new_shopping_cart_checkout_result())
@@ -531,14 +536,14 @@ async fn test_playback_with_overrides(
     );
 }
 
-fn nth_invocation_boundary(oplogs: &[PublicOplogEntry], n: usize) -> OplogIndex {
+fn nth_invocation_boundary(oplogs: &[PublicOplogEntryWithIndex], n: usize) -> OplogIndex {
     let index = oplogs
         .iter()
         .enumerate()
-        .filter(|(_, entry)| matches!(entry, PublicOplogEntry::ExportedFunctionCompleted(_)))
+        .filter(|(_, entry)| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionCompleted(_)))
         .nth(n - 1)
         .map(|(i, _)| i)
-        .unwrap_or_else(|| panic!("No {}th invocation boundary found", n));
+        .unwrap_or_else(|| panic!("No {n}th invocation boundary found"));
 
     OplogIndex::from_u64((index + 1) as u64)
 }
@@ -567,7 +572,7 @@ async fn start_debug_executor(
         .unwrap_or_else(|e| {
             panic!(
                 "Failed to start debug executor at port {}: {}",
-                context.debug_server_port(),
+                context.grpc_port(),
                 e
             )
         })
@@ -604,7 +609,7 @@ fn new_shopping_cart_checkout_result() -> ValueAndType {
 }
 
 async fn run_shopping_cart_initialize_and_add(
-    regular_worker_executor: &TestRegularWorkerExecutor,
+    regular_worker_executor: &impl TestDsl,
     worker_id: &WorkerId,
 ) {
     regular_worker_executor
@@ -635,7 +640,7 @@ async fn run_shopping_cart_initialize_and_add(
 }
 
 async fn run_shopping_cart_workflow(
-    regular_worker_executor: &TestRegularWorkerExecutor,
+    regular_worker_executor: &impl TestDsl,
     worker_id: &WorkerId,
 ) -> ShoppingCartExecutionResult {
     // Initialize

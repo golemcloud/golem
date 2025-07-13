@@ -26,11 +26,11 @@ const INITIAL_COMPONENT_FILES_LABEL: &str = "initial_component_files";
 /// Service for storing initial component files.
 #[derive(Debug)]
 pub struct InitialComponentFilesService {
-    blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+    blob_storage: Arc<dyn BlobStorage>,
 }
 
 impl InitialComponentFilesService {
-    pub fn new(blob_storage: Arc<dyn BlobStorage + Send + Sync>) -> Self {
+    pub fn new(blob_storage: Arc<dyn BlobStorage>) -> Self {
         Self { blob_storage }
     }
 
@@ -52,7 +52,7 @@ impl InitialComponentFilesService {
                 &path,
             )
             .await
-            .map_err(|err| format!("Failed to get metadata: {}", err))?;
+            .map_err(|err| format!("Failed to get metadata: {err}"))?;
 
         Ok(metadata.is_some())
     }
@@ -94,7 +94,7 @@ impl InitialComponentFilesService {
                 &key,
             )
             .await
-            .map_err(|err| format!("Failed to get metadata: {}", err))?;
+            .map_err(|err| format!("Failed to get metadata: {err}"))?;
 
         if metadata.is_none() {
             debug!("Storing initial component file with hash: {}", hash);

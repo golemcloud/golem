@@ -48,9 +48,12 @@ pub struct ComponentMetadata {
 }
 
 impl ComponentMetadata {
-    pub fn analyse_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProcessingError> {
+    pub fn analyse_component(
+        data: &[u8],
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+    ) -> Result<ComponentMetadata, ComponentProcessingError> {
         let raw = RawComponentMetadata::analyse_component(data)?;
-        Ok(raw.into())
+        Ok(raw.into_metadata(dynamic_linking))
     }
 }
 
@@ -266,6 +269,31 @@ impl RawComponentMetadata {
             root_package_version: root_package.and_then(|pkg| pkg.version.map(|v| v.to_string())),
         })
     }
+
+    pub fn into_metadata(
+        self,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+    ) -> ComponentMetadata {
+        let producers = self
+            .producers
+            .into_iter()
+            .map(|producers| producers.into())
+            .collect::<Vec<_>>();
+
+        let exports = self.exports.into_iter().collect::<Vec<_>>();
+
+        let memories = self.memories.into_iter().map(LinearMemory::from).collect();
+
+        ComponentMetadata {
+            exports,
+            producers,
+            memories,
+            dynamic_linking,
+            binary_wit: Base64(self.binary_wit),
+            root_package_name: self.root_package_name,
+            root_package_version: self.root_package_version,
+        }
+    }
 }
 
 impl From<golem_wasm_ast::metadata::Producers> for Producers {
@@ -342,10 +370,10 @@ impl SafeDisplay for ComponentProcessingError {
 impl Display for ComponentProcessingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            ComponentProcessingError::Parsing(e) => write!(f, "Parsing error: {}", e),
+            ComponentProcessingError::Parsing(e) => write!(f, "Parsing error: {e}"),
             ComponentProcessingError::Analysis(source) => {
                 let AnalysisFailure { reason } = source;
-                write!(f, "Analysis error: {}", reason)
+                write!(f, "Analysis error: {reason}")
             }
         }
     }

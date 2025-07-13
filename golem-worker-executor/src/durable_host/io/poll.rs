@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::InterruptKind;
-use chrono::{Duration, Utc};
-use golem_common::model::oplog::DurableFunctionType;
-use wasmtime::component::Resource;
-use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
-
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, SuspendForSleep};
 use crate::workerctx::WorkerCtx;
+use chrono::{Duration, Utc};
+use golem_common::model::oplog::DurableFunctionType;
+use golem_service_base::error::worker_executor::InterruptKind;
+use wasmtime::component::Resource;
+use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
 
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
@@ -53,9 +52,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
+            let count = in_.len();
             let result = Host::poll(&mut self.as_wasi_view().0, in_).await;
             if is_suspend_for_sleep(&result).is_none() {
-                durability.persist(self, (), result).await
+                durability.persist(self, count, result).await
             } else {
                 result
             }

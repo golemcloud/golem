@@ -1526,7 +1526,7 @@ mod internal {
 
         // We need to discriminate tuples that differ in size
         // and keep them separate
-        let path_field = PathElem::Field(format!("tuple-size::{}", path_size));
+        let path_field = PathElem::Field(format!("tuple-size::{path_size}"));
         path.push_back(path_field);
 
         let mut field_task_index = field_task_index;
@@ -1539,7 +1539,7 @@ mod internal {
             indices.push(field_task_index);
 
             let mut path = path.clone();
-            path.push_back(PathElem::Field(format!("tuple-index::{}", i)));
+            path.push_back(PathElem::Field(format!("tuple-index::{i}")));
 
             tasks_for_final_stack.push(MergeTask::inspect(
                 path.clone(),

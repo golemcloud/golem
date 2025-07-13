@@ -25,9 +25,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub async fn jrpc_handler(
-    debug_service: Arc<dyn DebugService + Sync + Send>,
+    debug_service: Arc<dyn DebugService>,
     json_rpc_request: JsonRpcRequest,
     active_session: Arc<ActiveSession>,
+    auth_ctx: AuthCtx,
 ) -> JsonRpcResult {
     let jrpc_id: Id = json_rpc_request.id;
 
@@ -47,8 +48,6 @@ pub async fn jrpc_handler(
         }
         "connect" => {
             let params: ConnectParams = parse_params(&jrpc_id, json_rpc_request.params)?;
-
-            let auth_ctx = AuthCtx::new(params.token);
 
             let result = debug_service
                 .connect(&auth_ctx, params.worker_id, active_session)
@@ -218,7 +217,7 @@ impl JrpcHandlerError {
                 self.jrpc_id.clone(),
                 JsonRpcError::new(
                     JsonRpcErrorReason::MethodNotFound,
-                    format!("Method not found: {}", method),
+                    format!("Method not found: {method}"),
                     Value::Null,
                 ),
             ),
@@ -230,14 +229,14 @@ impl Display for JrpcHandlerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.error_type {
             JrpcHandlerErrorType::DebugServiceError(error) => {
-                write!(f, "DebugServiceError: {}", error)
+                write!(f, "DebugServiceError: {error}")
             }
             JrpcHandlerErrorType::InactiveSession { error } => {
-                write!(f, "InactiveSessionError: {}", error)
+                write!(f, "InactiveSessionError: {error}")
             }
-            JrpcHandlerErrorType::InvalidParams { error } => write!(f, "JsonRpcError: {}", error),
+            JrpcHandlerErrorType::InvalidParams { error } => write!(f, "JsonRpcError: {error}"),
             JrpcHandlerErrorType::MethodNotFound { method } => {
-                write!(f, "MethodNotFound: {}", method)
+                write!(f, "MethodNotFound: {method}")
             }
         }
     }

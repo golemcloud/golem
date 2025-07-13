@@ -32,7 +32,7 @@ impl Display for RibResult {
             RibResult::Val(value_and_type) => value_and_type.to_string(),
         };
 
-        write!(f, "{}", wasm_wave)
+        write!(f, "{wasm_wave}")
     }
 }
 

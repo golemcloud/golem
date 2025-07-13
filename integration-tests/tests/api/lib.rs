@@ -12,15 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-test_r::enable!();
-
-use golem_api_grpc::proto::golem::rib::Expr;
-use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use golem_test_framework::config::{
-    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
-};
-use test_r::{tag_suite, test_dep};
-
+mod account;
 mod api_definition;
 mod api_deployment;
 mod api_security;
@@ -29,6 +21,16 @@ mod invocation_context;
 mod plugins;
 mod worker;
 
+use golem_api_grpc::proto::golem::rib::Expr;
+use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+};
+use test_r::{tag_suite, test_dep};
+
+test_r::enable!();
+
+tag_suite!(account, http_only);
 tag_suite!(api_security, http_only);
 tag_suite!(api_definition, http_only);
 tag_suite!(api_deployment, http_only);

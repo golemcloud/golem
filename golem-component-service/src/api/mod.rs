@@ -15,7 +15,6 @@
 pub mod common;
 pub mod component;
 pub mod dto;
-pub mod healthcheck;
 pub mod plugin;
 
 use crate::bootstrap::Services;
@@ -23,31 +22,21 @@ use crate::error::ComponentError as DomainComponentError;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
+use golem_service_base::api::HealthcheckApi;
 use poem::error::ReadBodyError;
 use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, OpenApiService, Tags};
+use poem_openapi::{ApiResponse, OpenApiService};
 
-#[derive(Tags)]
-enum ApiTags {
-    Component,
-    HealthCheck,
-    Plugin,
-}
-
-pub type Apis = (
-    component::ComponentApi,
-    healthcheck::HealthcheckApi,
-    plugin::PluginApi,
-);
+pub type Apis = (HealthcheckApi, component::ComponentApi, plugin::PluginApi);
 
 pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
     OpenApiService::new(
         (
+            HealthcheckApi,
             component::ComponentApi::new(
                 services.component_service.clone(),
                 services.api_mapper.clone(),
             ),
-            healthcheck::HealthcheckApi,
             plugin::PluginApi::new(services.plugin_service.clone()),
         ),
         "Golem API",
@@ -131,7 +120,9 @@ impl From<DomainComponentError> for ComponentError {
             | DomainComponentError::MalformedComponentArchiveError { .. }
             | DomainComponentError::ComponentConstraintConflictError(_)
             | DomainComponentError::InvalidOplogProcessorPlugin
-            | DomainComponentError::InvalidPluginScope { .. } => {
+            | DomainComponentError::InvalidPluginScope { .. }
+            | DomainComponentError::ConcurrentUpdate { .. }
+            | DomainComponentError::PluginInstallationNotFound { .. } => {
                 ComponentError::BadRequest(Json(ErrorsBody {
                     errors: vec![value.to_safe_string()],
                 }))

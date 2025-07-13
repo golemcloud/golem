@@ -25,7 +25,6 @@ pub async fn start_regular_worker_executor(
     let redis_monitor = deps.redis_monitor();
     redis.assert_valid();
     redis_monitor.assert_valid();
-    println!("Using Redis on port {}", redis.public_port());
 
     let prometheus = golem_worker_executor::metrics::register_all();
     let config = get_golem_config(

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api::ApiTags;
 use crate::model::*;
 use crate::service::account_summary::{AccountSummaryService, AccountSummaryServiceError};
 use crate::service::auth::{AuthService, AuthServiceError};
@@ -20,6 +19,7 @@ use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::ErrorBody;
 use golem_common::recorded_http_api_request;
 use golem_common::SafeDisplay;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
@@ -119,7 +119,12 @@ impl AccountSummaryApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<AccountSummary>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self.account_summary_service.get(skip, limit, &auth).await?;
+
+        self.auth_service
+            .authorize_global_action(&auth, &GlobalAction::ViewAccountSummaries)
+            .await?;
+
+        let response = self.account_summary_service.get(skip, limit).await?;
         Ok(Json(response))
     }
 
@@ -136,7 +141,11 @@ impl AccountSummaryApi {
 
     async fn get_account_count_internal(&self, token: GolemSecurityScheme) -> Result<Json<i64>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self.account_summary_service.count(&auth).await?;
+        self.auth_service
+            .authorize_global_action(&auth, &GlobalAction::ViewAccountCount)
+            .await?;
+
+        let response = self.account_summary_service.count().await?;
         Ok(Json(response as i64))
     }
 }

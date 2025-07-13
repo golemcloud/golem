@@ -50,7 +50,7 @@ use golem_component_service::service::component_object_store;
 use golem_component_service::service::component_object_store::ComponentObjectStore;
 use golem_component_service::service::plugin::PluginService;
 use golem_component_service::service::transformer_plugin_caller::{
-    TransformationFailedReason, TransformerPluginCaller,
+    ComponentTransformerResponse, TransformationFailedReason, TransformerPluginCaller,
 };
 use golem_service_base::clients::limit::LimitService;
 use golem_service_base::model::ComponentName;
@@ -136,7 +136,7 @@ impl TransformerPluginCaller for FailingTransformerPluginCaller {
         _data: &[u8],
         _url: String,
         _parameters: &HashMap<String, String>,
-    ) -> Result<Vec<u8>, TransformationFailedReason> {
+    ) -> Result<ComponentTransformerResponse, TransformationFailedReason> {
         Err(TransformationFailedReason::HttpStatus(
             StatusCode::INTERNAL_SERVER_ERROR,
         ))

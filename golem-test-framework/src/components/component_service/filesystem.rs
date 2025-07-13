@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ComponentServiceInternal;
-use crate::components::cloud_service::CloudService;
-use crate::components::component_service::{
-    AddComponentError, ComponentService, ComponentServiceClient, PluginServiceClient,
-};
-use crate::components::{PLACEHOLDER_ACCOUNT, PLACEHOLDER_PROJECT};
+use super::ComponentServiceGrpcClient;
+use super::PluginServiceGrpcClient;
+use crate::components::component_service::{AddComponentError, ComponentService};
+use crate::config::GolemClientProtocol;
 use anyhow::Context;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata, VersionedComponentId};
@@ -34,18 +32,28 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
+use tonic::transport::Channel;
 use tracing::{debug, info};
 use uuid::Uuid;
 
 const WASMS_DIRNAME: &str = "wasms";
+// const PLACEHOLDER_ACCOUNT: uuid::Uuid = uuid!("91879a4b-6c62-4dd1-91fe-9dcd29ebe178");
+// const PLACEHOLDER_PROJECT: uuid::Uuid = uuid!("6dfe5ca7-ab78-46b2-a98d-41098bb29c98");
 
 pub struct FileSystemComponentService {
     root: PathBuf,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+    account_id: AccountId,
+    default_project_id: ProjectId,
 }
 
 impl FileSystemComponentService {
-    pub async fn new(root: &Path, plugin_wasm_files_service: Arc<PluginWasmFilesService>) -> Self {
+    pub async fn new(
+        root: &Path,
+        plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+        account_id: AccountId,
+        project_id: ProjectId,
+    ) -> Self {
         info!("Using a directory for storing components: {root:?}");
 
         // If we keep metadata around for multiple runs invariants like unique name
@@ -56,6 +64,8 @@ impl FileSystemComponentService {
         Self {
             root: root.to_path_buf(),
             plugin_wasm_files_service,
+            account_id,
+            default_project_id: project_id,
         }
     }
 
@@ -70,6 +80,7 @@ impl FileSystemComponentService {
         skip_analysis: bool,
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         env: &HashMap<String, String>,
+        project_id_override: Option<ProjectId>,
     ) -> Result<Component, AddComponentError> {
         let target_dir = &self.root;
 
@@ -120,10 +131,8 @@ impl FileSystemComponentService {
             .len();
 
         let metadata = LocalFileSystemComponentMetadata {
-            account_id: AccountId {
-                value: PLACEHOLDER_ACCOUNT.to_string(),
-            },
-            project_id: ProjectId(PLACEHOLDER_PROJECT),
+            account_id: self.account_id.clone(),
+            project_id: project_id_override.unwrap_or_else(|| self.default_project_id.clone()),
             component_id: component_id.clone(),
             component_name: component_name.to_string(),
             version: component_version,
@@ -163,8 +172,8 @@ impl FileSystemComponentService {
                 root_package_name: raw_component_metadata.root_package_name,
                 root_package_version: raw_component_metadata.root_package_version,
             }),
-            account_id: None,
-            project_id: None,
+            account_id: Some(self.account_id.clone().into()),
+            project_id: Some(self.default_project_id.clone().into()),
             created_at: Some(SystemTime::now().into()),
             component_type: Some(component_type as i32),
             files: files.iter().map(|file| file.clone().into()).collect(),
@@ -213,28 +222,30 @@ impl FileSystemComponentService {
 }
 
 #[async_trait]
-impl ComponentServiceInternal for FileSystemComponentService {
-    fn component_client(&self) -> ComponentServiceClient {
-        panic!("No real component service running")
-    }
-
-    fn plugin_client(&self) -> PluginServiceClient {
-        panic!("No real component service running")
-    }
-
+impl ComponentService for FileSystemComponentService {
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
     }
 
-    fn cloud_service(&self) -> Arc<dyn CloudService> {
-        panic!("No real cloud service running")
+    fn client_protocol(&self) -> GolemClientProtocol {
+        panic!("No real component service running")
     }
-}
 
-#[async_trait]
-impl ComponentService for FileSystemComponentService {
+    async fn base_http_client(&self) -> reqwest::Client {
+        panic!("No real component service running")
+    }
+
+    async fn component_grpc_client(&self) -> ComponentServiceGrpcClient<Channel> {
+        panic!("No real component service running")
+    }
+
+    async fn plugin_grpc_client(&self) -> PluginServiceGrpcClient<Channel> {
+        panic!("No real component service running")
+    }
+
     async fn get_or_add_component(
         &self,
+        token: &Uuid,
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
@@ -242,8 +253,10 @@ impl ComponentService for FileSystemComponentService {
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> Component {
         self.add_component(
+            token,
             local_path,
             name,
             component_type,
@@ -251,6 +264,7 @@ impl ComponentService for FileSystemComponentService {
             dynamic_linking,
             unverified,
             env,
+            project_id,
         )
         .await
         .expect("Failed to add component")
@@ -258,6 +272,7 @@ impl ComponentService for FileSystemComponentService {
 
     async fn add_component(
         &self,
+        _token: &Uuid,
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
@@ -265,6 +280,7 @@ impl ComponentService for FileSystemComponentService {
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> Result<Component, AddComponentError> {
         self.write_component_to_filesystem(
             local_path,
@@ -279,6 +295,7 @@ impl ComponentService for FileSystemComponentService {
             unverified,
             dynamic_linking,
             env,
+            project_id,
         )
         .await
     }
@@ -289,6 +306,7 @@ impl ComponentService for FileSystemComponentService {
         component_id: &ComponentId,
         component_name: &str,
         component_type: ComponentType,
+        project_id: Option<ProjectId>,
     ) -> Result<(), AddComponentError> {
         self.write_component_to_filesystem(
             local_path,
@@ -300,6 +318,7 @@ impl ComponentService for FileSystemComponentService {
             false,
             &HashMap::new(),
             &HashMap::new(),
+            project_id,
         )
         .await?;
         Ok(())
@@ -307,6 +326,7 @@ impl ComponentService for FileSystemComponentService {
 
     async fn update_component(
         &self,
+        token: &Uuid,
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
@@ -326,7 +346,7 @@ impl ComponentService for FileSystemComponentService {
             std::panic!("Source file does not exist: {local_path:?}");
         }
 
-        let last_version = self.get_latest_version(component_id).await;
+        let last_version = self.get_latest_version(token, component_id).await;
         let new_version = last_version + 1;
 
         let old_metadata = self
@@ -351,6 +371,7 @@ impl ComponentService for FileSystemComponentService {
             false,
             dynamic_linking.unwrap_or(&old_metadata.dynamic_linking),
             env,
+            Some(old_metadata.project_id),
         )
         .await
         .expect("Failed to write component to filesystem");
@@ -358,7 +379,7 @@ impl ComponentService for FileSystemComponentService {
         Ok(new_version)
     }
 
-    async fn get_latest_version(&self, component_id: &ComponentId) -> u64 {
+    async fn get_latest_version(&self, _token: &Uuid, component_id: &ComponentId) -> u64 {
         let target_dir = &self.root;
 
         let component_id_str = component_id.to_string();
@@ -384,6 +405,7 @@ impl ComponentService for FileSystemComponentService {
 
     async fn get_component_size(
         &self,
+        _token: &Uuid,
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> crate::Result<u64> {

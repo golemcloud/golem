@@ -200,17 +200,15 @@ impl<T: ConfigLoaderConfig> MergedConfigLoaderOrDumper<T> {
                 Some(config) => Some(merge(base_config, config)),
                 None if self.dummy => None,
                 None => {
-                    panic!("illegal state while dumping, got no config for '{}'", name,);
+                    panic!("illegal state while dumping, got no config for '{name}'",);
                 }
             },
-            None => {
-                match config_loader.load_or_dump_config() {
-                    Some(_) => {
-                        panic!("illegal state while loading, got config for '{}', while expected dumping", name);
-                    }
-                    None => None,
+            None => match config_loader.load_or_dump_config() {
+                Some(_) => {
+                    panic!("illegal state while loading, got config for '{name}', while expected dumping");
                 }
-            }
+                None => None,
+            },
         };
 
         MergedConfigLoaderOrDumper {

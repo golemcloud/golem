@@ -17,13 +17,13 @@ pub mod mysql;
 pub mod postgres;
 pub(crate) mod sqlx_common;
 
-use crate::error::GolemError;
 use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_common::model::WorkerId;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 use golem_wasm_rpc_derive::IntoValue;
@@ -445,17 +445,17 @@ impl Error {
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::ConnectionFailure(msg) => write!(f, "ConnectionFailure: {}", msg),
-            Error::QueryParameterFailure(msg) => write!(f, "QueryParameterFailure: {}", msg),
-            Error::QueryExecutionFailure(msg) => write!(f, "QueryExecutionFailure: {}", msg),
-            Error::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {}", msg),
-            Error::Other(msg) => write!(f, "Other: {}", msg),
+            Error::ConnectionFailure(msg) => write!(f, "ConnectionFailure: {msg}"),
+            Error::QueryParameterFailure(msg) => write!(f, "QueryParameterFailure: {msg}"),
+            Error::QueryExecutionFailure(msg) => write!(f, "QueryExecutionFailure: {msg}"),
+            Error::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {msg}"),
+            Error::Other(msg) => write!(f, "Other: {msg}"),
         }
     }
 }
 
-impl From<GolemError> for Error {
-    fn from(value: GolemError) -> Self {
+impl From<WorkerExecutorError> for Error {
+    fn from(value: WorkerExecutorError) -> Self {
         Self::other_response_failure(value)
     }
 }

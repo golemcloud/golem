@@ -185,12 +185,14 @@ impl ShardManagement {
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
         rebalance: &mut Rebalance,
     ) {
-        info!("Shard manager beginning rebalance...");
+        info!("Beginning rebalance...");
 
-        info!(
-            unassignments = %rebalance.get_unassignments(),
-            "Executing shard unassignments",
-        );
+        if !rebalance.get_unassignments().is_empty() {
+            info!(
+                unassignments = %rebalance.get_unassignments(),
+                "Executing shard unassignments",
+            );
+        }
         let failed_unassignments =
             revoke_shards(worker_executors.clone(), rebalance.get_unassignments()).await;
         let failed_shards = failed_unassignments
@@ -205,10 +207,12 @@ impl ShardManagement {
             );
         }
 
-        info!(
-            assignments=%rebalance.get_assignments(),
-            "Executing shard assignments",
-        );
+        if !rebalance.get_assignments().is_empty() {
+            info!(
+                assignments=%rebalance.get_assignments(),
+                "Executing shard assignments",
+            );
+        }
         assign_shards(worker_executors.clone(), rebalance.get_assignments()).await;
     }
 }

@@ -264,16 +264,13 @@ impl HttpCors {
         let rib_compiler = RibCompiler::default();
         let compiled_expr = rib_compiler
             .compile(expr.0.clone())
-            .map_err(|err| format!("Rib compilation for cors-preflight response. {}", err))?;
+            .map_err(|err| format!("Rib compilation for cors-preflight response. {err}"))?;
 
         let rib_input = RibInput::default();
         let evaluate_rib = rib::interpret_pure(compiled_expr.byte_code, rib_input, None);
 
         let result = futures::executor::block_on(evaluate_rib).map_err(|err| {
-            format!(
-                "Failed to evaluate Rib script to form pre-flight CORS {}",
-                err
-            )
+            format!("Failed to evaluate Rib script to form pre-flight CORS {err}")
         })?;
 
         let record = result
@@ -286,8 +283,7 @@ impl HttpCors {
             let value = value
                 .get_literal()
                 .ok_or(format!(
-                    "Invalid value for key {} in CORS preflight response",
-                    key
+                    "Invalid value for key {key} in CORS preflight response"
                 ))?
                 .as_string();
 

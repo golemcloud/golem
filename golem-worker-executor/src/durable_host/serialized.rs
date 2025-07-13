@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::services::rdbms::Error as RdbmsError;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use anyhow::anyhow;
 use bincode::{Decode, Encode};
 use chrono::{DateTime, Timelike, Utc};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value};
 use golem_wasm_rpc_derive::IntoValue;
@@ -101,7 +101,7 @@ impl From<DateTime<Utc>> for SerializableDateTime {
 pub enum SerializableError {
     Generic { message: String },
     FsError { code: u8 },
-    Golem { error: GolemError },
+    Golem { error: WorkerExecutorError },
     SocketError { code: u8 },
     Rpc { error: RpcError },
     WorkerProxy { error: WorkerProxyError },
@@ -111,15 +111,15 @@ pub enum SerializableError {
 impl Display for SerializableError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            SerializableError::Generic { message } => write!(f, "{}", message),
+            SerializableError::Generic { message } => write!(f, "{message}"),
             SerializableError::FsError { code } => {
                 let decoded = decode_fs_error(*code);
                 match decoded {
                     Some(error_code) => {
-                        write!(f, "File system error: {}", error_code)
+                        write!(f, "File system error: {error_code}")
                     }
                     None => {
-                        write!(f, "File system error: unknown error code {}", code)
+                        write!(f, "File system error: unknown error code {code}")
                     }
                 }
             }
@@ -128,10 +128,10 @@ impl Display for SerializableError {
                 let decoded = decode_socket_error(*code);
                 match decoded {
                     Some(error_code) => {
-                        write!(f, "Socket error: {}", error_code)
+                        write!(f, "Socket error: {error_code}")
                     }
                     None => {
-                        write!(f, "Socket error: unknown error code {}", code)
+                        write!(f, "Socket error: unknown error code {code}")
                     }
                 }
             }
@@ -329,7 +329,7 @@ impl From<SerializableError> for anyhow::Error {
                 let error_code = decode_fs_error(code);
                 match error_code {
                     Some(code) => anyhow!(FsError::from(code)),
-                    None => anyhow::Error::msg(format!("Unknown file-system error code: {}", code)),
+                    None => anyhow::Error::msg(format!("Unknown file-system error code: {code}")),
                 }
             }
             SerializableError::Golem { error } => anyhow!(error),
@@ -337,7 +337,7 @@ impl From<SerializableError> for anyhow::Error {
                 let error_code = decode_socket_error(code);
                 match error_code {
                     Some(code) => anyhow!(SocketError::from(code)),
-                    None => anyhow::Error::msg(format!("Unknown socket error code: {}", code)),
+                    None => anyhow::Error::msg(format!("Unknown socket error code: {code}")),
                 }
             }
             SerializableError::Rpc { error } => anyhow!(error),
@@ -356,8 +356,7 @@ impl From<SerializableError> for FsError {
                 match error_code {
                     Some(code) => FsError::from(code),
                     None => FsError::trap(anyhow::Error::msg(format!(
-                        "Unknown file-system error code: {}",
-                        code
+                        "Unknown file-system error code: {code}"
                     ))),
                 }
             }
@@ -373,36 +372,38 @@ impl From<SerializableError> for FsError {
     }
 }
 
-impl From<GolemError> for SerializableError {
-    fn from(value: GolemError) -> Self {
+impl From<WorkerExecutorError> for SerializableError {
+    fn from(value: WorkerExecutorError) -> Self {
         Self::Golem { error: value }
     }
 }
 
-impl From<&GolemError> for SerializableError {
-    fn from(value: &GolemError) -> Self {
+impl From<&WorkerExecutorError> for SerializableError {
+    fn from(value: &WorkerExecutorError) -> Self {
         Self::Golem {
             error: value.clone(),
         }
     }
 }
 
-impl From<SerializableError> for GolemError {
+impl From<SerializableError> for WorkerExecutorError {
     fn from(value: SerializableError) -> Self {
         match value {
-            SerializableError::Generic { message } => GolemError::unknown(message),
+            SerializableError::Generic { message } => WorkerExecutorError::unknown(message),
             SerializableError::FsError { .. } => {
                 let anyhow: anyhow::Error = value.into();
-                GolemError::unknown(anyhow.to_string())
+                WorkerExecutorError::unknown(anyhow.to_string())
             }
             SerializableError::Golem { error } => error,
             SerializableError::SocketError { .. } => {
                 let anyhow: anyhow::Error = value.into();
-                GolemError::unknown(anyhow.to_string())
+                WorkerExecutorError::unknown(anyhow.to_string())
             }
-            SerializableError::Rpc { error } => GolemError::unknown(error.to_string()),
-            SerializableError::WorkerProxy { error } => GolemError::unknown(error.to_string()),
-            SerializableError::Rdbms { error } => GolemError::unknown(error.to_string()),
+            SerializableError::Rpc { error } => WorkerExecutorError::unknown(error.to_string()),
+            SerializableError::WorkerProxy { error } => {
+                WorkerExecutorError::unknown(error.to_string())
+            }
+            SerializableError::Rdbms { error } => WorkerExecutorError::unknown(error.to_string()),
         }
     }
 }
@@ -437,8 +438,7 @@ impl From<SerializableError> for SocketError {
                 match error_code {
                     Some(code) => SocketError::from(code),
                     None => SocketError::trap(anyhow::Error::msg(format!(
-                        "Unknown file-system error code: {}",
-                        code
+                        "Unknown file-system error code: {code}"
                     ))),
                 }
             }
@@ -499,25 +499,25 @@ impl From<SerializableError> for WorkerProxyError {
     fn from(value: SerializableError) -> Self {
         match value {
             SerializableError::Generic { message } => {
-                WorkerProxyError::InternalError(GolemError::unknown(message))
+                WorkerProxyError::InternalError(WorkerExecutorError::unknown(message))
             }
             SerializableError::FsError { .. } => {
                 let anyhow: anyhow::Error = value.into();
-                WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
+                WorkerProxyError::InternalError(WorkerExecutorError::unknown(anyhow.to_string()))
             }
             SerializableError::Golem { error } => WorkerProxyError::InternalError(error),
             SerializableError::SocketError { .. } => {
                 let anyhow: anyhow::Error = value.into();
-                WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
+                WorkerProxyError::InternalError(WorkerExecutorError::unknown(anyhow.to_string()))
             }
             SerializableError::Rpc { .. } => {
                 let anyhow: anyhow::Error = value.into();
-                WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
+                WorkerProxyError::InternalError(WorkerExecutorError::unknown(anyhow.to_string()))
             }
             SerializableError::WorkerProxy { error } => error,
             SerializableError::Rdbms { .. } => {
                 let anyhow: anyhow::Error = value.into();
-                WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
+                WorkerProxyError::InternalError(WorkerExecutorError::unknown(anyhow.to_string()))
             }
         }
     }
@@ -550,8 +550,8 @@ impl From<SerializableStreamError> for StreamError {
     }
 }
 
-impl From<GolemError> for SerializableStreamError {
-    fn from(value: GolemError) -> Self {
+impl From<WorkerExecutorError> for SerializableStreamError {
+    fn from(value: WorkerExecutorError) -> Self {
         Self::Trap(value.into())
     }
 }
@@ -649,10 +649,9 @@ mod tests {
         SerializableDateTime, SerializableError, SerializableIpAddress, SerializableIpAddresses,
         SerializableStreamError,
     };
-    use crate::error::GolemError;
-    use crate::model::InterruptKind;
-    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::oplog::{OplogIndex, WorkerError};
     use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
+    use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
     use proptest::collection::vec;
     use proptest::prelude::*;
     use proptest::strategy::LazyJust;
@@ -769,32 +768,43 @@ mod tests {
         any::<i64>().prop_map(ShardId::new)
     }
 
-    fn golemerror_strat() -> impl Strategy<Value = GolemError> {
+    fn workererror_strat() -> impl Strategy<Value = WorkerError> {
         prop_oneof! {
-            ".*".prop_map(|details| GolemError::InvalidRequest { details }),
-            workerid_strat().prop_map(|worker_id| GolemError::WorkerAlreadyExists { worker_id }),
-            workerid_strat().prop_map(|worker_id| GolemError::WorkerNotFound { worker_id }),
-            (workerid_strat(), ".*").prop_map(|(worker_id, details)| GolemError::WorkerCreationFailed { worker_id, details }),
-            (workerid_strat(), ".*").prop_map(|(worker_id, reason)| GolemError::FailedToResumeWorker { worker_id, reason: Box::new(GolemError::unknown(reason)) }),
-            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| GolemError::ComponentDownloadFailed { component_id, component_version, reason }),
-            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| GolemError::ComponentParseFailed { component_id, component_version, reason }),
-            (componentid_strat(), ".*").prop_map(|(component_id, reason)| GolemError::GetLatestVersionOfComponentFailed { component_id, reason }),
-            promiseid_strat().prop_map(|promise_id| GolemError::PromiseNotFound { promise_id }),
-            promiseid_strat().prop_map(|promise_id| GolemError::PromiseDropped { promise_id }),
-            promiseid_strat().prop_map(|promise_id| GolemError::PromiseAlreadyCompleted { promise_id }),
-            promiseid_strat().prop_map(|promise_id| GolemError::PromiseAlreadyCompleted { promise_id }),
-            interrupt_kind_strat().prop_map(|kind| GolemError::Interrupted { kind }),
-            ".*".prop_map(|details| GolemError::ParamTypeMismatch { details }),
-            Just(GolemError::NoValueInMessage),
-            ".*".prop_map(|details| GolemError::ValueMismatch { details }),
-            (".*", ".*").prop_map(|(expected, got)| GolemError::UnexpectedOplogEntry { expected, got }),
-            ".*".prop_map(|details| GolemError::Runtime { details }),
-            (shardid_strat(), vec(shardid_strat(), 0..100)).prop_map(|(shard_id, shard_ids)| GolemError::InvalidShardId { shard_id, shard_ids }),
-            Just(GolemError::InvalidAccount),
-            ".*".prop_map(|details| GolemError::PreviousInvocationFailed { details }),
-            Just(GolemError::PreviousInvocationExited),
-            ".*".prop_map(|details| GolemError::Unknown { details }),
-            (".*", ".*").prop_map(|(path, reason)| GolemError::InitialComponentFileDownloadFailed { path, reason }),
+            Just(WorkerError::OutOfMemory),
+            Just(WorkerError::StackOverflow),
+            ".*".prop_map(WorkerError::InvalidRequest),
+            ".*".prop_map(WorkerError::Unknown),
+        }
+    }
+
+    fn golemerror_strat() -> impl Strategy<Value = WorkerExecutorError> {
+        prop_oneof! {
+            ".*".prop_map(|details| WorkerExecutorError::InvalidRequest { details }),
+            workerid_strat().prop_map(|worker_id| WorkerExecutorError::WorkerAlreadyExists { worker_id }),
+            workerid_strat().prop_map(|worker_id| WorkerExecutorError::WorkerNotFound { worker_id }),
+            (workerid_strat(), ".*").prop_map(|(worker_id, details)| WorkerExecutorError::WorkerCreationFailed { worker_id, details }),
+            (workerid_strat(), ".*").prop_map(|(worker_id, reason)| WorkerExecutorError::FailedToResumeWorker { worker_id, reason: Box::new(WorkerExecutorError::unknown(reason)) }),
+            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| WorkerExecutorError::ComponentDownloadFailed { component_id, component_version, reason }),
+            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| WorkerExecutorError::ComponentParseFailed { component_id, component_version, reason }),
+            (componentid_strat(), ".*").prop_map(|(component_id, reason)| WorkerExecutorError::GetLatestVersionOfComponentFailed { component_id, reason }),
+            promiseid_strat().prop_map(|promise_id| WorkerExecutorError::PromiseNotFound { promise_id }),
+            promiseid_strat().prop_map(|promise_id| WorkerExecutorError::PromiseDropped { promise_id }),
+            promiseid_strat().prop_map(|promise_id| WorkerExecutorError::PromiseAlreadyCompleted { promise_id }),
+            promiseid_strat().prop_map(|promise_id| WorkerExecutorError::PromiseAlreadyCompleted { promise_id }),
+            interrupt_kind_strat().prop_map(|kind| WorkerExecutorError::Interrupted { kind }),
+            ".*".prop_map(|details| WorkerExecutorError::ParamTypeMismatch { details }),
+            Just(WorkerExecutorError::NoValueInMessage),
+            ".*".prop_map(|details| WorkerExecutorError::ValueMismatch { details }),
+            (".*", ".*").prop_map(|(expected, got)| WorkerExecutorError::UnexpectedOplogEntry { expected, got }),
+            ".*".prop_map(|details| WorkerExecutorError::Runtime { details }),
+            (shardid_strat(), vec(shardid_strat(), 0..100)).prop_map(|(shard_id, shard_ids)| WorkerExecutorError::InvalidShardId { shard_id, shard_ids }),
+            Just(WorkerExecutorError::InvalidAccount),
+            (workererror_strat(), ".*").prop_map(|(error, stderr)| WorkerExecutorError::PreviousInvocationFailed { error, stderr }),
+            Just(WorkerExecutorError::PreviousInvocationExited),
+            ".*".prop_map(|details| WorkerExecutorError::Unknown { details }),
+            (".*", ".*").prop_map(|(path, reason)| WorkerExecutorError::InitialComponentFileDownloadFailed { path, reason }),
+            (".*", ".*").prop_map(|(path, reason)| WorkerExecutorError::FileSystemError { path, reason }),
+            (workererror_strat(), ".*").prop_map(|(error, stderr)| WorkerExecutorError::InvocationFailed { error, stderr }),
         }
     }
 
@@ -887,7 +897,7 @@ mod tests {
         #[test]
         fn roundtrip_golemerror(value in golemerror_strat()) {
             let serialized: SerializableError = value.clone().into();
-            let result: GolemError = serialized.into();
+            let result: WorkerExecutorError = serialized.into();
             prop_assert_eq!(value, result);
         }
 

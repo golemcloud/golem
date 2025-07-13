@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{flaky, inherit_test_dep, test};
-
 use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use async_mutex::Mutex;
 use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use http::StatusCode;
 use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
+use test_r::{flaky, inherit_test_dep, test};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, Instrument};
@@ -142,7 +142,7 @@ async fn auto_update_on_running(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -190,7 +190,7 @@ async fn auto_update_on_running(
     control2.resume();
 
     let result = fiber.await.unwrap();
-    info!("result: {:?}", result);
+    info!("result: {result:?}");
 
     let _ = executor
         .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
@@ -220,7 +220,7 @@ async fn auto_update_on_idle(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -242,7 +242,7 @@ async fn auto_update_on_idle(
         .await
         .unwrap();
 
-    info!("result: {:?}", result);
+    info!("result: {result:?}");
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.check_oplog_is_queryable(&worker_id).await;
@@ -265,7 +265,7 @@ async fn failing_auto_update_on_idle(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -301,7 +301,7 @@ async fn failing_auto_update_on_idle(
         .await
         .unwrap();
 
-    info!("result: {:?}", result);
+    info!("result: {result:?}");
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.check_oplog_is_queryable(&worker_id).await;
@@ -328,7 +328,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -362,7 +362,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
         .await
         .unwrap();
 
-    info!("result: {:?}", result);
+    info!("result: {result:?}");
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.check_oplog_is_queryable(&worker_id).await;
@@ -385,7 +385,7 @@ async fn failing_auto_update_on_running(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -438,7 +438,7 @@ async fn failing_auto_update_on_running(
     control2.resume();
 
     let result = fiber.await.unwrap();
-    info!("result: {:?}", result);
+    info!("result: {result:?}");
 
     let _ = executor
         .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
@@ -470,7 +470,7 @@ async fn manual_update_on_idle(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -536,7 +536,7 @@ async fn manual_update_on_idle_without_save_snapshot(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -601,7 +601,7 @@ async fn auto_update_on_running_followed_by_manual(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -662,13 +662,13 @@ async fn auto_update_on_running_followed_by_manual(
     control2.resume();
 
     let result1 = fiber.await.unwrap();
-    info!("result1: {:?}", result1);
+    info!("result1: {result1:?}");
 
     let result2 = executor
         .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
         .await
         .unwrap();
-    info!("result2: {:?}", result2);
+    info!("result2: {result2:?}");
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
@@ -697,7 +697,7 @@ async fn manual_update_on_idle_with_failing_load(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -761,7 +761,7 @@ async fn manual_update_on_idle_using_v11(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -836,7 +836,7 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -901,4 +901,152 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     check!(metadata.last_known_status.pending_updates.is_empty());
     check!(metadata.last_known_status.failed_updates.is_empty());
     check!(metadata.last_known_status.successful_updates.len() == 1);
+}
+
+#[test]
+#[tracing::instrument]
+async fn auto_update_on_idle_to_non_existing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
+
+    let component_id = executor.component("update-test-v1").unique().store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "auto_update_on_idle")
+        .await;
+    let _ = executor.log_output(&worker_id).await;
+
+    let target_version = executor
+        .update_component(&component_id, "update-test-v2")
+        .await;
+    info!("Updated component to version {target_version}");
+
+    executor
+        .auto_update_worker(&worker_id, target_version)
+        .await;
+
+    let result1 = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
+        .await
+        .unwrap();
+
+    // Now we try to update to version target_version + 1, which does not exist.
+    executor
+        .auto_update_worker(&worker_id, target_version + 1)
+        .await;
+
+    // We expect this update to fail, and the component to remain on `target_version` and remain
+    // responsible to further invocations:
+
+    let result2 = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
+        .await
+        .unwrap();
+
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    // Expectation: the worker has no history so the update succeeds and then calling f2 returns
+    // the current state which is 0
+    check!(result1[0] == Value::U64(0));
+    check!(result2[0] == Value::U64(0));
+    check!(metadata.last_known_status.component_version == target_version);
+    check!(metadata.last_known_status.pending_updates.is_empty());
+    check!(metadata.last_known_status.failed_updates.len() == 1);
+    check!(metadata.last_known_status.successful_updates.len() == 1);
+}
+
+/// Check that GOLEM_COMPONENT_VERSION environment variable is updated as part of a worker update
+#[test]
+#[tracing::instrument]
+async fn update_component_version_environment_variable(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
+
+    let component_id = executor.component("update-test-env-var").store().await;
+
+    let worker_id = executor.start_worker(&component_id, "worker-1").await;
+
+    {
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, vec![Value::String("0".to_string())]);
+    }
+
+    let target_version1 = executor
+        .update_component(&component_id, "update-test-env-var")
+        .await;
+
+    executor
+        .auto_update_worker(&worker_id, target_version1)
+        .await;
+
+    {
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, vec![Value::String("0".to_string())]);
+
+        // FIXME: broken as get-environment during the replay is getting cached
+        // assert_eq!(result, vec![Value::String("1".to_string())]);
+    }
+
+    // worker created on the new version sees correct component version
+    {
+        let worker2 = executor.start_worker(&component_id, "worker-2").await;
+
+        let result = executor
+            .invoke_and_await(
+                &worker2,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, vec![Value::String("1".to_string())]);
+    }
+
+    let target_version2 = executor
+        .update_component(&component_id, "update-test-env-var")
+        .await;
+
+    executor
+        .manual_update_worker(&worker_id, target_version2)
+        .await;
+
+    {
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem:component/api.{get-version-from-env-var}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, vec![Value::String("2".to_string())]);
+    }
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 }

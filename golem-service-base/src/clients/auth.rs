@@ -13,19 +13,18 @@
 // limitations under the License.
 
 use super::authorised_request;
-use super::RemoteCloudServiceConfig;
-use async_trait::async_trait;
+use super::RemoteServiceConfig;
 use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
 use golem_api_grpc::proto::golem::auth::v1::{
-    authorize_project_action_response, get_account_response, AuthorizeProjectActionRequest,
-    GetAccountRequest,
+    authorize_account_action_response, authorize_project_action_response, get_account_response,
+    AuthorizeAccountActionRequest, AuthorizeProjectActionRequest, GetAccountRequest,
 };
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerExecutionError,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{AccountAction, ProjectAction};
 use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::{AccountId, ProjectId, RetryConfig};
 use golem_common::retries::with_retries;
@@ -35,26 +34,14 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
 
-#[async_trait]
-pub trait BaseAuthService: Send + Sync {
-    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError>;
-
-    async fn authorize_project_action(
-        &self,
-        project_id: &ProjectId,
-        permission: ProjectAction,
-        ctx: &AuthCtx,
-    ) -> Result<Namespace, AuthServiceError>;
-}
-
 #[derive(Clone)]
-pub struct CloudAuthService {
+pub struct AuthService {
     auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>>,
     retry_config: RetryConfig,
 }
 
-impl CloudAuthService {
-    pub fn new(config: &RemoteCloudServiceConfig) -> Self {
+impl AuthService {
+    pub fn new(config: &RemoteServiceConfig) -> Self {
         let auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>> = GrpcClient::new(
             "auth",
             |channel| {
@@ -73,11 +60,8 @@ impl CloudAuthService {
             retry_config: config.retries.clone(),
         }
     }
-}
 
-#[async_trait]
-impl BaseAuthService for CloudAuthService {
-    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
+    pub async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
         let result: Result<AccountId, AuthClientError> = with_retries(
             "auth",
             "get-account",
@@ -110,7 +94,56 @@ impl BaseAuthService for CloudAuthService {
         result.map_err(|e| e.into())
     }
 
-    async fn authorize_project_action(
+    pub async fn authorize_account_action(
+        &self,
+        account_id: &AccountId,
+        action: AccountAction,
+        ctx: &AuthCtx,
+    ) -> Result<(), AuthServiceError> {
+        let result: Result<(), AuthClientError> = with_retries(
+            "auth",
+            "authorize-project-action",
+            Some(format!("{action:}")),
+            &self.retry_config,
+            &(
+                self.auth_service_client.clone(),
+                account_id.clone(),
+                action.clone(),
+                ctx.token_secret.value,
+            ),
+            |(client, account_id, action, token)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("authorize-account-action", move |client| {
+                            let request = authorised_request(
+                                AuthorizeAccountActionRequest {
+                                    account_id: Some(account_id.clone().into()),
+                                    action: action.clone() as i32,
+                                },
+                                token,
+                            );
+
+                            Box::pin(client.authorize_account_action(request))
+                        })
+                        .await?
+                        .into_inner();
+                    match response.result {
+                        None => Err("Empty response".to_string().into()),
+                        Some(authorize_account_action_response::Result::Success(_)) => Ok(()),
+                        Some(authorize_account_action_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            AuthClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    pub async fn authorize_project_action(
         &self,
         project_id: &ProjectId,
         action: ProjectAction,

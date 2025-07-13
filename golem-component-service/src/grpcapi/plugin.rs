@@ -21,7 +21,6 @@ use golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginSe
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_plugin_response, delete_plugin_response, ComponentError,
     CreatePluginResponse, DeletePluginRequest, DeletePluginResponse, GetPluginRequest,
-    ListPluginVersionsRequest,
 };
 use golem_api_grpc::proto::golem::component::v1::{
     get_plugin_by_id_response, get_plugin_response, list_plugins_response, CreatePluginRequest,
@@ -51,32 +50,15 @@ impl PluginGrpcApi {
     ) -> Result<Vec<PluginDefinition>, ComponentError> {
         let auth = auth(metadata)?;
 
-        let plugins = match &request.scope {
-            Some(scope) => {
-                let scope = (*scope)
-                    .try_into()
-                    .map_err(|err| bad_request_error(&format!("Invalid plugin scope: {err}")))?;
-
-                self.plugin_service
-                    .list_plugins_for_scope(&auth, &scope)
-                    .await?
-            }
-            None => self.plugin_service.list_plugins(&auth).await?,
-        };
-
-        Ok(plugins.into_iter().map(|pd| pd.into()).collect())
-    }
-
-    async fn list_plugin_versions(
-        &self,
-        request: &ListPluginVersionsRequest,
-        metadata: MetadataMap,
-    ) -> Result<Vec<PluginDefinition>, ComponentError> {
-        let auth = auth(metadata)?;
+        let scope = request
+            .scope
+            .ok_or(bad_request_error("no scope found in request"))?
+            .try_into()
+            .map_err(|err| bad_request_error(&format!("Invalid plugin scope: {err}")))?;
 
         let plugins = self
             .plugin_service
-            .list_plugin_versions(&auth, &request.name)
+            .list_plugins_for_scope(&auth, &scope)
             .await?;
 
         Ok(plugins.into_iter().map(|pd| pd.into()).collect())
@@ -106,9 +88,15 @@ impl PluginGrpcApi {
     ) -> Result<PluginDefinition, ComponentError> {
         let auth = auth(metadata)?;
 
+        let account_id = request
+            .account_id
+            .clone()
+            .ok_or(bad_request_error("Missing account id"))?
+            .into();
+
         let plugin = self
             .plugin_service
-            .get(&auth, &request.name, &request.version)
+            .get(&auth, account_id, &request.name, &request.version)
             .await?;
 
         match plugin {
@@ -128,8 +116,14 @@ impl PluginGrpcApi {
     ) -> Result<(), ComponentError> {
         let auth = auth(metadata)?;
 
+        let account_id = request
+            .account_id
+            .clone()
+            .ok_or(bad_request_error("Missing account id"))?
+            .into();
+
         self.plugin_service
-            .delete(&auth, &request.name, &request.version)
+            .delete(&auth, account_id, &request.name, &request.version)
             .await?;
 
         Ok(())
@@ -172,32 +166,6 @@ impl PluginService for PluginGrpcApi {
 
         let response = match self
             .list_plugins(&request, metadata)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(plugins) => record.succeed(list_plugins_response::Result::Success(
-                ListPluginsSuccessResponse { plugins },
-            )),
-            Err(error) => record.fail(
-                list_plugins_response::Result::Error(error.clone()),
-                &ComponentTraceErrorKind(&error),
-            ),
-        };
-
-        Ok(Response::new(ListPluginsResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn list_plugin_versions(
-        &self,
-        request: Request<ListPluginVersionsRequest>,
-    ) -> Result<Response<ListPluginsResponse>, Status> {
-        let (metadata, _, request) = request.into_parts();
-        let record = recorded_grpc_api_request!("list_plugin_versions",);
-
-        let response = match self
-            .list_plugin_versions(&request, metadata)
             .instrument(record.span.clone())
             .await
         {

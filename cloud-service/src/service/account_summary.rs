@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::auth::{AuthService, AuthServiceError};
+use super::auth::AuthServiceError;
 use crate::model::AccountSummary;
 use crate::repo::account_summary::AccountSummaryRepo;
-use crate::{auth::AccountAuthorisation, model::GlobalAction};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
@@ -45,23 +44,18 @@ pub trait AccountSummaryService: Send + Sync {
         &self,
         skip: i32,
         limit: i32,
-        auth: &AccountAuthorisation,
     ) -> Result<Vec<AccountSummary>, AccountSummaryServiceError>;
-    async fn count(&self, auth: &AccountAuthorisation) -> Result<u64, AccountSummaryServiceError>;
+
+    async fn count(&self) -> Result<u64, AccountSummaryServiceError>;
 }
 
 pub struct AccountSummaryServiceDefault {
-    auth_service: Arc<dyn AuthService>,
     account_summary_repo: Arc<dyn AccountSummaryRepo>,
 }
 
 impl AccountSummaryServiceDefault {
-    pub fn new(
-        auth_service: Arc<dyn AuthService>,
-        account_summary_repo: Arc<dyn AccountSummaryRepo>,
-    ) -> Self {
+    pub fn new(account_summary_repo: Arc<dyn AccountSummaryRepo>) -> Self {
         Self {
-            auth_service,
             account_summary_repo,
         }
     }
@@ -73,11 +67,7 @@ impl AccountSummaryService for AccountSummaryServiceDefault {
         &self,
         skip: i32,
         limit: i32,
-        auth: &AccountAuthorisation,
     ) -> Result<Vec<AccountSummary>, AccountSummaryServiceError> {
-        self.auth_service
-            .authorize_global_action(auth, &GlobalAction::ViewAccountSummaries)
-            .await?;
         match self.account_summary_repo.get(skip, limit).await {
             Ok(account_summary) => Ok(account_summary),
             Err(error) => {
@@ -87,10 +77,7 @@ impl AccountSummaryService for AccountSummaryServiceDefault {
         }
     }
 
-    async fn count(&self, auth: &AccountAuthorisation) -> Result<u64, AccountSummaryServiceError> {
-        self.auth_service
-            .authorize_global_action(auth, &GlobalAction::ViewAccountCount)
-            .await?;
+    async fn count(&self) -> Result<u64, AccountSummaryServiceError> {
         match self.account_summary_repo.count().await {
             Ok(count) => Ok(count),
             Err(error) => {

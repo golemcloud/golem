@@ -757,7 +757,7 @@ fn convert_request_value_and_type_to_oplog_payload(
         "golem::rpc::wasm-rpc::invoke idempotency key" => Ok(empty_payload()),
         "golem::rpc::wasm-rpc::invoke-and-await idempotency key" => Ok(empty_payload()),
         "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key" => Ok(empty_payload()),
-        _ => Err(format!("Unsupported host function name: {}", function_name)),
+        _ => Err(format!("Unsupported host function name: {function_name}")),
     }
 }
 
@@ -1044,7 +1044,7 @@ fn convert_response_value_and_type_to_oplog_payload(
         "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key" => {
             create_uuid_payload(value_and_type)
         }
-        _ => Err(format!("Unsupported host function name: {}", function_name)),
+        _ => Err(format!("Unsupported host function name: {function_name}")),
     }
 }
 

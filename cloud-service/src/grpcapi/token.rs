@@ -15,7 +15,6 @@
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
 use crate::login::{LoginError, LoginSystem};
-use crate::model::AccountAction;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::token::{self, TokenServiceError};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
@@ -29,6 +28,7 @@ use golem_api_grpc::proto::golem::token::v1::{
 use golem_api_grpc::proto::golem::token::{Token, UnsafeToken};
 use golem_common::grpc::proto_account_id_string;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::auth::AccountAction;
 use golem_common::model::AccountId;
 use golem_common::model::TokenId;
 use golem_common::recorded_grpc_api_request;
@@ -67,11 +67,6 @@ impl From<AuthServiceError> for TokenError {
 impl From<token::TokenServiceError> for TokenError {
     fn from(value: token::TokenServiceError) -> Self {
         let error = match value {
-            token::TokenServiceError::Unauthorized(_) => {
-                token_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_safe_string(),
-                })
-            }
             token::TokenServiceError::InternalRepoError(_)
             | token::TokenServiceError::InternalSecretAlreadyExists { .. } => {
                 token_error::Error::InternalError(ErrorBody {
@@ -151,11 +146,7 @@ impl TokenGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing token id"))?;
 
-        match self
-            .token_service
-            .get(&token_id, &AccountAuthorisation::admin())
-            .await
-        {
+        match self.token_service.get(&token_id).await {
             Ok(existing) => {
                 self.auth_service
                     .authorize_account_action(
@@ -199,10 +190,12 @@ impl TokenGrpcApi {
             .create_token_dto
             .and_then(|d| chrono::DateTime::<chrono::Utc>::from_str(d.expires_at.as_str()).ok())
             .ok_or_else(|| bad_request_error("Missing expires at"))?;
-        let result = self
-            .token_service
-            .create(&account_id, &expires_at, &auth)
+
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::CreateToken)
             .await?;
+
+        let result = self.token_service.create(&account_id, &expires_at).await?;
         Ok(result.into())
     }
 
@@ -216,7 +209,13 @@ impl TokenGrpcApi {
             .token_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing token id"))?;
-        let result = self.token_service.get(&id, &auth).await?;
+
+        let result = self.token_service.get(&id).await?;
+
+        self.auth_service
+            .authorize_account_action(&auth, &result.account_id, &AccountAction::ViewTokens)
+            .await?;
+
         Ok(result.into())
     }
 
@@ -231,7 +230,11 @@ impl TokenGrpcApi {
             .map(|id| id.into())
             .ok_or_else(|| bad_request_error("Missing account id"))?;
 
-        let result = self.token_service.find(&account_id, &auth).await?;
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::ViewTokens)
+            .await?;
+
+        let result = self.token_service.find(&account_id).await?;
         Ok(result.into_iter().map(|p| p.into()).collect())
     }
 }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::authorised_request;
-use super::RemoteCloudServiceConfig;
+use super::RemoteServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use golem_api_grpc::proto::golem::project::v1::project_error::Error;
@@ -50,7 +50,7 @@ pub struct ProjectServiceDefault {
 }
 
 impl ProjectServiceDefault {
-    pub fn new(config: &RemoteCloudServiceConfig) -> Self {
+    pub fn new(config: &RemoteServiceConfig) -> Self {
         let project_service_client: GrpcClient<CloudProjectServiceClient<Channel>> =
             GrpcClient::new(
                 "project",

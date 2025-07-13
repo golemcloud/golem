@@ -26,7 +26,7 @@ use crate::service::component_object_store::{
     BlobStorageComponentObjectStore, ComponentObjectStore,
 };
 use golem_common::config::DbConfig;
-use golem_service_base::clients::auth::{BaseAuthService, CloudAuthService};
+use golem_service_base::clients::auth::AuthService;
 use golem_service_base::clients::limit::{LimitService, LimitServiceDefault};
 use golem_service_base::clients::project::{ProjectService, ProjectServiceDefault};
 use golem_service_base::config::BlobStorageConfig;
@@ -64,7 +64,7 @@ impl Services {
             BlobStorageConfig::Sqlite(sqlite) => {
                 let pool = SqlitePool::configured(sqlite)
                     .await
-                    .map_err(|e| format!("Failed to create sqlite pool: {}", e))?;
+                    .map_err(|e| format!("Failed to create sqlite pool: {e}"))?;
                 Arc::new(SqliteBlobStorage::new(pool.clone()).await?)
             }
             BlobStorageConfig::InMemory(_) => {
@@ -105,8 +105,7 @@ impl Services {
         let project_service: Arc<dyn ProjectService> =
             Arc::new(ProjectServiceDefault::new(&config.cloud_service));
 
-        let auth_service: Arc<dyn BaseAuthService> =
-            Arc::new(CloudAuthService::new(&config.cloud_service));
+        let auth_service: Arc<AuthService> = Arc::new(AuthService::new(&config.cloud_service));
 
         let object_store: Arc<dyn ComponentObjectStore> =
             Arc::new(BlobStorageComponentObjectStore::new(blob_storage.clone()));

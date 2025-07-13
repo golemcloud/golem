@@ -201,11 +201,7 @@ pub trait PluginRepo: Debug + Send + Sync {
         version: &str,
     ) -> Result<Option<PluginRecord>, RepoError>;
 
-    async fn get_by_id(
-        &self,
-        owner: &PluginOwnerRow,
-        id: &Uuid,
-    ) -> Result<Option<PluginRecord>, RepoError>;
+    async fn get_by_id(&self, id: &Uuid) -> Result<Option<PluginRecord>, RepoError>;
 
     async fn delete(
         &self,
@@ -283,13 +279,9 @@ impl<Repo: PluginRepo> PluginRepo for LoggedPluginRepo<Repo> {
             .await
     }
 
-    async fn get_by_id(
-        &self,
-        owner: &PluginOwnerRow,
-        id: &Uuid,
-    ) -> Result<Option<PluginRecord>, RepoError> {
+    async fn get_by_id(&self, id: &Uuid) -> Result<Option<PluginRecord>, RepoError> {
         self.repo
-            .get_by_id(owner, id)
+            .get_by_id(id)
             .instrument(info_span!("plugin repository", plugin_id = id.to_string()))
             .await
     }
@@ -562,11 +554,7 @@ impl PluginRepo for DbPluginRepo<golem_service_base::db::postgres::PostgresPool>
             .await
     }
 
-    async fn get_by_id(
-        &self,
-        owner: &PluginOwnerRow,
-        id: &Uuid,
-    ) -> Result<Option<PluginRecord>, RepoError> {
+    async fn get_by_id(&self, id: &Uuid) -> Result<Option<PluginRecord>, RepoError> {
         let mut query = QueryBuilder::new("SELECT ");
 
         let mut column_list = query.separated(", ");
@@ -593,9 +581,7 @@ impl PluginRepo for DbPluginRepo<golem_service_base::db::postgres::PostgresPool>
 
         // Important: do not filter out deleted plugins here.
         query.push(" FROM plugins WHERE ");
-        owner.add_where_clause(&mut query);
-
-        query.push(" AND id = ");
+        query.push(" id = ");
         query.push_bind(id);
 
         self.db_pool

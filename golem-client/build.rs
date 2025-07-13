@@ -16,8 +16,8 @@ fn main() {
 
     println!("Starting code generation for Golem OpenAPI client.");
 
-    println!("Output directory: {:?}", out_dir);
-    println!("Workspace OpenAPI file: {:?}", root_yaml_path);
+    println!("Output directory: {out_dir:?}");
+    println!("Workspace OpenAPI file: {root_yaml_path:?}");
 
     if root_yaml_path.exists() {
         // Copying the file to the crate so it gets packaged
@@ -63,6 +63,15 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "OplogCursor",
                 "golem_common::model::public_oplog::OplogCursor",
+            ),
+            ("OplogRegion", "golem_common::model::regions::OplogRegion"),
+            (
+                "ProjectActions",
+                "golem_common::model::auth::ProjectActions",
+            ),
+            (
+                "ProjectPermission",
+                "golem_common::model::auth::ProjectPermission",
             ),
             ("PromiseId", "golem_common::model::PromiseId"),
             (

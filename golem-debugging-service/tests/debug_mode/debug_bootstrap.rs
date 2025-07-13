@@ -8,7 +8,7 @@ use golem_debugging_service::auth::AuthService;
 use golem_debugging_service::debug_context::DebugContext;
 use golem_debugging_service::debug_session::{DebugSessions, DebugSessionsDefault};
 use golem_debugging_service::oplog::debug_oplog_service::DebugOplogService;
-use golem_debugging_service::{create_debug_wasmtime_linker, run_debug_server};
+use golem_debugging_service::{create_debug_wasmtime_linker, run_debug_worker_executor};
 use golem_service_base::storage::blob::BlobStorage;
 use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
@@ -38,7 +38,8 @@ use golem_worker_executor::services::worker_enumeration::{
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::All;
-use golem_worker_executor::Bootstrap;
+use golem_worker_executor::{Bootstrap, RunDetails};
+use prometheus::Registry;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -95,11 +96,11 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
 
     async fn run_grpc_server(
         &self,
-        service_dependencies: All<DebugContext>,
+        _service_dependencies: All<DebugContext>,
         _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext>>,
-        join_set: &mut JoinSet<Result<(), Error>>,
+        _join_set: &mut JoinSet<Result<(), Error>>,
     ) -> anyhow::Result<u16> {
-        run_debug_server(service_dependencies, join_set).await
+        panic!("no debug server running")
     }
 
     async fn create_services(
@@ -250,5 +251,23 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<DebugContext>> {
         create_debug_wasmtime_linker(engine)
+    }
+
+    async fn run(
+        &self,
+        golem_config: GolemConfig,
+        prometheus_registry: Registry,
+        runtime: Handle,
+        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    ) -> anyhow::Result<RunDetails> {
+        run_debug_worker_executor(
+            self,
+            golem_config,
+            ".*",
+            prometheus_registry,
+            runtime,
+            join_set,
+        )
+        .await
     }
 }

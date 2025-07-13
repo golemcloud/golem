@@ -15,7 +15,7 @@
 pub mod benchmark;
 pub mod debug_render;
 
-use crate::config::TestDependencies;
+use crate::config::{TestDependencies, TestDependenciesDsl};
 use crate::dsl::debug_render::debug_render_oplog_entry;
 use crate::model::PluginDefinitionCreation;
 use anyhow::anyhow;
@@ -38,7 +38,10 @@ use golem_api_grpc::proto::golem::worker::v1::{
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
-use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
+use golem_client::model::Account;
+use golem_common::model::component_metadata::{
+    ComponentMetadata, DynamicLinkedInstance, RawComponentMetadata,
+};
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
@@ -46,7 +49,7 @@ use golem_common::model::plugin::PluginWasmFileKey;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AccountId, ComponentFilePermissions, PluginInstallationId, WorkerStatus,
+    AccountId, ComponentFilePermissions, PluginInstallationId, ProjectId, WorkerStatus,
 };
 use golem_common::model::{
     ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
@@ -58,6 +61,7 @@ use golem_common::widen_infallible;
 use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_wasm_rpc::{Value, ValueAndType};
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -79,6 +83,7 @@ pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     files: Vec<(PathBuf, InitialComponentFile)>,
     dynamic_linking: Vec<(&'static str, DynamicLinkedInstance)>,
     env: HashMap<String, String>,
+    project_id: Option<ProjectId>,
 }
 
 impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
@@ -93,6 +98,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
             files: vec![],
             dynamic_linking: vec![],
             env: HashMap::new(),
+            project_id: None,
         }
     }
 
@@ -175,6 +181,11 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
         self
     }
 
+    pub fn with_project(mut self, project_id: ProjectId) -> Self {
+        let _ = self.project_id.insert(project_id);
+        self
+    }
+
     /// Stores the component
     pub async fn store(self) -> ComponentId {
         self.store_and_get_name().await.0
@@ -193,6 +204,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
                 &self.files,
                 &self.dynamic_linking,
                 &self.env,
+                self.project_id,
             )
             .await
     }
@@ -212,6 +224,7 @@ pub trait TestDsl {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> (ComponentId, ComponentName);
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
@@ -237,15 +250,10 @@ pub trait TestDsl {
         files: &[(String, String)],
     ) -> ComponentVersion;
 
-    async fn add_initial_component_file(
-        &self,
-        account_id: &AccountId,
-        path: &Path,
-    ) -> InitialComponentFileKey;
+    async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
 
     async fn add_initial_component_files(
         &self,
-        account_id: &AccountId,
         files: &[(&str, &str, ComponentFilePermissions)],
     ) -> Vec<(PathBuf, InitialComponentFile)> {
         let mut added_files = Vec::<(PathBuf, InitialComponentFile)>::with_capacity(files.len());
@@ -253,9 +261,7 @@ pub trait TestDsl {
             added_files.push((
                 source.into(),
                 InitialComponentFile {
-                    key: self
-                        .add_initial_component_file(account_id, Path::new(source))
-                        .await,
+                    key: self.add_initial_component_file(Path::new(source)).await,
                     path: (*target).try_into().unwrap(),
                     permissions: *permissions,
                 },
@@ -264,11 +270,7 @@ pub trait TestDsl {
         added_files
     }
 
-    async fn add_plugin_wasm(
-        &self,
-        account_id: &AccountId,
-        name: &str,
-    ) -> crate::Result<PluginWasmFileKey>;
+    async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey>;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
         -> crate::Result<WorkerId>;
@@ -422,7 +424,7 @@ pub trait TestDsl {
         &self,
         worker_id: &WorkerId,
         from: OplogIndex,
-    ) -> crate::Result<Vec<PublicOplogEntry>>;
+    ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
     async fn search_oplog(
         &self,
         worker_id: &WorkerId,
@@ -445,7 +447,12 @@ pub trait TestDsl {
 
     async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()>;
 
-    async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()>;
+    async fn delete_plugin(
+        &self,
+        account_id: AccountId,
+        name: &str,
+        version: &str,
+    ) -> crate::Result<()>;
 
     async fn install_plugin_to_component(
         &self,
@@ -470,10 +477,22 @@ pub trait TestDsl {
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
     ) -> crate::Result<bool>;
+
+    async fn default_project(&self) -> crate::Result<ProjectId>;
+
+    async fn create_project(&self) -> crate::Result<ProjectId>;
+
+    async fn grant_full_project_access(
+        &self,
+        project_id: &ProjectId,
+        grantee_account_id: &AccountId,
+    ) -> crate::Result<()>;
+
+    async fn get_account(&self, account_id: &AccountId) -> crate::Result<Account>;
 }
 
 #[async_trait]
-impl<T: TestDependencies + Send + Sync> TestDsl for T {
+impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
     fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self> {
         StoreComponentBuilder::new(self, name)
     }
@@ -488,8 +507,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> (ComponentId, ComponentName) {
-        let source_path = self.component_directory().join(format!("{wasm_name}.wasm"));
+        let source_path = self
+            .deps
+            .component_directory()
+            .join(format!("{wasm_name}.wasm"));
         let component_name = if unique {
             let uuid = Uuid::new_v4();
             format!("{name}-{uuid}")
@@ -507,7 +530,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         let source_path = if !unverified {
             rename_component_if_needed(
-                self.component_temp_directory(),
+                self.deps.borrow().component_temp_directory(),
                 &source_path,
                 &component_name,
             )
@@ -518,8 +541,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         let component = {
             if unique {
-                self.component_service()
+                self.deps
+                    .component_service()
                     .add_component(
+                        &self.token,
                         &source_path,
                         &component_name,
                         component_type,
@@ -527,12 +552,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                         &dynamic_linking,
                         unverified,
                         env,
+                        project_id,
                     )
                     .await
                     .expect("Failed to add component")
             } else {
-                self.component_service()
+                self.deps
+                    .component_service()
                     .get_or_add_component(
+                        &self.token,
                         &source_path,
                         &component_name,
                         component_type,
@@ -540,6 +568,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                         &dynamic_linking,
                         unverified,
                         env,
+                        project_id,
                     )
                     .await
             }
@@ -558,9 +587,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     }
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        self.component_service()
-            .add_component_with_id(&source_path, component_id, name, ComponentType::Durable)
+        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
+        self.deps
+            .component_service()
+            .add_component_with_id(
+                &source_path,
+                component_id,
+                name,
+                ComponentType::Durable,
+                None,
+            )
             .await
             .expect("Failed to store component");
     }
@@ -569,10 +605,14 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         component_id: &ComponentId,
     ) -> crate::Result<ComponentMetadata> {
-        self.component_service()
-            .get_latest_component_metadata(GetLatestComponentRequest {
-                component_id: Some(component_id.clone().into()),
-            })
+        self.deps
+            .component_service()
+            .get_latest_component_metadata(
+                &self.token,
+                GetLatestComponentRequest {
+                    component_id: Some(component_id.clone().into()),
+                },
+            )
             .await
             .and_then(|c| {
                 c.metadata
@@ -581,12 +621,8 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             })
     }
 
-    async fn add_initial_component_file(
-        &self,
-        account_id: &AccountId,
-        path: &Path,
-    ) -> InitialComponentFileKey {
-        let source_path = self.component_directory().join(path);
+    async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {
+        let source_path = self.deps.borrow().component_directory().join(path);
         let data = tokio::fs::read(&source_path)
             .await
             .expect("Failed to read file");
@@ -596,18 +632,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .map_item(|i| i.map_err(widen_infallible))
             .map_error(widen_infallible);
 
-        self.initial_component_files_service()
-            .put_if_not_exists(account_id, stream)
+        self.deps
+            .initial_component_files_service()
+            .put_if_not_exists(&self.account_id, stream)
             .await
             .expect("Failed to add initial component file")
     }
 
-    async fn add_plugin_wasm(
-        &self,
-        account_id: &AccountId,
-        name: &str,
-    ) -> crate::Result<PluginWasmFileKey> {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
+    async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey> {
+        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         let data = tokio::fs::read(&source_path)
             .await
             .map_err(|e| anyhow!("Failed to read file: {e}"))?;
@@ -619,8 +652,9 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .map_error(widen_infallible);
 
         let key = self
+            .deps
             .plugin_wasm_files_service()
-            .put_if_not_exists(account_id, stream)
+            .put_if_not_exists(&self.account_id, stream)
             .await
             .map_err(|e| anyhow!("Failed to store plugin wasm: {e}"))?;
 
@@ -628,10 +662,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         let component_env = HashMap::new();
-        self.component_service()
+        self.deps
+            .component_service()
             .update_component(
+                &self.token,
                 component_id,
                 &source_path,
                 ComponentType::Durable,
@@ -649,9 +685,11 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         name: &str,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
     ) -> ComponentVersion {
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        self.component_service()
+        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
+        self.deps
+            .component_service()
             .update_component(
+                &self.token,
                 component_id,
                 &source_path,
                 ComponentType::Durable,
@@ -671,9 +709,11 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     ) -> ComponentVersion {
         let map = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
-        let source_path = self.component_directory().join(format!("{name}.wasm"));
-        self.component_service()
+        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
+        self.deps
+            .component_service()
             .update_component(
+                &self.token,
                 component_id,
                 &source_path,
                 ComponentType::Durable,
@@ -720,13 +760,17 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         env: HashMap<String, String>,
     ) -> crate::Result<Result<WorkerId, Error>> {
         let response = self
+            .deps
             .worker_service()
-            .create_worker(LaunchNewWorkerRequest {
-                component_id: Some(component_id.clone().into()),
-                name: name.to_string(),
-                args,
-                env,
-            })
+            .create_worker(
+                &self.token,
+                LaunchNewWorkerRequest {
+                    component_id: Some(component_id.clone().into()),
+                    name: name.to_string(),
+                    args,
+                    env,
+                },
+            )
             .await?;
 
         match response.result {
@@ -751,10 +795,14 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     ) -> crate::Result<Option<(WorkerMetadata, Option<String>)>> {
         let worker_id: golem_api_grpc::proto::golem::worker::WorkerId = worker_id.clone().into();
         let response = self
+            .deps
             .worker_service()
-            .get_worker_metadata(GetWorkerMetadataRequest {
-                worker_id: Some(worker_id),
-            })
+            .get_worker_metadata(
+                &self.token,
+                GetWorkerMetadataRequest {
+                    worker_id: Some(worker_id),
+                },
+            )
             .await?;
 
         debug!("Received worker metadata: {:?}", response);
@@ -790,14 +838,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let component_id: golem_api_grpc::proto::golem::component::ComponentId =
             component_id.clone().into();
         let response = self
+            .deps
             .worker_service()
-            .get_workers_metadata(GetWorkersMetadataRequest {
-                component_id: Some(component_id),
-                filter: filter.map(|f| f.into()),
-                cursor: Some(cursor.into()),
-                count,
-                precise,
-            })
+            .get_workers_metadata(
+                &self.token,
+                GetWorkersMetadataRequest {
+                    component_id: Some(component_id),
+                    filter: filter.map(|f| f.into()),
+                    cursor: Some(cursor.into()),
+                    count,
+                    precise,
+                },
+            )
             .await?;
         match response.result {
             None => Err(anyhow!("No response from get_workers_metadata")),
@@ -815,10 +867,14 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn delete_worker(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let _ = self
+            .deps
             .worker_service()
-            .delete_worker(DeleteWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-            })
+            .delete_worker(
+                &self.token,
+                DeleteWorkerRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                },
+            )
             .await?;
         Ok(())
     }
@@ -831,8 +887,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     ) -> crate::Result<Result<(), Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
+            .deps
             .worker_service()
             .invoke(
+                &self.token,
                 target_worker_id.into(),
                 None,
                 function_name.to_string(),
@@ -862,8 +920,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     ) -> crate::Result<Result<(), Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
+            .deps
             .worker_service()
             .invoke(
+                &self.token,
                 target_worker_id.into(),
                 Some(idempotency_key.clone().into()),
                 function_name.to_string(),
@@ -936,8 +996,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
+            .deps
             .worker_service()
             .invoke_and_await(
+                &self.token,
                 target_worker_id.into(),
                 Some(idempotency_key.clone().into()),
                 function_name.to_string(),
@@ -1015,8 +1077,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
+            .deps
             .worker_service()
             .invoke_and_await_typed(
+                &self.token,
                 target_worker_id.into(),
                 Some(idempotency_key.clone().into()),
                 function_name.to_string(),
@@ -1059,14 +1123,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let params = params.into_iter().map(|p| p.to_string()).collect();
         let invoke_response = self
+            .deps
             .worker_service()
-            .invoke_and_await_json(InvokeAndAwaitJsonRequest {
-                worker_id: Some(target_worker_id.into()),
-                idempotency_key: Some(IdempotencyKey::fresh().into()),
-                function: function_name.to_string(),
-                invoke_parameters: params,
-                context: None,
-            })
+            .invoke_and_await_json(
+                &self.token,
+                InvokeAndAwaitJsonRequest {
+                    worker_id: Some(target_worker_id.into()),
+                    idempotency_key: Some(IdempotencyKey::fresh().into()),
+                    function: function_name.to_string(),
+                    invoke_parameters: params,
+                    context: None,
+                },
+            )
             .await?;
 
         match invoke_response.result {
@@ -1086,14 +1154,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let cloned_service = self.worker_service().clone();
+        let cloned_service = self.deps.borrow().worker_service().clone();
         let worker_id = worker_id.clone();
+        let token = self.token;
         tokio::spawn(
             async move {
                 let mut response = cloned_service
-                    .connect_worker(ConnectWorkerRequest {
-                        worker_id: Some(worker_id.clone().into()),
-                    })
+                    .connect_worker(
+                        &token,
+                        ConnectWorkerRequest {
+                            worker_id: Some(worker_id.clone().into()),
+                        },
+                    )
                     .await
                     .expect("Failed to connect worker");
 
@@ -1115,17 +1187,21 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: &WorkerId,
     ) -> (UnboundedReceiver<Option<LogEvent>>, Sender<()>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let cloned_service = self.worker_service().clone();
+        let cloned_service = self.deps.borrow().worker_service().clone();
         let worker_id = worker_id.clone();
+        let token = self.token;
         let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(
             async move {
                 let mut abort = false;
                 while !abort {
                     let mut response = cloned_service
-                        .connect_worker(ConnectWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
-                        })
+                        .connect_worker(
+                            &token,
+                            ConnectWorkerRequest {
+                                worker_id: Some(worker_id.clone().into()),
+                            },
+                        )
                         .await
                         .expect("Failed to connect worker");
 
@@ -1141,7 +1217,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                                         break;
                                     }
                                     Err(e) => {
-                                        panic!("Failed to get message: {:?}", e);
+                                        panic!("Failed to get message: {e:?}");
                                     }
                                 }
                             }
@@ -1167,14 +1243,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: &WorkerId,
     ) -> UnboundedReceiver<Option<LogEvent>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let cloned_service = self.worker_service().clone();
+        let cloned_service = self.deps.borrow().worker_service().clone();
         let worker_id = worker_id.clone();
+        let token = self.token;
         tokio::spawn(
             async move {
                 let mut response = cloned_service
-                    .connect_worker(ConnectWorkerRequest {
-                        worker_id: Some(worker_id.clone().into()),
-                    })
+                    .connect_worker(
+                        &token,
+                        ConnectWorkerRequest {
+                            worker_id: Some(worker_id.clone().into()),
+                        },
+                    )
                     .await
                     .expect("Failed to connect to worker");
 
@@ -1193,14 +1273,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     }
 
     async fn log_output(&self, worker_id: &WorkerId) {
-        let cloned_service = self.worker_service().clone();
+        let cloned_service = self.deps.borrow().worker_service().clone();
         let worker_id = worker_id.clone();
+        let token = self.token;
         tokio::spawn(
             async move {
                 let mut response = cloned_service
-                    .connect_worker(ConnectWorkerRequest {
-                        worker_id: Some(worker_id.clone().into()),
-                    })
+                    .connect_worker(
+                        &token,
+                        ConnectWorkerRequest {
+                            worker_id: Some(worker_id.clone().into()),
+                        },
+                    )
                     .await
                     .expect("Failed to connect worker");
 
@@ -1214,11 +1298,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()> {
         let response = self
+            .deps
             .worker_service()
-            .resume_worker(ResumeWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                force: Some(force),
-            })
+            .resume_worker(
+                &self.token,
+                ResumeWorkerRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    force: Some(force),
+                },
+            )
             .await?;
 
         match response.result {
@@ -1232,11 +1320,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn interrupt(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let response = self
+            .deps
             .worker_service()
-            .interrupt_worker(InterruptWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                recover_immediately: false,
-            })
+            .interrupt_worker(
+                &self.token,
+                InterruptWorkerRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    recover_immediately: false,
+                },
+            )
             .await?;
 
         match response {
@@ -1252,11 +1344,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn simulated_crash(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let response = self
+            .deps
             .worker_service()
-            .interrupt_worker(InterruptWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                recover_immediately: true,
-            })
+            .interrupt_worker(
+                &self.token,
+                InterruptWorkerRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    recover_immediately: true,
+                },
+            )
             .await?;
 
         match response {
@@ -1276,12 +1372,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         target_version: ComponentVersion,
     ) -> crate::Result<()> {
         let response = self
+            .deps
             .worker_service()
-            .update_worker(UpdateWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                target_version,
-                mode: UpdateMode::Automatic.into(),
-            })
+            .update_worker(
+                &self.token,
+                UpdateWorkerRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    target_version,
+                    mode: UpdateMode::Automatic.into(),
+                },
+            )
             .await?;
 
         match response {
@@ -1301,12 +1401,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         target_version: ComponentVersion,
     ) -> crate::Result<()> {
         let response = self
+            .deps
             .worker_service()
-            .update_worker(UpdateWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                target_version,
-                mode: UpdateMode::Manual.into(),
-            })
+            .update_worker(
+                &self.token,
+                UpdateWorkerRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    target_version,
+                    mode: UpdateMode::Manual.into(),
+                },
+            )
             .await?;
 
         match response {
@@ -1324,19 +1428,23 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         worker_id: &WorkerId,
         from: OplogIndex,
-    ) -> crate::Result<Vec<PublicOplogEntry>> {
+    ) -> crate::Result<Vec<PublicOplogEntryWithIndex>> {
         let mut result = Vec::new();
         let mut cursor = None;
 
         loop {
             let chunk = self
+                .deps
                 .worker_service()
-                .get_oplog(GetOplogRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    from_oplog_index: from.into(),
-                    cursor,
-                    count: 100,
-                })
+                .get_oplog(
+                    &self.token,
+                    GetOplogRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                        from_oplog_index: from.into(),
+                        cursor,
+                        count: 100,
+                    },
+                )
                 .await?;
 
             if let Some(chunk) = chunk.result {
@@ -1349,7 +1457,17 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                                 chunk
                                     .entries
                                     .into_iter()
-                                    .map(|entry| entry.try_into())
+                                    .enumerate()
+                                    .map(|(chunk_idx, entry)| {
+                                        PublicOplogEntry::try_from(entry).map(
+                                            |public_oplog_entry| PublicOplogEntryWithIndex {
+                                                entry: public_oplog_entry,
+                                                oplog_index: OplogIndex::from_u64(
+                                                    chunk.first_index_in_chunk + chunk_idx as u64,
+                                                ),
+                                            },
+                                        )
+                                    })
                                     .collect::<Result<Vec<_>, _>>()
                                     .map_err(|err| {
                                         anyhow!("Failed to convert oplog entry: {err}")
@@ -1380,13 +1498,17 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         loop {
             let chunk = self
+                .deps
                 .worker_service()
-                .search_oplog(SearchOplogRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    cursor,
-                    count: 100,
-                    query: query.to_string(),
-                })
+                .search_oplog(
+                    &self.token,
+                    SearchOplogRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                        cursor,
+                        count: 100,
+                        query: query.to_string(),
+                    },
+                )
                 .await?;
 
             if let Some(chunk) = chunk.result {
@@ -1423,8 +1545,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let oplog = TestDsl::get_oplog(self, worker_id, OplogIndex::INITIAL).await?;
 
-        for (idx, entry) in oplog.iter().enumerate() {
-            debug!("#{}:\n{}", idx + 1, debug_render_oplog_entry(entry));
+        for entry in oplog.iter() {
+            debug!(
+                "#{}:\n{}",
+                entry.oplog_index,
+                debug_render_oplog_entry(&entry.entry)
+            );
         }
 
         Ok(())
@@ -1438,11 +1564,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let target_worker_id: TargetWorkerId = worker_id.into();
 
         let response = self
+            .deps
             .worker_service()
-            .list_directory(ListDirectoryRequest {
-                worker_id: Some(target_worker_id.into()),
-                path: path.to_string(),
-            })
+            .list_directory(
+                &self.token,
+                ListDirectoryRequest {
+                    worker_id: Some(target_worker_id.into()),
+                    path: path.to_string(),
+                },
+            )
             .await?;
 
         match response.result {
@@ -1465,20 +1595,35 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         path: &str,
     ) -> crate::Result<Bytes> {
         let target_worker_id: TargetWorkerId = worker_id.into();
-        self.worker_service()
-            .get_file_contents(GetFileContentsRequest {
-                worker_id: Some(target_worker_id.into()),
-                file_path: path.to_string(),
-            })
+        self.deps
+            .worker_service()
+            .get_file_contents(
+                &self.token,
+                GetFileContentsRequest {
+                    worker_id: Some(target_worker_id.into()),
+                    file_path: path.to_string(),
+                },
+            )
             .await
     }
 
     async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()> {
-        self.component_service().create_plugin(definition).await
+        self.deps
+            .component_service()
+            .create_plugin(&self.token, &self.account_id, definition)
+            .await
     }
 
-    async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()> {
-        self.component_service().delete_plugin(name, version).await
+    async fn delete_plugin(
+        &self,
+        account_id: AccountId,
+        name: &str,
+        version: &str,
+    ) -> crate::Result<()> {
+        self.deps
+            .component_service()
+            .delete_plugin(&self.token, account_id, name, version)
+            .await
     }
 
     async fn install_plugin_to_component(
@@ -1489,8 +1634,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         priority: i32,
         parameters: HashMap<String, String>,
     ) -> crate::Result<PluginInstallationId> {
-        self.component_service()
+        self.deps
+            .component_service()
             .install_plugin_to_component(
+                &self.token,
                 component_id,
                 plugin_name,
                 plugin_version,
@@ -1549,12 +1696,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         oplog_index: OplogIndex,
     ) -> crate::Result<()> {
         let response = self
+            .deps
             .worker_service()
-            .fork_worker(ForkWorkerRequest {
-                source_worker_id: Some(source_worker_id.clone().into()),
-                target_worker_id: Some(target_worker_id.clone().into()),
-                oplog_index_cutoff: oplog_index.into(),
-            })
+            .fork_worker(
+                &self.token,
+                ForkWorkerRequest {
+                    source_worker_id: Some(source_worker_id.clone().into()),
+                    target_worker_id: Some(target_worker_id.clone().into()),
+                    oplog_index_cutoff: oplog_index.into(),
+                },
+            )
             .await?;
 
         match response {
@@ -1570,11 +1721,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> crate::Result<()> {
         let response = self
+            .deps
             .worker_service()
-            .revert_worker(RevertWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                target: Some(target.into()),
-            })
+            .revert_worker(
+                &self.token,
+                RevertWorkerRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    target: Some(target.into()),
+                },
+            )
             .await?;
 
         match response.result {
@@ -1592,11 +1747,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         idempotency_key: &IdempotencyKey,
     ) -> crate::Result<bool> {
         let response = self
+            .deps
             .worker_service()
-            .cancel_invocation(CancelInvocationRequest {
-                worker_id: Some(worker_id.clone().into()),
-                idempotency_key: Some(idempotency_key.clone().into()),
-            })
+            .cancel_invocation(
+                &self.token,
+                CancelInvocationRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    idempotency_key: Some(idempotency_key.clone().into()),
+                },
+            )
             .await?;
 
         match response.result {
@@ -1606,6 +1765,42 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             }
             _ => Err(anyhow!("Failed to cancel invocation: unknown error")),
         }
+    }
+
+    async fn default_project(&self) -> crate::Result<ProjectId> {
+        self.deps
+            .cloud_service()
+            .get_default_project(&self.token)
+            .await
+    }
+
+    async fn create_project(&self) -> crate::Result<ProjectId> {
+        let name = Uuid::new_v4().to_string();
+        let description = Uuid::new_v4().to_string();
+
+        self.deps
+            .cloud_service()
+            .create_project(&self.token, name, self.account_id.clone(), description)
+            .await
+    }
+
+    async fn grant_full_project_access(
+        &self,
+        project_id: &ProjectId,
+        grantee_account_id: &AccountId,
+    ) -> crate::Result<()> {
+        self.deps
+            .cloud_service()
+            .grant_full_project_access(&self.token, project_id, grantee_account_id)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_account(&self, account_id: &AccountId) -> crate::Result<Account> {
+        self.deps
+            .cloud_service()
+            .get_account_by_id(&self.token, account_id)
+            .await
     }
 }
 
@@ -1660,6 +1855,7 @@ pub fn log_event_to_string(event: &LogEvent) -> String {
         Some(log_event::Event::Log(log)) => log.message.clone(),
         Some(log_event::Event::InvocationFinished(_)) => "".to_string(),
         Some(log_event::Event::InvocationStarted(_)) => "".to_string(),
+        Some(log_event::Event::ClientLagged { .. }) => "".to_string(),
         None => std::panic!("Unexpected event type"),
     }
 }
@@ -1769,8 +1965,8 @@ pub fn worker_error_message(error: &Error) -> String {
                     "Invalid shard id: {:?}; ids: {:?}",
                     error.shard_id, error.shard_ids
                 ),
-                worker_execution_error::Error::PreviousInvocationFailed(error) => {
-                    format!("Previous invocation failed: {}", error.details)
+                worker_execution_error::Error::PreviousInvocationFailed(_) => {
+                    "Previous invocation failed".to_string()
                 }
                 worker_execution_error::Error::Unknown(error) => {
                     format!("Unknown error: {}", error.details)
@@ -1793,8 +1989,43 @@ pub fn worker_error_message(error: &Error) -> String {
                 worker_execution_error::Error::FileSystemError(error) => {
                     format!("File system error: {}", error.reason)
                 }
+                worker_execution_error::Error::InvocationFailed(_) => {
+                    "Invocation failed".to_string()
+                }
             },
         },
+    }
+}
+
+pub fn worker_error_underlying_error(
+    error: &Error,
+) -> Option<golem_common::model::oplog::WorkerError> {
+    match error {
+        Error::InternalError(error) => match &error.error {
+            Some(worker_execution_error::Error::InvocationFailed(error)) => {
+                Some(error.error.clone().unwrap().try_into().unwrap())
+            }
+            Some(worker_execution_error::Error::PreviousInvocationFailed(error)) => {
+                Some(error.error.clone().unwrap().try_into().unwrap())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+pub fn worker_error_logs(error: &Error) -> Option<String> {
+    match error {
+        Error::InternalError(error) => match &error.error {
+            Some(worker_execution_error::Error::InvocationFailed(error)) => {
+                Some(error.stderr.clone())
+            }
+            Some(worker_execution_error::Error::PreviousInvocationFailed(error)) => {
+                Some(error.stderr.clone())
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -1931,6 +2162,7 @@ pub trait TestDslUnsafe {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> (ComponentId, ComponentName);
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
@@ -1952,20 +2184,17 @@ pub trait TestDslUnsafe {
         env: &[(String, String)],
     ) -> ComponentVersion;
 
-    async fn add_initial_component_file(
-        &self,
-        account_id: &AccountId,
-        path: &Path,
-    ) -> InitialComponentFileKey;
+    async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
+
     async fn add_initial_component_files(
         &self,
-        account_id: &AccountId,
         files: &[(&str, &str, ComponentFilePermissions)],
     ) -> Vec<(PathBuf, InitialComponentFile)>;
 
-    async fn add_plugin_wasm(&self, account_id: &AccountId, name: &str) -> PluginWasmFileKey;
+    async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
+
     async fn try_start_worker(
         &self,
         component_id: &ComponentId,
@@ -2077,7 +2306,11 @@ pub trait TestDslUnsafe {
     async fn simulated_crash(&self, worker_id: &WorkerId);
     async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
     async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
-    async fn get_oplog(&self, worker_id: &WorkerId, from: OplogIndex) -> Vec<PublicOplogEntry>;
+    async fn get_oplog(
+        &self,
+        worker_id: &WorkerId,
+        from: OplogIndex,
+    ) -> Vec<PublicOplogEntryWithIndex>;
     async fn search_oplog(
         &self,
         worker_id: &WorkerId,
@@ -2099,7 +2332,7 @@ pub trait TestDslUnsafe {
 
     async fn create_plugin(&self, definition: PluginDefinitionCreation);
 
-    async fn delete_plugin(&self, name: &str, version: &str);
+    async fn delete_plugin(&self, account_id: AccountId, name: &str, version: &str);
 
     async fn install_plugin_to_component(
         &self,
@@ -2125,6 +2358,18 @@ pub trait TestDslUnsafe {
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
     ) -> crate::Result<bool>;
+
+    async fn default_project(&self) -> ProjectId;
+
+    async fn create_project(&self) -> ProjectId;
+
+    async fn grant_full_project_access(
+        &self,
+        project_id: &ProjectId,
+        grantee_account_id: &AccountId,
+    );
+
+    async fn get_account(&self, account_id: &AccountId) -> Account;
 }
 
 #[async_trait]
@@ -2144,6 +2389,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> (ComponentId, ComponentName) {
         <T as TestDsl>::store_component_with(
             self,
@@ -2155,6 +2401,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             files,
             dynamic_linking,
             env,
+            project_id,
         )
         .await
     }
@@ -2169,8 +2416,8 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to get latest component metadata")
     }
 
-    async fn add_plugin_wasm(&self, account_id: &AccountId, name: &str) -> PluginWasmFileKey {
-        <T as TestDsl>::add_plugin_wasm(self, account_id, name)
+    async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey {
+        <T as TestDsl>::add_plugin_wasm(self, name)
             .await
             .expect("Failed to add plugin wasm")
     }
@@ -2197,20 +2444,15 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::update_component_with_env(self, component_id, name, env).await
     }
 
-    async fn add_initial_component_file(
-        &self,
-        account_id: &AccountId,
-        path: &Path,
-    ) -> InitialComponentFileKey {
-        <T as TestDsl>::add_initial_component_file(self, account_id, path).await
+    async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {
+        <T as TestDsl>::add_initial_component_file(self, path).await
     }
 
     async fn add_initial_component_files(
         &self,
-        account_id: &AccountId,
         files: &[(&str, &str, ComponentFilePermissions)],
     ) -> Vec<(PathBuf, InitialComponentFile)> {
-        <T as TestDsl>::add_initial_component_files(self, account_id, files).await
+        <T as TestDsl>::add_initial_component_files(self, files).await
     }
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId {
@@ -2422,7 +2664,11 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to update worker")
     }
 
-    async fn get_oplog(&self, worker_id: &WorkerId, from: OplogIndex) -> Vec<PublicOplogEntry> {
+    async fn get_oplog(
+        &self,
+        worker_id: &WorkerId,
+        from: OplogIndex,
+    ) -> Vec<PublicOplogEntryWithIndex> {
         <T as TestDsl>::get_oplog(self, worker_id, from)
             .await
             .expect("Failed to get oplog")
@@ -2469,8 +2715,8 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to create plugin")
     }
 
-    async fn delete_plugin(&self, name: &str, version: &str) {
-        <T as TestDsl>::delete_plugin(self, name, version)
+    async fn delete_plugin(&self, account_id: AccountId, name: &str, version: &str) {
+        <T as TestDsl>::delete_plugin(self, account_id, name, version)
             .await
             .expect("Failed to delete plugin")
     }
@@ -2547,12 +2793,40 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
     ) -> crate::Result<bool> {
         <T as TestDsl>::cancel_invocation(self, worker_id, idempotency_key).await
     }
+
+    async fn default_project(&self) -> ProjectId {
+        <T as TestDsl>::default_project(self)
+            .await
+            .expect("failed to get default project")
+    }
+
+    async fn create_project(&self) -> ProjectId {
+        <T as TestDsl>::create_project(self)
+            .await
+            .expect("failed to create project")
+    }
+
+    async fn grant_full_project_access(
+        &self,
+        project_id: &ProjectId,
+        grantee_account_id: &AccountId,
+    ) {
+        <T as TestDsl>::grant_full_project_access(self, project_id, grantee_account_id)
+            .await
+            .expect("failed to grant full project access")
+    }
+
+    async fn get_account(&self, account_id: &AccountId) -> Account {
+        <T as TestDsl>::get_account(self, account_id)
+            .await
+            .expect("failed to get account")
+    }
 }
 
 fn rename_component_if_needed(temp_dir: &Path, path: &Path, name: &str) -> anyhow::Result<PathBuf> {
     // Check metadata
     let source = std::fs::read(path)?;
-    let metadata = ComponentMetadata::analyse_component(&source)?;
+    let metadata = RawComponentMetadata::analyse_component(&source)?;
     if metadata.root_package_name.is_none() || metadata.root_package_name == Some(name.to_string())
     {
         info!(

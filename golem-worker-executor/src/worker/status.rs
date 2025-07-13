@@ -1,4 +1,3 @@
-use crate::error::GolemError;
 use crate::services::{HasConfig, HasOplogService};
 use crate::worker::is_worker_error_retriable;
 use async_recursion::async_recursion;
@@ -12,6 +11,7 @@ use golem_common::model::{
     TimestampedWorkerInvocation, WorkerInvocation, WorkerMetadata, WorkerResourceDescription,
     WorkerStatus, WorkerStatusRecord,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 /// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.
@@ -20,7 +20,7 @@ pub async fn calculate_last_known_status<T>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
     metadata: &Option<WorkerMetadata>,
-) -> Result<WorkerStatusRecord, GolemError>
+) -> Result<WorkerStatusRecord, WorkerExecutorError>
 where
     T: HasOplogService + HasConfig + Sync,
 {
@@ -729,9 +729,6 @@ fn calculate_active_plugins(
 
 #[cfg(test)]
 mod test {
-    use test_r::test;
-
-    use crate::error::GolemError;
     use crate::model::ExecutionStatus;
     use crate::services::golem_config::GolemConfig;
     use crate::services::oplog::tests::rounded;
@@ -755,9 +752,11 @@ mod test {
         WorkerStatus, WorkerStatusRecord,
     };
     use golem_common::serialization::serialize;
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_wasm_rpc::Value;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::{Arc, RwLock};
+    use test_r::test;
 
     #[test]
     async fn empty() {
@@ -1463,7 +1462,7 @@ mod test {
             _component_id: &ComponentId,
             _cursor: ScanCursor,
             _count: u64,
-        ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+        ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
             unreachable!()
         }
 

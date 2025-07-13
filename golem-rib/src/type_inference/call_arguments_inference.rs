@@ -344,7 +344,7 @@ mod internal {
                     resource_name,
                     resource_method_name,
                 } => {
-                    let resource_constructor_prefix = format!("[method]{}.", resource_name);
+                    let resource_constructor_prefix = format!("[method]{resource_name}.");
                     resource_method_name.replace(&resource_constructor_prefix, "")
                 }
                 FunctionDetails::Fqn(fqn) => fqn.function.name_pretty(),
@@ -360,19 +360,19 @@ mod internal {
                     resource_constructor_name,
                     ..
                 } => {
-                    write!(f, "{}", resource_constructor_name)
+                    write!(f, "{resource_constructor_name}")
                 }
                 FunctionDetails::ResourceMethodName {
                     resource_method_name,
                     ..
                 } => {
-                    write!(f, "{}", resource_method_name)
+                    write!(f, "{resource_method_name}")
                 }
                 FunctionDetails::Fqn(fqn) => {
-                    write!(f, "{}", fqn)
+                    write!(f, "{fqn}")
                 }
                 FunctionDetails::VariantName(name) => {
-                    write!(f, "{}", name)
+                    write!(f, "{name}")
                 }
             }
         }

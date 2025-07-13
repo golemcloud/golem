@@ -17,6 +17,7 @@ use test_r::{inherit_test_dep, test};
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
 
@@ -32,7 +33,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("blob-store-service").store().await;
     let worker_name = "blob-store-service-1";
@@ -71,7 +72,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("blob-store-service").store().await;
     let worker_name = "blob-store-service-1";

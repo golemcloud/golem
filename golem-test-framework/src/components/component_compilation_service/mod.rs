@@ -38,7 +38,7 @@ pub mod provided;
 pub mod spawned;
 
 #[async_trait]
-pub trait ComponentCompilationService {
+pub trait ComponentCompilationService: Send + Sync {
     async fn client(&self) -> ComponentCompilationServiceClient<Channel> {
         new_client(&self.public_host(), self.public_grpc_port()).await
     }

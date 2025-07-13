@@ -38,8 +38,10 @@ exclude = [
     "test-components/file-write-read-delete",
     "test-components/flags-service",
     "test-components/golem-rust-tests",
+    "test-components/high-volume-logging",
     "test-components/http-client",
     "test-components/http-client-2",
+    "test-components/http-client-3",
     "test-components/ifs-update",
     "test-components/ifs-update-inside-exported-function",
     "test-components/interruption",
@@ -63,6 +65,7 @@ exclude = [
     "test-components/update-test-v3-11",
     "test-components/update-test-v3-sdk",
     "test-components/update-test-v4",
+    "test-components/update-test-env-var",
     "test-components/variant-service",
     "test-components/wasi-http-incoming-request-handler",
     "test-components/wasi-http-incoming-request-handler-echo",
@@ -129,6 +132,7 @@ fred = { version = "=9.4.0", features = [
     "partial-tracing",
 ] } # pinned to 9.x to avoid conflicting cookie-factory dependencies
 futures = "0.3"
+futures-concurrency = "7.6.3"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
 gethostname = "0.5.0"

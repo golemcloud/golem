@@ -12,27 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::sharding::*;
+use crate::model::ShardAssignmentCheck;
+use golem_common::model::{ShardAssignment, ShardId, WorkerId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use itertools::Itertools;
 use std::collections::HashSet;
 use std::convert::identity;
 use std::sync::{Arc, RwLock};
-
-use itertools::Itertools;
 use tracing::debug;
-
-use golem_common::model::{ShardAssignment, ShardId, WorkerId};
-
-use crate::error::GolemError;
-use crate::metrics::sharding::*;
-use crate::model::ShardAssignmentCheck;
 
 /// Service for assigning shards to worker executors
 pub trait ShardService: Send + Sync {
     fn is_ready(&self) -> bool;
-    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError>;
-    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError>;
+    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError>;
+    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), WorkerExecutorError>;
     fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>);
-    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError>;
-    fn current_assignment(&self) -> Result<ShardAssignment, GolemError>;
+    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError>;
+    fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError>;
     fn try_get_current_assignment(&self) -> Option<ShardAssignment>;
 }
 
@@ -53,7 +50,7 @@ impl ShardServiceDefault {
         }
     }
 
-    pub fn with_read_shard_assignment<F, O>(&self, f: F) -> Result<O, GolemError>
+    pub fn with_read_shard_assignment<F, O>(&self, f: F) -> Result<O, WorkerExecutorError>
     where
         F: Fn(&ShardAssignment) -> O,
     {
@@ -81,7 +78,7 @@ impl ShardService for ShardServiceDefault {
         self.shard_assignment.read().unwrap().is_some()
     }
 
-    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
+    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError> {
         self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
             Some(shard_assignment) => {
                 debug!(
@@ -98,14 +95,14 @@ impl ShardService for ShardServiceDefault {
         })
     }
 
-    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError> {
+    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), WorkerExecutorError> {
         self.with_read_shard_assignment(|shard_assignment: &ShardAssignment| {
             shard_assignment.check_worker(worker_id)
         })
         .and_then(identity)
     }
 
-    fn current_assignment(&self) -> Result<ShardAssignment, GolemError> {
+    fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError> {
         self.with_read_shard_assignment(|shard_assignment| shard_assignment.clone())
     }
 
@@ -130,7 +127,7 @@ impl ShardService for ShardServiceDefault {
         })
     }
 
-    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
+    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError> {
         self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
             Some(shard_assignment) => {
                 debug!(
@@ -152,8 +149,8 @@ impl ShardService for ShardServiceDefault {
     }
 }
 
-fn sharding_not_ready_error() -> GolemError {
-    GolemError::Unknown {
+fn sharding_not_ready_error() -> WorkerExecutorError {
+    WorkerExecutorError::Unknown {
         details: "Sharding is not ready".to_string(),
     }
 }

@@ -16,7 +16,7 @@ pub mod docker;
 
 pub mod spawned;
 
-pub trait RedisMonitor {
+pub trait RedisMonitor: Send + Sync {
     fn assert_valid(&self);
 
     fn kill(&self);

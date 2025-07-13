@@ -491,7 +491,7 @@ impl Default for Limits {
             max_active_workers: 1024,
             invocation_result_broadcast_capacity: 100000,
             max_concurrent_streams: 1024,
-            event_broadcast_capacity: 16,
+            event_broadcast_capacity: 1024,
             event_history_size: 128,
             fuel_to_borrow: 10000,
             epoch_interval: Duration::from_millis(10),
@@ -717,14 +717,14 @@ impl Default for ProjectServiceGrpcConfig {
 }
 
 fn build_url(name: &str, host: &str, port: u16) -> Url {
-    Url::parse(&format!("http://{}:{}", host, port))
+    Url::parse(&format!("http://{host}:{port}"))
         .unwrap_or_else(|_| panic!("Failed to parse {name} service URL"))
 }
 
 fn build_uri(name: &str, host: &str, port: u16) -> Uri {
     Uri::builder()
         .scheme("http")
-        .authority(format!("{}:{}", host, port).as_str())
+        .authority(format!("{host}:{port}").as_str())
         .path_and_query("/")
         .build()
         .unwrap_or_else(|_| panic!("Failed to build {name} service URI"))

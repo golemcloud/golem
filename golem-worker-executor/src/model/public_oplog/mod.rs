@@ -26,7 +26,6 @@ use crate::durable_host::wasm_rpc::serialized::{
     SerializableInvokeRequest, SerializableInvokeResult, SerializableScheduleId,
     SerializableScheduleInvocationRequest,
 };
-use crate::error::GolemError;
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::plugins::Plugins;
@@ -60,6 +59,7 @@ use golem_common::model::{
     ComponentId, ComponentVersion, Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation,
 };
 use golem_common::serialization::try_deserialize as core_try_deserialize;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
@@ -100,8 +100,12 @@ pub async fn get_public_oplog_chunk(
     let mut entries = Vec::new();
     let mut current_component_version = initial_component_version;
     let mut next_oplog_index = initial_oplog_index;
+    let mut first_index_in_chunk = None;
 
     for (index, raw_entry) in raw_entries {
+        if first_index_in_chunk.is_none() {
+            first_index_in_chunk = Some(index);
+        }
         if let Some(version) = raw_entry.specifies_component_version() {
             current_component_version = version;
         }
@@ -123,7 +127,7 @@ pub async fn get_public_oplog_chunk(
         entries,
         next_oplog_index,
         current_component_version,
-        first_index_in_chunk: initial_oplog_index,
+        first_index_in_chunk: first_index_in_chunk.unwrap_or(initial_oplog_index),
         last_index,
     })
 }
@@ -194,7 +198,7 @@ pub async fn find_component_version_at(
     oplog_service: Arc<dyn OplogService>,
     owned_worker_id: &OwnedWorkerId,
     start: OplogIndex,
-) -> Result<ComponentVersion, GolemError> {
+) -> Result<ComponentVersion, WorkerExecutorError> {
     let mut initial_component_version = 0;
     let last_oplog_index = oplog_service.get_last_index(owned_worker_id).await;
     let mut current = OplogIndex::INITIAL;
@@ -883,7 +887,10 @@ fn encode_host_function_request_as_value(
             let payload: SerializableHttpRequest = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem io::poll::poll" => no_payload(),
+        "golem io::poll::poll" => {
+            let count: usize = try_deserialize(bytes)?;
+            Ok(ValueAndType::new(Value::U64(count as u64), u64()))
+        }
         "golem blobstore::container::object_info" => {
             let payload: (String, String) = try_deserialize(bytes)?;
             Ok(container_and_object(payload.0, payload.1))
@@ -995,7 +1002,10 @@ fn encode_host_function_request_as_value(
         "golem_environment::initial_cwd" => no_payload(),
         "monotonic_clock::resolution" => no_payload(),
         "monotonic_clock::now" => no_payload(),
-        "monotonic_clock::subscribe_duration" => no_payload(),
+        "monotonic_clock::subscribe_duration" => {
+            let duration_ns: u64 = try_deserialize(bytes)?;
+            Ok(ValueAndType::new(Value::U64(duration_ns), u64()))
+        }
         "wall_clock::now" => no_payload(),
         "wall_clock::resolution" => no_payload(),
         "golem::api::create_promise" => no_payload(),

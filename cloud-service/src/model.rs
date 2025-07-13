@@ -14,7 +14,7 @@
 
 use chrono::{TimeZone, Utc};
 use golem_api_grpc::proto::golem::worker::Level;
-use golem_common::model::auth::{ProjectActions, ProjectPermisison, TokenSecret};
+use golem_common::model::auth::{ProjectActions, ProjectPermission, TokenSecret};
 use golem_common::model::plugin::PluginInstallationTarget;
 use golem_common::model::{AccountId, PlanId, ProjectGrantId, ProjectId, ProjectPolicyId, TokenId};
 use golem_service_base::model::*;
@@ -97,7 +97,7 @@ pub struct ProjectGrantDataRequest {
     pub grantee_account_id: Option<AccountId>,
     pub grantee_email: Option<String>,
     pub project_policy_id: Option<ProjectPolicyId>,
-    pub project_actions: Vec<ProjectPermisison>,
+    pub project_actions: Vec<ProjectPermission>,
     pub project_policy_name: Option<String>,
 }
 
@@ -191,7 +191,7 @@ impl TryFrom<i32> for ProjectType {
         match value {
             0 => Ok(ProjectType::Default),
             1 => Ok(ProjectType::NonDefault),
-            _ => Err(format!("Invalid project type: {}", value)),
+            _ => Err(format!("Invalid project type: {value}")),
         }
     }
 }
@@ -687,7 +687,7 @@ impl TryFrom<i32> for LogLevel {
             3 => Ok(LogLevel::Warn),
             4 => Ok(LogLevel::Error),
             5 => Ok(LogLevel::Critical),
-            _ => Err(format!("Invalid value for LogLevel: {}", value)),
+            _ => Err(format!("Invalid value for LogLevel: {value}")),
         }
     }
 }
@@ -781,21 +781,4 @@ pub enum GlobalAction {
     CreateAccount,
     ViewAccountSummaries,
     ViewAccountCount,
-}
-
-#[derive(Debug, Clone)]
-pub enum AccountAction {
-    ViewAccount,
-    UpdateAccount,
-    ViewPlan,
-    CreateProject,
-    DeleteAccount,
-    ViewAccountGrants,
-    CreateAccountGrant,
-    DeleteAccountGrant,
-    ViewDefaultProject,
-    ListProjectGrants,
-    ViewLimits,
-    UpdateLimits,
-    DeleteToken,
 }

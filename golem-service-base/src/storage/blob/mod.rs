@@ -175,7 +175,7 @@ pub trait BlobStorage: Debug + Send + Sync {
                 self.put_raw(target_label, op_label, namespace, to, &data)
                     .await
             }
-            None => Err(format!("Entry not found: {:?}", from)),
+            None => Err(format!("Entry not found: {from:?}")),
         }
     }
 

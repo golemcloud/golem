@@ -14,12 +14,10 @@
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
-use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::model::InterruptKind;
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
     ForkResult, GetWorkers, Host, HostGetWorkers, WorkerAnyFilter,
@@ -39,6 +37,7 @@ use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
@@ -121,10 +120,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .create(&self.owned_worker_id.worker_id, oplog_idx)
                 .await;
             durability
-                .persist(self, (), Ok::<PromiseId, GolemError>(promise_id))
+                .persist(self, (), Ok::<PromiseId, WorkerExecutorError>(promise_id))
                 .await?
         } else {
-            durability.replay::<PromiseId, GolemError>(self).await?
+            durability
+                .replay::<PromiseId, WorkerExecutorError>(self)
+                .await?
         };
 
         Ok(promise_id.into())
@@ -705,7 +706,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
-            let worker_id: Result<_, GolemError> = async {
+            let worker_id: Result<_, WorkerExecutorError> = async {
                 let component_id = self
                     .state
                     .component_service

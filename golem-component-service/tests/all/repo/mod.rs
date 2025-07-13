@@ -17,25 +17,16 @@ use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::plugin::PluginScope;
 use golem_common::model::plugin::{
-    ComponentPluginInstallationTarget, ComponentPluginScope, ComponentTransformerDefinition,
-    OplogProcessorDefinition, PluginDefinition, PluginInstallation, PluginOwner,
-    PluginTypeSpecificDefinition,
+    ComponentPluginScope, ComponentTransformerDefinition, OplogProcessorDefinition,
+    PluginDefinition, PluginTypeSpecificDefinition,
 };
-use golem_common::model::{
-    AccountId, ComponentId, ComponentType, Empty, PluginId, PluginInstallationId, ProjectId,
-};
-use golem_common::repo::ComponentPluginInstallationRow;
-use golem_common::repo::{ComponentOwnerRow, PluginOwnerRow, PluginScopeRow};
+use golem_common::model::{AccountId, ComponentId, ComponentType, Empty, PluginId, ProjectId};
+use golem_common::repo::{PluginOwnerRow, PluginScopeRow};
 use golem_component_service::model::{Component, ComponentByNameAndVersion, VersionType};
-use golem_component_service::repo::component::{
-    record_metadata_serde, ComponentRecord, ComponentRepo, PluginInstallationRepoAction,
-};
+use golem_component_service::repo::component::{ComponentRecord, ComponentRepo};
 use golem_component_service::repo::plugin::PluginRepo;
 use golem_service_base::model::ComponentName;
-use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
-use poem_openapi::__private::serde_json;
-use sqlx::types::Json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
@@ -61,7 +52,7 @@ fn random_component_owner() -> ComponentOwner {
 }
 
 pub(crate) fn get_component_data(name: &str) -> Vec<u8> {
-    let path = format!("../test-components/{}.wasm", name);
+    let path = format!("../test-components/{name}.wasm");
     std::fs::read(path).unwrap()
 }
 
@@ -98,20 +89,17 @@ async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo>) {
     component2.versioned_component_id.version = 1;
 
     let result1 = component_repo
-        .create(&ComponentRecord::try_from_model(component1.clone(), true).unwrap())
+        .create(&ComponentRecord::try_from_model(component1.clone()).unwrap())
         .await;
     let result2 = component_repo
-        .create(&ComponentRecord::try_from_model(component2.clone(), true).unwrap())
+        .create(&ComponentRecord::try_from_model(component2.clone()).unwrap())
         .await;
     let result3 = component_repo
         .create(
-            &ComponentRecord::try_from_model(
-                Component {
-                    owner: owner2.clone(),
-                    ..component1.clone()
-                },
-                true,
-            )
+            &ComponentRecord::try_from_model(Component {
+                owner: owner2.clone(),
+                ..component1.clone()
+            })
             .unwrap(),
         )
         .await;
@@ -156,29 +144,26 @@ async fn test_repo_component_name_unique_in_namespace(component_repo: Arc<dyn Co
 
     // Component with `component_name1` in `namespace1`
     let result1 = component_repo
-        .create(&ComponentRecord::try_from_model(component1.clone(), true).unwrap())
+        .create(&ComponentRecord::try_from_model(component1.clone()).unwrap())
         .await;
 
     // Another component with the same name in `namespace1`
     let result2 = component_repo
         .create(
-            &ComponentRecord::try_from_model(
-                Component {
-                    versioned_component_id: VersionedComponentId {
-                        component_id: ComponentId::new_v4(),
-                        version: 0,
-                    },
-                    ..component1.clone()
+            &ComponentRecord::try_from_model(Component {
+                versioned_component_id: VersionedComponentId {
+                    component_id: ComponentId::new_v4(),
+                    version: 0,
                 },
-                true,
-            )
+                ..component1.clone()
+            })
             .unwrap(),
         )
         .await;
 
     // Another component with `component_name1` but in `namespace2`
     let result3 = component_repo
-        .create(&ComponentRecord::try_from_model(component2.clone(), true).unwrap())
+        .create(&ComponentRecord::try_from_model(component2.clone()).unwrap())
         .await;
 
     info!("{:?}", result1);
@@ -208,7 +193,7 @@ async fn test_repo_component_find_by_names(component_repo: Arc<dyn ComponentRepo
     .unwrap();
 
     component_repo
-        .create(&ComponentRecord::try_from_model(component1.clone(), true).unwrap())
+        .create(&ComponentRecord::try_from_model(component1.clone()).unwrap())
         .await
         .unwrap();
 
@@ -230,38 +215,15 @@ async fn test_repo_component_find_by_names(component_repo: Arc<dyn ComponentRepo
 
     // rust-echo version:0
     component_repo
-        .create(&ComponentRecord::try_from_model(component2.clone(), true).unwrap())
+        .create(&ComponentRecord::try_from_model(component2.clone()).unwrap())
         .await
         .unwrap();
 
     // rust-echo: version: 1
+    let mut component2_1 = component2.clone();
+    component2_1.bump_version();
     component_repo
-        .update(
-            &test_component_owner().into(),
-            &test_component_owner().to_string(),
-            component2.versioned_component_id.component_id.0,
-            data.len() as i32,
-            record_metadata_serde::serialize(&component2.metadata)
-                .unwrap()
-                .to_vec(),
-            component2.metadata.root_package_version.as_deref(),
-            Some(0),
-            None,
-            Json(HashMap::new()),
-        )
-        .await
-        .unwrap();
-
-    // only when activated component2 becomes available in the search
-    component_repo
-        .activate(
-            &test_component_owner().to_string(),
-            component2.versioned_component_id.component_id.0,
-            1,
-            "",
-            "",
-            vec![],
-        )
+        .create(&ComponentRecord::try_from_model(component2_1.clone()).unwrap())
         .await
         .unwrap();
 
@@ -481,7 +443,7 @@ async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo>) {
     .unwrap();
 
     let result1 = component_repo
-        .create(&ComponentRecord::try_from_model(component1.clone(), true).unwrap())
+        .create(&ComponentRecord::try_from_model(component1.clone()).unwrap())
         .await;
 
     let result2 = component_repo
@@ -548,7 +510,7 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo>)
 
     // Create Component
     let component_create_result = component_repo
-        .create(&ComponentRecord::try_from_model(component1.clone(), true).unwrap())
+        .create(&ComponentRecord::try_from_model(component1.clone()).unwrap())
         .await;
 
     // Create Constraint
@@ -648,10 +610,10 @@ async fn test_default_plugin_repo(
     .unwrap();
 
     component_repo
-        .create(&ComponentRecord::try_from_model(component1.clone(), true).unwrap())
+        .create(&ComponentRecord::try_from_model(component1.clone()).unwrap())
         .await?;
     component_repo
-        .create(&ComponentRecord::try_from_model(component2.clone(), true).unwrap())
+        .create(&ComponentRecord::try_from_model(component2.clone()).unwrap())
         .await?;
 
     let all1 = plugin_repo.get_all(&plugin_owner_row).await?;
@@ -757,171 +719,6 @@ async fn test_default_plugin_repo(
 
     assert_eq!(after_delete.len(), all1.len() + 1);
     assert!(after_delete.iter().any(|p| p == &plugin2));
-
-    Ok(())
-}
-
-async fn test_default_component_plugin_installation(
-    component_repo: Arc<dyn ComponentRepo>,
-    plugin_repo: Arc<dyn PluginRepo>,
-) -> Result<(), RepoError> {
-    let component_owner: ComponentOwner = test_component_owner();
-    let component_owner_row: ComponentOwnerRow = component_owner.clone().into();
-    let plugin_owner_row: PluginOwnerRow = component_owner_row.into();
-
-    let plugin_owner: PluginOwner = test_component_owner().into();
-
-    let component_id = ComponentId::new_v4();
-
-    let component1 = Component::new(
-        component_id.clone(),
-        ComponentName("default-component-plugin-installation-component1".to_string()),
-        ComponentType::Ephemeral,
-        &get_component_data("shopping-cart"),
-        vec![],
-        vec![],
-        HashMap::new(),
-        component_owner.clone(),
-        HashMap::new(),
-    )
-    .unwrap();
-
-    let plugin1 = PluginDefinition {
-        id: PluginId(uuid!("F9890D4A-A3FA-4E8C-83D5-EABA0A9E1396")),
-        name: "plugin2".to_string(),
-        version: "v2".to_string(),
-        description: "another test plugin".to_string(),
-        icon: vec![1, 2, 3, 4],
-        homepage: "https://plugin2.com".to_string(),
-        specs: PluginTypeSpecificDefinition::ComponentTransformer(ComponentTransformerDefinition {
-            provided_wit_package: Some("wit".to_string()),
-            json_schema: Some("schema".to_string()),
-            validate_url: "https://plugin2.com/validate".to_string(),
-            transform_url: "https://plugin2.com/transform".to_string(),
-        }),
-        scope: PluginScope::Global(Empty {}),
-        owner: plugin_owner.clone(),
-        deleted: false,
-    };
-    let plugin1_row = plugin1.clone().into();
-
-    component_repo
-        .create(&ComponentRecord::try_from_model(component1.clone(), true).unwrap())
-        .await?;
-
-    plugin_repo.create(&plugin1_row).await?;
-
-    let target1 = ComponentPluginInstallationTarget {
-        component_id: component_id.clone(),
-        component_version: 0,
-    };
-    let target1_row: ComponentPluginInstallationRow = target1.clone().into();
-
-    let installations1 = component_repo
-        .get_installed_plugins(&plugin_owner_row, component_id.0, 0)
-        .await?;
-
-    let installation1 = PluginInstallation {
-        id: PluginInstallationId::new_v4(),
-        plugin_id: plugin1.id.clone(),
-        priority: 1000,
-        parameters: HashMap::from_iter(vec![("param1".to_string(), "value1".to_string())]),
-    };
-    let installation1_row = PluginInstallationRecord::try_from(
-        installation1.clone(),
-        plugin_owner_row.clone(),
-        target1_row.clone(),
-    )
-    .unwrap();
-
-    component_repo
-        .apply_plugin_installation_changes(
-            &plugin_owner_row,
-            component_id.0,
-            &[PluginInstallationRepoAction::Install {
-                record: installation1_row,
-            }],
-        )
-        .await?;
-
-    let installation2 = PluginInstallation {
-        id: PluginInstallationId::new_v4(),
-        plugin_id: plugin1.id.clone(),
-        priority: 800,
-        parameters: HashMap::default(),
-    };
-    let installation2_row = PluginInstallationRecord::try_from(
-        installation2.clone(),
-        plugin_owner_row.clone(),
-        target1_row.clone(),
-    )
-    .unwrap();
-
-    component_repo
-        .apply_plugin_installation_changes(
-            &plugin_owner_row,
-            component_id.0,
-            &[PluginInstallationRepoAction::Install {
-                record: installation2_row,
-            }],
-        )
-        .await?;
-
-    let installations2 = component_repo
-        .get_installed_plugins(&plugin_owner_row, component_id.0, 2)
-        .await?;
-
-    info!("{:?}", installations2);
-
-    let latest_installation2_id = installations2
-        .iter()
-        .find(|installation| installation.priority == 800)
-        .unwrap()
-        .installation_id;
-    let new_params: HashMap<String, String> =
-        HashMap::from_iter(vec![("param2".to_string(), "value2".to_string())]);
-
-    component_repo
-        .apply_plugin_installation_changes(
-            &plugin_owner_row,
-            component_id.0,
-            &[PluginInstallationRepoAction::Update {
-                plugin_installation_id: latest_installation2_id,
-                new_priority: 600,
-                new_parameters: serde_json::to_vec(&new_params).unwrap(),
-            }],
-        )
-        .await?;
-
-    let installations3 = component_repo
-        .get_installed_plugins(&plugin_owner_row, component_id.0, 3)
-        .await?;
-
-    let latest_installation1_id = installations3
-        .iter()
-        .find(|installation| installation.priority == 1000)
-        .unwrap()
-        .installation_id;
-
-    component_repo
-        .apply_plugin_installation_changes(
-            &plugin_owner_row,
-            component_id.0,
-            &[PluginInstallationRepoAction::Uninstall {
-                plugin_installation_id: latest_installation1_id,
-            }],
-        )
-        .await?;
-
-    let installations4 = component_repo
-        .get_installed_plugins(&plugin_owner_row, component_id.0, 4)
-        .await?;
-
-    assert_eq!(installations1.len(), 0);
-    assert_eq!(installations2.len(), 2);
-    assert_eq!(installations3.len(), 2);
-    assert_eq!(installations4.len(), 1);
-    assert_eq!(installations4[0].priority, 600);
 
     Ok(())
 }

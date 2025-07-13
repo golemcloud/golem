@@ -30,7 +30,7 @@ pub mod provided_mysql;
 pub mod sqlite;
 
 #[async_trait]
-pub trait Rdb {
+pub trait Rdb: Send + Sync {
     fn info(&self) -> DbInfo;
     async fn kill(&self);
 }

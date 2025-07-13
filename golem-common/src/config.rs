@@ -117,7 +117,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
             "--dump-config-toml" => self.dump(self.loaded_dump_source(), &dump::toml()),
             other => {
                 if other.starts_with("--dump-config") {
-                    panic!("Unknown dump config parameter: {}", other);
+                    panic!("Unknown dump config parameter: {other}");
                 } else {
                     match self.load() {
                         Ok(config) => Some(config),
@@ -154,7 +154,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
                 dump_figment("Generated from default config", false, &default);
                 for (name, example) in examples {
                     dump_figment(
-                        &format!("Generated from example config: {}", name),
+                        &format!("Generated from example config: {name}"),
                         true,
                         &example,
                     );
@@ -245,17 +245,17 @@ pub(crate) mod dump {
             if is_example {
                 println!();
             }
-            println!(":: {}\n", header)
+            println!(":: {header}\n")
         }
 
         fn value(&self, path: &[&str], name: &str, metadata: Option<&Metadata>, value: &Value) {
             if !path.is_empty() {
                 for elem in path {
-                    print!("{}.", elem);
+                    print!("{elem}.");
                 }
             }
             if !name.is_empty() {
-                print!("{}", name);
+                print!("{name}");
             }
 
             print!(
@@ -268,7 +268,7 @@ pub(crate) mod dump {
                 let source = metadata
                     .and_then(|m| m.source.as_ref())
                     .map_or("unknown".to_owned(), |s| s.to_string());
-                println!(" ({} - {})", name, source);
+                println!(" ({name} - {source})");
             } else {
                 println!()
             }
@@ -282,7 +282,7 @@ pub(crate) mod dump {
             if is_example {
                 println!();
             }
-            println!("### {}\n", header)
+            println!("### {header}\n")
         }
 
         fn value(&self, path: &[&str], name: &str, _metadata: Option<&Metadata>, value: &Value) {
@@ -292,7 +292,7 @@ pub(crate) mod dump {
                 print!("#");
             }
 
-            print!("{}", ENV_VAR_PREFIX);
+            print!("{ENV_VAR_PREFIX}");
 
             if !path.is_empty() {
                 for elem in path {
@@ -321,7 +321,7 @@ pub(crate) mod dump {
             if is_example {
                 println!();
             }
-            println!("## {}", header);
+            println!("## {header}");
 
             let mut config_as_toml_str =
                 toml::to_string(value).expect("Failed to serialize as TOML");
@@ -329,12 +329,12 @@ pub(crate) mod dump {
             if is_example {
                 config_as_toml_str = config_as_toml_str
                     .lines()
-                    .map(|l| format!("# {}", l))
+                    .map(|l| format!("# {l}"))
                     .collect::<Vec<String>>()
                     .join("\n")
             }
 
-            println!("{}", config_as_toml_str);
+            println!("{config_as_toml_str}");
         }
     }
 }
@@ -402,6 +402,16 @@ impl RetryConfig {
             max_delay: Duration::from_secs(2),
             multiplier: 2.0,
             max_jitter_factor: Some(0.15),
+        }
+    }
+
+    pub fn no_retries() -> RetryConfig {
+        Self {
+            max_attempts: 0,
+            min_delay: Duration::from_millis(0),
+            max_delay: Duration::from_millis(0),
+            multiplier: 1.0,
+            max_jitter_factor: None,
         }
     }
 }

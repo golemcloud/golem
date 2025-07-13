@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test, timeout};
-
-use crate::common::{start, start_limited, TestContext, TestWorkerExecutor};
+use crate::common::{start, start_customized, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
-use golem_common::model::ComponentId;
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::future::Future;
 use std::time::Duration;
+use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
 use tokio::task::JoinSet;
 use tracing::{info, Instrument};
@@ -41,7 +40,7 @@ async fn spawning_many_workers_that_sleep(
 ) {
     let context = TestContext::new(last_unique_id);
     fn worker_name(n: i32) -> String {
-        format!("sleeping-worker-{}", n)
+        format!("sleeping-worker-{n}")
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -54,7 +53,7 @@ async fn spawning_many_workers_that_sleep(
         (result, duration)
     }
 
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("clocks").store().await;
 
     let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;
@@ -74,7 +73,7 @@ async fn spawning_many_workers_that_sleep(
     info!("{N} instances");
 
     let start = tokio::time::Instant::now();
-    let input: Vec<(i32, ComponentId, TestWorkerExecutor)> = (1..N)
+    let input: Vec<(i32, _, _)> = (1..N)
         .map(|i| (i, component_id.clone(), executor.clone()))
         .collect();
     let fibers: Vec<_> = input
@@ -111,7 +110,7 @@ async fn spawning_many_workers_that_sleep(
         .into_iter()
         .map(|r| match r {
             Ok((_, duration)) => duration.as_millis(),
-            Err(err) => panic!("Error: {:?}", err),
+            Err(err) => panic!("Error: {err:?}"),
         })
         .collect::<Vec<_>>();
     sorted.sort();
@@ -133,7 +132,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 ) {
     let context = TestContext::new(last_unique_id);
     fn worker_name(n: i32) -> String {
-        format!("sleeping-suspending-worker-{}", n)
+        format!("sleeping-suspending-worker-{n}")
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -146,7 +145,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
         (result, duration)
     }
 
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("clocks").store().await;
 
     let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;
@@ -170,7 +169,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     info!("{N} instances");
 
     let start = tokio::time::Instant::now();
-    let input: Vec<(i32, ComponentId, TestWorkerExecutor)> = (1..N)
+    let input: Vec<(i32, _, _)> = (1..N)
         .map(|i| (i, component_id.clone(), executor.clone()))
         .collect();
     let fibers: Vec<_> = input
@@ -216,7 +215,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
                 };
                 (seconds * 1000.0) as u64
             }
-            Err(err) => panic!("Error: {:?}", err),
+            Err(err) => panic!("Error: {err:?}"),
         })
         .collect::<Vec<_>>();
     sorted1.sort();
@@ -227,7 +226,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
         .into_iter()
         .map(|r| match r {
             Ok((_, duration)) => duration.as_millis(),
-            Err(err) => panic!("Error: {:?}", err),
+            Err(err) => panic!("Error: {err:?}"),
         })
         .collect::<Vec<_>>();
     sorted2.sort();
@@ -249,9 +248,10 @@ async fn initial_large_memory_allocation(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start_limited(deps, &context, Some(768 * 1024 * 1024))
+    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None)
         .await
-        .unwrap();
+        .unwrap()
+        .into_admin();
     let component_id = executor.component("large-initial-memory").store().await;
 
     let mut handles = JoinSet::new();
@@ -294,9 +294,10 @@ async fn dynamic_large_memory_allocation(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start_limited(deps, &context, Some(768 * 1024 * 1024))
+    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None)
         .await
-        .unwrap();
+        .unwrap()
+        .into_admin();
     let component_id = executor.component("large-dynamic-memory").store().await;
 
     let mut handles = JoinSet::new();

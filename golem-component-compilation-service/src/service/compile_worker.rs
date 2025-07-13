@@ -89,12 +89,13 @@ impl CompileWorker {
                     match result {
                         Err(error) => {
                             warn!(
-                                "Failed to compile component {}: {}",
-                                request.component, error
+                                component_id = request.component.id.to_string(),
+                                component_version = request.component.version.to_string(),
+                                error = error.to_string(),
+                                "Failed to compile component"
                             );
                         }
                         Ok(component) => {
-                            info!("Compiled component {}", request.component);
                             let send_result = sender
                                 .send(CompiledComponent {
                                     component_and_version: request.component,
@@ -185,8 +186,7 @@ impl CompileWorker {
                 move || {
                     Component::from_binary(&engine, &bytes).map_err(|e| {
                         CompilationError::CompileFailure(format!(
-                            "Failed to compile component {:?}: {}",
-                            component_with_version, e
+                            "Failed to compile component {component_with_version:?}: {e}"
                         ))
                     })
                 }
@@ -200,9 +200,11 @@ impl CompileWorker {
 
             record_compilation_time(compilation_time);
 
-            tracing::debug!(
-                "Compiled {component_with_version:?} in {}ms",
-                compilation_time.as_millis(),
+            tracing::info!(
+                component_id = component_with_version.id.to_string(),
+                component_version = component_with_version.version.to_string(),
+                compilation_time_ms = compilation_time.as_millis(),
+                "Compiled component"
             );
 
             Ok(component)

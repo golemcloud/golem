@@ -157,7 +157,7 @@ pub fn bad_request_errors(errors: Vec<String>) -> WorkerError {
 pub fn error_to_status(error: WorkerError) -> Status {
     match error.error {
         Some(worker_error::Error::BadRequest(ErrorsBody { errors })) => {
-            Status::invalid_argument(format!("Bad Request: {:?}", errors))
+            Status::invalid_argument(format!("Bad Request: {errors:?}"))
         }
         Some(worker_error::Error::Unauthorized(ErrorBody { error })) => {
             Status::unauthenticated(error)
@@ -257,6 +257,9 @@ pub fn error_to_status(error: WorkerError) -> Status {
                 }
                 worker_execution_error::Error::FileSystemError(_) => {
                     "Failed accessing worker filesystem".to_string()
+                }
+                worker_execution_error::Error::InvocationFailed(_) => {
+                    "Invocation Failed".to_string()
                 }
             };
             Status::internal(message)

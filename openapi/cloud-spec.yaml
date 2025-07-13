@@ -7,12 +7,20 @@ tags:
 - name: Account
   description: The account API allows users to query and manipulate their own account data.
 - name: AccountSummary
+- name: ApiCertificate
+- name: ApiDefinition
+- name: ApiDeployment
+- name: ApiDomain
+- name: ApiSecurity
+- name: Component
+- name: Debugging
 - name: Grant
 - name: HealthCheck
 - name: Limits
   description: The limits API allows users to query their current resource limits.
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
+- name: Plugin
 - name: Project
   description: |-
     Projects are groups of components and their workers, providing both a separate namespace for these entities and allows sharing between accounts.
@@ -24,23 +32,10 @@ tags:
 
     The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
 - name: ProjectPolicy
-  description: |-
-    Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
-
-    The following actions can be used in the projectActions fields of this API:
-    - `ViewComponent` grants read access to a component
-    - `CreateComponent` allows creating new components in a project
-    - `UpdateComponent` allows uploading new versions for existing components in a project
-    - `DeleteComponent` allows deleting components from a project
-    - `ViewWorker` allows querying existing workers of a component belonging to the project
-    - `CreateWorker` allows launching new workers of a component in the project
-    - `UpdateWorker` allows manipulating existing workers of a component belonging to the project
-    - `DeleteWorker` allows deleting workers of a component belonging to the project
-    - `ViewProjectGrants` allows listing the existing grants of the project
-    - `CreateProjectGrants` allows creating new grants for the project
-    - `DeleteProjectGrants` allows deleting existing grants of the project
+  description: Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+- name: Worker
 paths:
   /v1/accounts:
     get:
@@ -1640,7 +1635,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ProjectPermisison'
+                  $ref: '#/components/schemas/ProjectPermission'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -3053,7 +3048,7 @@ components:
         actions:
           type: array
           items:
-            $ref: '#/components/schemas/ProjectPermisison'
+            $ref: '#/components/schemas/ProjectPermission'
     ProjectData:
       type: object
       title: ProjectData
@@ -3132,10 +3127,10 @@ components:
         projectActions:
           type: array
           items:
-            $ref: '#/components/schemas/ProjectPermisison'
+            $ref: '#/components/schemas/ProjectPermission'
         projectPolicyName:
           type: string
-    ProjectPermisison:
+    ProjectPermission:
       type: string
       enum:
       - ViewComponent
@@ -3164,6 +3159,10 @@ components:
       - UpsertApiDomain
       - ViewApiDomain
       - DeleteApiDomain
+      - ViewPluginDefinition
+      - CreatePluginDefinition
+      - UpdatePluginDefinition
+      - DeletePluginDefinition
     ProjectPolicy:
       type: object
       title: ProjectPolicy

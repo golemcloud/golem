@@ -35,10 +35,10 @@ impl Display for EncodingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             EncodingError::ParamTypeMismatch { details } => {
-                write!(f, "Parameter type mismatch: {}", details)
+                write!(f, "Parameter type mismatch: {details}")
             }
-            EncodingError::ValueMismatch { details } => write!(f, "Value mismatch: {}", details),
-            EncodingError::Unknown { details } => write!(f, "Unknown error: {}", details),
+            EncodingError::ValueMismatch { details } => write!(f, "Value mismatch: {details}"),
+            EncodingError::Unknown { details } => write!(f, "Unknown error: {details}"),
         }
     }
 }
@@ -251,8 +251,7 @@ async fn decode_param_impl(
                     .get(*case_idx as usize)
                     .ok_or(EncodingError::ValueMismatch {
                         details: format!(
-                            "in {context} could not get case for discriminant {}",
-                            case_idx
+                            "in {context} could not get case for discriminant {case_idx}"
                         ),
                     })?;
                 let name = case.name;
@@ -310,8 +309,7 @@ async fn decode_param_impl(
                         .get(*discriminant as usize)
                         .ok_or(EncodingError::ValueMismatch {
                             details: format!(
-                                "in {context} could not get name for discriminant {}",
-                                discriminant
+                                "in {context} could not get name for discriminant {discriminant}"
                             ),
                         })?;
 
@@ -558,7 +556,7 @@ pub async fn encode_output(
                     .enumerate()
                     .find(|(_idx, case)| case.name == *name)
                     .ok_or(EncodingError::ValueMismatch {
-                        details: format!("Could not find case for variant {}", name),
+                        details: format!("Could not find case for variant {name}"),
                     })?;
 
                 let encoded_output = match value {
@@ -592,7 +590,7 @@ pub async fn encode_output(
                     .enumerate()
                     .find(|(_idx, n)| n == name)
                     .ok_or(EncodingError::ValueMismatch {
-                        details: format!("Could not find discriminant for enum {}", name),
+                        details: format!("Could not find discriminant for enum {name}"),
                     })?;
                 Ok(Value::Enum(discriminant as u32))
             } else {

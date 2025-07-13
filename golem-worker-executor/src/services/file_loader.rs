@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use anyhow::anyhow;
 use async_lock::Mutex;
 use futures::TryStreamExt;
 use golem_common::model::{AccountId, InitialComponentFileKey};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use std::collections::HashMap;
 use std::path::Path;
@@ -72,11 +72,11 @@ impl FileLoader {
         account_id: &AccountId,
         key: &InitialComponentFileKey,
         target: &PathBuf,
-    ) -> Result<FileUseToken, GolemError> {
+    ) -> Result<FileUseToken, WorkerExecutorError> {
         self.get_read_only_to_impl(account_id, key, target)
             .await
             .map_err(|e| {
-                GolemError::initial_file_download_failed(
+                WorkerExecutorError::initial_file_download_failed(
                     target.display().to_string(),
                     e.to_string(),
                 )
@@ -89,11 +89,11 @@ impl FileLoader {
         account_id: &AccountId,
         key: &InitialComponentFileKey,
         target: &PathBuf,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.get_read_write_to_impl(account_id, key, target)
             .await
             .map_err(|e| {
-                GolemError::initial_file_download_failed(
+                WorkerExecutorError::initial_file_download_failed(
                     target.display().to_string(),
                     e.to_string(),
                 )
@@ -228,7 +228,7 @@ impl FileLoader {
                     }
                     Err(e) => {
                         // we failed to set the file to read-only, we need to fail the entry, remove it from the cache and return the error
-                        *prelocked_entry = Err(format!("Other thread failed to download: {}", e));
+                        *prelocked_entry = Err(format!("Other thread failed to download: {e}"));
                         self.cache.lock().await.remove(key);
 
                         return Err(e);

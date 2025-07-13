@@ -85,8 +85,7 @@ impl RibRepl {
         if history_file_path.exists() {
             if let Err(err) = rl.load_history(&history_file_path) {
                 return Err(ReplBootstrapError::ReplHistoryFileError(format!(
-                    "Failed to load history: {}. Starting with an empty history.",
-                    err
+                    "Failed to load history: {err}. Starting with an empty history."
                 )));
             }
         }
@@ -115,8 +114,7 @@ impl RibRepl {
                         Ok(component_dependencies)
                     }
                     Err(err) => Err(ReplBootstrapError::ComponentLoadError(format!(
-                        "failed to register components: {}",
-                        err
+                        "failed to register components: {err}"
                     ))),
                 }
             }
@@ -287,7 +285,7 @@ impl CommandOrExpr {
                     args: input_args,
                     executor: command,
                 })
-                .ok_or_else(|| format!("Command '{}' not found", command_name))?;
+                .ok_or_else(|| format!("Command '{command_name}' not found"))?;
 
             Ok(command)
         } else {

@@ -64,7 +64,7 @@ impl Display for RoutingTableError {
                     None => "Unknown".to_string(),
                 };
 
-                write!(f, "Shard Manager error: {}", detail)
+                write!(f, "Shard Manager error: {detail}")
             }
             RoutingTableError::NoResult => write!(f, "No Result"),
         }

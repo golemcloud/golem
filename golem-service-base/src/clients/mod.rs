@@ -28,17 +28,17 @@ use url::Url;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RemoteCloudServiceConfig {
+pub struct RemoteServiceConfig {
     pub host: String,
     pub port: u16,
     pub access_token: Uuid,
     pub retries: RetryConfig,
 }
 
-impl RemoteCloudServiceConfig {
+impl RemoteServiceConfig {
     pub fn url(&self) -> Url {
         Url::parse(&format!("http://{}:{}", self.host, self.port))
-            .expect("Failed to parse CloudService URL")
+            .expect("Failed to parse service URL")
     }
 
     pub fn uri(&self) -> Uri {
@@ -47,11 +47,11 @@ impl RemoteCloudServiceConfig {
             .authority(format!("{}:{}", self.host, self.port).as_str())
             .path_and_query("/")
             .build()
-            .expect("Failed to build CloudService URI")
+            .expect("Failed to build service URI")
     }
 }
 
-impl Default for RemoteCloudServiceConfig {
+impl Default for RemoteServiceConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
@@ -63,8 +63,8 @@ impl Default for RemoteCloudServiceConfig {
     }
 }
 
-impl HasConfigExamples<RemoteCloudServiceConfig> for RemoteCloudServiceConfig {
-    fn examples() -> Vec<ConfigExample<RemoteCloudServiceConfig>> {
+impl HasConfigExamples<RemoteServiceConfig> for RemoteServiceConfig {
+    fn examples() -> Vec<ConfigExample<RemoteServiceConfig>> {
         vec![]
     }
 }
@@ -73,7 +73,7 @@ pub fn authorised_request<T>(request: T, access_token: &Uuid) -> tonic::Request<
     let mut req = tonic::Request::new(request);
     req.metadata_mut().insert(
         "authorization",
-        format!("Bearer {}", access_token).parse().unwrap(),
+        format!("Bearer {access_token}").parse().unwrap(),
     );
     req
 }

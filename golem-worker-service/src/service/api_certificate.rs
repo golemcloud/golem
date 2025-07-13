@@ -659,13 +659,13 @@ fn check_certificate(
         Ok(cert) => {
             if let Some(cn) = cert.subject_common_name() {
                 if cn != domain_name {
-                    let detail = format!("Certificate does not match domain name (domain name: {}, certificate common name: {})", domain_name, cn);
+                    let detail = format!("Certificate does not match domain name (domain name: {domain_name}, certificate common name: {cn})");
                     return Err(detail.into());
                 }
             }
         }
         Err(err) => {
-            let detail = format!("Certificate decode error: {}", err);
+            let detail = format!("Certificate decode error: {err}");
             return Err(detail.into());
         }
     }
@@ -897,14 +897,14 @@ rnhtC5zQq8F/lo4kJjmvwQ==
             )
             .await;
 
-        println!("{:?}", import_result);
+        println!("{import_result:?}");
         assert!(import_result.is_ok());
 
         let certificate_arn = import_result.unwrap();
 
         let delete_result = manager.delete(&account_id, &certificate_arn).await;
 
-        println!("{:?}", delete_result);
+        println!("{delete_result:?}");
         assert!(delete_result.is_ok());
     }
 }

@@ -150,8 +150,7 @@ impl From<RouteCompilationErrors> for ApiDefinitionError {
             RouteCompilationErrors::ValidationError(e) => ApiDefinitionError::ValidationError(e),
             RouteCompilationErrors::MetadataNotFoundError(e) => {
                 ApiDefinitionError::RibCompilationErrors(format!(
-                    "Failed to find the metadata of the component {}",
-                    e
+                    "Failed to find the metadata of the component {e}"
                 ))
             }
         }

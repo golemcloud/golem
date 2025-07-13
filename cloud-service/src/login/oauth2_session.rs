@@ -71,10 +71,10 @@ impl OAuth2SessionServiceDefault {
         let public_key = format_key(config.public_key.as_str(), "PUBLIC");
 
         let encoding_key = EncodingKey::from_ed_pem(private_key.as_bytes())
-            .map_err(|err| format!("Failed to create encoding key {}", err))?;
+            .map_err(|err| format!("Failed to create encoding key {err}"))?;
 
         let decoding_key = DecodingKey::from_ed_pem(public_key.as_bytes())
-            .map_err(|err| format!("Failed to create decoding key {}", err))?;
+            .map_err(|err| format!("Failed to create decoding key {err}"))?;
 
         Ok(Self::new(encoding_key, decoding_key))
     }

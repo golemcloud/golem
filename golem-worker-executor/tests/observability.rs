@@ -12,9 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use axum::routing::post;
 use axum::{Json, Router};
+use golem_common::model::component_metadata::{
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+};
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
+use golem_common::model::{ComponentType, IdempotencyKey, WorkerId};
+use golem_test_framework::config::TestDependencies;
+use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use http::HeaderMap;
 use log::info;
@@ -22,16 +32,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test};
 use tracing::Instrument;
-
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use golem_common::model::component_metadata::{
-    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
-};
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
-use golem_common::model::{ComponentType, IdempotencyKey, WorkerId};
-use golem_test_framework::dsl::TestDslUnsafe;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -45,7 +45,7 @@ async fn get_oplog_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("runtime-service").store().await;
 
@@ -84,18 +84,26 @@ async fn get_oplog_1(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog2 = executor.get_oplog(&worker_id, OplogIndex::NONE).await;
     drop(executor);
 
     // Whether there is an "enqueued invocation" entry or just directly started invocation
     // depends on timing
     assert!(oplog.len() >= 12 && oplog.len() <= 14);
-    assert!(matches!(oplog[0], PublicOplogEntry::Create(_)));
+    assert_eq!(oplog[0].oplog_index, OplogIndex::INITIAL);
+    assert!(matches!(oplog[0].entry, PublicOplogEntry::Create(_)));
+
+    assert_eq!(oplog2[0].oplog_index, OplogIndex::INITIAL);
+    assert!(matches!(oplog2[0].entry, PublicOplogEntry::Create(_)));
+
     assert_eq!(
         oplog
             .iter()
             .filter(
-                |entry| matches!(entry, PublicOplogEntry::ExportedFunctionInvoked(
+                |entry| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
         ExportedFunctionInvokedParameters { function_name, .. }
     ) if function_name == "golem:it/api.{generate-idempotency-keys}")
             )
@@ -112,7 +120,7 @@ async fn search_oplog_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("shopping-cart").store().await;
 
@@ -212,7 +220,7 @@ async fn get_oplog_with_api_changing_updates(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -247,7 +255,7 @@ async fn get_oplog_with_api_changing_updates(
     // there might be a pending invocation entry before the update entry. Filter it out to make the test more robust
     let oplog = oplog
         .into_iter()
-        .filter(|entry| !matches!(entry, PublicOplogEntry::PendingWorkerInvocation(_)))
+        .filter(|entry| !matches!(entry.entry, PublicOplogEntry::PendingWorkerInvocation(_)))
         .collect::<Vec<_>>();
 
     check!(result[0] == Value::U64(11));
@@ -262,7 +270,7 @@ async fn get_oplog_starting_with_updated_component(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let target_version = executor
@@ -293,7 +301,7 @@ async fn invocation_context_test(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -372,7 +380,7 @@ async fn invocation_context_test(
     }
 
     let dump: Vec<_> = contexts.lock().unwrap().drain(..).collect();
-    info!("{:#?}", dump);
+    info!("{dump:#?}");
 
     executor.check_oplog_is_queryable(&worker_id).await;
 

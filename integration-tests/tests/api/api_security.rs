@@ -16,6 +16,7 @@ use crate::Tracing;
 use assert2::assert;
 use golem_client::model::{Provider, SecuritySchemeData};
 use golem_test_framework::config::{EnvBasedTestDependencies, GolemClientProtocol, TestDependencies};
+use golem_test_framework::dsl::TestDsl;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
@@ -29,11 +30,13 @@ async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
         return assert!(false, "Test requires to select HTTP golem client protocol");
     }
 
+    let admin = deps.admin();
+    let project = admin.default_project().await.unwrap();
     let security_scheme = new_security_scheme();
 
     let created_security_scheme = deps
         .worker_service()
-        .create_api_security_scheme(security_scheme.clone())
+        .create_api_security_scheme(&admin.token, &project, security_scheme.clone())
         .await
         .unwrap();
 
@@ -47,16 +50,18 @@ async fn get_api_security_scheme(deps: &EnvBasedTestDependencies) {
         return assert!(false, "Test requires to select HTTP golem client protocol");
     }
 
+    let admin = deps.admin();
+    let project = admin.default_project().await.unwrap();
     let security_scheme = new_security_scheme();
 
     deps.worker_service()
-        .create_api_security_scheme(security_scheme.clone())
+        .create_api_security_scheme(&admin.token, &project, security_scheme.clone())
         .await
         .unwrap();
 
     let get_result = deps
         .worker_service()
-        .get_api_security_scheme(&security_scheme.scheme_identifier)
+        .get_api_security_scheme(&admin.token, &project, &security_scheme.scheme_identifier)
         .await
         .unwrap();
 

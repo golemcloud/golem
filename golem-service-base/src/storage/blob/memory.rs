@@ -283,7 +283,7 @@ impl BlobStorage for InMemoryBlobStorage {
             let prefix = if dir.ends_with('/') || dir.is_empty() {
                 dir.to_string()
             } else {
-                format!("{}/", dir)
+                format!("{dir}/")
             };
             namespace_data
                 .iter()

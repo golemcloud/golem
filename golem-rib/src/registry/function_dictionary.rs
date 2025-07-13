@@ -263,7 +263,7 @@ fn resolve_function_name(
                 function_name: function_name.to_string(),
             })),
 
-            Err(e) => Err(format!("invalid function call. {}", e)),
+            Err(e) => Err(format!("invalid function call. {e}")),
         },
     }
 }
@@ -291,7 +291,7 @@ fn get_resource_method_name(function_name: &str) -> Result<Option<(String, Strin
             (Some(constructor), Some(method)) => {
                 Ok(Some((constructor.to_string(), method.to_string())))
             }
-            _ => Err(format!("Invalid resource method name: {}", function_name)),
+            _ => Err(format!("Invalid resource method name: {function_name}")),
         }
     } else if function_name.starts_with("[drop]") {
         let constructor = function_name.trim_start_matches("[drop]").to_string();
@@ -558,11 +558,11 @@ impl FullyQualifiedResourceMethod {
 impl Display for FullyQualifiedFunctionName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(package_name) = &self.package_name {
-            write!(f, "{}", package_name)?
+            write!(f, "{package_name}")?
         }
 
         if let Some(interface_name) = &self.interface_name {
-            write!(f, "/{}.", interface_name)?;
+            write!(f, "/{interface_name}.")?;
             write!(f, "{{{}}}", self.function_name)
         } else {
             write!(f, "{}", self.function_name)

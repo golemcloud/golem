@@ -103,16 +103,16 @@ impl Display for IdentityProviderError {
 impl SafeDisplay for IdentityProviderError {
     fn to_safe_string(&self) -> String {
         match self {
-            IdentityProviderError::ClientInitError(err) => format!("ClientInitError: {}", err),
-            IdentityProviderError::InvalidIssuerUrl(err) => format!("InvalidIssuerUrl: {}", err),
+            IdentityProviderError::ClientInitError(err) => format!("ClientInitError: {err}"),
+            IdentityProviderError::InvalidIssuerUrl(err) => format!("InvalidIssuerUrl: {err}"),
             IdentityProviderError::FailedToDiscoverProviderMetadata(err) => {
-                format!("FailedToDiscoverProviderMetadata: {}", err)
+                format!("FailedToDiscoverProviderMetadata: {err}")
             }
             IdentityProviderError::FailedToExchangeCodeForTokens(err) => {
-                format!("FailedToExchangeCodeForTokens: {}", err)
+                format!("FailedToExchangeCodeForTokens: {err}")
             }
             IdentityProviderError::IdTokenVerificationError(err) => {
-                format!("IdTokenVerificationError: {}", err)
+                format!("IdTokenVerificationError: {err}")
             }
         }
     }

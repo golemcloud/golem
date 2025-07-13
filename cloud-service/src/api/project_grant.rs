@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ApiError, ApiResult, ApiTags};
-use crate::auth::AccountAuthorisation;
+use super::{ApiError, ApiResult};
 use crate::model::*;
 use crate::service::account::AccountService;
-use crate::service::auth::AuthService;
+use crate::service::auth::{AuthService, ViewableAccounts};
 use crate::service::project_grant::ProjectGrantService;
 use crate::service::project_policy::ProjectPolicyService;
-use golem_common::model::auth::ProjectActions;
+use golem_common::model::auth::{ProjectAction, ProjectActions};
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::ProjectId;
 use golem_common::model::{ProjectGrantId, ProjectPolicyId};
 use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
@@ -78,9 +78,13 @@ impl ProjectGrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Vec<ProjectGrant>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::ViewProjectGrants)
+            .await?;
+
         let grants = self
             .project_grant_service
-            .get_by_project(&project_id, &auth)
+            .get_by_project(&project_id)
             .await?;
         Ok(Json(grants))
     }
@@ -119,10 +123,15 @@ impl ProjectGrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<ProjectGrant>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::ViewProjectGrants)
+            .await?;
+
         let grant = self
             .project_grant_service
-            .get(&project_id, &grant_id, &auth)
+            .get(&project_id, &grant_id)
             .await?;
+
         match grant {
             Some(grant) => Ok(Json(grant)),
             None => Err(ApiError::NotFound(Json(ErrorBody {
@@ -168,6 +177,9 @@ impl ProjectGrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<ProjectGrant>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::CreateProjectGrants)
+            .await?;
 
         let account_id = match (request.grantee_account_id, request.grantee_email) {
             (Some(account_id), _) => account_id,
@@ -175,7 +187,7 @@ impl ProjectGrantApi {
                 info!("Looking up account by email {email}");
                 let mut accounts = self
                     .account_service
-                    .find(Some(&email), &AccountAuthorisation::admin())
+                    .find(Some(&email), ViewableAccounts::All)
                     .await?;
                 if accounts.len() == 1 {
                     accounts.swap_remove(0).id
@@ -220,7 +232,7 @@ impl ProjectGrantApi {
             data,
         };
 
-        self.project_grant_service.create(&grant, &auth).await?;
+        self.project_grant_service.create(&grant).await?;
         Ok(Json(grant))
     }
 
@@ -258,10 +270,14 @@ impl ProjectGrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<DeleteProjectGrantResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::DeleteProjectGrants)
+            .await?;
 
         self.project_grant_service
-            .delete(&project_id, &grant_id, &auth)
+            .delete(&project_id, &grant_id)
             .await?;
+
         Ok(Json(DeleteProjectGrantResponse {}))
     }
 }

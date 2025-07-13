@@ -23,7 +23,6 @@ pub mod model;
 pub mod repo;
 pub mod service;
 
-use self::auth::AccountAuthorisation;
 use self::config::{AccountConfig, AccountsConfig};
 use self::service::account::AccountService;
 use self::service::account_grant::AccountGrantService;
@@ -51,7 +50,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::task::JoinSet;
-use tracing::{info, Instrument};
+use tracing::{debug, info, Instrument};
 
 #[cfg(test)]
 test_r::enable!();
@@ -80,10 +79,7 @@ impl CloudService {
         config: CloudServiceConfig,
         prometheus_registry: Registry,
     ) -> Result<Self, anyhow::Error> {
-        info!(
-            "Starting cloud-service server on ports: http: {}, grpc: {}",
-            config.http_port, config.grpc_port
-        );
+        debug!("Initializing cloud service");
 
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
 
@@ -131,6 +127,11 @@ impl CloudService {
     ) -> Result<RunDetails, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_http_server(join_set).await?;
+
+        info!(
+            "Started cloud service on ports: http: {}, grpc: {}",
+            http_port, grpc_port
+        );
 
         Ok(RunDetails {
             http_port,
@@ -252,17 +253,12 @@ async fn create_initial_account(
                 name: account_config.name.clone(),
                 email: account_config.email.clone(),
             },
-            &AccountAuthorisation::admin(),
         )
         .await
         .ok();
 
     grant_service
-        .add(
-            &account_id,
-            &account_config.role,
-            &AccountAuthorisation::admin(),
-        )
+        .add(&account_id, &account_config.role)
         .await
         .ok();
 
@@ -271,7 +267,6 @@ async fn create_initial_account(
             &account_id,
             &DateTime::<Utc>::MAX_UTC,
             &TokenSecret::new(account_config.token),
-            &AccountAuthorisation::admin(),
         )
         .await
         .ok();

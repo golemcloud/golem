@@ -24,7 +24,7 @@ use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
-use golem_worker_executor::model::InterruptKind;
+use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::oplog::Oplog;
 use golem_worker_executor::services::{
     All, HasConfig, HasExtraDeps, HasOplog, HasShardManagerService, HasShardService,
@@ -38,7 +38,7 @@ use std::time::Duration;
 use tracing::{error, info};
 
 #[async_trait]
-pub trait DebugService {
+pub trait DebugService: Send + Sync {
     async fn connect(
         &self,
         authentication_context: &AuthCtx,
@@ -101,9 +101,9 @@ pub enum DebugServiceError {
 impl Display for DebugServiceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DebugServiceError::Internal { message, .. } => write!(f, "Internal error: {}", message),
-            DebugServiceError::Unauthorized { message } => write!(f, "Unauthorized: {}", message),
-            DebugServiceError::Conflict { message, .. } => write!(f, "Conflict: {}", message),
+            DebugServiceError::Internal { message, .. } => write!(f, "Internal error: {message}"),
+            DebugServiceError::Unauthorized { message } => write!(f, "Unauthorized: {message}"),
+            DebugServiceError::Conflict { message, .. } => write!(f, "Conflict: {message}"),
             DebugServiceError::ValidationFailed { errors, .. } => {
                 write!(f, "Validation failed: {:?}", errors.join(", "))
             }
@@ -342,7 +342,7 @@ impl DebugServiceDefault {
                 worker_id: owned_worker_id.worker_id.clone(),
                 current_index: last_index,
                 success: true,
-                message: format!("Rewinding the worker to index {}", target_index),
+                message: format!("Rewinding the worker to index {target_index}"),
             })
         } else {
             // If this is the first step in a debugging session, then rewind is more or less
@@ -359,7 +359,7 @@ impl DebugServiceDefault {
                 worker_id: owned_worker_id.worker_id.clone(),
                 current_index: result.current_index,
                 success: true,
-                message: format!("Rewinding the worker to index {}", target_index),
+                message: format!("Rewinding the worker to index {target_index}"),
             })
         }
     }
@@ -391,8 +391,7 @@ impl DebugServiceDefault {
             if target_index < existing_target_index {
                 return Err(DebugServiceError::internal(
                     format!(
-                        "Target oplog index {} for playback is less than the existing target oplog index {}. Use rewind instead",
-                        target_index, existing_target_index
+                        "Target oplog index {target_index} for playback is less than the existing target oplog index {existing_target_index}. Use rewind instead"
                     ),
                     Some(debug_session_id.worker_id()),
                 ));
@@ -514,8 +513,7 @@ impl DebugServiceDefault {
                     if new_target_oplog_index == original_last_oplog_index {
                         let error_message = format!(
                             "Invocation boundary not found. Set an oplog index that is not in the middle of an incomplete invocation. \
-                        Last oplog index: {}",
-                            original_last_oplog_index
+                        Last oplog index: {original_last_oplog_index}"
                         );
                         error!("{}", error_message);
                         return Err(error_message);
@@ -544,7 +542,7 @@ impl DebugService for DebugServiceDefault {
                 auth_ctx,
             )
             .await
-            .map_err(|e| DebugServiceError::unauthorized(format!("Unauthorized: {}", e)))?;
+            .map_err(|e| DebugServiceError::unauthorized(format!("Unauthorized: {e}")))?;
 
         let owned_worker_id = OwnedWorkerId::new(&namespace.account_id, &worker_id);
 
@@ -582,7 +580,7 @@ impl DebugService for DebugServiceDefault {
         Ok(ConnectResult {
             worker_id: worker_id.clone(),
             success: true,
-            message: format!("Worker {} connected to namespace {}", worker_id, namespace),
+            message: format!("Worker {worker_id} connected to namespace {namespace}"),
         })
     }
 
@@ -677,10 +675,7 @@ impl DebugService for DebugServiceDefault {
             source_worker_id: source_worker_id.worker_id.clone(),
             target_worker_id: target_worker_id.clone(),
             success: true,
-            message: format!(
-                "Forked worker {} to new worker {}",
-                source_worker_id, target_worker_id
-            ),
+            message: format!("Forked worker {source_worker_id} to new worker {target_worker_id}"),
         })
     }
 
@@ -726,7 +721,7 @@ impl DebugService for DebugServiceDefault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Bytes;
+    use bytes::Bytes;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
     use golem_common::model::Timestamp;

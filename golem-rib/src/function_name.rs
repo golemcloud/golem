@@ -359,18 +359,18 @@ impl Display for ParsedFunctionReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let function_name = match self {
             Self::Function { function } => function.clone(),
-            Self::RawResourceConstructor { resource } => format!("{}.new", resource),
+            Self::RawResourceConstructor { resource } => format!("{resource}.new"),
             Self::IndexedResourceConstructor {
                 resource,
                 resource_params,
             } => {
                 format!("{}({}).new", resource, resource_params.join(", "))
             }
-            Self::RawResourceMethod { resource, method } => format!("{}.{}", resource, method),
+            Self::RawResourceMethod { resource, method } => format!("{resource}.{method}"),
             Self::RawResourceStaticMethod { resource, method } => {
-                format!("[static]{}.{}", resource, method)
+                format!("[static]{resource}.{method}")
             }
-            Self::RawResourceDrop { resource } => format!("{}.drop", resource),
+            Self::RawResourceDrop { resource } => format!("{resource}.drop"),
             Self::IndexedResourceDrop {
                 resource,
                 resource_params,
@@ -398,7 +398,7 @@ impl Display for ParsedFunctionReference {
             }
         };
 
-        write!(f, "{}", function_name)
+        write!(f, "{function_name}")
     }
 }
 
@@ -596,7 +596,7 @@ impl DynamicParsedFunctionName {
 impl Display for DynamicParsedFunctionName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let function_name = self.to_parsed_function_name().to_string();
-        write!(f, "{}", function_name)
+        write!(f, "{function_name}")
     }
 }
 
@@ -631,7 +631,7 @@ impl Display for ParsedFunctionName {
             .map_or(self.function.function_name(), |interface| {
                 format!("{}.{{{}}}", interface, self.function)
             });
-        write!(f, "{}", function_name)
+        write!(f, "{function_name}")
     }
 }
 

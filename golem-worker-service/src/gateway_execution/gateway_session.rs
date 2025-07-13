@@ -57,7 +57,7 @@ pub enum GatewaySessionError {
 impl SafeDisplay for GatewaySessionError {
     fn to_safe_string(&self) -> String {
         match self {
-            GatewaySessionError::InternalError(e) => format!("Internal error: {}", e),
+            GatewaySessionError::InternalError(e) => format!("Internal error: {e}"),
             GatewaySessionError::MissingValue { session_id, .. } => {
                 format!("Invalid session {}", session_id.0)
             }

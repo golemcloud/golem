@@ -432,7 +432,7 @@ impl BlobStorage for S3BlobStorage {
                         .get_object()
                         .bucket(*bucket)
                         .key(key.to_string_lossy())
-                        .range(format!("bytes={}-{}", start, end))
+                        .range(format!("bytes={start}-{end}"))
                         .send()
                         .await
                 })
@@ -909,7 +909,7 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<ExistsResult, String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.s3_key(&namespace, path);
-        let op_id = format!("{} - {:?}", bucket, key);
+        let op_id = format!("{bucket} - {key:?}");
 
         let file_head_result = with_retries_customized(
             target_label,

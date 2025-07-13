@@ -18,7 +18,7 @@ use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
-use golem_service_base::clients::RemoteCloudServiceConfig;
+use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use http::Uri;
@@ -45,7 +45,7 @@ pub struct WorkerServiceConfig {
     pub api_definition: ApiDefinitionServiceConfig,
     pub workspace: String,
     pub domain_records: DomainRecordsConfig,
-    pub cloud_service: RemoteCloudServiceConfig,
+    pub cloud_service: RemoteServiceConfig,
     pub cors_origin_regex: String,
 }
 
@@ -81,7 +81,7 @@ impl Default for WorkerServiceConfig {
             api_definition: ApiDefinitionServiceConfig::default(),
             workspace: "release".to_string(),
             domain_records: DomainRecordsConfig::default(),
-            cloud_service: RemoteCloudServiceConfig::default(),
+            cloud_service: RemoteServiceConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
     }
@@ -228,7 +228,7 @@ impl DomainRecordsConfig {
         let s = api_site.to_lowercase();
 
         !self.subdomain_black_list.iter().any(|p| {
-            let d = format!("{}.{}", p, hz).to_lowercase();
+            let d = format!("{p}.{hz}").to_lowercase();
             d == s
         })
     }

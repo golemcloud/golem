@@ -22,7 +22,7 @@ pub mod provided;
 pub mod spawned;
 
 #[async_trait]
-pub trait WorkerExecutorCluster {
+pub trait WorkerExecutorCluster: Send + Sync {
     fn size(&self) -> usize;
     async fn kill_all(&self);
     async fn restart_all(&self);
@@ -30,7 +30,7 @@ pub trait WorkerExecutorCluster {
     async fn stop(&self, index: usize);
     async fn start(&self, index: usize);
 
-    fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>>;
+    fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor>>;
 
     async fn stopped_indices(&self) -> Vec<usize>;
     async fn started_indices(&self) -> Vec<usize>;

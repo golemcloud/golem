@@ -47,7 +47,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
                 return Err(CustomError {
                     source_span:  source_span.clone(),
                     help_message: vec![],
-                    message: format!("invalid method invocation `{}.{}`. make sure `{}` is defined and is a valid instance type (i.e, resource or worker)", lhs, method, lhs),
+                    message: format!("invalid method invocation `{lhs}.{method}`. make sure `{lhs}` is defined and is a valid instance type (i.e, resource or worker)"),
                 }.into());
             }
 

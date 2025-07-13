@@ -58,7 +58,7 @@ pub fn deserialize_with_version<T: Decode<()>>(data: &[u8], version: u8) -> Resu
                 data = format!("{:?}", data),
                 "invalid serialization version"
             );
-            panic!("invalid serialization version: {}", version)
+            panic!("invalid serialization version: {version}")
         }
     }
 }

@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use super::dto;
-use crate::api::{ApiResult, ApiTags};
+use crate::api::ApiResult;
 use crate::model::*;
-use crate::service::account::AccountService;
+use crate::service::account::{AccountError, AccountService};
 use crate::service::auth::AuthService;
+use golem_common::model::auth::AccountAction;
 use golem_common::model::AccountId;
 use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use param::Query;
 use poem_openapi::param::Path;
@@ -58,7 +60,12 @@ impl AccountApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<dto::FindAccountsResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let values = self.account_service.find(email.as_deref(), &auth).await?;
+        let viewable_accounts = self.auth_service.viewable_accounts(&auth).await?;
+
+        let values = self
+            .account_service
+            .find(email.as_deref(), viewable_accounts)
+            .await?;
         Ok(Json(dto::FindAccountsResponse { values }))
     }
 
@@ -87,7 +94,11 @@ impl AccountApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Account>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self.account_service.get(&account_id, &auth).await?;
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::ViewAccount)
+            .await?;
+
+        let response = self.account_service.get(&account_id).await?;
         Ok(Json(response))
     }
 
@@ -118,7 +129,11 @@ impl AccountApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Plan>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self.account_service.get_plan(&account_id, &auth).await?;
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::ViewPlan)
+            .await?;
+
+        let response = self.account_service.get_plan(&account_id).await?;
         Ok(Json(response))
     }
 
@@ -152,10 +167,11 @@ impl AccountApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Account>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self
-            .account_service
-            .update(&account_id, &data, &auth)
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::UpdateAccount)
             .await?;
+
+        let response = self.account_service.update(&account_id, &data).await?;
         Ok(Json(response))
     }
 
@@ -183,9 +199,13 @@ impl AccountApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Account>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_global_action(&auth, &GlobalAction::CreateAccount)
+            .await?;
+
         let response = self
             .account_service
-            .create(&AccountId::generate(), &data, &auth)
+            .create(&AccountId::generate(), &data)
             .await?;
         Ok(Json(response))
     }
@@ -219,7 +239,17 @@ impl AccountApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<DeleteAccountResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        self.account_service.delete(&account_id, &auth).await?;
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::DeleteAccount)
+            .await?;
+
+        if auth.token.account_id == account_id {
+            Err(AccountError::ArgValidation(vec![
+                "Cannot delete current account.".to_string(),
+            ]))?;
+        };
+
+        self.account_service.delete(&account_id).await?;
         Ok(Json(DeleteAccountResponse {}))
     }
 }

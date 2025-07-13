@@ -4,7 +4,7 @@ use crate::common::{start, TestContext, TestWorkerExecutor};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use anyhow::anyhow;
 use golem_common::model::ComponentType;
-use golem_test_framework::config::TestDependencies;
+use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_ast::analysis::AnalysisContext;
 use golem_wasm_ast::component::Component;
@@ -31,11 +31,11 @@ async fn measure(
 ) {
     let mut system = System::new_all();
     let ctx = TestContext::new(last_unique_id);
-    let executor = start(deps, &ctx).await.unwrap();
+    let executor = start(deps, &ctx).await.unwrap().into_admin();
 
     // collect
     let mut paths = Vec::new();
-    let mut read_dir = tokio::fs::read_dir(executor.component_directory())
+    let mut read_dir = tokio::fs::read_dir(executor.deps.component_directory())
         .await
         .unwrap();
     while let Some(entry) = read_dir.next_entry().await.unwrap() {
@@ -88,21 +88,23 @@ async fn measure(
             ISizeFormatter::new(delta_memory, BINARY),
             // ISizeFormatter::new(vresult, BINARY)
         );
-        writeln!(csv, "{},{},{}", name, component_size, delta_memory).unwrap();
+        writeln!(csv, "{name},{component_size},{delta_memory}").unwrap();
     }
     info!("{}", csv);
 }
 
 async fn measure_component(
     system: &mut System,
-    executor: &TestWorkerExecutor,
+    executor: &TestDependenciesDsl<TestWorkerExecutor>,
     path: &Path,
 ) -> anyhow::Result<(i64, i64)> {
     info!("Measuring {path:?}");
 
     let component_meta = executor
+        .deps
         .component_service()
         .get_or_add_component(
+            &executor.token,
             path,
             path.file_name().unwrap().to_string_lossy().as_ref(),
             ComponentType::Durable,
@@ -110,6 +112,7 @@ async fn measure_component(
             &HashMap::new(),
             false,
             &HashMap::new(),
+            None,
         )
         .await;
 

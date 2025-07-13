@@ -29,6 +29,7 @@ use golem_api_grpc::proto::golem::project::v1::{
 };
 use golem_api_grpc::proto::golem::project::Project;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::auth::{AccountAction, ProjectAction};
 use golem_common::model::{AccountId, ProjectId};
 use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;
@@ -76,6 +77,11 @@ impl From<project::ProjectError> for ProjectError {
             }
             project::ProjectError::LimitExceeded(_) => {
                 wrap_error(project_error::Error::LimitExceeded(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            project::ProjectError::ProjectNotFound { .. } => {
+                wrap_error(project_error::Error::NotFound(ErrorBody {
                     error: value.to_safe_string(),
                 }))
             }
@@ -138,8 +144,15 @@ impl ProjectGrpcApi {
         metadata: MetadataMap,
     ) -> Result<Project, ProjectError> {
         let auth = self.auth(metadata).await?;
+        let account_id = &auth.token.account_id;
+        self.auth_service
+            .authorize_account_action(&auth, account_id, &AccountAction::ViewDefaultProject)
+            .await?;
 
-        let result = self.project_service.get_default(&auth).await?;
+        let result = self
+            .project_service
+            .get_default(&auth.token.account_id)
+            .await?;
         Ok(result.into())
     }
 
@@ -150,12 +163,16 @@ impl ProjectGrpcApi {
     ) -> Result<Project, ProjectError> {
         let auth = self.auth(metadata).await?;
 
-        let id: ProjectId = request
+        let project_id: ProjectId = request
             .project_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing project id"))?;
 
-        let result = self.project_service.get(&id, &auth).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::ViewProject)
+            .await?;
+
+        let result = self.project_service.get(&project_id).await?;
 
         match result {
             Some(project) => Ok(project.into()),
@@ -173,10 +190,15 @@ impl ProjectGrpcApi {
         metadata: MetadataMap,
     ) -> Result<Vec<Project>, ProjectError> {
         let auth = self.auth(metadata).await?;
+        let viewable_projects = self.auth_service.viewable_projects(&auth).await?;
 
         let projects = match request.project_name {
-            Some(name) => self.project_service.get_all_by_name(&name, &auth).await?,
-            None => self.project_service.get_all(&auth).await?,
+            Some(name) => {
+                self.project_service
+                    .get_all_by_name(&name, viewable_projects)
+                    .await?
+            }
+            None => self.project_service.get_all(viewable_projects).await?,
         };
 
         Ok(projects.into_iter().map(|p| p.into()).collect())
@@ -188,11 +210,16 @@ impl ProjectGrpcApi {
         metadata: MetadataMap,
     ) -> Result<(), ProjectError> {
         let auth = self.auth(metadata).await?;
-        let id: ProjectId = request
+        let project_id: ProjectId = request
             .project_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing project id"))?;
-        self.project_service.delete(&id, &auth).await?;
+
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::DeleteProject)
+            .await?;
+
+        self.project_service.delete(&project_id).await?;
 
         Ok(())
     }
@@ -209,6 +236,10 @@ impl ProjectGrpcApi {
             .map(|id| id.into())
             .ok_or_else(|| bad_request_error("Missing account id"))?;
 
+        self.auth_service
+            .authorize_account_action(&auth, &owner_account_id, &AccountAction::CreateProject)
+            .await?;
+
         let project = model::Project {
             project_id: ProjectId::new_v4(),
             project_data: model::ProjectData {
@@ -220,7 +251,7 @@ impl ProjectGrpcApi {
             },
         };
 
-        self.project_service.create(&project, &auth).await?;
+        self.project_service.create(&project).await?;
 
         Ok(project.into())
     }

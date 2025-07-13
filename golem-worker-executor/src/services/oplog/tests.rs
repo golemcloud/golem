@@ -23,7 +23,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use golem_common::config::RedisConfig;
-use golem_common::model::oplog::{SpanData, WorkerError};
+use golem_common::model::oplog::{LogLevel, SpanData, WorkerError};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentType, WorkerStatusRecord};
 use golem_common::redis::RedisPool;
@@ -1703,7 +1703,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
     for i in 0..100 {
         let worker_id = WorkerId {
             component_id: component_id.clone(),
-            worker_name: format!("worker-{}", i),
+            worker_name: format!("worker-{i}"),
         };
         let create_entry = OplogEntry::create(
             worker_id.clone(),
@@ -1734,13 +1734,47 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                 secondary_workers.push(worker_id.clone());
                 debug!("Archiving {worker_id} to secondary layer");
                 MultiLayerOplog::try_archive_blocking(&oplog).await;
+
+                if i % 2 == 1 {
+                    debug!("Adding more oplog entries to primary");
+                    oplog
+                        .add_and_commit(OplogEntry::log(
+                            LogLevel::Debug,
+                            "test".to_string(),
+                            "test".to_string(),
+                        ))
+                        .await;
+                }
             }
             2 => {
                 tertiary_workers.push(worker_id.clone());
                 debug!("Archiving {worker_id} to secondary layer");
                 let r = MultiLayerOplog::try_archive_blocking(&oplog).await;
+
+                if i % 2 == 1 {
+                    debug!("Adding more oplog entries to primary going to be moved to the secondary layer");
+                    oplog
+                        .add_and_commit(OplogEntry::log(
+                            LogLevel::Debug,
+                            "test".to_string(),
+                            "test".to_string(),
+                        ))
+                        .await;
+                }
+
                 debug!("[{r:?}] => archiving {worker_id} to tertiary layer");
                 MultiLayerOplog::try_archive_blocking(&oplog).await;
+
+                if i % 2 == 1 {
+                    debug!("Adding more oplog entries to primary");
+                    oplog
+                        .add_and_commit(OplogEntry::log(
+                            LogLevel::Debug,
+                            "test".to_string(),
+                            "test".to_string(),
+                        ))
+                        .await;
+                }
             }
             _ => unreachable!(),
         }

@@ -94,19 +94,6 @@ mod tests {
 
     #[test]
     #[tracing::instrument]
-    async fn default_component_plugin_installation(
-        component_repo: &Arc<dyn ComponentRepo>,
-        plugin_repo: &Arc<dyn PluginRepo>,
-    ) -> Result<(), RepoError> {
-        crate::all::repo::test_default_component_plugin_installation(
-            component_repo.clone(),
-            plugin_repo.clone(),
-        )
-        .await
-    }
-
-    #[test]
-    #[tracing::instrument]
     async fn component_find_by_names(component_repo: &Arc<dyn ComponentRepo>) {
         crate::all::repo::test_repo_component_find_by_names(component_repo.clone()).await
     }

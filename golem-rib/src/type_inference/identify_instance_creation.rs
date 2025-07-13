@@ -121,7 +121,7 @@ mod internal {
                 .map_err(|err| {
                     RibTypeErrorInternal::from(CustomError::new(
                         source_span.clone(),
-                        format!("failed to get instance creation details: {}", err),
+                        format!("failed to get instance creation details: {err}"),
                     ))
                 })?;
 
@@ -138,7 +138,7 @@ mod internal {
                     .map_err(|err| {
                         RibTypeErrorInternal::from(CustomError::new(
                             source_span.clone(),
-                            format!("failed to create instance: {}", err),
+                            format!("failed to create instance: {err}"),
                         ))
                     })?;
 
