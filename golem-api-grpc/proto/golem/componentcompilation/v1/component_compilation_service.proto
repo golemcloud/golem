@@ -4,6 +4,7 @@ package golem.componentcompilation.v1;
 
 import "golem/common/empty.proto";
 import "golem/common/error_body.proto";
+import "golem/common/project_id.proto";
 import "golem/component/component_id.proto";
 
 service ComponentCompilationService {
@@ -14,6 +15,7 @@ message ComponentCompilationRequest {
     golem.component.ComponentId component_id = 1;
     uint64 component_version = 2;
     optional uint32 component_service_port = 3;
+    golem.common.ProjectId project_id = 4;
 }
 
 message ComponentCompilationResponse {

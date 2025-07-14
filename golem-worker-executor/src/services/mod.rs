@@ -31,6 +31,7 @@ pub mod golem_config;
 pub mod key_value;
 pub mod oplog;
 pub mod plugins;
+pub mod projects;
 pub mod promise;
 pub mod rdbms;
 pub mod resource_limits;
@@ -173,6 +174,10 @@ pub trait HasResourceLimits {
     fn resource_limits(&self) -> Arc<dyn resource_limits::ResourceLimits>;
 }
 
+pub trait HasProjectService {
+    fn project_service(&self) -> Arc<dyn projects::ProjectService>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -199,6 +204,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasPlugins
     + HasOplogProcessorPlugin
     + HasResourceLimits
+    + HasProjectService
     + HasExtraDeps<Ctx>
     + Clone
     + Sync
@@ -231,6 +237,7 @@ impl<
             + HasPlugins
             + HasOplogProcessorPlugin
             + HasResourceLimits
+            + HasProjectService
             + HasExtraDeps<Ctx>
             + Clone
             + Sync,
@@ -268,6 +275,7 @@ pub struct All<Ctx: WorkerCtx> {
     plugins: Arc<dyn Plugins>,
     oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
     resource_limits: Arc<dyn resource_limits::ResourceLimits>,
+    project_service: Arc<dyn projects::ProjectService>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -300,6 +308,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
+            project_service: self.project_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -336,6 +345,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
         resource_limits: Arc<dyn resource_limits::ResourceLimits>,
+        project_service: Arc<dyn projects::ProjectService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -365,6 +375,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             plugins,
             oplog_processor_plugin,
             resource_limits,
+            project_service,
             extra_deps,
         }
     }
@@ -397,6 +408,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.plugins(),
             this.oplog_processor_plugin(),
             this.resource_limits(),
+            this.project_service(),
             this.extra_deps(),
         )
     }
@@ -567,6 +579,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasOplogProcessorPlugin for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasResourceLimits for T {
     fn resource_limits(&self) -> Arc<dyn resource_limits::ResourceLimits> {
         self.all().resource_limits.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasProjectService for T {
+    fn project_service(&self) -> Arc<dyn projects::ProjectService> {
+        self.all().project_service.clone()
     }
 }
 

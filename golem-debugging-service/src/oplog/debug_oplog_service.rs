@@ -16,8 +16,9 @@ use crate::debug_session::{DebugSessionId, DebugSessions};
 use crate::oplog::debug_oplog_constructor::CreateDebugOplogConstructor;
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_common::base_model::ProjectId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata};
+use golem_common::model::{ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata};
 use golem_worker_executor::error::GolemError;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{OpenOplogs, Oplog, OplogService};
@@ -135,13 +136,13 @@ impl OplogService for DebugOplogService {
 
     async fn scan_for_component(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
         self.inner
-            .scan_for_component(account_id, component_id, cursor, count)
+            .scan_for_component(project_id, component_id, cursor, count)
             .await
     }
 

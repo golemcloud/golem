@@ -91,9 +91,16 @@ impl WorkerProxy for TestWorkerProxy {
         ))
     }
 
-    async fn resume(&self, worker_id: &WorkerId, force: bool) -> Result<(), WorkerProxyError> {
+    async fn resume(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        force: bool,
+    ) -> Result<(), WorkerProxyError> {
         let mut retry_count = Self::RETRY_COUNT;
-        let worker_id: golem_api_grpc::proto::golem::worker::WorkerId = worker_id.clone().into();
+        let worker_id: golem_api_grpc::proto::golem::worker::WorkerId =
+            owned_worker_id.worker_id().into();
+        let project_id: golem_api_grpc::proto::golem::common::ProjectId =
+            owned_worker_id.project_id().into();
 
         let result = loop {
             let result = self
@@ -106,6 +113,7 @@ impl WorkerProxy for TestWorkerProxy {
                     account_id: Some(AccountId {
                         name: "test-account".to_string(),
                     }),
+                    project_id: Some(project_id),
                     force: Some(force),
                 })
                 .await;
@@ -133,7 +141,7 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn fork_worker(
         &self,
-        source_worker_id: &WorkerId,
+        source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cutoff: &OplogIndex,
     ) -> Result<(), WorkerProxyError> {
@@ -146,7 +154,8 @@ impl WorkerProxy for TestWorkerProxy {
                 account_id: Some(AccountId {
                     name: "test-account".to_string(),
                 }),
-                source_worker_id: Some(source_worker_id.clone().into()),
+                project_id: Some(source_worker_id.project_id().into()),
+                source_worker_id: Some(source_worker_id.worker_id().into()),
                 target_worker_id: Some(target_worker_id.clone().into()),
                 oplog_index_cutoff: (*oplog_index_cutoff).into(),
             })
@@ -167,7 +176,7 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn revert(
         &self,
-        worker_id: WorkerId,
+        worker_id: &OwnedWorkerId,
         target: RevertWorkerTarget,
     ) -> Result<(), WorkerProxyError> {
         let result = self
@@ -176,10 +185,11 @@ impl WorkerProxy for TestWorkerProxy {
             .await
             .map_err(|e| WorkerProxyError::InternalError(GolemError::from(e)))?
             .revert_worker(RevertWorkerRequest {
-                worker_id: Some(worker_id.into()),
+                worker_id: Some(worker_id.worker_id().into()),
                 account_id: Some(AccountId {
                     name: "test-account".to_string(),
                 }),
+                project_id: Some(worker_id.project_id().into()),
                 target: Some(target.into()),
             })
             .await?

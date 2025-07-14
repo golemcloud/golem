@@ -23,6 +23,7 @@ use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
+use golem_worker_executor::services::projects::ProjectService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms;
 use golem_worker_executor::services::resource_limits;
@@ -83,14 +84,15 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         golem_worker_executor::services::component::configured(
             &get_component_service_config(),
-            &golem_config.project_service,
             &get_component_cache_config(),
             &golem_config.compiled_component_service,
             blob_storage,
             plugin_observations,
+            project_service,
         )
     }
 
@@ -128,6 +130,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
     ) -> anyhow::Result<All<DebugContext>> {
         let auth_service: Arc<dyn AuthService> = Arc::new(TestAuthService);
 
@@ -183,6 +186,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
             addition_deps.clone(),
         ));
 
@@ -215,6 +219,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
             addition_deps.clone(),
         ));
 
@@ -245,6 +250,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
+            project_service,
             addition_deps,
         ))
     }

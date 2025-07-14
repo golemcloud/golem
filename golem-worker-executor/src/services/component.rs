@@ -14,18 +14,18 @@
 
 use super::golem_config::{
     CompiledComponentServiceConfig, ComponentCacheConfig, ComponentServiceConfig,
-    ProjectServiceConfig,
 };
 use super::plugins::PluginsObservations;
 use crate::error::GolemError;
 use crate::metrics::component::record_compilation_time;
+use crate::services::projects::ProjectService;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_metadata::{DynamicLinkedInstance, LinearMemory};
 use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
+    ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ProjectId,
 };
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::testing::LocalFileSystemComponentMetadata;
@@ -78,14 +78,14 @@ pub trait ComponentService: Send + Sync {
     async fn get(
         &self,
         engine: &Engine,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<(Component, ComponentMetadata), GolemError>;
 
     async fn get_metadata(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
     ) -> Result<ComponentMetadata, GolemError>;
@@ -101,20 +101,19 @@ pub trait ComponentService: Send + Sync {
 
 pub fn configured(
     config: &ComponentServiceConfig,
-    project_service_config: &ProjectServiceConfig,
     cache_config: &ComponentCacheConfig,
     compiled_config: &CompiledComponentServiceConfig,
     blob_storage: Arc<dyn BlobStorage>,
     plugin_observations: Arc<dyn PluginsObservations>,
+    project_service: Arc<dyn ProjectService>,
 ) -> Arc<dyn ComponentService> {
     let compiled_component_service =
         super::compiled_component::configured(compiled_config, blob_storage);
-    match (config, project_service_config) {
-        (ComponentServiceConfig::Grpc(config), ProjectServiceConfig::Grpc(project_config)) => {
+    match config {
+        ComponentServiceConfig::Grpc(config) => {
             info!("Using component API at {}", config.url());
-            Arc::new(self::grpc::ComponentServiceGrpc::new(
+            Arc::new(grpc::ComponentServiceGrpc::new(
                 config.uri(),
-                project_config.uri(),
                 config
                     .access_token
                     .parse::<Uuid>()
@@ -122,25 +121,24 @@ pub fn configured(
                 cache_config.max_capacity,
                 cache_config.max_metadata_capacity,
                 cache_config.max_resolved_component_capacity,
-                cache_config.max_resolved_project_capacity,
                 cache_config.time_to_idle,
                 config.retries.clone(),
                 config.connect_timeout,
                 compiled_component_service,
                 config.max_component_size,
                 plugin_observations,
+                project_service,
             ))
         }
-        (ComponentServiceConfig::Local(config), ProjectServiceConfig::Disabled(_)) => {
+        ComponentServiceConfig::Local(config) => {
             info!("Using local component server at {:?}", config.root);
-            Arc::new(self::filesystem::ComponentServiceLocalFileSystem::new(
+            Arc::new(filesystem::ComponentServiceLocalFileSystem::new(
                 &config.root,
                 cache_config.max_capacity,
                 cache_config.time_to_idle,
                 compiled_component_service,
             ))
         }
-        _ => panic!("Unsupported cloud component and project service configuration"),
     }
 }
 
@@ -177,7 +175,7 @@ mod filesystem {
     use golem_common::cache::Cache;
     use golem_common::cache::SimpleCache;
     use golem_common::model::component::ComponentOwner;
-    use golem_common::model::{AccountId, ComponentId, ComponentVersion};
+    use golem_common::model::{ComponentId, ComponentVersion, ProjectId};
     use golem_service_base::testing::LocalFileSystemComponentMetadata;
     use std::collections::{HashMap, HashSet};
     use std::path::{Path, PathBuf};
@@ -292,6 +290,7 @@ mod filesystem {
             &self,
             wasm_path: &Path,
             engine: &Engine,
+            project_id: &ProjectId,
             component_id: &ComponentId,
             component_version: ComponentVersion,
         ) -> Result<Component, GolemError> {
@@ -308,7 +307,7 @@ mod filesystem {
                 .get_or_insert_simple(&key.clone(), || {
                     Box::pin(async move {
                         let result = compiled_component_service
-                            .get(&component_id, component_version, &engine)
+                            .get(project_id, &component_id, component_version, &engine)
                             .await;
 
                         let component = match result {
@@ -351,7 +350,7 @@ mod filesystem {
                                 );
 
                                 let result = compiled_component_service
-                                    .put(&component_id, component_version, &component)
+                                    .put(project_id, &component_id, component_version, &component)
                                     .await;
 
                                 match result {
@@ -430,7 +429,7 @@ mod filesystem {
         async fn get(
             &self,
             engine: &Engine,
-            _account_id: &AccountId,
+            project_id: &ProjectId,
             component_id: &ComponentId,
             component_version: ComponentVersion,
         ) -> Result<(Component, ComponentMetadata), GolemError> {
@@ -453,7 +452,13 @@ mod filesystem {
             let wasm_path = self.root.join(metadata.wasm_filename.clone());
 
             let component = self
-                .get_component_from_path(&wasm_path, engine, component_id, component_version)
+                .get_component_from_path(
+                    &wasm_path,
+                    engine,
+                    project_id,
+                    component_id,
+                    component_version,
+                )
                 .await?;
 
             Ok((component, metadata.into()))
@@ -461,7 +466,7 @@ mod filesystem {
 
         async fn get_metadata(
             &self,
-            _account_id: &AccountId,
+            _project_id: &ProjectId,
             component_id: &ComponentId,
             forced_version: Option<ComponentVersion>,
         ) -> Result<ComponentMetadata, GolemError> {
@@ -512,6 +517,7 @@ mod grpc {
     use crate::metrics::component::record_compilation_time;
     use crate::services::compiled_component::CompiledComponentService;
     use crate::services::plugins::PluginsObservations;
+    use crate::services::projects::ProjectService;
     use async_trait::async_trait;
     use futures_util::TryStreamExt;
     use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -520,7 +526,6 @@ mod grpc {
         DownloadComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
         GetVersionedComponentRequest,
     };
-    use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::client::{GrpcClient, GrpcClientConfig};
     use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
@@ -549,28 +554,26 @@ mod grpc {
         resolved_component_cache: Cache<(ProjectId, String), (), Option<ComponentId>, GolemError>,
         access_token: Uuid,
         retry_config: RetryConfig,
-        compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
+        compiled_component_service: Arc<dyn CompiledComponentService>,
         component_client: GrpcClient<ComponentServiceClient<Channel>>,
-        project_client: GrpcClient<CloudProjectServiceClient<Channel>>,
         plugin_observations: Arc<dyn PluginsObservations>,
-        resolved_project_cache: Cache<(AccountId, String), (), Option<ProjectId>, GolemError>,
+        project_service: Arc<dyn ProjectService>,
     }
 
     impl ComponentServiceGrpc {
         pub fn new(
             component_endpoint: Uri,
-            project_endpoint: Uri,
             access_token: Uuid,
             max_component_capacity: usize,
             max_metadata_capacity: usize,
             max_resolved_component_capacity: usize,
-            max_resolved_project_capacity: usize,
             time_to_idle: Duration,
             retry_config: RetryConfig,
             connect_timeout: Duration,
-            compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
+            compiled_component_service: Arc<dyn CompiledComponentService>,
             max_component_size: usize,
             plugin_observations: Arc<dyn PluginsObservations>,
+            project_service: Arc<dyn ProjectService>,
         ) -> Self {
             Self {
                 component_cache: create_component_cache(max_component_capacity, time_to_idle),
@@ -599,107 +602,8 @@ mod grpc {
                         connect_timeout,
                     },
                 ),
-                project_client: GrpcClient::new(
-                    "project_service",
-                    move |channel| {
-                        CloudProjectServiceClient::new(channel)
-                            .max_decoding_message_size(max_component_size)
-                            .send_compressed(CompressionEncoding::Gzip)
-                            .accept_compressed(CompressionEncoding::Gzip)
-                    },
-                    project_endpoint,
-                    GrpcClientConfig {
-                        retries_on_unavailable: retry_config.clone(),
-                        connect_timeout,
-                    },
-                ),
-                resolved_project_cache: create_resolved_project_cache(
-                    max_resolved_project_capacity,
-                    time_to_idle,
-                ),
                 plugin_observations,
-            }
-        }
-
-        fn resolve_project_remotely(
-            &self,
-            account_id: &AccountId,
-            project_name: &str,
-        ) -> impl Future<Output = Result<Option<ProjectId>, GolemError>> + 'static {
-            use golem_api_grpc::proto::golem::project::v1::{
-                get_projects_response, GetProjectsRequest, ProjectError,
-            };
-            use golem_api_grpc::proto::golem::project::Project as GrpcProject;
-
-            let client = self.project_client.clone();
-            let retry_config = self.retry_config.clone();
-            let access_token = self.access_token;
-
-            fn get_account(project: &GrpcProject) -> AccountId {
-                project
-                    .data
-                    .clone()
-                    .expect("did not receive account data")
-                    .owner_account_id
-                    .expect("failed to receive project owner_account_id")
-                    .into()
-            }
-
-            let account_id = account_id.clone();
-            let project_name = project_name.to_string();
-
-            async move {
-                with_retries(
-                    "component",
-                    "resolve_project_remotely",
-                    Some(format!("{account_id}/{project_name}").to_string()),
-                    &retry_config,
-                    &(
-                        client,
-                        account_id.clone(),
-                        project_name.to_string(),
-                        access_token,
-                    ),
-                    |(client, account_id, project_name, access_token)| {
-                        Box::pin(async move {
-                            let response = client
-                                .call("lookup_project_by_name", move |client| {
-                                    let request = authorised_grpc_request(
-                                        GetProjectsRequest {
-                                            project_name: Some(project_name.to_string()),
-                                        },
-                                        access_token,
-                                    );
-                                    Box::pin(client.get_projects(request))
-                                })
-                                .await?
-                                .into_inner();
-
-                            match response
-                                .result
-                                .expect("Didn't receive expected field result")
-                            {
-                                get_projects_response::Result::Success(payload) => {
-                                    let project_id = payload
-                                        .data
-                                        .into_iter()
-                                        // TODO: Push account filter to the server
-                                        .find(|p| get_account(p) == *account_id)
-                                        .map(|c| c.id.expect("didn't receive expected project_id"));
-                                    Ok(project_id.map(|c| {
-                                        c.try_into().expect("failed to convert project_id")
-                                    }))
-                                }
-                                get_projects_response::Result::Error(err) => {
-                                    Err(GrpcError::Domain(err))?
-                                }
-                            }
-                        })
-                    },
-                    is_grpc_retriable::<ProjectError>,
-                )
-                .await
-                .map_err(|err| GolemError::unknown(format!("Failed to get project: {err}")))
+                project_service,
             }
         }
 
@@ -779,7 +683,7 @@ mod grpc {
         async fn get(
             &self,
             engine: &Engine,
-            account_id: &AccountId,
+            project_id: &ProjectId,
             component_id: &ComponentId,
             component_version: ComponentVersion,
         ) -> Result<(Component, ComponentMetadata), GolemError> {
@@ -788,6 +692,7 @@ mod grpc {
                 component_version,
             };
             let client_clone = self.component_client.clone();
+            let project_id_clone = project_id.clone();
             let component_id_clone = component_id.clone();
             let engine = engine.clone();
             let access_token = self.access_token;
@@ -798,7 +703,12 @@ mod grpc {
                 .get_or_insert_simple(&key.clone(), || {
                     Box::pin(async move {
                         let result = compiled_component_service
-                            .get(&component_id_clone, component_version, &engine)
+                            .get(
+                                &project_id_clone,
+                                &component_id_clone,
+                                component_version,
+                                &engine,
+                            )
                             .await;
 
                         let component = match result {
@@ -845,7 +755,12 @@ mod grpc {
                                 );
 
                                 let result = compiled_component_service
-                                    .put(&component_id_clone, component_version, &component)
+                                    .put(
+                                        &project_id_clone,
+                                        &component_id_clone,
+                                        component_version,
+                                        &component,
+                                    )
                                     .await;
 
                                 match result {
@@ -864,7 +779,7 @@ mod grpc {
                 })
                 .await?;
             let metadata = self
-                .get_metadata(account_id, component_id, Some(component_version))
+                .get_metadata(project_id, component_id, Some(component_version))
                 .await?;
 
             Ok((component, metadata))
@@ -872,7 +787,7 @@ mod grpc {
 
         async fn get_metadata(
             &self,
-            account_id: &AccountId,
+            project_id: &ProjectId,
             component_id: &ComponentId,
             forced_version: Option<ComponentVersion>,
         ) -> Result<ComponentMetadata, GolemError> {
@@ -883,7 +798,7 @@ mod grpc {
                     let retry_config = self.retry_config.clone();
                     let component_id = component_id.clone();
                     let plugin_observations = self.plugin_observations.clone();
-                    let account_id = account_id.clone();
+                    let account_id = self.project_service.get_project_owner(project_id).await?;
                     self.component_metadata_cache
                         .get_or_insert_simple(
                             &ComponentKey {
@@ -957,10 +872,8 @@ mod grpc {
                 .unwrap_or(resolving_component.account_id);
 
             let project_id = if let Some(project_name) = component_slug.project_name {
-                self.resolved_project_cache
-                    .get_or_insert_simple(&(account_id.clone(), project_name.clone()), || {
-                        Box::pin(self.resolve_project_remotely(&account_id, &project_name))
-                    })
+                self.project_service
+                    .resolve_project(&account_id, &project_name)
                     .await?
                     .ok_or(GolemError::invalid_request(format!(
                         "Failed to resolve project: {project_name}"
@@ -1231,21 +1144,6 @@ mod grpc {
                 period: Duration::from_secs(60),
             },
             "component_metadata",
-        )
-    }
-
-    fn create_resolved_project_cache(
-        max_capacity: usize,
-        time_to_idle: Duration,
-    ) -> Cache<(AccountId, String), (), Option<ProjectId>, GolemError> {
-        Cache::new(
-            Some(max_capacity),
-            FullCacheEvictionMode::LeastRecentlyUsed(1),
-            BackgroundEvictionMode::OlderThan {
-                ttl: time_to_idle,
-                period: Duration::from_secs(60),
-            },
-            "resolved_project",
         )
     }
 

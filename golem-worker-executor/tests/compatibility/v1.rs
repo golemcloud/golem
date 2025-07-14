@@ -28,12 +28,12 @@ use golem_common::model::oplog::{
     PayloadId, TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::RetryConfig;
 use golem_common::model::{
     AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, PromiseId,
     ScheduledAction, ShardId, SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation,
     WorkerId, WorkerInvocation, WorkerResourceDescription, WorkerStatus,
 };
+use golem_common::model::{ProjectId, RetryConfig};
 use golem_common::serialization::{deserialize, serialize};
 use golem_wasm_ast::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
@@ -502,6 +502,7 @@ pub fn scheduled_action() {
         account_id: AccountId {
             value: "account_id".to_string(),
         },
+        project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
         promise_id: PromiseId {
             worker_id: WorkerId {
                 component_id: ComponentId(
@@ -513,10 +514,11 @@ pub fn scheduled_action() {
         },
     };
     let sa2 = ScheduledAction::ArchiveOplog {
+        account_id: AccountId {
+            value: "account_id".to_string(),
+        },
         owned_worker_id: OwnedWorkerId {
-            account_id: AccountId {
-                value: "account_id".to_string(),
-            },
+            project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
             worker_id: WorkerId {
                 component_id: ComponentId(
                     Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
@@ -632,70 +634,6 @@ pub fn oplog_entry() {
         assert_eq!(old_decoded, new_decoded);
     }
 
-    let oe1a = OplogEntry::CreateV1 {
-        timestamp: Timestamp::from(1724701938466),
-        worker_id: WorkerId {
-            component_id: ComponentId(
-                Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-            ),
-            worker_name: "worker_name".to_string(),
-        },
-        component_version: 0,
-        args: vec!["hello".to_string(), "world".to_string()],
-        env: vec![
-            ("key1".to_string(), "value1".to_string()),
-            ("key2".to_string(), "value2".to_string()),
-        ],
-        account_id: AccountId {
-            value: "account_id".to_string(),
-        },
-        parent: None,
-        component_size: 100_000_000,
-        initial_total_linear_memory_size: 100_000_000,
-    };
-    let oe1b = OplogEntry::CreateV1 {
-        timestamp: Timestamp::from(1724701938466),
-        worker_id: WorkerId {
-            component_id: ComponentId(
-                Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-            ),
-            worker_name: "worker_name".to_string(),
-        },
-        component_version: 0,
-        args: vec!["hello".to_string(), "world".to_string()],
-        env: vec![
-            ("key1".to_string(), "value1".to_string()),
-            ("key2".to_string(), "value2".to_string()),
-        ],
-        account_id: AccountId {
-            value: "account_id".to_string(),
-        },
-        parent: Some(WorkerId {
-            component_id: ComponentId(
-                Uuid::parse_str("90BB3957-2C4E-4711-A488-902B7018100F").unwrap(),
-            ),
-            worker_name: "parent_worker_name".to_string(),
-        }),
-        component_size: 100_000_000,
-        initial_total_linear_memory_size: 100_000_000,
-    };
-
-    let oe2 = OplogEntry::ImportedFunctionInvokedV1 {
-        timestamp: Timestamp::from(1724701938466),
-        function_name: "test:pkg/iface.{fn}".to_string(),
-        response: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
-        wrapped_function_type: DurableFunctionType::ReadLocal,
-    };
-
-    let oe3 = OplogEntry::ExportedFunctionInvokedV1 {
-        timestamp: Timestamp::from(1724701938466),
-        function_name: "test:pkg/iface.{fn}".to_string(),
-        request: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
-        idempotency_key: IdempotencyKey {
-            value: "id1".to_string(),
-        },
-    };
-
     let oe4 = OplogEntry::ExportedFunctionCompleted {
         timestamp: Timestamp::from(1724701938466),
         response: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
@@ -773,12 +711,6 @@ pub fn oplog_entry() {
         },
     };
 
-    let oe18 = OplogEntry::SuccessfulUpdateV1 {
-        timestamp: Timestamp::from(1724701938466),
-        target_version: 10,
-        new_component_size: 1234,
-    };
-
     let oe19a = OplogEntry::FailedUpdate {
         timestamp: Timestamp::from(1724701938466),
         target_version: 10,
@@ -823,10 +755,6 @@ pub fn oplog_entry() {
     };
 
     let mut mint = Mint::new("tests/goldenfiles");
-    backward_compatible("oplog_entry_create", &mut mint, oe1a);
-    backward_compatible("oplog_entry_create_with_parent", &mut mint, oe1b);
-    backward_compatible("oplog_entry_imported_function_invoked", &mut mint, oe2);
-    backward_compatible("oplog_entry_exported_function_invoked", &mut mint, oe3);
     backward_compatible("oplog_entry_exported_function_completed", &mut mint, oe4);
     backward_compatible("oplog_entry_suspend", &mut mint, oe5);
     backward_compatible("oplog_entry_error", &mut mint, oe6);
@@ -846,7 +774,6 @@ pub fn oplog_entry() {
         Box::new(is_deserializable_ignoring_invocation_context),
     );
     backward_compatible("oplog_entry_pending_update", &mut mint, oe17);
-    backward_compatible("oplog_entry_successful_update", &mut mint, oe18);
     backward_compatible("oplog_entry_failed_update_no_details", &mut mint, oe19a);
     backward_compatible("oplog_entry_failed_update_with_details", &mut mint, oe19b);
     backward_compatible("oplog_entry_grow_memory", &mut mint, oe20);

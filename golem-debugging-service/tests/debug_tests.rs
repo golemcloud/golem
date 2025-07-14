@@ -25,7 +25,10 @@ async fn test_connect_non_invoked_worker(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
 
@@ -60,7 +63,10 @@ async fn test_connect_invoked_worker(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -116,7 +122,10 @@ async fn test_connect_and_playback(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -165,7 +174,10 @@ async fn test_connect_and_playback_to_middle_of_invocation(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -217,7 +229,10 @@ async fn test_playback_from_breakpoint(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -291,7 +306,10 @@ async fn test_playback_and_rewind(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -350,7 +368,10 @@ async fn test_playback_and_fork(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -442,7 +463,10 @@ async fn test_playback_with_overrides(
     _tracing: &Tracing,
 ) {
     let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;

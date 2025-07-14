@@ -24,6 +24,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::OplogService;
 use crate::services::plugins::{Plugins, PluginsObservations};
+use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use crate::services::scheduler::SchedulerService;
@@ -73,14 +74,15 @@ impl Bootstrap<Context> for ServerBootstrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         crate::services::component::configured(
             &golem_config.component_service,
-            &golem_config.project_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage,
             plugin_observations,
+            project_service,
         )
     }
 
@@ -109,6 +111,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
     ) -> anyhow::Result<All<Context>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);
 
@@ -143,6 +146,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
             additional_deps.clone(),
         ));
 
@@ -175,6 +179,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
             additional_deps.clone(),
         ));
 
@@ -205,6 +210,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
+            project_service,
             additional_deps,
         ))
     }

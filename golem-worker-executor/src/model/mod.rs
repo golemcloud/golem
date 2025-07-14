@@ -23,8 +23,8 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId,
-    WorkerStatusRecord,
+    AccountId, ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp,
+    WorkerId, WorkerStatusRecord,
 };
 use golem_wasm_rpc::ValueAndType;
 use golem_wasm_rpc_derive::IntoValue;
@@ -90,6 +90,7 @@ pub struct WorkerConfig {
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
     pub component_version_for_replay: u64,
+    pub created_by: AccountId,
 }
 
 impl WorkerConfig {
@@ -101,6 +102,7 @@ impl WorkerConfig {
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
         component_version_for_replay: u64,
+        created_by: AccountId,
     ) -> WorkerConfig {
         let worker_name = worker_id.worker_name.clone();
         let component_id = worker_id.component_id;
@@ -119,6 +121,7 @@ impl WorkerConfig {
             deleted_regions,
             total_linear_memory_size,
             component_version_for_replay,
+            created_by,
         }
     }
 }

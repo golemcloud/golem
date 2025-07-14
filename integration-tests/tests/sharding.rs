@@ -389,7 +389,7 @@ mod tests {
         }
 
         async fn create_component_and_start_workers(&self, n: usize) -> Vec<WorkerId> {
-            let admin = self.admin();
+            let admin = self.admin().await;
             info!("Storing component");
             let component_id = admin.component("option-service").store().await;
             info!("ComponentId: {}", component_id);
@@ -415,7 +415,7 @@ mod tests {
         ) -> Result<(), worker::v1::worker_error::Error> {
             let mut tasks = JoinSet::new();
             for worker_id in workers {
-                let self_clone = self.clone().into_admin();
+                let self_clone = self.clone().into_admin().await;
                 tasks.spawn({
                     let worker_id = worker_id.clone();
                     async move {

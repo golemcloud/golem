@@ -23,7 +23,7 @@ use tokio::sync::RwLock;
 
 use crate::error::GolemError;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
+use golem_common::model::{ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
@@ -97,7 +97,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
 
     async fn scan_for_component(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
@@ -122,7 +122,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             keys.into_iter()
                 .map(|key| OwnedWorkerId {
                     worker_id: PrimaryOplogService::get_worker_id_from_key(&key, component_id),
-                    account_id: account_id.clone(),
+                    project_id: project_id.clone(),
                 })
                 .collect(),
         ))

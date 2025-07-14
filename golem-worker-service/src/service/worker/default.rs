@@ -335,6 +335,7 @@ impl WorkerServiceDefault {
     }
 
     async fn get_resource_limits(&self, namespace: &Namespace) -> WorkerResult<ResourceLimits> {
+        // TODO: get project owner and use that account_id
         let resource_limits = self
             .limit_service
             .get_resource_limits(&namespace.account_id)
@@ -418,6 +419,7 @@ impl WorkerServiceDefault {
                             count,
                             precise,
                             account_id: Some(namespace.account_id.clone().into()),
+                            project_id: Some(namespace.project_id.clone().into()),
                         },
                     ))
                 },
@@ -503,6 +505,7 @@ impl WorkerService for WorkerServiceDefault {
                     args: arguments.clone(),
                     env: environment_variables.clone(),
                     account_id: Some(account_id.clone().into()),
+                    project_id: Some(namespace.project_id.clone().into()),
                     account_limits: Some(resource_limits.clone().into()),
                 }))
             },
@@ -534,6 +537,7 @@ impl WorkerService for WorkerServiceDefault {
         let resource_limits = self.get_resource_limits(&namespace).await?;
 
         let account_id = namespace.account_id.clone();
+        let project_id = namespace.project_id.clone();
         let worker_id_clone = worker_id.clone();
         let worker_id_err = worker_id.clone();
         let stream = self
@@ -545,6 +549,7 @@ impl WorkerService for WorkerServiceDefault {
                         worker_id: Some(worker_id_clone.clone().into()),
                         account_id: Some(account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
+                        project_id: Some(project_id.clone().into()),
                     }))
                 },
                 |response| Ok(WorkerStream::new(response.into_inner())),
@@ -585,6 +590,7 @@ impl WorkerService for WorkerServiceDefault {
                             worker_id_clone.clone(),
                         )),
                         account_id: Some(account_id_clone.clone().into()),
+                        project_id: Some(namespace.project_id.clone().into()),
                     },
                 ))
             },
@@ -647,6 +653,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }
                 )
                 )
@@ -706,6 +713,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }
                 )
                 )
@@ -765,6 +773,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }
                 )
                 )
@@ -823,6 +832,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     },
                 ))
             },
@@ -866,6 +876,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     },
                 ))
             },
@@ -908,8 +919,9 @@ impl WorkerService for WorkerServiceDefault {
                             .complete_promise(CompletePromiseRequest {
                                 promise_id: Some(promise_id.into()),
                                 data,
-                                account_id: Some(namespace.account_id.clone().into())
-                        })
+                                account_id: Some(namespace.account_id.clone().into()),
+                                project_id: Some(namespace.project_id.clone().into()),
+                            })
                     )
                 },
                 |response| {
@@ -954,6 +966,7 @@ impl WorkerService for WorkerServiceDefault {
                         worker_id: Some(worker_id.into()),
                         recover_immediately,
                         account_id: Some(namespace.account_id.clone().into()),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
@@ -988,7 +1001,7 @@ impl WorkerService for WorkerServiceDefault {
                 Box::pin(worker_executor_client.get_worker_metadata(
                     workerexecutor::v1::GetWorkerMetadataRequest {
                         worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
-                        account_id: Some(namespace.account_id.clone().into())
+                        project_id: Some(namespace.project_id.clone().into()),
                     }
                 ))
             },
@@ -1054,6 +1067,7 @@ impl WorkerService for WorkerServiceDefault {
                     worker_id: Some(worker_id.into()),
                     account_id: Some(namespace.account_id.clone().into()),
                     force: Some(force),
+                    project_id: Some(namespace.project_id.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1089,6 +1103,7 @@ impl WorkerService for WorkerServiceDefault {
                     mode: update_mode.into(),
                     target_version,
                     account_id: Some(namespace.account_id.clone().into()),
+                    project_id: Some(namespace.project_id.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1126,7 +1141,7 @@ impl WorkerService for WorkerServiceDefault {
                         from_oplog_index: from_oplog_index.into(),
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
-                        account_id: Some(namespace.account_id.clone().into()),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
@@ -1198,7 +1213,7 @@ impl WorkerService for WorkerServiceDefault {
                         query: query_clone,
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
-                        account_id: Some(namespace.account_id.clone().into())
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
@@ -1222,7 +1237,7 @@ impl WorkerService for WorkerServiceDefault {
                                 details: format!("Unexpected oplog entries in error: {err}"),
                             })
                         })?;
-                    let first_index_in_chunk =  entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
+                    let first_index_in_chunk = entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
                     Ok(GetOplogResponse {
                         entries,
                         next: next.map(|c| c.into()),
@@ -1259,7 +1274,8 @@ impl WorkerService for WorkerServiceDefault {
                         worker_id: Some(worker_id.into()),
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
-                        path: path_clone.to_string()
+                        path: path_clone.to_string(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
@@ -1271,8 +1287,8 @@ impl WorkerService for WorkerServiceDefault {
                         .into_iter()
                         .map(|v|
                             v
-                            .try_into()
-                            .map_err(|_| "Failed to convert node".into())
+                                .try_into()
+                                .map_err(|_| "Failed to convert node".into())
                         )
                         .collect::<Result<Vec<_>, _>>()
                 }
@@ -1314,6 +1330,7 @@ impl WorkerService for WorkerServiceDefault {
                             account_id: Some(namespace.account_id.clone().into()),
                             account_limits: Some(resource_limits.clone().into()),
                             file_path: path_clone.to_string(),
+                            project_id: Some(namespace.project_id.clone().into()),
                         },
                     ))
                 },
@@ -1403,7 +1420,8 @@ impl WorkerService for WorkerServiceDefault {
                     worker_executor_client.activate_plugin(ActivatePluginRequest {
                         worker_id: Some(worker_id.into()),
                         installation_id: Some(plugin_installation_id.clone().into()),
-                        account_id: Some(namespace.account_id.clone().into())
+                        account_id: Some(namespace.account_id.clone().into()),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
@@ -1441,7 +1459,8 @@ impl WorkerService for WorkerServiceDefault {
                     worker_executor_client.deactivate_plugin(DeactivatePluginRequest {
                         worker_id: Some(worker_id.into()),
                         installation_id: Some(plugin_installation_id.clone().into()),
-                        account_id: Some(namespace.account_id.clone().into())
+                        account_id: Some(namespace.account_id.clone().into()),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
@@ -1482,6 +1501,7 @@ impl WorkerService for WorkerServiceDefault {
                     target_worker_id: Some(target_worker_id.into()),
                     account_id: Some(namespace.account_id.clone().into()),
                     oplog_index_cutoff: oplog_index_cut_off.into(),
+                    project_id: Some(namespace.project_id.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1516,6 +1536,7 @@ impl WorkerService for WorkerServiceDefault {
                     worker_id: Some(worker_id.into()),
                     target: Some(target.into()),
                     account_id: Some(namespace.account_id.clone().into()),
+                    project_id: Some(namespace.project_id.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1551,6 +1572,7 @@ impl WorkerService for WorkerServiceDefault {
                     worker_id: Some(worker_id.into()),
                     idempotency_key: Some(idempotency_key.into()),
                     account_id: Some(namespace.account_id.clone().into()),
+                    project_id: Some(namespace.project_id.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1564,7 +1586,7 @@ impl WorkerService for WorkerServiceDefault {
             },
             WorkerServiceError::InternalCallError,
         )
-        .await?;
+            .await?;
         Ok(canceled)
     }
 }

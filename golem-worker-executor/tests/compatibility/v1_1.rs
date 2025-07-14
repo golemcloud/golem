@@ -14,6 +14,7 @@
 
 use crate::compatibility::v1::backward_compatible;
 use goldenfile::Mint;
+use golem_common::base_model::ProjectId;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogPayload};
 use golem_common::model::{AccountId, ComponentId, PluginInstallationId, Timestamp, WorkerId};
 use golem_wasm_ast::analysis::analysed_type::bool;
@@ -44,7 +45,7 @@ pub fn oplog_entry() {
         function_name: "test:pkg/iface.{fn}".to_string(),
         request: OplogPayload::Inline(vec![5, 6, 7, 8, 9]),
         response: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
-        wrapped_function_type: DurableFunctionType::ReadLocal,
+        durable_function_type: DurableFunctionType::ReadLocal,
     };
     let oe27a = OplogEntry::Create {
         timestamp: Timestamp::from(1724701938466),
@@ -60,7 +61,8 @@ pub fn oplog_entry() {
             ("key1".to_string(), "value1".to_string()),
             ("key2".to_string(), "value2".to_string()),
         ],
-        account_id: AccountId {
+        project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
+        created_by: AccountId {
             value: "account_id".to_string(),
         },
         parent: None,
@@ -85,7 +87,8 @@ pub fn oplog_entry() {
             ("key1".to_string(), "value1".to_string()),
             ("key2".to_string(), "value2".to_string()),
         ],
-        account_id: AccountId {
+        project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
+        created_by: AccountId {
             value: "account_id".to_string(),
         },
         parent: Some(WorkerId {

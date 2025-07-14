@@ -21,7 +21,7 @@ use aws_sdk_s3::Client;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
-use golem_common::model::{AccountId, ComponentId};
+use golem_common::model::{ComponentId, ProjectId};
 use golem_common::widen_infallible;
 use golem_service_base::config::S3BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -404,15 +404,15 @@ async fn sqlite() -> Arc<dyn GetBlobStorage + Send + Sync> {
 
 #[test_dep(tagged_as = "cc")]
 fn compilation_cache() -> BlobStorageNamespace {
-    BlobStorageNamespace::CompilationCache
+    BlobStorageNamespace::CompilationCache {
+        project_id: ProjectId(Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap()),
+    }
 }
 
 #[test_dep(tagged_as = "co")]
 fn compressed_oplog() -> BlobStorageNamespace {
     BlobStorageNamespace::CompressedOplog {
-        account_id: AccountId {
-            value: "test-account".to_string(),
-        },
+        project_id: ProjectId(Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap()),
         component_id: ComponentId(Uuid::new_v4()),
         level: 0,
     }

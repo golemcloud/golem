@@ -19,7 +19,7 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tracing::{debug, Instrument};
 
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_common::model::{AccountId, OwnedWorkerId, WorkerId};
 
 use crate::error::GolemError;
 use crate::services::golem_config::MemoryConfig;
@@ -55,6 +55,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         &self,
         deps: &T,
         owned_worker_id: &OwnedWorkerId,
+        account_id: &AccountId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         component_version: Option<u64>,
@@ -66,6 +67,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let worker_id = owned_worker_id.worker_id();
 
         let owned_worker_id = owned_worker_id.clone();
+        let account_id = account_id.clone();
         let deps = deps.clone();
         self.workers
             .get_or_insert_simple(&worker_id, || {
@@ -73,6 +75,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                     Ok(Arc::new(
                         Worker::new(
                             &deps,
+                            &account_id,
                             owned_worker_id,
                             worker_args,
                             worker_env,

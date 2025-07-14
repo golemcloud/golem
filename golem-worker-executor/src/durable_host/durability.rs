@@ -409,8 +409,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         } else {
             let (_, oplog_entry) = crate::get_oplog_entry!(
                 self.state.replay_state,
-                OplogEntry::ImportedFunctionInvoked,
-                OplogEntry::ImportedFunctionInvokedV1
+                OplogEntry::ImportedFunctionInvoked
             )?;
 
             let bytes = self
@@ -427,26 +426,14 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 OplogEntry::ImportedFunctionInvoked {
                     timestamp,
                     function_name,
-                    wrapped_function_type,
+                    durable_function_type,
                     ..
                 } => Ok(PersistedDurableFunctionInvocation {
                     timestamp,
                     function_name,
                     response: bytes.to_vec(),
-                    function_type: wrapped_function_type,
+                    function_type: durable_function_type,
                     oplog_entry_version: OplogEntryVersion::V2,
-                }),
-                OplogEntry::ImportedFunctionInvokedV1 {
-                    timestamp,
-                    function_name,
-                    wrapped_function_type,
-                    ..
-                } => Ok(PersistedDurableFunctionInvocation {
-                    timestamp,
-                    function_name,
-                    response: bytes.to_vec(),
-                    function_type: wrapped_function_type,
-                    oplog_entry_version: OplogEntryVersion::V1,
                 }),
                 _ => Err(GolemError::unexpected_oplog_entry(
                     "ImportedFunctionInvoked",

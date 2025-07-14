@@ -74,19 +74,22 @@ pub trait WorkerProxy: Send + Sync {
         mode: UpdateMode,
     ) -> Result<(), WorkerProxyError>;
 
-    async fn resume(&self, owned_worker_id: &WorkerId, force: bool)
-        -> Result<(), WorkerProxyError>;
+    async fn resume(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        force: bool,
+    ) -> Result<(), WorkerProxyError>;
 
     async fn fork_worker(
         &self,
-        source_worker_id: &WorkerId,
+        source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cutoff: &OplogIndex,
     ) -> Result<(), WorkerProxyError>;
 
     async fn revert(
         &self,
-        worker_id: WorkerId,
+        worker_id: &OwnedWorkerId,
         target: RevertWorkerTarget,
     ) -> Result<(), WorkerProxyError>;
 }
@@ -373,7 +376,11 @@ impl WorkerProxy for RemoteWorkerProxy {
         }
     }
 
-    async fn resume(&self, worker_id: &WorkerId, force: bool) -> Result<(), WorkerProxyError> {
+    async fn resume(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        force: bool,
+    ) -> Result<(), WorkerProxyError> {
         debug!("Resuming remote worker");
 
         let response: ResumeWorkerResponse = self
@@ -381,7 +388,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("resume_worker", move |client| {
                 Box::pin(client.resume_worker(authorised_grpc_request(
                     ResumeWorkerRequest {
-                        worker_id: Some(worker_id.clone().into()),
+                        worker_id: Some(owned_worker_id.worker_id().into()),
                         force: Some(force),
                     },
                     &self.access_token,
@@ -401,7 +408,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn fork_worker(
         &self,
-        source_worker_id: &WorkerId,
+        source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cutoff: &OplogIndex,
     ) -> Result<(), WorkerProxyError> {
@@ -412,7 +419,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("fork_worker", move |client| {
                 Box::pin(client.fork_worker(authorised_grpc_request(
                     ForkWorkerRequest {
-                        source_worker_id: Some(source_worker_id.clone().into()),
+                        source_worker_id: Some(source_worker_id.worker_id().into()),
                         target_worker_id: Some(target_worker_id.clone().into()),
                         oplog_index_cutoff: u64::from(*oplog_index_cutoff),
                     },
@@ -433,7 +440,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn revert(
         &self,
-        worker_id: WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         target: RevertWorkerTarget,
     ) -> Result<(), WorkerProxyError> {
         let response: RevertWorkerResponse = self
@@ -441,7 +448,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("revert_worker", move |client| {
                 Box::pin(client.revert_worker(authorised_grpc_request(
                     RevertWorkerRequest {
-                        worker_id: Some(worker_id.clone().into()),
+                        worker_id: Some(owned_worker_id.worker_id().into()),
                         target: Some(target.clone().into()),
                     },
                     &self.access_token,

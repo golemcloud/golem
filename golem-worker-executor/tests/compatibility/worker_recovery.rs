@@ -37,7 +37,7 @@ async fn recover_shopping_cart_example(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id = restore_from_recovery_golden_file(
         &executor,
@@ -62,7 +62,7 @@ async fn recover_shopping_cart_resource_example(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id = restore_from_recovery_golden_file(
         &executor,
@@ -87,7 +87,7 @@ async fn recover_environment_example(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id = restore_from_recovery_golden_file(
         &executor,
@@ -112,7 +112,7 @@ async fn recover_read_stdin(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id =
         restore_from_recovery_golden_file(&executor, &context, "read_stdin_fails", &["read-stdin"])
@@ -133,7 +133,7 @@ async fn recover_jump(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id =
         restore_from_recovery_golden_file(&executor, &context, "jump", &["runtime-service"]).await;
@@ -153,7 +153,7 @@ async fn recover_js_example_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id =
         restore_from_recovery_golden_file(&executor, &context, "js_example_1", &["js-1"]).await;
@@ -173,7 +173,7 @@ async fn recover_auto_update_on_running(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id = restore_from_recovery_golden_file(
         &executor,
@@ -198,7 +198,7 @@ async fn recover_counter_resource_test_2(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let caller_worker_id = restore_from_recovery_golden_file(
         &executor,

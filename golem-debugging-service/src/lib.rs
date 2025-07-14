@@ -46,6 +46,7 @@ use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
+use golem_worker_executor::services::projects::ProjectService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
@@ -96,14 +97,15 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugins: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         golem_worker_executor::services::component::configured(
             &golem_config.component_service,
-            &golem_config.project_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage,
             plugins,
+            project_service,
         )
     }
 
@@ -150,6 +152,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
     ) -> anyhow::Result<All<DebugContext>> {
         let remote_cloud_service_config = self.debug_config.cloud_service.clone();
 
@@ -201,6 +204,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
             addition_deps.clone(),
         ));
 
@@ -233,6 +237,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
             addition_deps.clone(),
         ));
 
@@ -263,6 +268,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
+            project_service.clone(),
             addition_deps,
         ))
     }
@@ -276,7 +282,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         golem_config: GolemConfig,
         prometheus_registry: Registry,
         runtime: Handle,
-        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+        join_set: &mut JoinSet<Result<(), Error>>,
     ) -> anyhow::Result<RunDetails> {
         run_debug_worker_executor(
             self,
@@ -296,7 +302,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized>(
     cors_origin_regex: &str,
     prometheus_registry: Registry,
     runtime: Handle,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    join_set: &mut JoinSet<Result<(), Error>>,
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing debug worker executor");
 
@@ -356,8 +362,8 @@ async fn start_http_server(
     http_port: u16,
     cors_origin_regex: &str,
     prometheus_registry: &Registry,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<u16, anyhow::Error> {
+    join_set: &mut JoinSet<Result<(), Error>>,
+) -> Result<u16, Error> {
     let open_api_service = api::make_open_api_service(services);
 
     let ui = open_api_service.swagger_ui();

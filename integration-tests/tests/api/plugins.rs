@@ -108,7 +108,7 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Trac
         axum::Json(response)
     }
 
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let app = Router::new().route("/transform", post(transform));
 
@@ -239,7 +239,7 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
         axum::Json(response)
     }
 
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let app = Router::new().route("/transform", post(transform));
 
@@ -345,7 +345,7 @@ async fn component_transformer_env_var(deps: &EnvBasedTestDependencies, _tracing
         axum::Json(response)
     }
 
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let app = Router::new().route("/transform", post(transform));
 
@@ -475,7 +475,7 @@ async fn component_transformer_ifs(deps: &EnvBasedTestDependencies, _tracing: &T
         axum::Json(response)
     }
 
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let app = Router::new().route("/transform", post(transform));
 
@@ -571,7 +571,7 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing:
     async fn transform() -> StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
     }
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let app = Router::new().route("/transform", post(transform));
 
@@ -949,7 +949,7 @@ async fn oplog_processor_project_scope(deps: &EnvBasedTestDependencies, _tracing
 
 #[test]
 async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin
         .component("app_and_library_app")
         .unique()
@@ -991,7 +991,7 @@ async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
 #[test]
 async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let component_id = admin
         .component("app_and_library_library")
@@ -1035,7 +1035,7 @@ async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 /// Test that a plugin can be recreated after deleting it
 #[test]
 async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let component_id = admin
         .component("app_and_library_app")

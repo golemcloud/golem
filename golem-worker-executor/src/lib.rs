@@ -45,6 +45,7 @@ use crate::services::oplog::{
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
 use crate::services::plugins::{Plugins, PluginsObservations};
+use crate::services::projects::ProjectService;
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
@@ -170,6 +171,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService>;
 
     /// Allows customizing the `All` service.
@@ -201,6 +203,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -397,10 +400,16 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
     let (plugins, plugins_observations) = bootstrap.create_plugins(&golem_config);
 
+    let project_service = services::projects::configured(
+        &golem_config.project_service,
+        &golem_config.component_cache,
+    );
+
     let component_service = bootstrap.create_component_service(
         &golem_config,
         blob_storage.clone(),
         plugins_observations,
+        project_service.clone(),
     );
 
     let golem_config = Arc::new(golem_config.clone());
@@ -502,6 +511,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         shard_service.clone(),
         lazy_worker_activator.clone(),
         plugins.clone(),
+        project_service.clone(),
     ));
 
     let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
@@ -509,6 +519,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         oplog_processor_plugin.clone(),
         component_service.clone(),
         plugins.clone(),
+        project_service.clone(),
     ));
 
     let worker_service = Arc::new(DefaultWorkerService::new(
@@ -558,6 +569,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             file_loader,
             plugins,
             oplog_processor_plugin,
+            project_service,
         )
         .await?;
 

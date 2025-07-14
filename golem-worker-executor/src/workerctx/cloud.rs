@@ -27,6 +27,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::plugins::Plugins;
+use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
@@ -45,6 +46,7 @@ use crate::workerctx::{
 };
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::base_model::ProjectId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -73,7 +75,7 @@ use wasmtime_wasi_http::WasiHttpView;
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
     config: Arc<GolemConfig>,
-    account_id: AccountId,
+    project_owner_account_id: AccountId,
     resource_limits: Arc<dyn ResourceLimits>,
     last_fuel_level: i64,
     min_fuel_level: i64,
@@ -83,13 +85,13 @@ impl Context {
     pub fn new(
         golem_ctx: DurableWorkerCtx<Context>,
         config: Arc<GolemConfig>,
-        account_id: AccountId,
+        project_owner_account_id: AccountId,
         resource_limits: Arc<dyn ResourceLimits + Send + Sync>,
     ) -> Self {
         Self {
             durable_ctx: golem_ctx,
             config,
-            account_id,
+            project_owner_account_id,
             resource_limits,
             last_fuel_level: i64::MAX,
             min_fuel_level: i64::MAX,
@@ -97,7 +99,9 @@ impl Context {
     }
 
     pub async fn get_max_memory(&self) -> Result<usize, GolemError> {
-        self.resource_limits.get_max_memory(&self.account_id).await
+        self.resource_limits
+            .get_max_memory(&self.project_owner_account_id)
+            .await
     }
 }
 
@@ -120,20 +124,27 @@ impl FuelManagement for Context {
     async fn borrow_fuel(&mut self) -> Result<(), GolemError> {
         let amount = self
             .resource_limits
-            .borrow_fuel(&self.account_id, self.config.limits.fuel_to_borrow)
+            .borrow_fuel(
+                &self.project_owner_account_id,
+                self.config.limits.fuel_to_borrow,
+            )
             .await?;
         self.min_fuel_level -= amount;
-        debug!("borrowed fuel for {}: {}", self.account_id, amount);
+        debug!(
+            "borrowed fuel for {}: {}",
+            self.project_owner_account_id, amount
+        );
         Ok(())
     }
 
     fn borrow_fuel_sync(&mut self) {
-        let amount = self
-            .resource_limits
-            .borrow_fuel_sync(&self.account_id, self.config.limits.fuel_to_borrow);
+        let amount = self.resource_limits.borrow_fuel_sync(
+            &self.project_owner_account_id,
+            self.config.limits.fuel_to_borrow,
+        );
         match amount {
             Some(amount) => {
-                debug!("borrowed fuel for {}: {}", self.account_id, amount);
+                debug!("borrowed fuel for {}: {}", self.project_owner_account_id, amount);
                 self.min_fuel_level -= amount;
             }
             None => panic!("Illegal state: account's resource limits are not available when borrow_fuel_sync is called")
@@ -146,14 +157,20 @@ impl FuelManagement for Context {
             debug!("current_level: {current_level}");
             debug!("min_fuel_level: {}", self.min_fuel_level);
             debug!("last_fuel_level: {}", self.last_fuel_level);
-            debug!("returning unused fuel for {}: {}", self.account_id, unused);
+            debug!(
+                "returning unused fuel for {}: {}",
+                self.project_owner_account_id, unused
+            );
             self.resource_limits
-                .return_fuel(&self.account_id, unused)
+                .return_fuel(&self.project_owner_account_id, unused)
                 .await?
         }
         let consumed = self.last_fuel_level - current_level;
         self.last_fuel_level = current_level;
-        debug!("reset fuel mark for {}: {}", self.account_id, current_level);
+        debug!(
+            "reset fuel mark for {}: {}",
+            self.project_owner_account_id, current_level
+        );
         Ok(consumed)
     }
 }
@@ -327,11 +344,12 @@ impl ExternalOperations<Context> for Context {
 
     async fn record_last_known_limits<T: HasAll<Context> + Send + Sync>(
         this: &T,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), GolemError> {
+        let project_owner = this.project_service().get_project_owner(project_id).await?;
         this.resource_limits()
-            .update_last_known_limits(account_id, last_known_limits)
+            .update_last_known_limits(&project_owner, last_known_limits)
             .await
     }
 
@@ -350,12 +368,14 @@ impl ExternalOperations<Context> for Context {
 
     async fn on_worker_update_failed_to_start<T: HasAll<Context> + Send + Sync>(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         details: Option<String>,
     ) -> Result<(), GolemError> {
         DurableWorkerCtx::<Context>::on_worker_update_failed_to_start(
             this,
+            account_id,
             owned_worker_id,
             target_version,
             details,
@@ -612,6 +632,7 @@ impl WorkerCtx for Context {
     type PublicState = PublicDurableWorkerState<Context>;
 
     async fn create(
+        account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
@@ -636,6 +657,7 @@ impl WorkerCtx for Context {
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id.clone(),
@@ -659,14 +681,10 @@ impl WorkerCtx for Context {
             file_loader,
             plugins,
             worker_fork,
+            project_service,
         )
         .await?;
-        Ok(Self::new(
-            golem_ctx,
-            config,
-            owned_worker_id.account_id,
-            resource_limits,
-        ))
+        Ok(Self::new(golem_ctx, config, account_id, resource_limits))
     }
 
     fn as_wasi_view(&mut self) -> impl WasiView {

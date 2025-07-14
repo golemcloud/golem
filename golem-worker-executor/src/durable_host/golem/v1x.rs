@@ -28,7 +28,7 @@ use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
 use crate::services::oplog::CommitLevel;
-use crate::services::{HasOplogService, HasPlugins, HasWorker};
+use crate::services::{HasOplogService, HasPlugins, HasProjectService, HasWorker};
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use bincode::de::Decoder;
@@ -522,7 +522,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let worker_id: WorkerId = worker_id.into();
-        let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.account_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.project_id, &worker_id);
 
         let mode = match mode {
             golem_api_1_x::host::UpdateMode::Automatic => {
@@ -561,7 +561,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<golem_api_1_x::host::WorkerMetadata>> {
         self.observe_function_call("golem::api", "get_worker_metadata");
         let worker_id: WorkerId = worker_id.into();
-        let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.account_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.project_id, &worker_id);
         let metadata = self.state.worker_service.get(&owned_worker_id).await;
 
         match metadata {
@@ -592,8 +592,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let source_worker_id: WorkerId = source_worker_id.into();
-
         let target_worker_id: WorkerId = target_worker_id.into();
+
+        let source_worker_id = self
+            .state
+            .project_service
+            .to_owned_worker_id(&source_worker_id)
+            .await?;
 
         let oplog_index_cut_off: OplogIndex = OplogIndex::from_u64(oplog_idx_cut_off);
 
@@ -634,9 +639,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let worker_id: WorkerId = worker_id.into();
             let revert_target: golem_service_base::model::RevertWorkerTarget = revert_target.into();
 
+            let worker_id = self
+                .state
+                .project_service
+                .to_owned_worker_id(&worker_id)
+                .await?;
+
             let result = self
                 .worker_proxy()
-                .revert(worker_id.clone(), revert_target.clone())
+                .revert(&worker_id, revert_target.clone())
                 .await;
             durability
                 .persist(self, (worker_id, revert_target), result)
@@ -721,7 +732,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
                 if let Some(worker_id) = worker_id.clone() {
                     let owned_id = OwnedWorkerId {
-                        account_id: self.state.owned_worker_id.account_id(),
+                        project_id: self.state.owned_worker_id.project_id(),
                         worker_id,
                     };
 
@@ -761,10 +772,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             };
             let oplog_index_cut_off = self.state.current_oplog_index().await.previous();
 
+            let metadata = self
+                .state
+                .worker_service
+                .get(&self.owned_worker_id)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("Worker does not exist"))?;
             let fork_result = self
                 .state
                 .worker_fork
                 .fork_and_write_fork_result(
+                    &metadata.created_by,
                     &self.owned_worker_id,
                     &target_worker_id,
                     oplog_index_cut_off,
@@ -787,7 +805,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<GetOplogEntry>> {
         self.observe_function_call("golem::api::get-oplog", "new");
 
-        let account_id = self.owned_worker_id.account_id();
+        let account_id = self.owned_worker_id.project_id();
         let worker_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
@@ -809,6 +827,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
         let plugins = self.state.plugins();
+        let project_service = self.state.project_service();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
@@ -816,6 +835,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             component_service,
             oplog_service,
             plugins,
+            project_service,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,
@@ -889,7 +909,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<SearchOplog>> {
         self.observe_function_call("golem::api::search-oplog", "new");
 
-        let account_id = self.owned_worker_id.account_id();
+        let account_id = self.owned_worker_id.project_id();
         let worker_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
@@ -919,6 +939,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
         let plugins = self.state.plugins();
+        let project_service = self.state.project_service();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
@@ -926,6 +947,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             component_service,
             oplog_service,
             plugins,
+            project_service,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,

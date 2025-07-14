@@ -21,8 +21,8 @@ use golem_api_grpc::proto::golem::component::v1::ComponentError;
 use golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-use golem_common::model::ComponentId;
 use golem_common::model::RetryConfig;
+use golem_common::model::{ComponentId, ProjectId};
 use golem_common::retries::with_retries;
 use golem_worker_executor::grpc::authorised_grpc_request;
 use golem_worker_executor::grpc::is_grpc_retriable;
@@ -85,7 +85,9 @@ impl CompileWorker {
                         }
                     }
 
-                    let result = worker.compile_component(&request.component).await;
+                    let result = worker
+                        .compile_component(&request.component, &request.project_id)
+                        .await;
                     match result {
                         Err(error) => {
                             warn!(
@@ -100,6 +102,7 @@ impl CompileWorker {
                                 .send(CompiledComponent {
                                     component_and_version: request.component,
                                     component,
+                                    project_id: request.project_id,
                                 })
                                 .await;
 
@@ -146,6 +149,7 @@ impl CompileWorker {
     async fn compile_component(
         &self,
         component_with_version: &ComponentWithVersion,
+        project_id: &ProjectId,
     ) -> Result<Component, CompilationError> {
         let engine = self.engine.clone();
 
@@ -153,6 +157,7 @@ impl CompileWorker {
         let result = self
             .compiled_component_service
             .get(
+                project_id,
                 &component_with_version.id,
                 component_with_version.version,
                 &engine,

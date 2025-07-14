@@ -26,8 +26,8 @@ use crate::worker::status::calculate_last_known_status;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    AccountId, ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use tracing::{debug, warn};
 
@@ -124,14 +124,15 @@ impl WorkerService for DefaultWorkerService {
         record_worker_call("add");
 
         let worker_id = &worker_metadata.worker_id;
-        let owned_worker_id = OwnedWorkerId::new(&worker_metadata.account_id, worker_id);
+        let owned_worker_id = OwnedWorkerId::new(&worker_metadata.project_id, worker_id);
 
         let initial_oplog_entry = OplogEntry::create(
             worker_metadata.worker_id.clone(),
             worker_metadata.last_known_status.component_version,
             worker_metadata.args.clone(),
             worker_metadata.env.clone(),
-            worker_metadata.account_id.clone(),
+            worker_metadata.project_id.clone(),
+            worker_metadata.created_by.clone(),
             worker_metadata.parent.clone(),
             worker_metadata.last_known_status.component_size,
             worker_metadata.last_known_status.total_linear_memory_size,
@@ -203,77 +204,13 @@ impl WorkerService for DefaultWorkerService {
             None => None,
             Some((
                 _,
-                OplogEntry::CreateV1 {
-                    worker_id,
-                    component_version,
-                    args,
-                    env,
-                    account_id,
-                    timestamp,
-                    parent,
-                    component_size,
-                    initial_total_linear_memory_size,
-                },
-            )) => {
-                let mut details = WorkerMetadata {
-                    worker_id,
-                    args,
-                    env,
-                    account_id,
-                    created_at: timestamp,
-                    parent,
-                    last_known_status: WorkerStatusRecord {
-                        component_version,
-                        component_size,
-                        total_linear_memory_size: initial_total_linear_memory_size,
-                        ..WorkerStatusRecord::default()
-                    },
-                };
-
-                let status_value: Option<Result<WorkerStatusRecord, String>> = self
-                    .key_value_storage
-                    .with_entity("worker", "get", "worker_status")
-                    .get_attempt_deserialize(
-                        KeyValueStorageNamespace::Worker,
-                        &Self::status_key(&owned_worker_id.worker_id),
-                    )
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!("failed to get worker status for {owned_worker_id} from KV storage: {err}")
-                    });
-
-                match status_value {
-                    Some(Ok(status)) => {
-                        details.last_known_status = status;
-                    }
-                    // We had a status, but it was written in a previous format and is not longer valid -> recompute
-                    Some(Err(_)) => {
-                        let last_known_status = calculate_last_known_status(self, owned_worker_id, &None)
-                            .await
-                            .unwrap_or_else(|err| {
-                                panic!("failed to recalculate last known status {owned_worker_id} from KV storage: {err}")
-                            });
-                        self.update_status(
-                            owned_worker_id,
-                            &last_known_status,
-                            ComponentType::Durable,
-                        )
-                        .await;
-                        details.last_known_status = last_known_status;
-                    }
-                    None => {}
-                }
-
-                Some(details)
-            }
-            Some((
-                _,
                 OplogEntry::Create {
                     worker_id,
                     component_version,
                     args,
                     env,
-                    account_id,
+                    project_id,
+                    created_by,
                     timestamp,
                     parent,
                     component_size,
@@ -285,7 +222,8 @@ impl WorkerService for DefaultWorkerService {
                     worker_id,
                     args,
                     env,
-                    account_id,
+                    project_id,
+                    created_by,
                     created_at: timestamp,
                     parent,
                     last_known_status: WorkerStatusRecord {
@@ -352,7 +290,10 @@ impl WorkerService for DefaultWorkerService {
                     worker_id: owned_worker_id.worker_id(),
                     args: vec![],
                     env: vec![],
-                    account_id: owned_worker_id.account_id(),
+                    project_id: owned_worker_id.project_id(),
+                    created_by: AccountId {
+                        value: "system".to_string(),
+                    },
                     created_at: Timestamp::now_utc(),
                     parent: None,
                     last_known_status: WorkerStatusRecord {

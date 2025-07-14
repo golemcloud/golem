@@ -37,7 +37,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8586;
 
@@ -111,7 +111,7 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let component_id = admin.component("shopping-cart").store().await;
 
@@ -197,7 +197,7 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[flaky(5)]
 #[timeout(120000)]
 async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8587;
     let http_server = run_http_server(&response, host_http_port);
@@ -285,7 +285,7 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
@@ -400,7 +400,7 @@ async fn fork_worker_when_target_already_exists(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
@@ -447,7 +447,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
@@ -489,7 +489,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_invalid_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
@@ -527,7 +527,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("environment-service").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
@@ -624,7 +624,7 @@ fn run_http_server(
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("golem-rust-tests").store().await;
 
     let (port_tx, port_rx) = tokio::sync::oneshot::channel::<u16>();

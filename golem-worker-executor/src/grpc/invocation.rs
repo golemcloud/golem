@@ -20,7 +20,7 @@ use crate::workerctx::WorkerCtx;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_common::base_model::{TargetWorkerId, WorkerId};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, WorkerMetadata};
+use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, ProjectId, WorkerMetadata};
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -33,6 +33,7 @@ use tracing::warn;
 pub trait CanStartWorker {
     fn account_id(&self) -> Result<AccountId, GolemError>;
     fn account_limits(&self) -> Option<GrpcResourceLimits>;
+    fn project_id(&self) -> Result<ProjectId, GolemError>;
     fn worker_id(&self) -> Result<TargetWorkerId, GolemError>;
     fn args(&self) -> Option<Vec<String>>;
     fn env(&self) -> Option<Vec<(String, String)>>;
@@ -54,6 +55,7 @@ trait ProtobufInvocationDetails {
     fn proto_account_limits(&self)
         -> &Option<golem_api_grpc::proto::golem::common::ResourceLimits>;
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::TargetWorkerId>;
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId>;
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext>;
@@ -70,6 +72,13 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 
     fn account_limits(&self) -> Option<GrpcResourceLimits> {
         *self.proto_account_limits()
+    }
+
+    fn project_id(&self) -> Result<ProjectId, GolemError> {
+        (*self.proto_project_id())
+            .ok_or(GolemError::invalid_request("project_id not found"))?
+            .try_into()
+            .map_err(GolemError::invalid_request)
     }
 
     fn worker_id(&self) -> Result<TargetWorkerId, GolemError> {
@@ -118,6 +127,10 @@ impl ProtobufInvocationDetails
         &self.worker_id
     }
 
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
+    }
+
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
@@ -140,6 +153,10 @@ impl ProtobufInvocationDetails
 
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::TargetWorkerId> {
         &self.worker_id
+    }
+
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
     }
 
     fn proto_invocation_context(
@@ -166,6 +183,10 @@ impl ProtobufInvocationDetails
         &self.worker_id
     }
 
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
+    }
+
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
@@ -190,6 +211,10 @@ impl ProtobufInvocationDetails
         &self.worker_id
     }
 
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
+    }
+
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
@@ -212,6 +237,10 @@ impl ProtobufInvocationDetails
 
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::TargetWorkerId> {
         &self.worker_id
+    }
+
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
     }
 
     fn proto_invocation_context(
@@ -257,6 +286,10 @@ impl ProtobufInvocationDetails
 
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::TargetWorkerId> {
         &self.worker_id
+    }
+
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
     }
 
     fn proto_invocation_context(
@@ -396,7 +429,7 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
     let component_metadata = worker
         .component_service()
         .get_metadata(
-            &metadata.account_id,
+            &metadata.project_id,
             &metadata.worker_id.component_id,
             Some(assumed_component_version),
         )

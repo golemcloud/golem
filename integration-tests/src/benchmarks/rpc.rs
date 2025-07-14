@@ -89,6 +89,7 @@ impl Benchmark for Rpc {
         let child_component_id = benchmark_context
             .deps
             .admin()
+            .await
             .component("child_component")
             .unique()
             .store()
@@ -96,6 +97,7 @@ impl Benchmark for Rpc {
         let component_id = benchmark_context
             .deps
             .admin()
+            .await
             .component("parent_component_composed")
             .unique()
             .store()
@@ -130,6 +132,7 @@ impl Benchmark for Rpc {
             benchmark_context
                 .deps
                 .admin()
+                .await
                 .start_worker_with(
                     &parent_worker_id.component_id,
                     &parent_worker_id.worker_name,
@@ -210,12 +213,14 @@ impl Benchmark for Rpc {
             benchmark_context
                 .deps
                 .admin()
+                .await
                 .delete_worker(&worker_id.parent)
                 .await
                 .expect("Failed to delete parent worker");
             benchmark_context
                 .deps
                 .admin()
+                .await
                 .delete_worker(&worker_id.child)
                 .await
                 .expect("Failed to delete child worker");
@@ -250,7 +255,7 @@ impl Rpc {
             let _ = fibers.spawn(async move {
                 for _ in 0..length {
                     let result = invoke_and_await(
-                        &context_clone.deps.admin(),
+                        &context_clone.deps.admin().await,
                         &worker_id_clone,
                         &function_clone,
                         params_clone.clone(),

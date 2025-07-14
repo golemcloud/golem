@@ -632,9 +632,15 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .map_item(|i| i.map_err(widen_infallible))
             .map_error(widen_infallible);
 
+        let project_id = self
+            .deps
+            .cloud_service()
+            .get_default_project(&self.token)
+            .await
+            .expect("Failed to get default project");
         self.deps
             .initial_component_files_service()
-            .put_if_not_exists(&self.account_id, stream)
+            .put_if_not_exists(&project_id, stream)
             .await
             .expect("Failed to add initial component file")
     }
@@ -2012,8 +2018,13 @@ pub fn to_worker_metadata(
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect::<Vec<_>>(),
-            account_id: metadata
-                .account_id
+            project_id: metadata
+                .project_id
+                .expect("no project_id")
+                .try_into()
+                .expect("invalid project_id"),
+            created_by: metadata
+                .created_by
                 .clone()
                 .expect("no account_id")
                 .clone()

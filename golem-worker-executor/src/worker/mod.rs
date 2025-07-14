@@ -34,9 +34,9 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPlugins,
-    HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService,
-    HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
-    HasWorkerService, UsesAllDeps,
+    HasProjectService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasSchedulerService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerForkService,
+    HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
@@ -48,7 +48,7 @@ use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::RetryConfig;
+use golem_common::model::{AccountId, RetryConfig};
 use golem_common::model::{ComponentFilePath, ComponentType, PluginInstallationId};
 use golem_common::model::{
     ComponentVersion, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
@@ -117,6 +117,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker, but does not start it
     pub async fn get_or_create_suspended<T>(
         deps: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
@@ -130,6 +131,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_or_add(
                 deps,
                 owned_worker_id,
+                account_id,
                 worker_args,
                 worker_env,
                 component_version,
@@ -141,6 +143,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker and makes sure it is running
     pub async fn get_or_create_running<T>(
         deps: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
@@ -152,6 +155,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         let worker = Self::get_or_create_suspended(
             deps,
+            account_id,
             owned_worker_id,
             worker_args,
             worker_env,
@@ -188,6 +192,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn new<T: HasAll<Ctx>>(
         deps: &T,
+        account_id: &AccountId,
         owned_worker_id: OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
@@ -196,6 +201,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<Self, GolemError> {
         let (worker_metadata, execution_status) = Self::get_or_create_worker_metadata(
             deps,
+            account_id,
             &owned_worker_id,
             component_version,
             worker_args,
@@ -207,7 +213,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let initial_component_metadata = deps
             .component_service()
             .get_metadata(
-                &owned_worker_id.account_id,
+                &owned_worker_id.project_id,
                 &owned_worker_id.worker_id.component_id,
                 Some(worker_metadata.last_known_status.component_version),
             )
@@ -1260,6 +1266,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasWorkerService + HasComponentService + HasConfig + HasOplogService + Sync,
     >(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         component_version: Option<ComponentVersion>,
         worker_args: Option<Vec<String>>,
@@ -1270,7 +1277,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let component_metadata = this
             .component_service()
             .get_metadata(
-                &owned_worker_id.account_id,
+                &owned_worker_id.project_id,
                 &component_id,
                 component_version,
             )
@@ -1286,7 +1293,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     worker_id: owned_worker_id.worker_id(),
                     args: worker_args.unwrap_or_default(),
                     env: worker_env,
-                    account_id: owned_worker_id.account_id(),
+                    project_id: owned_worker_id.project_id(),
+                    created_by: account_id.clone(),
                     created_at: Timestamp::now_utc(),
                     parent,
                     last_known_status: WorkerStatusRecord {
@@ -1547,7 +1555,7 @@ impl RunningWorker {
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
     ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), GolemError> {
-        let account_id = parent.owned_worker_id.account_id();
+        let project_id = parent.owned_worker_id.project_id();
         let component_id = parent.owned_worker_id.component_id();
         let worker_metadata = parent.get_metadata()?;
 
@@ -1576,7 +1584,7 @@ impl RunningWorker {
                 .component_service()
                 .get(
                     &parent.engine(),
-                    &account_id,
+                    &project_id,
                     &component_id,
                     component_version,
                 )
@@ -1593,6 +1601,7 @@ impl RunningWorker {
                         parent.pop_pending_update().await;
                         Ctx::on_worker_update_failed_to_start(
                             &parent.deps,
+                            &parent.initial_worker_metadata.created_by,
                             &parent.owned_worker_id,
                             component_version,
                             Some(error.to_string()),
@@ -1603,7 +1612,7 @@ impl RunningWorker {
                             .component_service()
                             .get(
                                 &parent.engine(),
-                                &account_id,
+                                &project_id,
                                 &component_id,
                                 worker_metadata.last_known_status.component_version,
                             )
@@ -1635,7 +1644,8 @@ impl RunningWorker {
             );
 
         let context = Ctx::create(
-            OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
+            worker_metadata.created_by,
+            OwnedWorkerId::new(&worker_metadata.project_id, &worker_metadata.worker_id),
             parent.promise_service(),
             parent.worker_service(),
             parent.worker_enumeration_service(),
@@ -1661,12 +1671,14 @@ impl RunningWorker {
                 worker_metadata.last_known_status.skipped_regions.clone(),
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
+                parent.initial_worker_metadata.created_by.clone(),
             ),
             parent.execution_status.clone(),
             parent.file_loader(),
             parent.plugins(),
             parent.worker_fork_service(),
             parent.resource_limits(),
+            parent.project_service(),
         )
         .await?;
 

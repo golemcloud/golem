@@ -5,6 +5,7 @@ package golem.worker;
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
 import "golem/common/plugin_installation_id.proto";
+import "golem/common/project_id.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/worker_id.proto";
@@ -75,11 +76,12 @@ message CreateParameters {
   uint64 component_version = 3;
   repeated string args = 4;
   map<string, string> env = 5;
-  golem.common.AccountId account_id = 6;
+  golem.common.AccountId created_by = 6;
   optional WorkerId parent = 7;
   uint64 component_size = 8;
   uint64 initial_total_linear_memory_size = 9;
   repeated PluginInstallationDescription initial_active_plugins = 10;
+  golem.common.ProjectId project_id = 11;
 }
 
 message ImportedFunctionInvokedParameters {

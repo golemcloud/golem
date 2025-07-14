@@ -22,7 +22,7 @@ use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+    PluginInstallationId, ProjectId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
@@ -47,6 +47,7 @@ use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::{Oplog, OplogService};
 use golem_worker_executor::services::plugins::Plugins;
+use golem_worker_executor::services::projects::ProjectService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::RdbmsService;
 use golem_worker_executor::services::resource_limits::ResourceLimits;
@@ -143,10 +144,10 @@ impl ExternalOperations<Self> for DebugContext {
 
     async fn record_last_known_limits<This: HasAll<Self> + Send + Sync>(
         this: &This,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), GolemError> {
-        DurableWorkerCtx::<Self>::record_last_known_limits(this, account_id, last_known_limits)
+        DurableWorkerCtx::<Self>::record_last_known_limits(this, project_id, last_known_limits)
             .await
     }
 
@@ -165,12 +166,14 @@ impl ExternalOperations<Self> for DebugContext {
 
     async fn on_worker_update_failed_to_start<T: HasAll<Self> + Send + Sync>(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         details: Option<String>,
     ) -> Result<(), GolemError> {
         DurableWorkerCtx::<Self>::on_worker_update_failed_to_start(
             this,
+            account_id,
             owned_worker_id,
             target_version,
             details,
@@ -550,6 +553,7 @@ impl WorkerCtx for DebugContext {
     type PublicState = PublicDurableWorkerState<Self>;
 
     async fn create(
+        _account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
@@ -574,6 +578,7 @@ impl WorkerCtx for DebugContext {
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -597,6 +602,7 @@ impl WorkerCtx for DebugContext {
             file_loader,
             plugins,
             worker_fork,
+            project_service,
         )
         .await?;
         Ok(Self {
