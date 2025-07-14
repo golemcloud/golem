@@ -381,6 +381,7 @@ impl Services {
             config.worker_executor_retries.clone(),
             routing_table_service.clone(),
             limit_service.clone(),
+            project_service.clone(),
         ));
 
         let worker_request_to_http_service: Arc<dyn GatewayWorkerRequestExecutor> = Arc::new(

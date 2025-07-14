@@ -508,10 +508,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(
-                &OwnedWorkerId::new(&source_worker_id.project_id, target_worker_id),
-                true,
-            )
+            .resume(target_worker_id, true)
             .await
             .map_err(|err| {
                 GolemError::failed_to_resume_worker(target_worker_id.clone(), err.into())
@@ -569,10 +566,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(
-                &OwnedWorkerId::new(&source_worker_id.project_id, target_worker_id),
-                true,
-            )
+            .resume(target_worker_id, true)
             .await
             .map_err(|err| {
                 GolemError::failed_to_resume_worker(target_worker_id.clone(), err.into())

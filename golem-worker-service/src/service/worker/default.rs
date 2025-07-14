@@ -43,6 +43,7 @@ use golem_common::model::{
     WorkerId, WorkerStatus,
 };
 use golem_service_base::clients::limit::LimitService;
+use golem_service_base::clients::project::ProjectService;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
@@ -317,6 +318,7 @@ pub struct WorkerServiceDefault {
     worker_executor_retries: RetryConfig,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
     limit_service: Arc<dyn LimitService>,
+    project_service: Arc<dyn ProjectService + Send + Sync>,
 }
 
 impl WorkerServiceDefault {
@@ -325,17 +327,24 @@ impl WorkerServiceDefault {
         worker_executor_retries: RetryConfig,
         routing_table_service: Arc<dyn RoutingTableService>,
         limit_service: Arc<dyn LimitService>,
+        project_service: Arc<dyn ProjectService + Send + Sync>,
     ) -> Self {
         Self {
             worker_executor_clients,
             worker_executor_retries,
             routing_table_service,
             limit_service,
+            project_service,
         }
     }
 
     async fn get_resource_limits(&self, namespace: &Namespace) -> WorkerResult<ResourceLimits> {
-        // TODO: get project owner and use that account_id
+        // TODO: cache this?
+        let project_owner = self
+            .project_service
+            .get(&namespace.project_id, token)
+            .await?
+            .owner_account_id;
         let resource_limits = self
             .limit_service
             .get_resource_limits(&namespace.account_id)

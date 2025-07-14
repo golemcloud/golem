@@ -19,9 +19,10 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::{AccountId, OwnedWorkerId, ProjectId, RetryConfig, WorkerId};
+use golem_common::model::{AccountId, ProjectId, RetryConfig};
 use golem_common::retries::with_retries;
 use http::Uri;
+use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
@@ -36,7 +37,6 @@ pub trait ProjectService: Send + Sync {
         account_id: &AccountId,
         project_name: &str,
     ) -> Result<Option<ProjectId>, GolemError>;
-    async fn to_owned_worker_id(&self, worker_id: &WorkerId) -> Result<OwnedWorkerId, GolemError>;
 }
 
 pub fn configured(
@@ -55,9 +55,7 @@ pub fn configured(
             cache_config.max_resolved_project_capacity,
             cache_config.time_to_idle,
         )),
-        ProjectServiceConfig::Disabled(_) => {
-            todo!()
-        }
+        ProjectServiceConfig::Disabled(_) => Arc::new(ProjectServiceDisabled),
     }
 }
 
@@ -66,6 +64,7 @@ struct ProjectServiceGrpc {
     retry_config: RetryConfig,
     access_token: Uuid,
     resolved_project_cache: Cache<(AccountId, String), (), Option<ProjectId>, GolemError>,
+    project_owner_cache: Cache<ProjectId, (), AccountId, GolemError>,
 }
 
 impl ProjectServiceGrpc {
@@ -91,10 +90,8 @@ impl ProjectServiceGrpc {
                     connect_timeout,
                 },
             ),
-            resolved_project_cache: create_resolved_project_cache(
-                max_resolved_project_capacity,
-                time_to_idle,
-            ),
+            resolved_project_cache: create_cache(max_resolved_project_capacity, time_to_idle),
+            project_owner_cache: create_cache(max_resolved_project_capacity, time_to_idle),
             access_token,
             retry_config,
         }
@@ -176,12 +173,70 @@ impl ProjectServiceGrpc {
         .await
         .map_err(|err| GolemError::unknown(format!("Failed to get project: {err}")))
     }
+
+    async fn get_project_owner_remotely(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<AccountId, GolemError> {
+        use golem_api_grpc::proto::golem::project::v1::{
+            get_project_response, GetProjectRequest, ProjectError,
+        };
+
+        let client = self.project_client.clone();
+        let retry_config = self.retry_config.clone();
+        let access_token = self.access_token;
+
+        with_retries(
+            "component",
+            "get_project_owner_remotely",
+            Some(project_id.to_string()),
+            &retry_config,
+            &(client, project_id.clone(), access_token),
+            |(client, project_id, access_token)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get_project_owner", move |client| {
+                            let request = authorised_grpc_request(
+                                GetProjectRequest {
+                                    project_id: Some(project_id.clone().into()),
+                                },
+                                access_token,
+                            );
+                            Box::pin(client.get_project(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response
+                        .result
+                        .expect("Didn't receive expected field result")
+                    {
+                        get_project_response::Result::Success(payload) => Ok(payload
+                            .data
+                            .expect("didn't receive expected owner_account_id")
+                            .owner_account_id
+                            .expect("failed to receive project owner_account_id")
+                            .into()),
+                        get_project_response::Result::Error(err) => Err(GrpcError::Domain(err))?,
+                    }
+                })
+            },
+            is_grpc_retriable::<ProjectError>,
+        )
+        .await
+        .map_err(|err| GolemError::unknown(format!("Failed to get project owner: {err}")))
+    }
 }
 
 #[async_trait]
 impl ProjectService for ProjectServiceGrpc {
     async fn get_project_owner(&self, project_id: &ProjectId) -> Result<AccountId, GolemError> {
-        todo!()
+        self.project_owner_cache
+            .get_or_insert_simple(project_id, || {
+                Box::pin(self.get_project_owner_remotely(project_id))
+            })
+            .await
+            .map_err(|e| GolemError::unknown(format!("Failed to get project owner: {e}")))
     }
 
     async fn resolve_project(
@@ -195,16 +250,13 @@ impl ProjectService for ProjectServiceGrpc {
             })
             .await
     }
-
-    async fn to_owned_worker_id(&self, worker_id: &WorkerId) -> Result<OwnedWorkerId, GolemError> {
-        todo!()
-    }
 }
 
-fn create_resolved_project_cache(
-    max_capacity: usize,
-    time_to_idle: Duration,
-) -> Cache<(AccountId, String), (), Option<ProjectId>, GolemError> {
+fn create_cache<K, V>(max_capacity: usize, time_to_idle: Duration) -> Cache<K, (), V, GolemError>
+where
+    K: Eq + Hash + Clone + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
     Cache::new(
         Some(max_capacity),
         FullCacheEvictionMode::LeastRecentlyUsed(1),
@@ -214,4 +266,21 @@ fn create_resolved_project_cache(
         },
         "resolved_project",
     )
+}
+
+struct ProjectServiceDisabled;
+
+#[async_trait]
+impl ProjectService for ProjectServiceDisabled {
+    async fn get_project_owner(&self, _project_id: &ProjectId) -> Result<AccountId, GolemError> {
+        todo!()
+    }
+
+    async fn resolve_project(
+        &self,
+        _account_id: &AccountId,
+        _project_name: &str,
+    ) -> Result<Option<ProjectId>, GolemError> {
+        todo!()
+    }
 }

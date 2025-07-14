@@ -7,7 +7,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::OplogIndex;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, WorkerId};
 use golem_service_base::model::RevertWorkerTarget;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_wasm_rpc::{ValueAndType, WitValue};
@@ -24,6 +24,7 @@ use std::sync::Arc;
 // however place it in the real executor
 pub struct TestWorkerProxy {
     pub worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
+    pub project_resolver: Arc<dyn GetWorkerProject>,
 }
 
 impl TestWorkerProxy {
@@ -91,16 +92,10 @@ impl WorkerProxy for TestWorkerProxy {
         ))
     }
 
-    async fn resume(
-        &self,
-        owned_worker_id: &OwnedWorkerId,
-        force: bool,
-    ) -> Result<(), WorkerProxyError> {
+    async fn resume(&self, worker_id: &WorkerId, force: bool) -> Result<(), WorkerProxyError> {
         let mut retry_count = Self::RETRY_COUNT;
-        let worker_id: golem_api_grpc::proto::golem::worker::WorkerId =
-            owned_worker_id.worker_id().into();
-        let project_id: golem_api_grpc::proto::golem::common::ProjectId =
-            owned_worker_id.project_id().into();
+        let project_id = self.project_resolver.get_worker_project(worker_id).await?;
+        let worker_id: golem_api_grpc::proto::golem::worker::WorkerId = worker_id.clone().into();
 
         let result = loop {
             let result = self
@@ -113,7 +108,7 @@ impl WorkerProxy for TestWorkerProxy {
                     account_id: Some(AccountId {
                         name: "test-account".to_string(),
                     }),
-                    project_id: Some(project_id),
+                    project_id: Some(project_id.clone().into()),
                     force: Some(force),
                 })
                 .await;
@@ -141,10 +136,14 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn fork_worker(
         &self,
-        source_worker_id: &OwnedWorkerId,
+        source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cutoff: &OplogIndex,
     ) -> Result<(), WorkerProxyError> {
+        let project_id = self
+            .project_resolver
+            .get_worker_project(source_worker_id)
+            .await?;
         let result = self
             .worker_executor
             .client()
@@ -154,8 +153,8 @@ impl WorkerProxy for TestWorkerProxy {
                 account_id: Some(AccountId {
                     name: "test-account".to_string(),
                 }),
-                project_id: Some(source_worker_id.project_id().into()),
-                source_worker_id: Some(source_worker_id.worker_id().into()),
+                project_id: Some(project_id.into()),
+                source_worker_id: Some(source_worker_id.clone().into()),
                 target_worker_id: Some(target_worker_id.clone().into()),
                 oplog_index_cutoff: (*oplog_index_cutoff).into(),
             })
@@ -176,20 +175,21 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn revert(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         target: RevertWorkerTarget,
     ) -> Result<(), WorkerProxyError> {
+        let project_id = self.project_resolver.get_worker_project(worker_id).await?;
         let result = self
             .worker_executor
             .client()
             .await
             .map_err(|e| WorkerProxyError::InternalError(GolemError::from(e)))?
             .revert_worker(RevertWorkerRequest {
-                worker_id: Some(worker_id.worker_id().into()),
+                worker_id: Some(worker_id.clone().into()),
                 account_id: Some(AccountId {
                     name: "test-account".to_string(),
                 }),
-                project_id: Some(worker_id.project_id().into()),
+                project_id: Some(project_id.into()),
                 target: Some(target.into()),
             })
             .await?
@@ -206,4 +206,10 @@ impl WorkerProxy for TestWorkerProxy {
             ),
         }
     }
+}
+
+#[async_trait]
+pub trait GetWorkerProject: Send + Sync {
+    async fn get_worker_project(&self, worker_id: &WorkerId)
+        -> Result<ProjectId, WorkerProxyError>;
 }

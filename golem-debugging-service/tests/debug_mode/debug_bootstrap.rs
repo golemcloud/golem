@@ -143,6 +143,9 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
                 self.regular_worker_executor_context.grpc_port(),
                 true,
             )),
+            project_resolver: self
+                .regular_worker_executor_context
+                .create_project_resolver(),
         });
 
         let debug_sessions: Arc<dyn DebugSessions> = Arc::new(DebugSessionsDefault::default());

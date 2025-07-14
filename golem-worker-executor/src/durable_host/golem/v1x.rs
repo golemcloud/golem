@@ -594,12 +594,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let source_worker_id: WorkerId = source_worker_id.into();
         let target_worker_id: WorkerId = target_worker_id.into();
 
-        let source_worker_id = self
-            .state
-            .project_service
-            .to_owned_worker_id(&source_worker_id)
-            .await?;
-
         let oplog_index_cut_off: OplogIndex = OplogIndex::from_u64(oplog_idx_cut_off);
 
         if durability.is_live() {
@@ -638,12 +632,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if durability.is_live() {
             let worker_id: WorkerId = worker_id.into();
             let revert_target: golem_service_base::model::RevertWorkerTarget = revert_target.into();
-
-            let worker_id = self
-                .state
-                .project_service
-                .to_owned_worker_id(&worker_id)
-                .await?;
 
             let result = self
                 .worker_proxy()
