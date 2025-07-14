@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use clap_verbosity_flag::Verbosity;
+use golem_common::tracing::directive;
+use golem_common::tracing::directive::warn;
 use shadow_rs::shadow;
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod app;
 pub mod auth;
@@ -60,11 +62,21 @@ pub fn version() -> &'static str {
 pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
     if let Some(level) = verbosity.tracing_level() {
         let subscriber = FmtSubscriber::builder();
+
+        let mut filter = EnvFilter::builder().parse_lossy(level.as_str());
+        for directive in directive::default_deps() {
+            filter = filter.add_directive(directive);
+        }
+        filter = filter.add_directive(warn("opentelemetry_sdk"));
+        filter = filter.add_directive(warn("opentelemetry"));
+        filter = filter.add_directive(warn("poem"));
+
         if pretty_mode {
             let subscriber = subscriber
                 .pretty()
                 .with_max_level(level)
                 .with_writer(std::io::stderr)
+                .with_env_filter(filter)
                 .finish();
 
             tracing::subscriber::set_global_default(subscriber)
@@ -73,6 +85,7 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
             let subscriber = subscriber
                 .with_max_level(level)
                 .with_writer(std::io::stderr)
+                .with_env_filter(filter)
                 .finish();
 
             tracing::subscriber::set_global_default(subscriber)
