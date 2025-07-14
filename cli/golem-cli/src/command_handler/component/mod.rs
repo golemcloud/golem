@@ -128,8 +128,9 @@ impl ComponentCommandHandler {
             ComponentSubcommand::UpdateWorkers {
                 component_name,
                 update_mode,
+                r#await,
             } => {
-                self.cmd_update_workers(component_name.component_name, update_mode)
+                self.cmd_update_workers(component_name.component_name, update_mode, r#await)
                     .await
             }
             ComponentSubcommand::RedeployWorkers { component_name } => {
@@ -494,11 +495,12 @@ impl ComponentCommandHandler {
         &self,
         component_name: Option<ComponentName>,
         update_mode: WorkerUpdateMode,
+        await_update: bool,
     ) -> anyhow::Result<()> {
         let components = self
             .components_for_update_or_redeploy(component_name)
             .await?;
-        self.update_workers_by_components(&components, update_mode)
+        self.update_workers_by_components(&components, update_mode, await_update)
             .await?;
 
         Ok(())
@@ -646,7 +648,7 @@ impl ComponentCommandHandler {
         };
 
         if let Some(update) = update_or_redeploy.update_workers {
-            self.update_workers_by_components(&components, update)
+            self.update_workers_by_components(&components, update, true)
                 .await?;
         } else if update_or_redeploy.redeploy_workers(self.ctx.update_or_redeploy()) {
             self.redeploy_workers_by_components(&components).await?;
@@ -882,6 +884,7 @@ impl ComponentCommandHandler {
         &self,
         components: &[Component],
         update: WorkerUpdateMode,
+        await_updates: bool,
     ) -> anyhow::Result<()> {
         if components.is_empty() {
             return Ok(());
@@ -900,6 +903,7 @@ impl ComponentCommandHandler {
                     component.versioned_component_id.component_id,
                     update,
                     component.versioned_component_id.version,
+                    await_updates,
                 )
                 .await?;
             update_results.extend(result);

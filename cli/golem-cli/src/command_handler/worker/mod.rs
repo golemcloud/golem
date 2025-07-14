@@ -47,7 +47,9 @@ use crate::model::{
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::WorkerClient;
-use golem_client::model::{ComponentType, InvokeResult, PublicOplogEntry, ScanCursor};
+use golem_client::model::{
+    ComponentType, InvokeResult, PublicOplogEntry, ScanCursor, UpdateRecord,
+};
 use golem_client::model::{
     InvokeParameters as InvokeParametersCloud, RevertLastInvocations as RevertLastInvocationsCloud,
     RevertToOplogIndex as RevertToOplogIndexCloud, RevertWorkerTarget as RevertWorkerTargetCloud,
@@ -129,11 +131,13 @@ impl WorkerCommandHandler {
                 worker_name,
                 mode,
                 target_version,
+                r#await,
             } => {
                 self.cmd_update(
                     worker_name,
                     mode.unwrap_or(WorkerUpdateMode::Automatic),
                     target_version,
+                    r#await,
                 )
                 .await
             }
@@ -738,6 +742,7 @@ impl WorkerCommandHandler {
         worker_name: WorkerNameArg,
         mode: WorkerUpdateMode,
         target_version: Option<u64>,
+        await_update: bool,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
@@ -778,6 +783,7 @@ impl WorkerCommandHandler {
             &worker_name.0,
             mode,
             target_version,
+            await_update,
         )
         .await?;
 
@@ -1016,6 +1022,7 @@ impl WorkerCommandHandler {
         component_id: Uuid,
         update_mode: WorkerUpdateMode,
         target_version: u64,
+        await_update: bool,
     ) -> anyhow::Result<TryUpdateAllWorkersResult> {
         let (workers, _) = self
             .list_component_workers(component_name, component_id, None, None, None, false)
@@ -1041,7 +1048,7 @@ impl WorkerCommandHandler {
         let _indent = LogIndent::new();
 
         let mut update_results = TryUpdateAllWorkersResult::default();
-        for worker in workers {
+        for worker in &workers {
             let result = self
                 .update_worker(
                     component_name,
@@ -1049,6 +1056,7 @@ impl WorkerCommandHandler {
                     &worker.worker_id.worker_name,
                     update_mode,
                     target_version,
+                    false,
                 )
                 .await;
 
@@ -1072,6 +1080,18 @@ impl WorkerCommandHandler {
             }
         }
 
+        if await_update {
+            for worker in workers {
+                let _ = self
+                    .await_update_result(
+                        &worker.worker_id.component_id.0,
+                        &worker.worker_id.worker_name,
+                        target_version,
+                    )
+                    .await;
+            }
+        }
+
         Ok(update_results)
     }
 
@@ -1082,6 +1102,7 @@ impl WorkerCommandHandler {
         worker_name: &str,
         update_mode: WorkerUpdateMode,
         target_version: u64,
+        await_update: bool,
     ) -> anyhow::Result<()> {
         log_warn_action(
             "Triggering update",
@@ -1118,6 +1139,12 @@ impl WorkerCommandHandler {
         match result {
             Ok(_) => {
                 log_action("Triggered update", "");
+
+                if await_update {
+                    self.await_update_result(&component_id, worker_name, target_version)
+                        .await?;
+                }
+
                 Ok(())
             }
             Err(error) => {
@@ -1125,6 +1152,95 @@ impl WorkerCommandHandler {
                 let _indent = LogIndent::new();
                 logln(format!("{error}"));
                 Err(anyhow!(error))
+            }
+        }
+    }
+
+    async fn await_update_result(
+        &self,
+        component_id: &Uuid,
+        worker_name: &str,
+        target_version: u64,
+    ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+        loop {
+            let metadata = clients
+                .worker
+                .get_worker_metadata(component_id, worker_name)
+                .await?;
+            for update_record in metadata.updates {
+                let mut latest_success = None;
+                let mut latest_failure = None;
+                let mut pending_count = 0;
+                match update_record {
+                    UpdateRecord::PendingUpdate(details)
+                        if details.target_version == target_version =>
+                    {
+                        pending_count += 1;
+                    }
+                    UpdateRecord::SuccessfulUpdate(details)
+                        if details.target_version == target_version =>
+                    {
+                        match latest_success {
+                            None => latest_success = Some(details),
+                            Some(previous_success)
+                                if previous_success.timestamp < details.timestamp =>
+                            {
+                                latest_success = Some(details);
+                            }
+                            _ => {}
+                        }
+                    }
+                    UpdateRecord::FailedUpdate(details)
+                        if details.target_version == target_version =>
+                    {
+                        match latest_failure {
+                            None => latest_failure = Some(details),
+                            Some(previous_failure)
+                                if previous_failure.timestamp < details.timestamp =>
+                            {
+                                latest_failure = Some(details);
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+
+                if pending_count > 0 {
+                    log_action("Worker update", "is still pending");
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                } else if let Some(success) = latest_success {
+                    log_action(
+                        "Worker update",
+                        format!(
+                            "to version {} succeeded at {}",
+                            success.target_version.to_string().log_color_highlight(),
+                            success.timestamp.to_string().log_color_highlight()
+                        ),
+                    );
+                    return Ok(());
+                } else if let Some(failure) = latest_failure {
+                    let error = failure.details.unwrap_or("unknown reason".to_string());
+                    log_error_action(
+                        "Worker update",
+                        format!(
+                            "to version {} succeeded at {}: {}",
+                            failure.target_version.to_string().log_color_highlight(),
+                            failure.timestamp.to_string().log_color_highlight(),
+                            error
+                        ),
+                    );
+                    return Err(anyhow!(error));
+                } else {
+                    log_error_action(
+                        "Worker update",
+                        "is not pending anymore, but no outcome has been found",
+                    );
+                    return Err(anyhow ! (
+                "Unexpected worker state: update is not pending anymore, but no outcome has been found"
+                ));
+                }
             }
         }
     }
@@ -1385,13 +1501,13 @@ impl WorkerCommandHandler {
                         if selected_component_names.len() != 1 {
                             logln("");
                             log_error(
-                                format!("Multiple components were selected based on the current directory: {}",
-                                        selected_component_names.iter().map(|cn| cn.as_str().log_color_highlight()).join(", ")),
-                            );
+                                    format!("Multiple components were selected based on the current directory: {}",
+                                            selected_component_names.iter().map(|cn| cn.as_str().log_color_highlight()).join(", ")),
+                                );
                             logln("");
                             logln(
-                                "Switch to a different directory with only one component or specify the full or partial component name as part of the worker name!",
-                            );
+                                    "Switch to a different directory with only one component or specify the full or partial component name as part of the worker name!",
+                                );
                             logln("");
                             log_text_view(&WorkerNameHelp);
                             logln("");
@@ -1549,9 +1665,9 @@ impl WorkerCommandHandler {
                                 } => {
                                     logln("");
                                     log_error(format!(
-                                        "The requested application component name ({}) is ambiguous.",
-                                        component_name.0.log_color_error_highlight()
-                                    ));
+                                            "The requested application component name ({}) is ambiguous.",
+                                            component_name.0.log_color_error_highlight()
+                                        ));
                                     logln("");
                                     logln("Did you mean one of");
                                     for option in highlighted_options {
