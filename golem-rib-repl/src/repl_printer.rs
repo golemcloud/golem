@@ -91,7 +91,8 @@ pub trait ReplPrinter {
 
             RibResult::Val(value_and_type) => {
                 let value_str = display_for_value_and_type(value_and_type);
-                println!("{}", value_str.yellow());
+                let formatted = try_formatting(&value_str, 2);
+                println!("{}", formatted.yellow());
             }
         }
     }
@@ -697,4 +698,58 @@ fn display_for_resource_handle(uri: &str, resource_id: &u64) -> String {
     let result = ValueAndType::new(resource, analysed_type);
 
     result.to_string()
+}
+
+fn try_formatting(input: &str, _indent: usize) -> String {
+    let mut result = String::new();
+    let mut depth = 0;
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        match chars[i] {
+            '{' | '[' => {
+                // Check for empty object or array
+                let mut j = i + 1;
+                while j < chars.len() && chars[j].is_whitespace() {
+                    j += 1;
+                }
+                if j < chars.len() && (chars[j] == '}' || chars[j] == ']') {
+                    result.push(chars[i]);
+                    result.push(chars[j]);
+                    i = j + 1;
+                    continue;
+                }
+
+                depth += 1;
+                result.push(chars[i]);
+                result.push('\n');
+                result.push_str(&"  ".repeat(depth));
+                i += 1;
+            }
+            '}' | ']' => {
+                depth = depth.saturating_sub(1);
+                result.push('\n');
+                result.push_str(&"  ".repeat(depth));
+                result.push(chars[i]);
+                i += 1;
+            }
+            ',' => {
+                result.push(chars[i]);
+                result.push('\n');
+                result.push_str(&"  ".repeat(depth));
+                i += 1;
+                // Skip whitespace after comma
+                while i < chars.len() && chars[i].is_whitespace() && chars[i] != '\n' {
+                    i += 1;
+                }
+            }
+            _ => {
+                result.push(chars[i]);
+                i += 1;
+            }
+        }
+    }
+
+    result
 }
