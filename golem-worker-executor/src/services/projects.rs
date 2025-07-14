@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 use crate::services::golem_config::{ComponentCacheConfig, ProjectServiceConfig};
 use async_trait::async_trait;
@@ -21,6 +20,7 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::{AccountId, ProjectId, RetryConfig};
 use golem_common::retries::with_retries;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::Uri;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -31,12 +31,15 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait ProjectService: Send + Sync {
-    async fn get_project_owner(&self, project_id: &ProjectId) -> Result<AccountId, GolemError>;
+    async fn get_project_owner(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<AccountId, WorkerExecutorError>;
     async fn resolve_project(
         &self,
         account_id: &AccountId,
         project_name: &str,
-    ) -> Result<Option<ProjectId>, GolemError>;
+    ) -> Result<Option<ProjectId>, WorkerExecutorError>;
 }
 
 pub fn configured(
@@ -63,8 +66,8 @@ struct ProjectServiceGrpc {
     project_client: GrpcClient<CloudProjectServiceClient<Channel>>,
     retry_config: RetryConfig,
     access_token: Uuid,
-    resolved_project_cache: Cache<(AccountId, String), (), Option<ProjectId>, GolemError>,
-    project_owner_cache: Cache<ProjectId, (), AccountId, GolemError>,
+    resolved_project_cache: Cache<(AccountId, String), (), Option<ProjectId>, WorkerExecutorError>,
+    project_owner_cache: Cache<ProjectId, (), AccountId, WorkerExecutorError>,
 }
 
 impl ProjectServiceGrpc {
@@ -101,7 +104,7 @@ impl ProjectServiceGrpc {
         &self,
         account_id: &AccountId,
         project_name: &str,
-    ) -> Result<Option<ProjectId>, GolemError> {
+    ) -> Result<Option<ProjectId>, WorkerExecutorError> {
         use golem_api_grpc::proto::golem::project::v1::{
             get_projects_response, GetProjectsRequest, ProjectError,
         };
@@ -171,13 +174,13 @@ impl ProjectServiceGrpc {
             is_grpc_retriable::<ProjectError>,
         )
         .await
-        .map_err(|err| GolemError::unknown(format!("Failed to get project: {err}")))
+        .map_err(|err| WorkerExecutorError::unknown(format!("Failed to get project: {err}")))
     }
 
     async fn get_project_owner_remotely(
         &self,
         project_id: &ProjectId,
-    ) -> Result<AccountId, GolemError> {
+    ) -> Result<AccountId, WorkerExecutorError> {
         use golem_api_grpc::proto::golem::project::v1::{
             get_project_response, GetProjectRequest, ProjectError,
         };
@@ -224,26 +227,29 @@ impl ProjectServiceGrpc {
             is_grpc_retriable::<ProjectError>,
         )
         .await
-        .map_err(|err| GolemError::unknown(format!("Failed to get project owner: {err}")))
+        .map_err(|err| WorkerExecutorError::unknown(format!("Failed to get project owner: {err}")))
     }
 }
 
 #[async_trait]
 impl ProjectService for ProjectServiceGrpc {
-    async fn get_project_owner(&self, project_id: &ProjectId) -> Result<AccountId, GolemError> {
+    async fn get_project_owner(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<AccountId, WorkerExecutorError> {
         self.project_owner_cache
             .get_or_insert_simple(project_id, || {
                 Box::pin(self.get_project_owner_remotely(project_id))
             })
             .await
-            .map_err(|e| GolemError::unknown(format!("Failed to get project owner: {e}")))
+            .map_err(|e| WorkerExecutorError::unknown(format!("Failed to get project owner: {e}")))
     }
 
     async fn resolve_project(
         &self,
         account_id: &AccountId,
         project_name: &str,
-    ) -> Result<Option<ProjectId>, GolemError> {
+    ) -> Result<Option<ProjectId>, WorkerExecutorError> {
         self.resolved_project_cache
             .get_or_insert_simple(&(account_id.clone(), project_name.to_string()), || {
                 Box::pin(self.resolve_project_remotely(account_id, project_name))
@@ -252,7 +258,10 @@ impl ProjectService for ProjectServiceGrpc {
     }
 }
 
-fn create_cache<K, V>(max_capacity: usize, time_to_idle: Duration) -> Cache<K, (), V, GolemError>
+fn create_cache<K, V>(
+    max_capacity: usize,
+    time_to_idle: Duration,
+) -> Cache<K, (), V, WorkerExecutorError>
 where
     K: Eq + Hash + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -272,7 +281,10 @@ struct ProjectServiceDisabled;
 
 #[async_trait]
 impl ProjectService for ProjectServiceDisabled {
-    async fn get_project_owner(&self, _project_id: &ProjectId) -> Result<AccountId, GolemError> {
+    async fn get_project_owner(
+        &self,
+        _project_id: &ProjectId,
+    ) -> Result<AccountId, WorkerExecutorError> {
         todo!()
     }
 
@@ -280,7 +292,7 @@ impl ProjectService for ProjectServiceDisabled {
         &self,
         _account_id: &AccountId,
         _project_name: &str,
-    ) -> Result<Option<ProjectId>, GolemError> {
+    ) -> Result<Option<ProjectId>, WorkerExecutorError> {
         todo!()
     }
 }

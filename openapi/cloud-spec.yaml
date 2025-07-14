@@ -1635,7 +1635,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ProjectPermisison'
+                  $ref: '#/components/schemas/ProjectPermission'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -2015,7 +2015,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: bath_update_installed_plugins_of_project
+      operationId: batch_update_installed_plugins_of_project
   /v1/projects/{project_id}/grants:
     get:
       tags:
@@ -3048,7 +3048,7 @@ components:
         actions:
           type: array
           items:
-            $ref: '#/components/schemas/ProjectPermisison'
+            $ref: '#/components/schemas/ProjectPermission'
     ProjectData:
       type: object
       title: ProjectData
@@ -3127,10 +3127,10 @@ components:
         projectActions:
           type: array
           items:
-            $ref: '#/components/schemas/ProjectPermisison'
+            $ref: '#/components/schemas/ProjectPermission'
         projectPolicyName:
           type: string
-    ProjectPermisison:
+    ProjectPermission:
       type: string
       enum:
       - ViewComponent

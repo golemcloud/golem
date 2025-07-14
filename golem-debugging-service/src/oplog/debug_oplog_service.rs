@@ -19,7 +19,7 @@ use bytes::Bytes;
 use golem_common::base_model::ProjectId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata};
-use golem_worker_executor::error::GolemError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{OpenOplogs, Oplog, OplogService};
 use std::collections::BTreeMap;
@@ -140,7 +140,7 @@ impl OplogService for DebugOplogService {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         self.inner
             .scan_for_component(project_id, component_id, cursor, count)
             .await

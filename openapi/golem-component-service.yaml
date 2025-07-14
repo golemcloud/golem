@@ -1057,7 +1057,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: bath_update_installed_plugins
+      operationId: batch_update_installed_plugins
   /v1/components/{component_id}/versions/{version}/file-contents/{file_path}:
     get:
       tags:

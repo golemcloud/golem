@@ -27,12 +27,12 @@ use tracing::{debug, error, info, trace, warn, Instrument};
 use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
-use golem_common::model::error::{GolemError, GolemErrorInvalidShardId, GolemErrorUnknown};
 use golem_common::model::RetryConfig;
 use golem_common::model::{Pod, ShardId, TargetWorkerId, WorkerId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
 use golem_common::SafeDisplay;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableError};
 
 use crate::service::worker::WorkerServiceError;
@@ -322,18 +322,19 @@ pub enum ResponseMapResult {
     Other(WorkerServiceError),
 }
 
-impl From<GolemError> for ResponseMapResult {
-    fn from(error: GolemError) -> Self {
+impl From<WorkerExecutorError> for ResponseMapResult {
+    fn from(error: WorkerExecutorError) -> Self {
         match error {
-            GolemError::InvalidShardId(GolemErrorInvalidShardId {
+            WorkerExecutorError::InvalidShardId {
                 shard_id,
                 shard_ids,
-            }) => ResponseMapResult::InvalidShardId {
+            } => ResponseMapResult::InvalidShardId {
                 shard_id,
-                shard_ids,
+                shard_ids: HashSet::from_iter(shard_ids),
             },
-            GolemError::ShardingNotReady(_) => ResponseMapResult::ShardingNotReady,
-            GolemError::WorkerNotFound(_) | GolemError::WorkerAlreadyExists(_) => {
+            WorkerExecutorError::ShardingNotReady => ResponseMapResult::ShardingNotReady,
+            WorkerExecutorError::WorkerNotFound { .. }
+            | WorkerExecutorError::WorkerAlreadyExists { .. } => {
                 ResponseMapResult::Expected(error.into())
             }
             other => ResponseMapResult::Other(other.into()),
@@ -349,11 +350,10 @@ impl From<&'static str> for ResponseMapResult {
 
 impl From<WorkerExecutionError> for ResponseMapResult {
     fn from(error: WorkerExecutionError) -> Self {
-        let golem_error = error.clone().try_into().unwrap_or_else(|_| {
-            GolemError::Unknown(GolemErrorUnknown {
-                details: "Unknown worker execution error".to_string(),
-            })
-        });
+        let golem_error = error
+            .clone()
+            .try_into()
+            .unwrap_or_else(|_| WorkerExecutorError::unknown("Unknown worker execution error"));
         let response_map_result = golem_error.clone().into();
         trace!(
             error = format!("{:?}", error),

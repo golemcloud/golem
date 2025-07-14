@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
-
-use crate::error::GolemError;
+use super::golem_config::GolemConfig;
+use super::{HasConfig, HasOplogService};
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::OplogService;
@@ -29,10 +28,9 @@ use golem_common::model::{
     AccountId, ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::sync::{Arc, RwLock};
 use tracing::{debug, warn};
-
-use super::golem_config::GolemConfig;
-use super::{HasConfig, HasOplogService};
 
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
@@ -41,7 +39,7 @@ pub trait WorkerService: Send + Sync {
         &self,
         worker_metadata: &WorkerMetadata,
         component_type: ComponentType,
-    ) -> Result<Arc<RwLock<ExecutionStatus>>, GolemError>;
+    ) -> Result<Arc<RwLock<ExecutionStatus>>, WorkerExecutorError>;
 
     async fn get(&self, owned_worker_id: &OwnedWorkerId) -> Option<WorkerMetadata>;
 
@@ -120,7 +118,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         worker_metadata: &WorkerMetadata,
         component_type: ComponentType,
-    ) -> Result<Arc<RwLock<ExecutionStatus>>, GolemError> {
+    ) -> Result<Arc<RwLock<ExecutionStatus>>, WorkerExecutorError> {
         record_worker_call("add");
 
         let worker_id = &worker_metadata.worker_id;

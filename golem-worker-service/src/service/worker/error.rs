@@ -15,11 +15,11 @@
 use crate::service::component::ComponentServiceError;
 use crate::service::worker::CallWorkerExecutorError;
 use golem_common::model::component::VersionedComponentId;
-use golem_common::model::error::GolemError;
 use golem_common::model::{AccountId, ComponentFilePath, ComponentId, WorkerId};
 use golem_common::SafeDisplay;
 use golem_service_base::clients::limit::LimitError;
 use golem_service_base::clients::project::ProjectError;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerServiceError {
@@ -30,7 +30,7 @@ pub enum WorkerServiceError {
     #[error(transparent)]
     InternalCallError(CallWorkerExecutorError),
     #[error(transparent)]
-    GolemError(#[from] GolemError),
+    GolemError(#[from] WorkerExecutorError),
     #[error(transparent)]
     Project(#[from] ProjectError),
 
@@ -93,7 +93,7 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
             | WorkerServiceError::VersionedComponentIdNotFound(_)
             | WorkerServiceError::WorkerNotFound(_)
             | WorkerServiceError::FileNotFound(_)
-            | WorkerServiceError::GolemError(GolemError::WorkerNotFound(_)) => {
+            | WorkerServiceError::GolemError(WorkerExecutorError::WorkerNotFound { .. }) => {
                 Self::NotFound(ErrorBody {
                     error: error.to_safe_string(),
                 })

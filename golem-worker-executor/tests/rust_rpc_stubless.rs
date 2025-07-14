@@ -20,9 +20,10 @@ use assert2::check;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::ComponentType;
 use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::{worker_error_message, TestDslUnsafe};
+use golem_test_framework::dsl::{worker_error_underlying_error, TestDslUnsafe};
 use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::collections::HashMap;
@@ -1159,8 +1160,9 @@ async fn error_message_non_existing_target_component(
 
     drop(executor);
 
-    check!(worker_error_message(&create_auction_result.err().unwrap())
-        .contains("Could not find any component with the given id"));
+    assert!(
+        matches!(worker_error_underlying_error(&create_auction_result.err().unwrap()), Some(WorkerError::Unknown(err)) if err.contains("Could not find any component with the given id"))
+    );
 }
 
 #[test]

@@ -25,6 +25,7 @@ use golem_common::model::{
     PluginInstallationId, ProjectId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
@@ -34,10 +35,9 @@ use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
-use golem_worker_executor::error::GolemError;
 use golem_worker_executor::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
-    ReadFileResult, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, LastError, ListDirectoryResult, ReadFileResult,
+    TrapType, WorkerConfig,
 };
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::blob_store::BlobStoreService;
@@ -91,13 +91,13 @@ impl FuelManagement for DebugContext {
         false
     }
 
-    async fn borrow_fuel(&mut self) -> Result<(), GolemError> {
+    async fn borrow_fuel(&mut self) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
 
     fn borrow_fuel_sync(&mut self) {}
 
-    async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, GolemError> {
+    async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, WorkerExecutorError> {
         Ok(0)
     }
 }
@@ -123,14 +123,14 @@ impl ExternalOperations<Self> for DebugContext {
         this: &This,
         worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
-    ) -> Result<WorkerStatusRecord, GolemError> {
+    ) -> Result<WorkerStatusRecord, WorkerExecutorError> {
         DurableWorkerCtx::<Self>::compute_latest_worker_status(this, worker_id, metadata).await
     }
 
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Self> + Send),
         instance: &Instance,
-    ) -> Result<RetryDecision, GolemError> {
+    ) -> Result<RetryDecision, WorkerExecutorError> {
         DurableWorkerCtx::<Self>::resume_replay(store, instance).await
     }
 
@@ -138,7 +138,7 @@ impl ExternalOperations<Self> for DebugContext {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Self> + Send),
-    ) -> Result<RetryDecision, GolemError> {
+    ) -> Result<RetryDecision, WorkerExecutorError> {
         DurableWorkerCtx::<Self>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -146,7 +146,7 @@ impl ExternalOperations<Self> for DebugContext {
         this: &This,
         project_id: &ProjectId,
         last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         DurableWorkerCtx::<Self>::record_last_known_limits(this, project_id, last_known_limits)
             .await
     }
@@ -154,7 +154,7 @@ impl ExternalOperations<Self> for DebugContext {
     async fn on_worker_deleted<This: HasAll<Self> + Send + Sync>(
         this: &This,
         worker_id: &WorkerId,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         DurableWorkerCtx::<Self>::on_worker_deleted(this, worker_id).await
     }
 
@@ -170,7 +170,7 @@ impl ExternalOperations<Self> for DebugContext {
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         details: Option<String>,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         DurableWorkerCtx::<Self>::on_worker_update_failed_to_start(
             this,
             account_id,
@@ -201,7 +201,7 @@ impl InvocationManagement for DebugContext {
     async fn set_current_invocation_context(
         &mut self,
         stack: InvocationContextStack,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.set_current_invocation_context(stack).await
     }
 
@@ -224,7 +224,7 @@ impl StatusManagement for DebugContext {
         }
     }
 
-    async fn set_suspended(&self) -> Result<(), GolemError> {
+    async fn set_suspended(&self) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.set_suspended().await
     }
 
@@ -255,7 +255,7 @@ impl InvocationHooks for DebugContext {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_exported_function_invoked(full_function_name, function_input)
             .await
@@ -271,7 +271,7 @@ impl InvocationHooks for DebugContext {
         function_input: &Vec<Value>,
         consumed_fuel: i64,
         output: Option<ValueAndType>,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
@@ -362,11 +362,14 @@ impl FileSystemReading for DebugContext {
     async fn list_directory(
         &self,
         path: &ComponentFilePath,
-    ) -> Result<ListDirectoryResult, GolemError> {
+    ) -> Result<ListDirectoryResult, WorkerExecutorError> {
         self.durable_ctx.list_directory(path).await
     }
 
-    async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError> {
+    async fn read_file(
+        &self,
+        path: &ComponentFilePath,
+    ) -> Result<ReadFileResult, WorkerExecutorError> {
         self.durable_ctx.read_file(path).await
     }
 }
@@ -511,7 +514,7 @@ impl InvocationContextManagement for DebugContext {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, invocation_context::AttributeValue)],
-    ) -> Result<Arc<invocation_context::InvocationContextSpan>, GolemError> {
+    ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
         self.durable_ctx.start_span(initial_attributes).await
     }
 
@@ -519,7 +522,7 @@ impl InvocationContextManagement for DebugContext {
         &mut self,
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<invocation_context::InvocationContextSpan>, GolemError> {
+    ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
         self.durable_ctx
             .start_child_span(parent, initial_attributes)
             .await
@@ -528,11 +531,14 @@ impl InvocationContextManagement for DebugContext {
     async fn finish_span(
         &mut self,
         span_id: &invocation_context::SpanId,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.finish_span(span_id).await
     }
 
-    fn remove_span(&mut self, span_id: &invocation_context::SpanId) -> Result<(), GolemError> {
+    fn remove_span(
+        &mut self,
+        span_id: &invocation_context::SpanId,
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.remove_span(span_id)
     }
 
@@ -541,7 +547,7 @@ impl InvocationContextManagement for DebugContext {
         span_id: &SpanId,
         key: &str,
         value: AttributeValue,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .set_span_attribute(span_id, key, value)
             .await
@@ -579,7 +585,7 @@ impl WorkerCtx for DebugContext {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
-    ) -> Result<Self, GolemError> {
+    ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
             promise_service,
@@ -657,7 +663,7 @@ impl WorkerCtx for DebugContext {
     async fn generate_unique_local_worker_id(
         &mut self,
         remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, GolemError> {
+    ) -> Result<WorkerId, WorkerExecutorError> {
         self.durable_ctx
             .generate_unique_local_worker_id(remote_worker_id)
             .await

@@ -32,7 +32,7 @@ use golem_common::model::{
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
     drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
-    worker_error_message, TestDslUnsafe,
+    worker_error_logs, worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType, TypeStr};
@@ -3212,10 +3212,16 @@ async fn stderr_returned_for_failed_component(
     check!(result2.is_err());
     check!(result3.is_err());
 
-    let expected_stderr = "\n\nthread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+    let expected_stderr = "thread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
 
-    check!(worker_error_message(&result2.clone().err().unwrap()).ends_with(&expected_stderr));
-    check!(worker_error_message(&result3.clone().err().unwrap()).ends_with(&expected_stderr));
+    println!("result3: {result3:?}");
+
+    check!(worker_error_logs(&result2.clone().err().unwrap())
+        .unwrap()
+        .ends_with(&expected_stderr));
+    check!(worker_error_logs(&result3.clone().err().unwrap())
+        .unwrap()
+        .ends_with(&expected_stderr));
 
     check!(metadata.last_known_status.status == WorkerStatus::Failed);
     check!(last_error.is_some());

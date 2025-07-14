@@ -25,7 +25,7 @@ use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
-use golem_worker_executor::model::InterruptKind;
+use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::oplog::Oplog;
 use golem_worker_executor::services::{
     All, HasConfig, HasExtraDeps, HasOplog, HasShardManagerService, HasShardService,

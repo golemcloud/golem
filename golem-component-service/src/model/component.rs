@@ -91,7 +91,7 @@ impl Component {
         format!("{}:user", self.object_store_key)
     }
 
-    pub fn protected_object_store_key(&self) -> String {
+    pub fn transformed_object_store_key(&self) -> String {
         format!("{}:protected", self.transformed_object_store_key)
     }
 

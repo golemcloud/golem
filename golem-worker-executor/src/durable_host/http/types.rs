@@ -12,11 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::http::serialized::{
+    SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
+};
+use crate::durable_host::http::{continue_http_request, end_http_request};
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
+use crate::get_oplog_entry;
+use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::workerctx::WorkerCtx;
+use anyhow::anyhow;
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::str::FromStr;
-
-use anyhow::anyhow;
-use http::{HeaderName, HeaderValue};
 use wasmtime::component::Resource;
 use wasmtime_wasi_http::bindings::wasi::http::types::{
     Duration, ErrorCode, FieldKey, FieldValue, Fields, FutureIncomingResponse, FutureTrailers,
@@ -30,19 +40,6 @@ use wasmtime_wasi_http::bindings::wasi::http::types::{
 use wasmtime_wasi_http::get_fields;
 use wasmtime_wasi_http::types::FieldMap;
 use wasmtime_wasi_http::{HttpError, HttpResult};
-
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
-
-use crate::durable_host::http::serialized::{
-    SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
-};
-use crate::durable_host::http::{continue_http_request, end_http_request};
-use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
-use crate::error::GolemError;
-use crate::get_oplog_entry;
-use crate::services::oplog::{CommitLevel, OplogOps};
-use crate::workerctx::WorkerCtx;
 
 impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
     fn new(&mut self) -> anyhow::Result<Resource<Fields>> {
@@ -652,10 +649,10 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
 
             response
         } else if durable_execution_state.persistence_level == PersistenceLevel::PersistNothing {
-            Err(
-                GolemError::runtime("Trying to replay an http request in a PersistNothing block")
-                    .into(),
+            Err(WorkerExecutorError::runtime(
+                "Trying to replay an http request in a PersistNothing block",
             )
+            .into())
         } else {
             let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
 

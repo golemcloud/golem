@@ -32,8 +32,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
-use golem_common::model::auth::Namespace;
-use golem_common::model::error::{GolemError, GolemErrorUnknown};
+use golem_common::model::auth::{Namespace, TokenSecret};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::RetryConfig;
@@ -44,6 +43,8 @@ use golem_common::model::{
 };
 use golem_service_base::clients::limit::LimitService;
 use golem_service_base::clients::project::ProjectService;
+use golem_service_base::clients::RemoteServiceConfig;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
@@ -319,6 +320,7 @@ pub struct WorkerServiceDefault {
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
     limit_service: Arc<dyn LimitService>,
     project_service: Arc<dyn ProjectService + Send + Sync>,
+    cloud_service_config: RemoteServiceConfig,
 }
 
 impl WorkerServiceDefault {
@@ -328,6 +330,7 @@ impl WorkerServiceDefault {
         routing_table_service: Arc<dyn RoutingTableService>,
         limit_service: Arc<dyn LimitService>,
         project_service: Arc<dyn ProjectService + Send + Sync>,
+        cloud_service_config: RemoteServiceConfig,
     ) -> Self {
         Self {
             worker_executor_clients,
@@ -335,6 +338,7 @@ impl WorkerServiceDefault {
             routing_table_service,
             limit_service,
             project_service,
+            cloud_service_config,
         }
     }
 
@@ -342,12 +346,15 @@ impl WorkerServiceDefault {
         // TODO: cache this?
         let project_owner = self
             .project_service
-            .get(&namespace.project_id, token)
+            .get(
+                &namespace.project_id,
+                &TokenSecret::new(self.cloud_service_config.access_token),
+            )
             .await?
             .owner_account_id;
         let resource_limits = self
             .limit_service
-            .get_resource_limits(&namespace.account_id)
+            .get_resource_limits(&project_owner)
             .await?;
 
         Ok(resource_limits)
@@ -384,9 +391,7 @@ impl WorkerServiceDefault {
                                                                                                                 workers
                                                                                                             })),
                         } => {
-                            let workers: Vec<WorkerMetadata> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::Unknown(GolemErrorUnknown {
-                                details: "Convert response error".to_string(),
-                            }))?;
+                            let workers: Vec<WorkerMetadata> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| WorkerExecutorError::unknown("Convert response error"))?;
                             Ok(workers)
                         }
                         workerexecutor::v1::GetRunningWorkersMetadataResponse {
@@ -447,11 +452,9 @@ impl WorkerServiceDefault {
                             .map(|w| w.try_into())
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(|err| {
-                                GolemError::Unknown(GolemErrorUnknown {
-                                    details: format!(
-                                        "Unexpected worker metadata in response: {err}"
-                                    ),
-                                })
+                                WorkerExecutorError::unknown(format!(
+                                    "Unexpected worker metadata in response: {err}"
+                                ))
                             })?;
                         Ok((cursor.map(|c| c.into()), workers))
                     }
@@ -1171,9 +1174,9 @@ impl WorkerService for WorkerServiceDefault {
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|err| {
-                            GolemError::Unknown(GolemErrorUnknown {
-                                details: format!("Unexpected oplog entries in error: {err}"),
-                            })
+                            WorkerExecutorError::unknown(format!(
+                                "Unexpected oplog entries in error: {err}"
+                            ))
                         })?;
                     Ok(GetOplogResponse {
                         entries: entries
@@ -1241,11 +1244,7 @@ impl WorkerService for WorkerServiceDefault {
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
-                        .map_err(|err| {
-                            GolemError::Unknown(GolemErrorUnknown {
-                                details: format!("Unexpected oplog entries in error: {err}"),
-                            })
-                        })?;
+                        .map_err(|err| WorkerExecutorError::unknown(format!("Unexpected oplog entries in error: {err}")))?;
                     let first_index_in_chunk = entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
                     Ok(GetOplogResponse {
                         entries,
@@ -1360,7 +1359,7 @@ impl WorkerService for WorkerServiceDefault {
                 WorkerServiceError::Internal("Protocal violation".to_string()),
             ),
             Some(workerexecutor::v1::get_file_contents_response::Result::Failure(err)) => {
-                let converted = GolemError::try_from(err).map_err(|err| {
+                let converted = WorkerExecutorError::try_from(err).map_err(|err| {
                     WorkerServiceError::Internal(format!("Failed converting errors {err}"))
                 })?;
                 Err(converted.into())
@@ -1396,7 +1395,7 @@ impl WorkerService for WorkerServiceDefault {
                     Ok(Bytes::from(bytes))
                 }
                 workerexecutor::v1::get_file_contents_response::Result::Failure(err) => {
-                    let converted = GolemError::try_from(err)
+                    let converted = WorkerExecutorError::try_from(err)
                         .map_err(|err| {
                             WorkerServiceError::Internal(format!("Failed converting errors {err}"))
                         })?

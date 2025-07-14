@@ -912,7 +912,7 @@ pub enum DurableFunctionType {
 }
 
 /// Describes the error that occurred in the worker
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum WorkerError {
     Unknown(String),
     InvalidRequest(String),
@@ -921,23 +921,29 @@ pub enum WorkerError {
 }
 
 impl WorkerError {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Unknown(message) => message,
+            Self::InvalidRequest(message) => message,
+            Self::StackOverflow => "Stack overflow",
+            Self::OutOfMemory => "Out of memory",
+        }
+    }
+
     pub fn to_string(&self, error_logs: &str) -> String {
+        let message = self.message();
         let error_logs = if !error_logs.is_empty() {
             format!("\n\n{error_logs}")
         } else {
             "".to_string()
         };
-        match self {
-            WorkerError::Unknown(message) => format!("{message}{error_logs}"),
-            WorkerError::InvalidRequest(message) => format!("{message}{error_logs}"),
-            WorkerError::StackOverflow => format!("Stack overflow{error_logs}"),
-            WorkerError::OutOfMemory => format!("Out of memory{error_logs}"),
-        }
+        format!("{message}{error_logs}")
     }
 }
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
+    use super::WorkerError;
     use crate::model::oplog::{IndexedResourceKey, PersistenceLevel};
 
     impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
@@ -981,6 +987,40 @@ mod protobuf {
                 golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistRemoteSideEffects => PersistenceLevel::PersistRemoteSideEffects,
                 golem_api_grpc::proto::golem::worker::PersistenceLevel::Smart => PersistenceLevel::Smart,
             }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerError> for WorkerError {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::WorkerError,
+        ) -> Result<Self, Self::Error> {
+            use golem_api_grpc::proto::golem::worker::worker_error::Error;
+            match value.error.ok_or("no error field")? {
+                Error::StackOverflow(_) => Ok(Self::StackOverflow),
+                Error::OutOfMemory(_) => Ok(Self::OutOfMemory),
+                Error::InvalidRequest(inner) => Ok(Self::InvalidRequest(inner.details)),
+                Error::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
+            }
+        }
+    }
+
+    impl From<WorkerError> for golem_api_grpc::proto::golem::worker::WorkerError {
+        fn from(value: WorkerError) -> Self {
+            use golem_api_grpc::proto::golem::worker as grpc_worker;
+            use golem_api_grpc::proto::golem::worker::worker_error::Error;
+            let error = match value {
+                WorkerError::StackOverflow => Error::StackOverflow(grpc_worker::StackOverflow {}),
+                WorkerError::OutOfMemory => Error::OutOfMemory(grpc_worker::OutOfMemory {}),
+                WorkerError::InvalidRequest(details) => {
+                    Error::InvalidRequest(grpc_worker::InvalidRequest { details })
+                }
+                WorkerError::Unknown(details) => {
+                    Error::UnknownError(grpc_worker::UnknownError { details })
+                }
+            };
+            Self { error: Some(error) }
         }
     }
 }

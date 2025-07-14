@@ -984,6 +984,7 @@ impl ComponentServiceDefault {
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         let result = self.component_repo.create(&record).await;
+
         match result {
             Err(RepoError::UniqueViolation(_)) => Err(ComponentError::ConcurrentUpdate {
                 component_id: component_id.clone(),
@@ -1029,7 +1030,7 @@ impl ComponentServiceDefault {
         self.object_store
             .put(
                 &component.owner.project_id,
-                &component.protected_object_store_key(),
+                &component.transformed_object_store_key(),
                 data,
             )
             .await
@@ -1418,7 +1419,7 @@ impl ComponentService for ComponentServiceDefault {
             self.object_store
                 .get(
                     &component.owner.project_id,
-                    &component.protected_object_store_key(),
+                    &component.transformed_object_store_key(),
                 )
                 .await
                 .tap_err(|e| error!(owner = %owner, "Error downloading component - error: {}", e))
@@ -1451,7 +1452,7 @@ impl ComponentService for ComponentServiceDefault {
         };
 
         if let Some(component) = component {
-            let protected_object_store_key = component.protected_object_store_key();
+            let protected_object_store_key = component.transformed_object_store_key();
 
             info!(
                 owner = %owner,
@@ -1690,7 +1691,7 @@ impl ComponentService for ComponentServiceDefault {
         for component in components {
             object_store_keys.push((
                 component.owner.project_id.clone(),
-                component.protected_object_store_key(),
+                component.transformed_object_store_key(),
             ));
             object_store_keys.push((
                 component.owner.project_id.clone(),
@@ -1944,7 +1945,6 @@ impl ComponentService for ComponentServiceDefault {
 
                     existing.priority = update.priority;
                     existing.parameters = update.parameters.clone();
-
                     result.push(None);
                 }
                 PluginInstallationAction::Uninstall(uninstallation) => {
@@ -1981,7 +1981,7 @@ impl ComponentService for ComponentServiceDefault {
         self.object_store
             .put(
                 &component.owner.project_id,
-                &component.protected_object_store_key(),
+                &component.transformed_object_store_key(),
                 transformed_data,
             )
             .await

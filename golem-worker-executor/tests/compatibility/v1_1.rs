@@ -17,11 +17,11 @@ use goldenfile::Mint;
 use golem_common::base_model::ProjectId;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogPayload};
 use golem_common::model::{AccountId, ComponentId, PluginInstallationId, Timestamp, WorkerId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_ast::analysis::analysed_type::bool;
 use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor::durable_host::serialized::SerializableError;
 use golem_worker_executor::durable_host::wasm_rpc::serialized::SerializableInvokeResult;
-use golem_worker_executor::error::GolemError;
 use golem_worker_executor::services::rpc::RpcError;
 use std::collections::HashSet;
 use test_r::test;
@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 #[test]
 pub fn golem_error() {
-    let g1 = GolemError::ShardingNotReady;
+    let g1 = WorkerExecutorError::ShardingNotReady;
 
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("golem_error_sharding_not_ready", &mut mint, g1);

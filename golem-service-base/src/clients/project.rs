@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::authorised_request;
-use super::RemoteCloudServiceConfig;
+use super::RemoteServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use golem_api_grpc::proto::golem::project::v1::project_error::Error;
@@ -50,7 +50,7 @@ pub struct ProjectServiceDefault {
 }
 
 impl ProjectServiceDefault {
-    pub fn new(config: &RemoteCloudServiceConfig) -> Self {
+    pub fn new(config: &RemoteServiceConfig) -> Self {
         let project_service_client: GrpcClient<CloudProjectServiceClient<Channel>> =
             GrpcClient::new(
                 "project",
@@ -168,86 +168,73 @@ impl From<golem_api_grpc::proto::golem::project::v1::ProjectError> for ProjectEr
     }
 }
 
-impl From<ProjectError> for golem_api_grpc::proto::golem::worker::v1::WorkerError {
+impl From<ProjectError> for golem_api_grpc::proto::golem::worker::v1::worker_error::Error {
     fn from(error: ProjectError) -> Self {
         match error {
             ProjectError::Server(project_error) =>
                 match project_error.error {
                     Some(golem_api_grpc::proto::golem::project::v1::project_error::Error::BadRequest(error)) =>
-                        golem_api_grpc::proto::golem::worker::v1::WorkerError {
-                            error: Some(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::BadRequest(error)),
-                        },
+                        golem_api_grpc::proto::golem::worker::v1::worker_error::Error::BadRequest(error)
+                    ,
                     Some(golem_api_grpc::proto::golem::project::v1::project_error::Error::InternalError(error)) =>
-                        golem_api_grpc::proto::golem::worker::v1::WorkerError {
-                            error: Some(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(
-                                golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
-                                    error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::Unknown(
-                                        golem_api_grpc::proto::golem::worker::v1::UnknownError {
-                                            details: format!("Internal project server error: {}", error.error),
-                                        },
-                                    )),
-                                })),
-                        },
-                    Some(golem_api_grpc::proto::golem::project::v1::project_error::Error::NotFound(error)) =>
-                        golem_api_grpc::proto::golem::worker::v1::WorkerError {
-                            error: Some(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::NotFound(error)),
-                        },
-                    Some(golem_api_grpc::proto::golem::project::v1::project_error::Error::Unauthorized(error)) =>
-                        golem_api_grpc::proto::golem::worker::v1::WorkerError {
-                            error: Some(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::Unauthorized(error)),
-                        },
-                    Some(golem_api_grpc::proto::golem::project::v1::project_error::Error::LimitExceeded(error)) =>
-                        golem_api_grpc::proto::golem::worker::v1::WorkerError {
-                            error: Some(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::LimitExceeded(error)),
-                        },
-                    None => golem_api_grpc::proto::golem::worker::v1::WorkerError {
-                        error: Some(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(
+                        golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(
                             golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
                                 error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::Unknown(
                                     golem_api_grpc::proto::golem::worker::v1::UnknownError {
-                                        details: "Unknown project error".to_string(),
+                                        details: format!("Internal project server error: {}", error.error),
                                     },
                                 )),
-                            },
-                        )),
-                    }
-                }
-            ProjectError::Connection(error) => golem_api_grpc::proto::golem::worker::v1::WorkerError {
-                error: Some(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(
+                            })
+                    ,
+                    Some(golem_api_grpc::proto::golem::project::v1::project_error::Error::NotFound(error)) =>
+                        golem_api_grpc::proto::golem::worker::v1::worker_error::Error::NotFound(error)
+                    ,
+                    Some(golem_api_grpc::proto::golem::project::v1::project_error::Error::Unauthorized(error)) =>
+                        golem_api_grpc::proto::golem::worker::v1::worker_error::Error::Unauthorized(error)
+                    ,
+                    Some(golem_api_grpc::proto::golem::project::v1::project_error::Error::LimitExceeded(error)) =>
+                        golem_api_grpc::proto::golem::worker::v1::worker_error::Error::LimitExceeded(error)
+                    ,
+                    None => golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(
+                        golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
+                            error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::Unknown(
+                                golem_api_grpc::proto::golem::worker::v1::UnknownError {
+                                    details: "Unknown project error".to_string(),
+                                },
+                            )),
+                        },
+                    ),
+                },
+            ProjectError::Connection(error) => golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(
+                golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::Unknown(
+                        golem_api_grpc::proto::golem::worker::v1::UnknownError {
+                            details: format!("Project server connection error: {error}"),
+                        },
+                    )),
+                },
+            ),
+            ProjectError::Transport(error) => {
+                golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(
                     golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
                         error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::Unknown(
                             golem_api_grpc::proto::golem::worker::v1::UnknownError {
-                                details: format!("Project server connection error: {error}"),
+                                details: format!("Project server transport error: {error}"),
                             },
                         )),
                     },
-                ))
-            },
-            ProjectError::Transport(error) => {
-                golem_api_grpc::proto::golem::worker::v1::WorkerError {
-                    error: Some(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(
-                        golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
-                            error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::Unknown(
-                                golem_api_grpc::proto::golem::worker::v1::UnknownError {
-                                    details: format!("Project server transport error: {error}"),
-                                },
-                            )),
-                        },
-                    )),
-                }
+                )
             }
             ProjectError::Unknown(error) => {
-                golem_api_grpc::proto::golem::worker::v1::WorkerError {
-                    error: Some(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(
-                        golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
-                            error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::Unknown(
-                                golem_api_grpc::proto::golem::worker::v1::UnknownError {
-                                    details: format!("Project server unknown error: {error}"),
-                                },
-                            )),
-                        },
-                    )),
-                }
+                golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(
+                    golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
+                        error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::Unknown(
+                            golem_api_grpc::proto::golem::worker::v1::UnknownError {
+                                details: format!("Project server unknown error: {error}"),
+                            },
+                        )),
+                    },
+                )
             }
         }
     }
