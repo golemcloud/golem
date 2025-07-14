@@ -18,7 +18,7 @@ use chrono::Utc;
 use futures_util::future::join_all;
 use golem_registry_service::repo::account::AccountRecord;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
-use golem_registry_service::repo::model::audit::{AuditFields, RevisionAuditFields};
+use golem_registry_service::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use uuid::Uuid;
 // Common test cases -------------------------------------------------------------------------------
 
@@ -192,7 +192,7 @@ pub async fn test_environment_create(deps: &Deps) {
     let revision_0 = EnvironmentRevisionRecord {
         environment_id: Uuid::new_v4(),
         revision_id: 0,
-        audit: RevisionAuditFields::new(user.account_id),
+        audit: DeletableRevisionAuditFields::new(user.account_id),
         compatibility_check: false,
         version_check: false,
         security_overrides: false,
@@ -245,7 +245,7 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
                             EnvironmentRevisionRecord {
                                 environment_id: Uuid::new_v4(),
                                 revision_id: 0,
-                                audit: RevisionAuditFields::new(user.account_id),
+                                audit: DeletableRevisionAuditFields::new(user.account_id),
                                 compatibility_check: false,
                                 version_check: false,
                                 security_overrides: false,
@@ -279,7 +279,7 @@ pub async fn test_environment_update(deps: &Deps) {
     let env_rev_1 = EnvironmentRevisionRecord {
         environment_id: env_rev_0.revision.environment_id,
         revision_id: 1,
-        audit: RevisionAuditFields::new(user.account_id),
+        audit: DeletableRevisionAuditFields::new(user.account_id),
         compatibility_check: true,
         version_check: true,
         security_overrides: false,
@@ -326,7 +326,7 @@ pub async fn test_environment_update(deps: &Deps) {
     let env_rev_2 = EnvironmentRevisionRecord {
         environment_id: env_rev_0.revision.environment_id,
         revision_id: 2,
-        audit: RevisionAuditFields::new(user.account_id),
+        audit: DeletableRevisionAuditFields::new(user.account_id),
         compatibility_check: true,
         version_check: true,
         security_overrides: false,
@@ -394,7 +394,7 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
                             EnvironmentRevisionRecord {
                                 environment_id: env_rev_0.revision.environment_id,
                                 revision_id: 0,
-                                audit: RevisionAuditFields::new(user.account_id),
+                                audit: DeletableRevisionAuditFields::new(user.account_id),
                                 compatibility_check: false,
                                 version_check: false,
                                 security_overrides: false,

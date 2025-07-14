@@ -35,13 +35,13 @@ impl AuditFields {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, PartialEq)]
-pub struct RevisionAuditFields {
+pub struct DeletableRevisionAuditFields {
     pub created_at: SqlDateTime,
     pub created_by: Uuid,
     pub deleted: bool,
 }
 
-impl RevisionAuditFields {
+impl DeletableRevisionAuditFields {
     pub fn new(created_by: Uuid) -> Self {
         Self {
             created_at: SqlDateTime::now(),
@@ -69,6 +69,21 @@ impl RevisionAuditFields {
         Self {
             deleted: true,
             ..self
+        }
+    }
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, PartialEq)]
+pub struct RevisionAuditFields {
+    pub created_at: SqlDateTime,
+    pub created_by: Uuid,
+}
+
+impl RevisionAuditFields {
+    pub fn new(created_by: Uuid) -> Self {
+        Self {
+            created_at: SqlDateTime::now(),
+            created_by,
         }
     }
 }

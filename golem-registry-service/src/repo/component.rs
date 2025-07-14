@@ -355,7 +355,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 .bind(revision.revision_id)
                 .bind(revision.version)
                 .bind(revision.hash)
-                .bind_revision_audit_fields(revision.audit)
+                .bind_deletable_revision_audit(revision.audit)
                 .bind(revision.component_type)
                 .bind(revision.size)
                 .bind(revision.metadata)
@@ -391,8 +391,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 .bind(file.revision_id)
                 .bind(file.file_path)
                 .bind(file.hash)
-                .bind(file.created_at)
-                .bind(file.created_by)
+                .bind_revision_audit(file.audit)
                 .bind(file.file_key)
                 .bind(file.file_permissions)
         ).await

@@ -103,7 +103,7 @@ bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bincode = { version = "2.0.1", features = ["serde"] }
 bincode_derive = { version = "2.0.1" }
 bit-vec = { version = "0.6.3", features = ["serde"] }
-blake3 = { version = "1.8.2" }
+blake3 = { version = "1.8.2", features = ["rayon"] }
 bytes = "1.10.1"
 cap-std = "3.4.2" # keep in sync with wasmtime
 chrono = { version = "0.4.40", features = ["serde"] }

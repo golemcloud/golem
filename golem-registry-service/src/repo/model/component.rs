@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::audit::{AuditFields, RevisionAuditFields};
-use crate::repo::model::datetime::SqlDateTime;
+use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::ComponentFilePermissions;
@@ -288,7 +287,7 @@ pub struct ComponentRevisionRecord {
     pub version: String,
     pub hash: Option<SqlBlake3Hash>,
     #[sqlx(flatten)]
-    pub audit: RevisionAuditFields,
+    pub audit: DeletableRevisionAuditFields,
     pub component_type: i32,
     pub size: i32,
     pub metadata: SqlComponentMetadata,
@@ -328,7 +327,7 @@ impl ComponentRevisionRecord {
             revision_id: current_revision_id + 1,
             version: "".to_string(),
             hash: None,
-            audit: RevisionAuditFields::deletion(created_by),
+            audit: DeletableRevisionAuditFields::deletion(created_by),
             component_type: 0,
             size: 0,
             metadata: ComponentMetadata {
@@ -357,8 +356,8 @@ pub struct ComponentFileRecord {
     pub revision_id: i64,
     pub file_path: String,
     pub hash: SqlBlake3Hash,
-    pub created_at: SqlDateTime,
-    pub created_by: Uuid,
+    #[sqlx(flatten)]
+    pub audit: RevisionAuditFields,
     pub file_key: String,
     pub file_permissions: SqlComponentFilePermissions,
 }

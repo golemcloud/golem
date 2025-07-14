@@ -325,16 +325,14 @@ CREATE TABLE component_files
 
 CREATE TABLE deployment_revisions
 (
-    environment_id  UUID      NOT NULL,
-    revision_id     BIGINT    NOT NULL,
-    version         TEXT      NOT NULL,
+    environment_id UUID      NOT NULL,
+    revision_id    BIGINT    NOT NULL,
+    version        TEXT      NOT NULL,
 
-    hash            BYTEA     NOT NULL,
+    hash           BYTEA     NOT NULL,
 
-    created_at      TIMESTAMP NOT NULL,
-    created_by      UUID      NOT NULL,
-
-    deployment_kind INTEGER   NOT NULL,
+    created_at     TIMESTAMP NOT NULL,
+    created_by     UUID      NOT NULL,
 
     CONSTRAINT deployments_revisions_pk
         PRIMARY KEY (environment_id, revision_id),

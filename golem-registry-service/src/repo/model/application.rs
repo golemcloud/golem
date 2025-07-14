@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::audit::{AuditFields, RevisionAuditFields};
+use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -32,5 +32,5 @@ pub struct ApplicationRevisionRecord {
     pub name: String,
     pub account_id: Uuid,
     #[sqlx(flatten)]
-    pub audit: RevisionAuditFields,
+    pub audit: DeletableRevisionAuditFields,
 }

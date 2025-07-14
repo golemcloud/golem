@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::audit::{AuditFields, RevisionAuditFields};
+use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -33,7 +33,7 @@ pub struct EnvironmentRevisionRecord {
     pub revision_id: i64,
     pub hash: SqlBlake3Hash,
     #[sqlx(flatten)]
-    pub audit: RevisionAuditFields,
+    pub audit: DeletableRevisionAuditFields,
     pub compatibility_check: bool,
     pub version_check: bool,
     pub security_overrides: bool,
@@ -60,7 +60,7 @@ impl EnvironmentRevisionRecord {
         Self {
             environment_id,
             revision_id: current_revision_id + 1,
-            audit: RevisionAuditFields::deletion(created_by),
+            audit: DeletableRevisionAuditFields::deletion(created_by),
             compatibility_check: false,
             version_check: false,
             security_overrides: false,

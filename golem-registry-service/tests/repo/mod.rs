@@ -18,7 +18,7 @@ use golem_registry_service::repo::application::ApplicationRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
 use golem_registry_service::repo::model::account::AccountRecord;
 use golem_registry_service::repo::model::application::ApplicationRecord;
-use golem_registry_service::repo::model::audit::{AuditFields, RevisionAuditFields};
+use golem_registry_service::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use golem_registry_service::repo::model::environment::{
     EnvironmentCurrentRevisionRecord, EnvironmentRevisionRecord,
 };
@@ -96,7 +96,7 @@ impl Deps {
                 EnvironmentRevisionRecord {
                     environment_id: Uuid::new_v4(),
                     revision_id: 0,
-                    audit: RevisionAuditFields::new(app.audit.modified_by),
+                    audit: DeletableRevisionAuditFields::new(app.audit.modified_by),
                     compatibility_check: false,
                     version_check: false,
                     security_overrides: false,

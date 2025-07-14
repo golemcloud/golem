@@ -107,7 +107,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                 "#})
                     .bind(account.account_id)
                     .bind(account.email)
-                    .bind_audit_fields(account.audit)
+                    .bind_audit(account.audit)
                     .bind(account.name)
                     .bind(account.plan_id),
             )

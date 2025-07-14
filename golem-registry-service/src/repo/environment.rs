@@ -76,15 +76,15 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
     }
 
     fn span_name(application_id: &Uuid, name: &str) -> Span {
-        info_span!(SPAN_NAME, application_id = % application_id, name)
+        info_span!(SPAN_NAME, application_id = %application_id, name)
     }
 
     fn span_env_id(environment_id: &Uuid) -> Span {
-        info_span!(SPAN_NAME, environment_id = % environment_id)
+        info_span!(SPAN_NAME, environment_id = %environment_id)
     }
 
     fn span_app_id(application_id: &Uuid) -> Span {
-        info_span!(SPAN_NAME, application_id = % application_id)
+        info_span!(SPAN_NAME, application_id = %application_id)
     }
 }
 
@@ -438,7 +438,7 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
             .bind(revision.environment_id)
             .bind(revision.revision_id)
             .bind(revision.hash)
-            .bind_revision_audit_fields(revision.audit)
+            .bind_deletable_revision_audit(revision.audit)
             .bind(revision.compatibility_check)
             .bind(revision.version_check)
             .bind(revision.security_overrides)).await

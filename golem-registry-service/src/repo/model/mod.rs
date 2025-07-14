@@ -17,20 +17,27 @@ pub mod application;
 pub mod audit;
 pub mod component;
 pub mod datetime;
+pub mod deployment;
 pub mod environment;
 pub mod hash;
 
-use crate::repo::model::audit::{AuditFields, RevisionAuditFields};
+use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::datetime::SqlDateTime;
 use chrono::NaiveDateTime;
 use sqlx::query::{Query, QueryAs};
 use sqlx::Database;
 use uuid::Uuid;
 
+// TODO: typed revision_id and entity UUIDs
+
 /// BindFields is used to extract binding of common field sets, e.g., audit fields
 pub trait BindFields {
-    fn bind_audit_fields(self, entity_audit_fields: AuditFields) -> Self;
-    fn bind_revision_audit_fields(self, entity_revision_audit_fields: RevisionAuditFields) -> Self;
+    fn bind_audit(self, entity_audit_fields: AuditFields) -> Self;
+    fn bind_revision_audit(self, field: RevisionAuditFields) -> Self;
+    fn bind_deletable_revision_audit(
+        self,
+        entity_revision_audit_fields: DeletableRevisionAuditFields,
+    ) -> Self;
 }
 
 impl<'q, DB: Database, O> BindFields for QueryAs<'q, DB, O, <DB as Database>::Arguments<'q>>
@@ -40,14 +47,21 @@ where
     bool: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     Option<SqlDateTime>: sqlx::Encode<'q, DB>,
 {
-    fn bind_audit_fields(self, entity_audit_fields: AuditFields) -> Self {
+    fn bind_audit(self, entity_audit_fields: AuditFields) -> Self {
         self.bind(entity_audit_fields.created_at)
             .bind(entity_audit_fields.updated_at)
             .bind(entity_audit_fields.deleted_at)
             .bind(entity_audit_fields.modified_by)
     }
 
-    fn bind_revision_audit_fields(self, entity_revision_audit_fields: RevisionAuditFields) -> Self {
+    fn bind_revision_audit(self, field: RevisionAuditFields) -> Self {
+        self.bind(field.created_at).bind(field.created_by)
+    }
+
+    fn bind_deletable_revision_audit(
+        self,
+        entity_revision_audit_fields: DeletableRevisionAuditFields,
+    ) -> Self {
         self.bind(entity_revision_audit_fields.created_at)
             .bind(entity_revision_audit_fields.created_by)
             .bind(entity_revision_audit_fields.deleted)
@@ -61,16 +75,20 @@ where
     bool: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     Option<SqlDateTime>: sqlx::Encode<'q, DB>,
 {
-    fn bind_audit_fields(self, entity_audit_fields: AuditFields) -> Self {
-        self.bind(entity_audit_fields.created_at)
-            .bind(entity_audit_fields.updated_at)
-            .bind(entity_audit_fields.deleted_at)
-            .bind(entity_audit_fields.modified_by)
+    fn bind_audit(self, fields: AuditFields) -> Self {
+        self.bind(fields.created_at)
+            .bind(fields.updated_at)
+            .bind(fields.deleted_at)
+            .bind(fields.modified_by)
     }
 
-    fn bind_revision_audit_fields(self, entity_revision_audit_fields: RevisionAuditFields) -> Self {
-        self.bind(entity_revision_audit_fields.created_at)
-            .bind(entity_revision_audit_fields.created_by)
-            .bind(entity_revision_audit_fields.deleted)
+    fn bind_revision_audit(self, field: RevisionAuditFields) -> Self {
+        self.bind(field.created_at).bind(field.created_by)
+    }
+
+    fn bind_deletable_revision_audit(self, fields: DeletableRevisionAuditFields) -> Self {
+        self.bind(fields.created_at)
+            .bind(fields.created_by)
+            .bind(fields.deleted)
     }
 }

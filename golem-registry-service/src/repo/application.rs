@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::application::{ApplicationRecord, ApplicationRevisionRecord};
-use crate::repo::model::audit::{AuditFields, RevisionAuditFields};
+use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -261,7 +261,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                         .bind(Uuid::new_v4())
                         .bind(&name)
                         .bind(owner_id)
-                        .bind_audit_fields(AuditFields::new(user_id))
+                        .bind_audit(AuditFields::new(user_id))
                 ).await?;
 
                 Self::insert_revision(
@@ -271,7 +271,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                         revision_id: 0,
                         name: app.name.clone(),
                         account_id: app.account_id,
-                        audit: RevisionAuditFields::new(user_id),
+                        audit: DeletableRevisionAuditFields::new(user_id),
                     },
                 ).await?;
 
@@ -323,7 +323,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 revision_id: latest_revision.revision_id + 1,
                 name: latest_revision.name,
                 account_id: latest_revision.account_id,
-                audit: RevisionAuditFields::deletion(user_account_id),
+                audit: DeletableRevisionAuditFields::deletion(user_account_id),
             };
             let deleted_at = revision.audit.created_at.clone();
 
@@ -381,7 +381,7 @@ impl ApplicationRepoInternal for DbApplicationRepo<PostgresPool> {
                 .bind(revision.revision_id)
                 .bind(revision.name)
                 .bind(revision.account_id)
-                .bind_revision_audit_fields(revision.audit)
+                .bind_deletable_revision_audit(revision.audit)
         ).await?;
 
         Ok(())
