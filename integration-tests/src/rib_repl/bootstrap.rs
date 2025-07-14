@@ -46,8 +46,6 @@ impl RibDependencyManager for TestRibReplDependencyManager {
             .get_latest_component_metadata(&component_id)
             .await;
 
-        dbg!(&metadata.exports.clone());
-
         let component_dependency_key = ComponentDependencyKey {
             component_name,
             component_id: component_id.0,

@@ -42,50 +42,6 @@ async fn main() {
         .expect("Failed to bootstrap REPL");
 
     rib_repl.run().await;
-
-    // if let Err(_) = rib_repl.execute("let x = instance()").await {
-    //     eprintln!("Failed to execute instance()");
-    //     rib_repl.run().await;
-    //     return;
-    // }
-    //
-    // match rib_repl.execute("x.discover-agent-definitions()").await {
-    //     Ok(Some(result)) => {
-    //         let analysed_functions = extract_agent_definitions(result);
-    //
-    //         let exports = AnalysedInstance {
-    //             name: "golem:agentic/simulated-agents".to_string(),
-    //             functions: analysed_functions,
-    //         };
-    //
-    //         let repl_config_with_exports = RibReplConfig {
-    //             history_file: None,
-    //             dependency_manager: Arc::new(TestRibReplStaticDependencyManager::new(
-    //                 deps.clone(),
-    //                 vec![AnalysedExport::Instance(exports)],
-    //             )),
-    //             worker_function_invoke: Arc::new(TestRibReplAgenticWorkerFunctionInvoke::new(deps.clone())),
-    //             printer: None,
-    //             component_source: Some(ComponentSource {
-    //                 component_name,
-    //                 source_path: wasm_path,
-    //             }),
-    //             prompt: None,
-    //             command_registry: None,
-    //         };
-    //
-    //         let mut rib_repl = RibRepl::bootstrap(repl_config_with_exports)
-    //             .await
-    //             .expect("Failed to bootstrap REPL with exports");
-    //
-    //         rib_repl.run().await;
-    //     }
-    //
-    //     _ => {
-    //         eprintln!("Falling back to default REPL (agent discovery failed)");
-    //         rib_repl.run().await;
-    //     }
-    // }
 }
 
 
