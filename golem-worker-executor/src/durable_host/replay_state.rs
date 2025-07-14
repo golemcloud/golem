@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::services::oplog::{Oplog, OplogOps, OplogService};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
@@ -20,6 +19,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{Value, ValueAndType};
 use metrohash::MetroHash128;
 use std::collections::HashSet;
@@ -411,7 +411,7 @@ impl ReplayState {
     // TODO: can we rewrite this on top of get_oplog_entry?
     pub async fn get_oplog_entry_exported_function_invoked(
         &mut self,
-    ) -> Result<Option<ExportedFunctionInvoked>, GolemError> {
+    ) -> Result<Option<ExportedFunctionInvoked>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
@@ -475,7 +475,7 @@ impl ReplayState {
                     }
                     entry if entry.is_hint() => {}
                     _ => {
-                        break Err(GolemError::unexpected_oplog_entry(
+                        break Err(WorkerExecutorError::unexpected_oplog_entry(
                             "ExportedFunctionInvoked",
                             format!("{oplog_entry:?}"),
                         ));
@@ -490,7 +490,7 @@ impl ReplayState {
     // TODO: can we rewrite this on top of get_oplog_entry?
     pub async fn get_oplog_entry_exported_function_completed(
         &mut self,
-    ) -> Result<Option<Option<ValueAndType>>, GolemError> {
+    ) -> Result<Option<Option<ValueAndType>>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
@@ -507,7 +507,7 @@ impl ReplayState {
                     }
                     entry if entry.is_hint() => {}
                     _ => {
-                        break Err(GolemError::unexpected_oplog_entry(
+                        break Err(WorkerExecutorError::unexpected_oplog_entry(
                             "ExportedFunctionCompleted",
                             format!("{oplog_entry:?}"),
                         ));

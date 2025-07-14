@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package golem.worker;
+
+message WorkerError {
+  oneof error {
+    StackOverflow stack_overflow = 1;
+    OutOfMemory out_of_memory = 2;
+    InvalidRequest invalid_request = 3;
+    UnknownError unknown_error = 4;
+  }
+}
+
+message StackOverflow { }
+
+message OutOfMemory { }
+
+message InvalidRequest {
+  string details = 1;
+}
+
+message UnknownError {
+  string details = 1;
+}

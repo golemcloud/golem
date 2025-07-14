@@ -127,7 +127,7 @@ pub async fn run(
     )
     .await?;
 
-    info!("Server started on port {}", config.grpc_port);
+    info!("Started component service on ports: grpc: {grpc_port}");
 
     Ok(RunDetails {
         http_port,

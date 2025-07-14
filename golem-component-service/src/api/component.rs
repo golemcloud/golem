@@ -14,7 +14,7 @@
 
 use super::dto;
 use super::dto::ApiMapper;
-use crate::api::{ApiTags, ComponentError, Result};
+use crate::api::{ComponentError, Result};
 use crate::authed::component::AuthedComponentService;
 use crate::model::{
     ComponentEnv, DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
@@ -30,6 +30,7 @@ use golem_common::model::{
 };
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_service_base::model::{BatchPluginInstallationUpdates, ComponentName};
 use golem_service_base::poem::TempFileUpload;
@@ -573,13 +574,13 @@ impl ComponentApi {
     ) -> Result<Json<Vec<dto::PluginInstallation>>> {
         let version_int = Self::parse_version_path_segment(&version)?;
 
-        let (owner, installations) = self
+        let installations = self
             .component_service
             .get_plugin_installations_for_component(&auth, &component_id, version_int)
             .await?;
 
         let converted = stream::iter(installations)
-            .then(|pi| self.api_mapper.convert_plugin_installation(&owner, pi))
+            .then(|pi| self.api_mapper.convert_plugin_installation(pi))
             .try_collect::<Vec<_>>()
             .await?;
 
@@ -621,14 +622,14 @@ impl ComponentApi {
         plugin: PluginInstallationCreation,
         auth: AuthCtx,
     ) -> Result<Json<dto::PluginInstallation>> {
-        let (owner, installation) = self
+        let installation = self
             .component_service
             .create_plugin_installation_for_component(&auth, &component_id, plugin)
             .await?;
 
         Ok(Json(
             self.api_mapper
-                .convert_plugin_installation(&owner, installation)
+                .convert_plugin_installation(installation)
                 .await?,
         ))
     }

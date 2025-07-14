@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::golem::durability::durability;
 use crate::preview2::golem::durability::durability::PersistedTypedDurableFunctionInvocation;
@@ -25,6 +24,7 @@ use bytes::Bytes;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex, PersistenceLevel};
 use golem_common::model::Timestamp;
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -50,9 +50,10 @@ pub struct PersistedDurableFunctionInvocation {
 }
 
 impl PersistedDurableFunctionInvocation {
-    pub fn response_as_value_and_type(&self) -> Result<ValueAndType, GolemError> {
-        deserialize(&self.response)
-            .map_err(|err| GolemError::runtime(format!("Failed to deserialize payload: {err}")))
+    pub fn response_as_value_and_type(&self) -> Result<ValueAndType, WorkerExecutorError> {
+        deserialize(&self.response).map_err(|err| {
+            WorkerExecutorError::runtime(format!("Failed to deserialize payload: {err}"))
+        })
     }
 }
 
@@ -69,7 +70,7 @@ pub trait DurabilityHost {
     async fn begin_durable_function(
         &mut self,
         function_type: &DurableFunctionType,
-    ) -> Result<OplogIndex, GolemError>;
+    ) -> Result<OplogIndex, WorkerExecutorError>;
 
     /// Marks the end of a durable function
     ///
@@ -81,7 +82,7 @@ pub trait DurabilityHost {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
         forced_commit: bool,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Gets the current durable execution state
     fn durable_execution_state(&self) -> DurableExecutionState;
@@ -111,7 +112,7 @@ pub trait DurabilityHost {
     /// Reads the next persisted durable function invocation from the oplog during replay
     async fn read_persisted_durable_function_invocation(
         &mut self,
-    ) -> Result<PersistedDurableFunctionInvocation, GolemError>;
+    ) -> Result<PersistedDurableFunctionInvocation, WorkerExecutorError>;
 }
 
 impl From<durability::DurableFunctionType> for DurableFunctionType {
@@ -330,7 +331,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     async fn begin_durable_function(
         &mut self,
         function_type: &DurableFunctionType,
-    ) -> Result<OplogIndex, GolemError> {
+    ) -> Result<OplogIndex, WorkerExecutorError> {
         self.process_pending_replay_events().await?;
         let oplog_index = self.state.begin_function(function_type).await?;
         Ok(oplog_index)
@@ -341,7 +342,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
         forced_commit: bool,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.state.end_function(function_type, begin_index).await?;
         if function_type == &DurableFunctionType::WriteRemote
             || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
@@ -401,9 +402,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
 
     async fn read_persisted_durable_function_invocation(
         &mut self,
-    ) -> Result<PersistedDurableFunctionInvocation, GolemError> {
+    ) -> Result<PersistedDurableFunctionInvocation, WorkerExecutorError> {
         if self.state.persistence_level == PersistenceLevel::PersistNothing {
-            Err(GolemError::runtime(
+            Err(WorkerExecutorError::runtime(
                 "Trying to replay an durable invocation in a PersistNothing block",
             ))
         } else {
@@ -419,7 +420,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 .get_raw_payload_of_entry(&oplog_entry)
                 .await
                 .map_err(|err| {
-                    GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "ImportedFunctionInvoked payload",
+                        err,
+                    )
                 })?
                 .unwrap();
 
@@ -448,7 +452,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                     function_type: wrapped_function_type,
                     oplog_entry_version: OplogEntryVersion::V1,
                 }),
-                _ => Err(GolemError::unexpected_oplog_entry(
+                _ => Err(WorkerExecutorError::unexpected_oplog_entry(
                     "ImportedFunctionInvoked",
                     format!("{oplog_entry:?}"),
                 )),
@@ -479,7 +483,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         interface: &'static str,
         function: &'static str,
         function_type: DurableFunctionType,
-    ) -> Result<Self, GolemError> {
+    ) -> Result<Self, WorkerExecutorError> {
         ctx.observe_function_call(interface, function);
 
         let begin_index = ctx.begin_durable_function(&function_type).await?;
@@ -508,9 +512,9 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     ) -> Result<Ok, Err>
     where
         Ok: Clone,
-        Err: From<SErr> + From<GolemError> + Send + Sync,
+        Err: From<SErr> + From<WorkerExecutorError> + Send + Sync,
         SIn: Debug + Encode + Send + Sync,
-        SErr: Debug + Encode + for<'a> From<&'a Err> + From<GolemError> + Send + Sync,
+        SErr: Debug + Encode + for<'a> From<&'a Err> + From<WorkerExecutorError> + Send + Sync,
         SOk: Debug + Encode + From<Ok> + Send + Sync,
     {
         let serializable_result: Result<SOk, SErr> = result
@@ -533,7 +537,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         ctx: &mut impl DurabilityHost,
         input: SIn,
         result: Result<SOk, SErr>,
-    ) -> Result<(), GolemError>
+    ) -> Result<(), WorkerExecutorError>
     where
         SIn: Debug + Encode + Send + Sync,
         SOk: Debug + Encode + Send + Sync,
@@ -566,7 +570,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         ctx: &mut impl DurabilityHost,
         input: SIn,
         result: Result<SOk, SErr>,
-    ) -> Result<(), GolemError>
+    ) -> Result<(), WorkerExecutorError>
     where
         SIn: Debug + IntoValue + Send + Sync,
         SOk: Debug + IntoValue + Send + Sync,
@@ -593,7 +597,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     pub async fn replay_raw(
         &self,
         ctx: &mut impl DurabilityHost,
-    ) -> Result<(Bytes, OplogEntryVersion), GolemError> {
+    ) -> Result<(Bytes, OplogEntryVersion), WorkerExecutorError> {
         let oplog_entry = ctx.read_persisted_durable_function_invocation().await?;
 
         let function_name = self.function_name();
@@ -608,7 +612,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     pub async fn replay_serializable(
         &self,
         ctx: &mut impl DurabilityHost,
-    ) -> Result<Result<SOk, SErr>, GolemError>
+    ) -> Result<Result<SOk, SErr>, WorkerExecutorError>
     where
         SOk: Decode<()>,
         SErr: Decode<()>,
@@ -616,7 +620,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         let (bytes, _) = self.replay_raw(ctx).await?;
         let result: Result<SOk, SErr> = try_deserialize(&bytes)
             .map_err(|err| {
-                GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
+                WorkerExecutorError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
             })?
             .expect("Payload is empty");
         Ok(result)
@@ -625,8 +629,8 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     pub async fn replay<Ok, Err>(&self, ctx: &mut impl DurabilityHost) -> Result<Ok, Err>
     where
         Ok: From<SOk>,
-        Err: From<SErr> + From<GolemError>,
-        SErr: Debug + Encode + Decode<()> + From<GolemError> + Send + Sync,
+        Err: From<SErr> + From<WorkerExecutorError>,
+        SErr: Debug + Encode + Decode<()> + From<WorkerExecutorError> + Send + Sync,
         SOk: Debug + Encode + Decode<()> + Send + Sync,
     {
         Self::replay_serializable(self, ctx)
@@ -647,13 +651,13 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     fn validate_oplog_entry(
         oplog_entry: &PersistedDurableFunctionInvocation,
         expected_function_name: &str,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         if oplog_entry.function_name != expected_function_name {
             error!(
                 "Unexpected imported function call entry in oplog: expected {}, got {}",
                 expected_function_name, oplog_entry.function_name
             );
-            Err(GolemError::unexpected_oplog_entry(
+            Err(WorkerExecutorError::unexpected_oplog_entry(
                 expected_function_name,
                 oplog_entry.function_name.clone(),
             ))

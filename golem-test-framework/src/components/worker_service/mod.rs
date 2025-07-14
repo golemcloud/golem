@@ -24,7 +24,7 @@ use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::{wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder};
 use crate::config::GolemClientProtocol;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::future::join_all;
@@ -98,6 +98,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::TcpStream;
 use tokio::{task, time};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Payload;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
@@ -1538,6 +1539,16 @@ fn http_worker_metadata_to_grpc(
                 value: Some(id.into()),
             })
             .collect(),
+        skipped_regions: worker_metadata
+            .skipped_regions
+            .into_iter()
+            .map(|region| region.into())
+            .collect(),
+        deleted_regions: worker_metadata
+            .deleted_regions
+            .into_iter()
+            .map(|region| region.into())
+            .collect(),
     }
 }
 
@@ -1917,8 +1928,20 @@ impl HttpWorkerLogEventStream {
             request.worker_id.unwrap().name,
         );
 
+        let mut connection_request = url
+            .into_client_request()
+            .context("Failed to create request")?;
+
+        {
+            let headers = connection_request.headers_mut();
+
+            if let Some(bearer_token) = client.context.bearer_token() {
+                headers.insert("Authorization", format!("Bearer {bearer_token}").parse()?);
+            }
+        }
+
         let (stream, _) = tokio_tungstenite::connect_async_tls_with_config(
-            url,
+            connection_request,
             None,
             false,
             Some(Connector::Plain),

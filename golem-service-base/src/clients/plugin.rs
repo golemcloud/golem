@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use super::authorised_request;
-use super::RemoteCloudServiceConfig;
+use super::RemoteServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_error::Error;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plugin::PluginDefinition;
-use golem_common::model::{PluginId, RetryConfig};
+use golem_common::model::{AccountId, PluginId, RetryConfig};
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use std::fmt::Display;
@@ -31,6 +31,7 @@ use tonic::Status;
 pub trait PluginServiceClient: Send + Sync {
     async fn get(
         &self,
+        owner: AccountId,
         name: &str,
         version: &str,
         token: &TokenSecret,
@@ -54,7 +55,7 @@ pub struct PluginServiceClientDefault {
 }
 
 impl PluginServiceClientDefault {
-    pub fn new(config: &RemoteCloudServiceConfig) -> Self {
+    pub fn new(config: &RemoteServiceConfig) -> Self {
         let plugin_service_client = GrpcClient::new(
             "plugin",
             |channel| {
@@ -80,6 +81,7 @@ impl PluginServiceClientDefault {
 impl PluginServiceClient for PluginServiceClientDefault {
     async fn get(
         &self,
+        owner: AccountId,
         name: &str,
         version: &str,
         token: &TokenSecret,
@@ -89,13 +91,14 @@ impl PluginServiceClient for PluginServiceClientDefault {
             "get",
             None,
             &self.retry_config,
-            &(self.plugin_service_client.clone(), token.clone(), name.to_string(), version.to_string()),
-            |(client, token, name, version)| {
+            &(self.plugin_service_client.clone(), token.clone(), owner.clone(), name.to_string(), version.to_string()),
+            |(client, token, owner, name, version)| {
                 Box::pin(async move {
                     let response = client
                         .call("get", move |client| {
                             let request = authorised_request(
                                 golem_api_grpc::proto::golem::component::v1::GetPluginRequest {
+                                    account_id: Some(owner.clone().into()),
                                     name: name.to_string(),
                                     version: version.to_string(),
                                 },

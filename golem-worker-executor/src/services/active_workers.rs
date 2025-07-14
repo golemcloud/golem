@@ -12,24 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
-
-use tracing::{debug, Instrument};
-
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::{OwnedWorkerId, WorkerId};
-
-use crate::error::GolemError;
 use crate::services::golem_config::MemoryConfig;
 use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
+use tracing::{debug, Instrument};
 
 /// Holds the metadata and wasmtime structures of currently active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
-    workers: Cache<WorkerId, (), Arc<Worker<Ctx>>, GolemError>,
+    workers: Cache<WorkerId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
     worker_memory: Arc<Semaphore>,
     priority_allocation_lock: Arc<Mutex<()>>,
     acquire_retry_delay: Duration,
@@ -59,7 +56,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         worker_env: Option<Vec<(String, String)>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
-    ) -> Result<Arc<Worker<Ctx>>, GolemError>
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {

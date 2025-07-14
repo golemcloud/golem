@@ -24,14 +24,13 @@ use golem_common::model::component::ComponentOwner;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
-use golem_common::model::plugin::PluginOwner;
 use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationAction, PluginInstallationCreation,
     PluginInstallationUpdate,
 };
 use golem_common::model::{ComponentId, ComponentType, ComponentVersion, PluginInstallationId};
 use golem_common::model::{InitialComponentFile, ProjectId};
-use golem_service_base::clients::auth::BaseAuthService;
+use golem_service_base::clients::auth::AuthService;
 use golem_service_base::clients::project::ProjectService;
 use golem_service_base::model::ComponentName;
 use std::collections::HashMap;
@@ -41,14 +40,14 @@ use std::vec;
 
 pub struct AuthedComponentService {
     component_service: Arc<dyn ComponentService>,
-    auth_service: Arc<dyn BaseAuthService>,
+    auth_service: Arc<AuthService>,
     project_service: Arc<dyn ProjectService>,
 }
 
 impl AuthedComponentService {
     pub fn new(
         base_component_service: Arc<dyn ComponentService>,
-        auth_service: Arc<dyn BaseAuthService>,
+        auth_service: Arc<AuthService>,
         project_service: Arc<dyn ProjectService>,
     ) -> Self {
         Self {
@@ -433,7 +432,7 @@ impl AuthedComponentService {
         auth: &AuthCtx,
         component_id: &ComponentId,
         component_version: ComponentVersion,
-    ) -> Result<(PluginOwner, Vec<PluginInstallation>), ComponentError> {
+    ) -> Result<Vec<PluginInstallation>, ComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
@@ -443,7 +442,7 @@ impl AuthedComponentService {
             .get_plugin_installations_for_component(&owner, component_id, component_version)
             .await?;
 
-        Ok((owner.into(), installations))
+        Ok(installations)
     }
 
     pub async fn create_plugin_installation_for_component(
@@ -451,7 +450,7 @@ impl AuthedComponentService {
         auth: &AuthCtx,
         component_id: &ComponentId,
         installation: PluginInstallationCreation,
-    ) -> Result<(PluginOwner, PluginInstallation), ComponentError> {
+    ) -> Result<PluginInstallation, ComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
@@ -461,7 +460,7 @@ impl AuthedComponentService {
             .create_plugin_installation_for_component(&owner, component_id, installation)
             .await?;
 
-        Ok((owner.into(), installation))
+        Ok(installation)
     }
 
     pub async fn update_plugin_installation_for_component(

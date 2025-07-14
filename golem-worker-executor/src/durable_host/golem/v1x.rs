@@ -13,24 +13,19 @@
 // limitations under the License.
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::wasm_rpc::{create_rpc_connection_span, WasmRpcEntryPayload};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
-use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::model::InterruptKind;
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
-    ForkResult, GetWorkers, Host, HostGetWorkers,
-    WorkerAnyFilter,
+    ForkResult, GetWorkers, Host, HostGetWorkers, WorkerAnyFilter,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
 use crate::services::oplog::CommitLevel;
-use crate::services::rpc::RpcDemand;
 use crate::services::{HasOplogService, HasPlugins, HasWorker};
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
@@ -38,21 +33,15 @@ use bincode::de::Decoder;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::Decode;
-use golem_common::base_model::TargetWorkerId;
-use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
-use golem_wasm_ast::analysis::analysed_type::{list, str};
-use golem_wasm_rpc::{
-    HostWasmRpc, IntoValue, Uri, Value, ValueAndType, WasmRpcEntry, WitType, WitValue,
-};
-use std::num::NonZeroU64;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
-use wasmtime::component::{Resource, ResourceAny};
+use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
 
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
@@ -111,68 +100,6 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     }
 }
 
-pub struct RemoteAgentEntry {
-    pub payload: Box<dyn std::any::Any + Send + Sync>,
-}
-
-pub enum RemoteAgentEntryPayload {
-    Interface {
-        #[allow(dead_code)]
-        demand: Box<dyn RpcDemand>,
-        remote_worker_id: OwnedWorkerId,
-        span_id: SpanId,
-    },
-}
-
-pub fn unwrap_constructor_result(constructor_result: Value) -> anyhow::Result<(Uri, u64)> {
-    if let Value::Tuple(values) = constructor_result {
-        if values.len() == 1 {
-            if let Value::Handle { uri, resource_id } = values.into_iter().next().unwrap() {
-                Ok((Uri { value: uri }, resource_id))
-            } else {
-                Err(anyhow!(
-                    "Invalid constructor result: single handle expected"
-                ))
-            }
-        } else {
-            Err(anyhow!(
-                "Invalid constructor result: single result value expected, but got {}",
-                values.len()
-            ))
-        }
-    } else {
-        Err(anyhow!(
-                "Invalid constructor result: a tuple with a single field expected, but got {constructor_result:?}"
-            ))
-    }
-}
-
-struct AgentInfo {
-    agent_name: String,
-    worker_name: String,
-    instance_number: String,
-}
-
-fn parse_agent_id(agent_id: &str) -> anyhow::Result<AgentInfo> {
-    let parts: Vec<&str> = agent_id.split("--").collect();
-    if parts.len() < 3 {
-        return Err(anyhow!(
-            "Invalid agent_id format: {}. Expected format is {{worker_name}}-{{agent_name}}-{{instance_number}}",
-            agent_id
-        ));
-    }
-
-    let worker_name = parts[0].to_string();
-    let agent_name = parts[1].to_string();
-    let instance = parts[2].to_string();
-
-    Ok(AgentInfo {
-        agent_name,
-        worker_name,
-        instance_number: instance,
-    })
-}
-
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn discover_agent_definitions(
         &mut self,
@@ -198,10 +125,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .create(&self.owned_worker_id.worker_id, oplog_idx)
                 .await;
             durability
-                .persist(self, (), Ok::<PromiseId, GolemError>(promise_id))
+                .persist(self, (), Ok::<PromiseId, WorkerExecutorError>(promise_id))
                 .await?
         } else {
-            durability.replay::<PromiseId, GolemError>(self).await?
+            durability
+                .replay::<PromiseId, WorkerExecutorError>(self)
+                .await?
         };
 
         Ok(promise_id.into())
@@ -782,7 +711,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
-            let worker_id: Result<_, GolemError> = async {
+            let worker_id: Result<_, WorkerExecutorError> = async {
                 let component_id = self
                     .state
                     .component_service

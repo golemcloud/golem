@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use bytes::Bytes;
 use golem_common::virtual_exports::http_incoming_handler::*;
 use golem_common::widen_infallible;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::Value;
 use http::{HeaderName, HeaderValue};
 use http_body_util::combinators::BoxBody;
@@ -27,9 +27,9 @@ pub type SchemeAndRequest = (
     hyper::Request<BoxBody<Bytes, hyper::Error>>,
 );
 
-pub fn input_to_hyper_request(inputs: &[Value]) -> Result<SchemeAndRequest, GolemError> {
+pub fn input_to_hyper_request(inputs: &[Value]) -> Result<SchemeAndRequest, WorkerExecutorError> {
     let request = IncomingHttpRequest::from_function_input(inputs).map_err(|e| {
-        GolemError::invalid_request(format!("Failed contructing incoming request: {e}"))
+        WorkerExecutorError::invalid_request(format!("Failed contructing incoming request: {e}"))
     })?;
 
     let wasmtime_scheme = match request.scheme {
@@ -44,7 +44,7 @@ pub fn input_to_hyper_request(inputs: &[Value]) -> Result<SchemeAndRequest, Gole
         HttpScheme::HTTP => http::uri::Scheme::HTTP,
         HttpScheme::HTTPS => http::uri::Scheme::HTTPS,
         HttpScheme::Custom(custom) => custom.as_str().try_into().map_err(|e| {
-            GolemError::invalid_request(format!("Not a valid scheme: {custom} ({e})"))
+            WorkerExecutorError::invalid_request(format!("Not a valid scheme: {custom} ({e})"))
         })?,
     };
 
@@ -54,14 +54,15 @@ pub fn input_to_hyper_request(inputs: &[Value]) -> Result<SchemeAndRequest, Gole
         .path_and_query(request.path_and_query)
         .build()
         .map_err(|e| {
-            GolemError::invalid_request(format!("Failed to construct a valid url: {e}"))
+            WorkerExecutorError::invalid_request(format!("Failed to construct a valid url: {e}"))
         })?;
 
     let mut builder = hyper::Request::builder().uri(uri).method(request.method);
 
     for (name, value) in request.headers.0 {
-        let converted = http::HeaderValue::from_bytes(&value)
-            .map_err(|e| GolemError::invalid_request(format!("Invalid header value: {e}")))?;
+        let converted = http::HeaderValue::from_bytes(&value).map_err(|e| {
+            WorkerExecutorError::invalid_request(format!("Invalid header value: {e}"))
+        })?;
 
         builder = builder.header(name, converted);
     }
@@ -75,10 +76,14 @@ pub fn input_to_hyper_request(inputs: &[Value]) -> Result<SchemeAndRequest, Gole
             let mut converted_trailers = http::HeaderMap::new();
             for (name, value) in trailers.0.into_iter() {
                 let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
-                    GolemError::invalid_request(format!("Failed to convert header name {e}"))
+                    WorkerExecutorError::invalid_request(format!(
+                        "Failed to convert header name {e}"
+                    ))
                 })?;
                 let header_value = HeaderValue::from_bytes(&value).map_err(|e| {
-                    GolemError::invalid_request(format!("Failed to convert header value {e}"))
+                    WorkerExecutorError::invalid_request(format!(
+                        "Failed to convert header value {e}"
+                    ))
                 })?;
 
                 converted_trailers.insert(header_name, header_value);
@@ -96,14 +101,14 @@ pub fn input_to_hyper_request(inputs: &[Value]) -> Result<SchemeAndRequest, Gole
 
     let hyper_request = builder
         .body(body)
-        .map_err(|e| GolemError::invalid_request(format!("Failed to attach body {e}")))?;
+        .map_err(|e| WorkerExecutorError::invalid_request(format!("Failed to attach body {e}")))?;
 
     Ok((wasmtime_scheme, hyper_request))
 }
 
 pub async fn http_response_to_output(
     response: http::Response<BoxBody<Bytes, ErrorCode>>,
-) -> Result<Value, GolemError> {
+) -> Result<Value, WorkerExecutorError> {
     use http_body_util::BodyExt;
 
     tracing::debug!("Converting wasi:http/incoming-handler response to golem compatible value");
@@ -119,7 +124,7 @@ pub async fn http_response_to_output(
     };
 
     let collected = response.into_body().collect().await.map_err(|e| {
-        GolemError::runtime(format!("Failed collection body of http response: {e}"))
+        WorkerExecutorError::runtime(format!("Failed collection body of http response: {e}"))
     })?;
 
     let trailers = collected.trailers().cloned();

@@ -5,6 +5,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionCompletedParameters, PublicOplogEntry};
 use golem_common::model::{Timestamp, WorkerId};
 use golem_debugging_service::model::params::PlaybackOverride;
+use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_ast::analysis::analysed_type::{record, str, variant};
 use golem_wasm_ast::analysis::{NameOptionTypePair, NameTypePair};
@@ -514,7 +515,11 @@ async fn test_playback_with_overrides(
 
     let entry = oplogs_in_forked_worker.last();
 
-    if let Some(PublicOplogEntry::ExportedFunctionCompleted(completed)) = entry {
+    if let Some(PublicOplogEntryWithIndex {
+        entry: PublicOplogEntry::ExportedFunctionCompleted(completed),
+        oplog_index: _,
+    }) = entry
+    {
         assert_eq!(
             completed.response,
             Some(new_shopping_cart_checkout_result())
@@ -531,11 +536,11 @@ async fn test_playback_with_overrides(
     );
 }
 
-fn nth_invocation_boundary(oplogs: &[PublicOplogEntry], n: usize) -> OplogIndex {
+fn nth_invocation_boundary(oplogs: &[PublicOplogEntryWithIndex], n: usize) -> OplogIndex {
     let index = oplogs
         .iter()
         .enumerate()
-        .filter(|(_, entry)| matches!(entry, PublicOplogEntry::ExportedFunctionCompleted(_)))
+        .filter(|(_, entry)| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionCompleted(_)))
         .nth(n - 1)
         .map(|(i, _)| i)
         .unwrap_or_else(|| panic!("No {n}th invocation boundary found"));
@@ -567,7 +572,7 @@ async fn start_debug_executor(
         .unwrap_or_else(|e| {
             panic!(
                 "Failed to start debug executor at port {}: {}",
-                context.debug_server_port(),
+                context.grpc_port(),
                 e
             )
         })

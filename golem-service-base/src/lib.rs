@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod api;
 pub mod api_tags;
 pub mod clients;
 pub mod config;
 pub mod db;
 pub mod dto;
+pub mod error;
 pub mod grpc;
 pub mod headers;
 pub mod metrics;

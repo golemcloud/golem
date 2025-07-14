@@ -1,8 +1,7 @@
 ## Generated from default config
-grpc_address = "0.0.0.0"
+cors_origin_regex = "https://*.golem.cloud"
 http_address = "0.0.0.0"
 http_port = 8082
-port = 9000
 tracing_file_name_with_port = true
 
 [active_workers]
@@ -79,7 +78,7 @@ multiplier = 2.0
 [limits]
 epoch_interval = "10ms"
 epoch_ticks = 1
-event_broadcast_capacity = 16
+event_broadcast_capacity = 1024
 event_history_size = 128
 fuel_to_borrow = 10000
 invocation_result_broadcast_capacity = 100000
@@ -222,10 +221,9 @@ without_time = false
 
 
 ## Generated from example config: default-debug-config
-# grpc_address = "0.0.0.0"
+# cors_origin_regex = "https://*.golem.cloud"
 # http_address = "0.0.0.0"
 # http_port = 8082
-# port = 9000
 # tracing_file_name_with_port = true
 # 
 # [active_workers]
@@ -302,7 +300,7 @@ without_time = false
 # [limits]
 # epoch_interval = "10ms"
 # epoch_ticks = 1
-# event_broadcast_capacity = 16
+# event_broadcast_capacity = 1024
 # event_history_size = 128
 # fuel_to_borrow = 10000
 # invocation_result_broadcast_capacity = 100000

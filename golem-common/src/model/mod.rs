@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::oplog::{
-    IndexedResourceKey, OplogEntry, TimestampedUpdateDescription, WorkerResourceId,
-};
+use crate::model::oplog::{IndexedResourceKey, TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
@@ -1614,86 +1612,9 @@ pub enum WorkerEvent {
         function: String,
         idempotency_key: IdempotencyKey,
     },
-    Close,
-}
-
-impl WorkerEvent {
-    pub fn stdout(bytes: Vec<u8>) -> WorkerEvent {
-        WorkerEvent::StdOut {
-            timestamp: Timestamp::now_utc(),
-            bytes,
-        }
-    }
-
-    pub fn stderr(bytes: Vec<u8>) -> WorkerEvent {
-        WorkerEvent::StdErr {
-            timestamp: Timestamp::now_utc(),
-            bytes,
-        }
-    }
-
-    pub fn log(level: LogLevel, context: &str, message: &str) -> WorkerEvent {
-        WorkerEvent::Log {
-            timestamp: Timestamp::now_utc(),
-            level,
-            context: context.to_string(),
-            message: message.to_string(),
-        }
-    }
-
-    pub fn invocation_start(function: &str, idempotency_key: &IdempotencyKey) -> WorkerEvent {
-        WorkerEvent::InvocationStart {
-            timestamp: Timestamp::now_utc(),
-            function: function.to_string(),
-            idempotency_key: idempotency_key.clone(),
-        }
-    }
-
-    pub fn invocation_finished(function: &str, idempotency_key: &IdempotencyKey) -> WorkerEvent {
-        WorkerEvent::InvocationFinished {
-            timestamp: Timestamp::now_utc(),
-            function: function.to_string(),
-            idempotency_key: idempotency_key.clone(),
-        }
-    }
-
-    pub fn as_oplog_entry(&self) -> Option<OplogEntry> {
-        match self {
-            WorkerEvent::StdOut { timestamp, bytes } => Some(OplogEntry::Log {
-                timestamp: *timestamp,
-                level: oplog::LogLevel::Stdout,
-                context: String::new(),
-                message: String::from_utf8_lossy(bytes).to_string(),
-            }),
-            WorkerEvent::StdErr { timestamp, bytes } => Some(OplogEntry::Log {
-                timestamp: *timestamp,
-                level: oplog::LogLevel::Stderr,
-                context: String::new(),
-                message: String::from_utf8_lossy(bytes).to_string(),
-            }),
-            WorkerEvent::Log {
-                timestamp,
-                level,
-                context,
-                message,
-            } => Some(OplogEntry::Log {
-                timestamp: *timestamp,
-                level: match level {
-                    LogLevel::Trace => oplog::LogLevel::Trace,
-                    LogLevel::Debug => oplog::LogLevel::Debug,
-                    LogLevel::Info => oplog::LogLevel::Info,
-                    LogLevel::Warn => oplog::LogLevel::Warn,
-                    LogLevel::Error => oplog::LogLevel::Error,
-                    LogLevel::Critical => oplog::LogLevel::Critical,
-                },
-                context: context.clone(),
-                message: message.clone(),
-            }),
-            WorkerEvent::InvocationStart { .. } => None,
-            WorkerEvent::InvocationFinished { .. } => None,
-            WorkerEvent::Close => None,
-        }
-    }
+    /// The client fell behind and the point it left of is no longer in our buffer.
+    /// {number_of_skipped_messages} is the number of messages between the client left of and the point it is now at.
+    ClientLagged { number_of_missed_messages: u64 },
 }
 
 impl Display for WorkerEvent {
@@ -1735,8 +1656,10 @@ impl Display for WorkerEvent {
             } => {
                 write!(f, "<invocation-finished> {function} {idempotency_key}")
             }
-            WorkerEvent::Close => {
-                write!(f, "<close>")
+            WorkerEvent::ClientLagged {
+                number_of_missed_messages,
+            } => {
+                write!(f, "<client-lagged> {number_of_missed_messages}")
             }
         }
     }

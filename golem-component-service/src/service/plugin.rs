@@ -156,7 +156,7 @@ impl PluginService {
 
     pub async fn list_plugins_for_scopes(
         &self,
-        owner: &PluginOwner,
+        owner: PluginOwner,
         scopes: Vec<PluginScope>,
     ) -> Result<Vec<PluginDefinition>, ComponentError> {
         let owner_record: PluginOwnerRow = owner.clone().into();
@@ -219,11 +219,9 @@ impl PluginService {
 
     pub async fn get_by_id(
         &self,
-        owner: &PluginOwner,
         id: &PluginId,
     ) -> Result<Option<PluginDefinition>, ComponentError> {
-        let owner_record: PluginOwnerRow = owner.clone().into();
-        let record = self.plugin_repo.get_by_id(&owner_record, &id.0).await?;
+        let record = self.plugin_repo.get_by_id(&id.0).await?;
         record
             .map(PluginDefinition::try_from)
             .transpose()

@@ -32,7 +32,7 @@ use golem_common::model::{
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
     drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
-    worker_error_message, TestDslUnsafe,
+    worker_error_logs, worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType, TypeStr};
@@ -1921,6 +1921,76 @@ async fn long_running_poll_loop_works_as_expected(
 
 #[test]
 #[tracing::instrument]
+#[timeout(120_000)]
+async fn long_running_poll_loop_works_as_expected_async_http(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin();
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response_clone.lock().unwrap();
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component_id = executor.component("http-client-3").store().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
+
+    let worker_id = executor
+        .start_worker_with(&component_id, "poll-loop-component-0", vec![], env)
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    executor
+        .invoke(
+            &worker_id,
+            "golem:it/api.{start-polling}",
+            vec!["first".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "first".to_string();
+    }
+
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+    drop(executor);
+    http_server.abort();
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout(300_000)]
 async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     last_unique_id: &LastUniqueId,
@@ -3141,10 +3211,16 @@ async fn stderr_returned_for_failed_component(
     check!(result2.is_err());
     check!(result3.is_err());
 
-    let expected_stderr = "\n\nthread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+    let expected_stderr = "thread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
 
-    check!(worker_error_message(&result2.clone().err().unwrap()).ends_with(&expected_stderr));
-    check!(worker_error_message(&result3.clone().err().unwrap()).ends_with(&expected_stderr));
+    println!("result3: {result3:?}");
+
+    check!(worker_error_logs(&result2.clone().err().unwrap())
+        .unwrap()
+        .ends_with(&expected_stderr));
+    check!(worker_error_logs(&result3.clone().err().unwrap())
+        .unwrap()
+        .ends_with(&expected_stderr));
 
     check!(metadata.last_known_status.status == WorkerStatus::Failed);
     check!(last_error.is_some());
@@ -3539,4 +3615,42 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
             .await
         }
     );
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
+async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin();
+
+    let component_id = executor.component("option-service").store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "wrong-parameter-type-1")
+        .await;
+
+    let failure = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{echo}",
+            vec![100u64.into_value_and_type()],
+        )
+        .await;
+
+    let success = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{echo}",
+            vec![Some("x").into_value_and_type()],
+        )
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+    drop(executor);
+
+    check!(failure.is_err());
+    check!(success.is_ok());
 }

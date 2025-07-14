@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::auth::TokenSecret;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::WorkerId;
@@ -21,7 +20,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ConnectParams {
     pub worker_id: WorkerId,
-    pub token: TokenSecret,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -13,15 +13,17 @@
 // limitations under the License.
 
 use super::ApiError;
-use crate::api::{ApiResult, ApiTags};
+use crate::api::ApiResult;
 use crate::login::LoginSystem;
 use crate::model::*;
 use crate::service::auth::AuthService;
 use crate::service::token::{TokenService, TokenServiceError};
+use golem_common::model::auth::AccountAction;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::AccountId;
 use golem_common::model::TokenId;
 use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;

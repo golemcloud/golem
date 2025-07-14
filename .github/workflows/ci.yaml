@@ -349,6 +349,20 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      - name: Extract metadata (tags, labels) for cloud service
+        id: meta-cloud-service
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/cloud-service
+      - name: Build and push cloud-service
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./cloud-service/docker/Dockerfile
+          push: true
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ steps.meta-cloud-service.outputs.tags }}
+          labels: ${{ steps.meta-cloud-service.outputs.labels }}
       - name: Extract metadata (tags, labels) for worker executor
         id: meta-worker-executor
         uses: docker/metadata-action@v5
@@ -363,6 +377,20 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-worker-executor.outputs.tags }}
           labels: ${{ steps.meta-worker-executor.outputs.labels }}
+      - name: Extract metadata (tags, labels) for golem debugging service
+        id: meta-golem-debugging-service
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-debugging-service
+      - name: Build and push golem debugging service image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-debugging-service/docker/Dockerfile
+          push: true
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ steps.meta-golem-debugging-service.outputs.tags }}
+          labels: ${{ steps.meta-golem-debugging-service.outputs.labels }}
       - name: Extract metadata (tags, labels) for shard manager
         id: meta-shard-manager
         uses: docker/metadata-action@v5

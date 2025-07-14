@@ -50,7 +50,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::task::JoinSet;
-use tracing::{info, Instrument};
+use tracing::{debug, info, Instrument};
 
 #[cfg(test)]
 test_r::enable!();
@@ -79,10 +79,7 @@ impl CloudService {
         config: CloudServiceConfig,
         prometheus_registry: Registry,
     ) -> Result<Self, anyhow::Error> {
-        info!(
-            "Starting cloud-service server on ports: http: {}, grpc: {}",
-            config.http_port, config.grpc_port
-        );
+        debug!("Initializing cloud service");
 
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
 
@@ -130,6 +127,11 @@ impl CloudService {
     ) -> Result<RunDetails, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_http_server(join_set).await?;
+
+        info!(
+            "Started cloud service on ports: http: {}, grpc: {}",
+            http_port, grpc_port
+        );
 
         Ok(RunDetails {
             http_port,

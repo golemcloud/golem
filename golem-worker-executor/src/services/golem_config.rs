@@ -491,7 +491,7 @@ impl Default for Limits {
             max_active_workers: 1024,
             invocation_result_broadcast_capacity: 100000,
             max_concurrent_streams: 1024,
-            event_broadcast_capacity: 16,
+            event_broadcast_capacity: 1024,
             event_history_size: 128,
             fuel_to_borrow: 10000,
             epoch_interval: Duration::from_millis(10),

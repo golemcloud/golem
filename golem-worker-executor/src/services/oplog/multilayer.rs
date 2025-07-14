@@ -12,21 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cmp::min;
-use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
-
-use async_trait::async_trait;
-use bytes::Bytes;
-use nonempty_collections::NEVec;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::oneshot::Sender;
-use tracing::{debug, error, info, warn, Instrument};
-
-use crate::error::GolemError;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::ephemeral::EphemeralOplog;
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
@@ -35,10 +20,23 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
 use crate::services::oplog::{
     downcast_oplog, CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService,
 };
+use async_trait::async_trait;
+use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, OwnedWorkerId, ScanCursor, WorkerMetadata,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use nonempty_collections::NEVec;
+use std::cmp::min;
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot::Sender;
+use tracing::{debug, error, info, warn, Instrument};
 
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
@@ -65,7 +63,7 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError>;
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError>;
 
     /// Gets the last stored oplog entry's id in the archive
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
@@ -138,6 +136,28 @@ impl MultiLayerOplogService {
             entry_count_limit,
             max_operations_before_commit_ephemeral,
         }
+    }
+
+    async fn filter_ids_existing_on_lower_layers(
+        &self,
+        unfiltered_ids: Vec<OwnedWorkerId>,
+        from: usize,
+    ) -> Result<Vec<OwnedWorkerId>, WorkerExecutorError> {
+        let mut ids = Vec::new();
+        for id in unfiltered_ids {
+            let mut exists_in_lower = false;
+            for lower_layer in &self.lower.iter().as_slice()[from..] {
+                if lower_layer.exists(&id).await {
+                    exists_in_lower = true;
+                    break;
+                }
+            }
+
+            if !exists_in_lower {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
     }
 }
 
@@ -388,13 +408,18 @@ impl OplogService for MultiLayerOplogService {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         match cursor.layer {
             0 => {
-                let (new_cursor, ids) = self
+                let (new_cursor, unfiltered_ids) = self
                     .primary
                     .scan_for_component(account_id, component_id, cursor, count)
                     .await?;
+
+                let ids = self
+                    .filter_ids_existing_on_lower_layers(unfiltered_ids, 0)
+                    .await?;
+
                 if new_cursor.is_active_layer_finished() {
                     // Continuing with the first lower layer
                     Ok((
@@ -410,8 +435,11 @@ impl OplogService for MultiLayerOplogService {
                 }
             }
             layer if layer <= self.lower.len().get() => {
-                let (new_cursor, ids) = self.lower[layer - 1]
+                let (new_cursor, unfiltered_ids) = self.lower[layer - 1]
                     .scan_for_component(account_id, component_id, cursor, count)
+                    .await?;
+                let ids = self
+                    .filter_ids_existing_on_lower_layers(unfiltered_ids, layer)
                     .await?;
                 if new_cursor.is_active_layer_finished() && (layer + 1) <= self.lower.len().get() {
                     // Continuing with the next lower layer
@@ -436,7 +464,7 @@ impl OplogService for MultiLayerOplogService {
                     Ok((new_cursor, ids))
                 }
             }
-            layer => Err(GolemError::unknown(format!(
+            layer => Err(WorkerExecutorError::unknown(format!(
                 "Invalid oplog layer in scan cursor: {layer}"
             ))),
         }

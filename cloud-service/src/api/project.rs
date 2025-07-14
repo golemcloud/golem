@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ApiError, ApiResult, ApiTags};
+use super::{ApiError, ApiResult};
 use crate::model::*;
 use crate::service::api_mapper::ApiMapper;
 use crate::service::auth::AuthService;
 use crate::service::project::ProjectService;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use golem_common::model::auth::{ProjectAction, ProjectPermisison};
+use golem_common::model::auth::{AccountAction, ProjectAction, ProjectPermission};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
 use golem_common::model::{Empty, PluginInstallationId, ProjectId};
 use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::dto;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_service_base::model::BatchPluginInstallationUpdates;
@@ -258,7 +259,7 @@ impl ProjectApi {
         &self,
         project_id: Path<ProjectId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Vec<ProjectPermisison>>> {
+    ) -> ApiResult<Json<Vec<ProjectPermission>>> {
         let record = recorded_http_api_request!(
             "get_project_actions",
             project_id = project_id.0.to_string(),
@@ -275,7 +276,7 @@ impl ProjectApi {
         &self,
         project_id: ProjectId,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Vec<ProjectPermisison>>> {
+    ) -> ApiResult<Json<Vec<ProjectPermission>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let result = self
             .auth_service
@@ -314,10 +315,13 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Vec<dto::PluginInstallation>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::ViewPluginInstallations)
+            .await?;
 
         let response = self
             .project_service
-            .get_plugin_installations_for_project(&project_id, &auth)
+            .get_plugin_installations_for_project(&project_id)
             .await?;
 
         let secret = &token.secret();
@@ -363,11 +367,15 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<dto::PluginInstallation>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::CreatePluginInstallation)
+            .await?;
+
         let token = token.secret();
 
         let plugin_installation = self
             .project_service
-            .create_plugin_installation_for_project(&project_id, plugin, &auth, &token)
+            .create_plugin_installation_for_project(&project_id, plugin, &token)
             .await?;
 
         Ok(Json(
@@ -412,16 +420,14 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Empty>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::UpdatePluginInstallation)
+            .await?;
+
         let token = token.secret();
 
         self.project_service
-            .update_plugin_installation_for_project(
-                &project_id,
-                &installation_id,
-                update,
-                &auth,
-                &token,
-            )
+            .update_plugin_installation_for_project(&project_id, &installation_id, update, &token)
             .await
             .map_err(|e| e.into())
             .map(|_| Json(Empty {}))
@@ -460,10 +466,14 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Empty>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::DeletePluginInstallation)
+            .await?;
+
         let token = token.secret();
 
         self.project_service
-            .delete_plugin_installation_for_project(&installation_id, &project_id, &auth, &token)
+            .delete_plugin_installation_for_project(&installation_id, &project_id, &token)
             .await
             .map_err(|e| e.into())
             .map(|_| Json(Empty {}))
@@ -500,15 +510,18 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Empty>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(
+                &auth,
+                &project_id,
+                &ProjectAction::BatchUpdatePluginInstallations,
+            )
+            .await?;
+
         let token = token.secret();
 
         self.project_service
-            .batch_update_plugin_installations_for_project(
-                &project_id,
-                &updates.actions,
-                &auth,
-                &token,
-            )
+            .batch_update_plugin_installations_for_project(&project_id, &updates.actions, &token)
             .await?;
         Ok(Json(Empty {}))
     }

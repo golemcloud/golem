@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::metrics::oplog::record_oplog_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
@@ -24,6 +23,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId
 use golem_common::model::{
     AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId, WorkerMetadata,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -302,7 +302,7 @@ impl OplogService for PrimaryOplogService {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         record_oplog_call("scan");
 
         let (cursor, keys) = self

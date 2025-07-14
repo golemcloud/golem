@@ -24,7 +24,7 @@ use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
-use golem_worker_executor::model::InterruptKind;
+use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::oplog::Oplog;
 use golem_worker_executor::services::{
     All, HasConfig, HasExtraDeps, HasOplog, HasShardManagerService, HasShardService,
@@ -38,7 +38,7 @@ use std::time::Duration;
 use tracing::{error, info};
 
 #[async_trait]
-pub trait DebugService {
+pub trait DebugService: Send + Sync {
     async fn connect(
         &self,
         authentication_context: &AuthCtx,
@@ -721,7 +721,7 @@ impl DebugService for DebugServiceDefault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Bytes;
+    use bytes::Bytes;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
     use golem_common::model::Timestamp;

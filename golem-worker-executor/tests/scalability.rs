@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, start_limited, TestContext};
+use crate::common::{start, start_customized, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use futures_util::stream::FuturesUnordered;
@@ -248,7 +248,7 @@ async fn initial_large_memory_allocation(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start_limited(deps, &context, Some(768 * 1024 * 1024))
+    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None)
         .await
         .unwrap()
         .into_admin();
@@ -294,7 +294,7 @@ async fn dynamic_large_memory_allocation(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start_limited(deps, &context, Some(768 * 1024 * 1024))
+    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None)
         .await
         .unwrap()
         .into_admin();

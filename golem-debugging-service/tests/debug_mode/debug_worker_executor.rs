@@ -1,9 +1,12 @@
+use anyhow::Context;
 use axum_jrpc::{Id, JsonRpcAnswer, JsonRpcRequest, JsonRpcResponse};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
+use golem_common::model::auth::TokenSecret;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Utf8Payload;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -80,11 +83,21 @@ impl DebugWorkerExecutorClient {
         }
     }
 
-    pub async fn connect(port: u16) -> Result<Self, anyhow::Error> {
-        let server_url = format!("ws://127.0.0.1:{port}/ws");
+    pub async fn connect(port: u16, token: TokenSecret) -> Result<Self, anyhow::Error> {
+        let server_url = format!("ws://127.0.0.1:{port}/v1/debugger");
+
+        let mut connection_request = server_url
+            .into_client_request()
+            .context("Failed to create request")?;
+
+        {
+            let headers = connection_request.headers_mut();
+
+            headers.insert("Authorization", format!("Bearer {}", token.value).parse()?);
+        }
 
         // Connect to the WebSocket server
-        let ws_stream = connect_async(server_url)
+        let ws_stream = connect_async(connection_request)
             .await
             .map(|x| x.0)
             .map_err(|e| anyhow::anyhow!("Failed to connect to WebSocket server: {:?}", e))?;

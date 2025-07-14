@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use super::dto;
-use crate::api::{ApiResult, ApiTags};
+use crate::api::ApiResult;
 use crate::model::*;
 use crate::service::account::{AccountError, AccountService};
 use crate::service::auth::AuthService;
+use golem_common::model::auth::AccountAction;
 use golem_common::model::AccountId;
 use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use param::Query;
 use poem_openapi::param::Path;

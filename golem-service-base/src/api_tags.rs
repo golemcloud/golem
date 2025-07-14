@@ -16,11 +16,34 @@ use poem_openapi::Tags;
 
 #[derive(Tags)]
 pub enum ApiTags {
-    ApiDeployment,
+    /// The account API allows users to query and manipulate their own account data.
+    Account,
+    AccountSummary,
+    ApiCertificate,
     ApiDefinition,
+    ApiDeployment,
+    ApiDomain,
     ApiSecurity,
     Component,
-    Worker,
+    Debugging,
+    Grant,
     HealthCheck,
+    /// The limits API allows users to query their current resource limits.
+    Limits,
+    /// The login endpoints are implementing an OAuth2 flow.
+    Login,
     Plugin,
+    /// Projects are groups of components and their workers, providing both a separate namespace for these entities and allows sharing between accounts.
+    ///
+    /// Every account has a default project which is assumed when no specific project ID is passed in some component and worker related APIs.
+    Project,
+    /// Projects can have grants providing access to other accounts than the project's owner.
+    ///
+    /// The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
+    ProjectGrant,
+    /// Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
+    ProjectPolicy,
+    /// The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+    Token,
+    Worker,
 }

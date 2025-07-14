@@ -95,7 +95,7 @@ async fn measure(
 
 async fn measure_component(
     system: &mut System,
-    executor: &TestDependenciesDsl<TestWorkerExecutor, TestWorkerExecutor>,
+    executor: &TestDependenciesDsl<TestWorkerExecutor>,
     path: &Path,
 ) -> anyhow::Result<(i64, i64)> {
     info!("Measuring {path:?}");
@@ -112,6 +112,7 @@ async fn measure_component(
             &HashMap::new(),
             false,
             &HashMap::new(),
+            None,
         )
         .await;
 
