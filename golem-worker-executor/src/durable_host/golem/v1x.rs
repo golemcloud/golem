@@ -52,7 +52,7 @@ use std::num::NonZeroU64;
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
-use wasmtime::component::Resource;
+use wasmtime::component::{Resource, ResourceAny};
 use wasmtime_wasi::IoView;
 
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
@@ -148,93 +148,49 @@ pub fn unwrap_constructor_result(constructor_result: Value) -> anyhow::Result<(U
 }
 
 impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent for DurableWorkerCtx<Ctx> {
-    // async fn new(
-    //     &mut self,
-    //     agent: AgentDependency,
-    //     agent_id: String,
-    // ) -> anyhow::Result<Resource<WasmRpcEntry>> {
-    //     self.observe_function_call("golem::host::remote-agent", "new");
-
-    //     let self_metadata = Host::get_self_metadata(self).await?;
-
-    //     let component_id = self_metadata.worker_id.component_id;
-
-    //     let agent_name = agent.agent_name;
-
-    //     let worker_id: WorkerId = WorkerId {
-    //         component_id: ComponentId(Uuid::from_u64_pair(
-    //             component_id.uuid.high_bits,
-    //             component_id.uuid.low_bits,
-    //         )),
-    //         worker_name: agent_id.clone(),
-    //     };
-
-    //     let remote_worker_id = worker_id.clone().into_target_worker_id();
-
-    //     let remote_worker_id = self
-    //         .generate_unique_local_worker_id(remote_worker_id.clone())
-    //         .await?;
-
-    //     let span = create_rpc_connection_span(self, &remote_worker_id).await?;
-
-    //     let remote_worker_id =
-    //         OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
-
-    //     let demand = self.rpc().create_demand(&remote_worker_id).await;
-
-    //     let entry = self.table().push(WasmRpcEntry {
-    //         payload: Box::new(WasmRpcEntryPayload::Interface {
-    //             demand,
-    //             remote_worker_id: remote_worker_id.clone(),
-    //             span_id: span.span_id().clone(),
-    //         }),
-    //     })?;
-
-    //     let agent_name = ValueAndType::new(Value::String(agent_name.to_string()), str());
-    //     let agent_id = ValueAndType::new(Value::String(agent_id), str());
-
-    //     let wit_value_agent_name = WitValue::from(agent_name);
-    //     let wit_value_agent_id = WitValue::from(agent_id);
-
-    //     let remote_agent_resource = HostWasmRpc::invoke_and_await(
-    //         self,
-    //         entry,
-    //         "golem:agentic-guest/guest.{agent.new}".to_string(),
-    //         vec![wit_value_agent_name, wit_value_agent_id],
-    //     )
-    //     .await?;
-
-    //     let resource = remote_agent_resource?;
-
-    //     let remote_agent_constructor_result: Value = resource.into();
-
-    //     let (resource_uri, resource_id) =
-    //         unwrap_constructor_result(remote_agent_constructor_result)?;
-
-    //     let demand = self.rpc().create_demand(&remote_worker_id).await;
-
-    //     let entry = self.table().push(WasmRpcEntry {
-    //         payload: Box::new(WasmRpcEntryPayload::Resource {
-    //             demand,
-    //             remote_worker_id,
-    //             resource_uri,
-    //             resource_id,
-    //             span_id: span.span_id().clone(),
-    //         }),
-    //     })?;
-
-    //     Ok(entry)
-    // }
-
-    // Currently I am delegating invoke to invoke-and-await
-    // Probably the spec for remote-agent resource need to consider this
-    // and have parallels of a wasm-rpc
-
     async fn get_id(
         &mut self,
         self_: wasmtime::component::Resource<WasmRpcEntry>,
     ) -> wasmtime::Result<String> {
-        Err(anyhow!("get_id is not implemented in the durable host",))
+        let result = HostWasmRpc::invoke_and_await(
+            self,
+            self_,
+            "golem:agentic-guest/guest.{[method]agent.get-agent-id}".to_string(),
+            vec![],
+        )
+            .await?;
+
+        let value = result?;
+
+        let value = Value::from(value);
+
+        match value {
+            Value::String(string) => {
+                Ok(string)
+            }
+
+            Value::Tuple(values) => {
+                if values.len() == 1 {
+                    if let Value::String(string) = values.into_iter().next().unwrap() {
+                        Ok(string)
+                    } else {
+                        Err(anyhow!(
+                            "Invalid result type: expected a single string value, but got multiple values",
+                        ))
+                    }
+                } else {
+                    Err(anyhow!(
+                        "Invalid result type: expected a single value, but got {}",
+                        values.len()
+                    ))
+                }
+            }
+
+            _ => Err(anyhow!(
+                "Invalid result type: expected a string or a tuple with a single string, but got {:?}",
+                value
+            )),
+        }
     }
 
     async fn invoke(
@@ -326,9 +282,14 @@ impl<Ctx: WorkerCtx> golem_api_1_x::host::HostRemoteAgent for DurableWorkerCtx<C
     }
 }
 
-fn parse_agent_id(agent_id: &str) -> anyhow::Result<String> {
-    // agent-id is of the format of {worker-name}-{agent-name}-{instance-number}
-    let parts: Vec<&str> = agent_id.split('-').collect();
+struct AgentInfo {
+    agent_name: String,
+    worker_name: String,
+    instance_number: String,
+}
+
+fn parse_agent_id(agent_id: &str) -> anyhow::Result<AgentInfo> {
+    let parts: Vec<&str> = agent_id.split("--").collect();
     if parts.len() < 3 {
         return Err(anyhow!(
             "Invalid agent_id format: {}. Expected format is {{worker_name}}-{{agent_name}}-{{instance_number}}",
@@ -336,8 +297,15 @@ fn parse_agent_id(agent_id: &str) -> anyhow::Result<String> {
         ));
     }
 
-    // return just the agent name part
-    Ok(parts[1].to_string())
+    let worker_name = parts[0].to_string();
+    let agent_name = parts[1].to_string();
+    let instance = parts[2].to_string();
+
+    Ok(AgentInfo {
+        agent_name,
+        worker_name,
+        instance_number: instance,
+    })
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -345,79 +313,142 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_id: String,
     ) -> wasmtime::Result<Result<wasmtime::component::Resource<WasmRpcEntry>, String>> {
-        // self.observe_function_call("golem::host::remote-agent", "new");
-        //
-        // // agent-id holds the information about the agent
-        //
-        // let agent_name = parse_agent_id(&agent_id)?;
-        //
-        // let self_metadata = Host::get_self_metadata(self).await?;
-        //
-        // let component_id = self_metadata.worker_id.component_id;
-        //
-        // let worker_id: WorkerId = WorkerId {
-        //     component_id: ComponentId(Uuid::from_u64_pair(
-        //         component_id.uuid.high_bits,
-        //         component_id.uuid.low_bits,
-        //     )),
-        //     worker_name: agent_id.clone(),
-        // };
-        //
-        // let remote_worker_id = worker_id.clone().into_target_worker_id();
-        //
-        // let remote_worker_id = self
-        //     .generate_unique_local_worker_id(remote_worker_id.clone())
-        //     .await?;
-        //
-        // let span = create_rpc_connection_span(self, &remote_worker_id).await?;
-        //
-        // let remote_worker_id =
-        //     OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
-        //
-        // let demand = self.rpc().create_demand(&remote_worker_id).await;
-        //
-        // let entry = self.table().push(WasmRpcEntry {
-        //     payload: Box::new(WasmRpcEntryPayload::Interface {
-        //         demand,
-        //         remote_worker_id: remote_worker_id.clone(),
-        //         span_id: span.span_id().clone(),
-        //     }),
-        // })?;
-        //
-        // let agent_id = WitValue::from(ValueAndType::new(Value::String(agent_id), str()));
-        //
-        // let remote_agent_resource = HostWasmRpc::invoke_and_await(
-        //     self,
-        //     entry,
-        //     "golem:agentic-guest/guest.{agent.new}".to_string(),
-        //     vec![agent_id],
-        // )
-        // .await?;
-        //
-        // let resource = remote_agent_resource?;
-        //
-        // let remote_agent_constructor_result: Value = resource.into();
-        //
-        // let (resource_uri, resource_id) =
-        //     unwrap_constructor_result(remote_agent_constructor_result)?;
-        //
-        // let demand = self.rpc().create_demand(&remote_worker_id).await;
-        //
-        // let entry = self.table().push(WasmRpcEntry {
-        //     payload: Box::new(WasmRpcEntryPayload::Resource {
-        //         demand,
-        //         remote_worker_id,
-        //         resource_uri,
-        //         resource_id,
-        //         span_id: span.span_id().clone(),
-        //     }),
-        // })?;
-        //
-        // Ok(Ok(entry))
+        self.observe_function_call("golem::host::remote-agent", "new");
 
-        Err(anyhow!(
-            "connect_to_agent is not implemented in the durable host"
-        ))
+        // agent-id holds the information about the agent
+
+        let agent_info = parse_agent_id(&agent_id)?;
+
+        let self_metadata = Host::get_self_metadata(self).await?;
+
+        let component_id = self_metadata.worker_id.component_id;
+
+        let worker_id: WorkerId = WorkerId {
+            component_id: ComponentId(Uuid::from_u64_pair(
+                component_id.uuid.high_bits,
+                component_id.uuid.low_bits,
+            )),
+            worker_name: agent_info.worker_name.clone(),
+        };
+
+        let remote_worker_id = worker_id.clone().into_target_worker_id();
+
+        let remote_worker_id = self
+            .generate_unique_local_worker_id(remote_worker_id.clone())
+            .await?;
+
+        let span = create_rpc_connection_span(self, &remote_worker_id).await?;
+
+        let remote_worker_id =
+            OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
+
+        let demand = self.rpc().create_demand(&remote_worker_id).await;
+
+        let entry = self.table().push(WasmRpcEntry {
+            payload: Box::new(WasmRpcEntryPayload::Interface {
+                demand,
+                remote_worker_id: remote_worker_id.clone(),
+                span_id: span.span_id().clone(),
+            }),
+        })?;
+
+        let agent_id = WitValue::from(ValueAndType::new(Value::String(agent_id.clone()), str()));
+
+        let remote_agent_resource = HostWasmRpc::invoke_and_await(
+            self,
+            entry,
+            "golem:agentic-guest/guest.{get-agent}".to_string(),
+            vec![agent_id.clone()],
+        )
+            .await?;
+
+        let result = remote_agent_resource.map_err(|err| {
+            anyhow!(
+                "Failed to connect to agent with id {:?}, {:?}",
+                agent_id.clone(), remote_worker_id
+            )
+        })?;
+
+        let value = Value::from(result);
+
+        let value = match value {
+            Value::Tuple(values) => values[0].clone(),
+            _ => {
+                return Err(anyhow!(
+                    "Invalid result type from remote worker method: expected a tuple, but got {:?}",
+                    value
+                ));
+            }
+        };
+
+        match value {
+            Value::Record(values) => {
+                let agent_id = values[0].clone();
+                let agent_name = values[1].clone();
+                let handle = values[2].clone();
+
+                match agent_id {
+                    Value::String(agent_id) => {
+                        let agent_info = parse_agent_id(&agent_id)?;
+                        let worker_name = agent_info.worker_name;
+
+                        match handle {
+                            Value::U32(u32) => {
+                                let value =Value::Handle {
+                                    uri: format!("urn:worker:{}/{}", component_id, worker_name.clone()),
+                                    resource_id: u32 as u64
+                                };
+
+
+                                let handle = unwrap_constructor_result(value.clone())?;
+
+                                let wasm_rpc_entry_payload = WasmRpcEntryPayload::Resource {
+                                    demand: self.rpc().create_demand(&remote_worker_id).await,
+                                    remote_worker_id: OwnedWorkerId::new(
+                                        &self.owned_worker_id.account_id,
+                                        &WorkerId {
+                                            component_id:ComponentId(Uuid::from_u64_pair(
+                                                component_id.uuid.high_bits,
+                                                component_id.uuid.low_bits,
+                                            )),
+                                            worker_name: worker_name.clone(),
+                                        }),
+                                    resource_uri: unwrap_constructor_result(value.clone())?.0,
+                                    resource_id:  unwrap_constructor_result(value.clone())?.1,
+                                    span_id: span.span_id().clone(),
+                                };
+
+                                let entry = self.table().push(WasmRpcEntry {
+                                    payload: Box::new(wasm_rpc_entry_payload),
+                                })?;
+
+                                Ok(Ok(entry))
+                            }
+
+                            _ => {
+                                return Err(anyhow!(
+                                    "Invalid handle type for agent_id {:?}: expected a u32, but got {:?}",
+                                    agent_id, handle
+                                ));
+                            }
+                        }
+                    }
+
+                    _ => {
+                         Err(anyhow!(
+                            "Invalid agent_id format: expected a string, but got {:?}",
+                            agent_id
+                        ))
+                    }
+                }
+            }
+            _ => {
+                Err(anyhow!(
+                    "Invalid result type from remote worker method: expected a record, but got {:?}",
+                    value
+                ))
+            }
+        }
     }
 
     async fn create_remote_agent(

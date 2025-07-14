@@ -4,7 +4,7 @@ package golem:api@1.1.7;
 /// the durability and transactional guarantees the executor provides.
 interface host {
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
-    use golem:rpc/types@0.2.1.{component-id, uuid, worker-id};
+    use golem:rpc/types@0.2.1.{component-id, uuid, worker-id, wit-value};
     use golem:agentic/common.{agent-definition, agent-dependency, status-update};
 
     /// An index into the persistent log storing all performed operations of a worker
@@ -280,7 +280,7 @@ interface host {
 
     create-remote-agent: func(dependency: agent-dependency) -> result<remote-agent, string>;
 
-    connect-to-agent: func(agent-id: string) -> result<remote-agent, string>;
+    connect-to-agent: func(agent-id: string) -> result<wit-value, string>;
 
     discover-agent-definitions: func() -> list<agent-definition>;
 
