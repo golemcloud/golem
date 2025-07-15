@@ -37,6 +37,7 @@ use golem_api_grpc::proto::golem::apidefinition::v1::{
     ExportOpenapiSpecRequest, GetApiDefinitionRequest, GetApiDefinitionVersionsRequest,
     UpdateApiDefinitionRequest,
 };
+use golem_api_grpc::proto::golem::apidefinition::ExportOpenApiSpec;
 use golem_api_grpc::proto::golem::apidefinition::{
     static_binding, ApiDefinition, ApiDefinitionId, CorsPreflight, GatewayBinding,
     GatewayBindingType, HttpApiDefinition, HttpMethod, HttpRoute, StaticBinding,
@@ -1229,7 +1230,7 @@ pub trait WorkerService: Send + Sync {
         token: &Uuid,
         project_id: &ProjectId,
         request: ExportOpenapiSpecRequest,
-    ) -> crate::Result<OpenApiHttpApiDefinitionResponse> {
+    ) -> crate::Result<ExportOpenApiSpec> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => not_available_on_grpc_api("export_openapi_spec"),
             GolemClientProtocol::Http => {
@@ -1243,7 +1244,7 @@ pub trait WorkerService: Send + Sync {
                     )
                     .await?;
 
-                Ok(result)
+                Ok(http_export_openapi_spec_to_grpc(result))
             }
         }
     }
@@ -1906,6 +1907,16 @@ fn to_http_rib_expr(expr: Expr) -> String {
 
 fn not_available_on_grpc_api<T>(endpoint: &str) -> crate::Result<T> {
     Err(anyhow!("not available on GRPC API: {endpoint}"))
+}
+
+fn http_export_openapi_spec_to_grpc(
+    response: OpenApiHttpApiDefinitionResponse,
+) -> ExportOpenApiSpec {
+    ExportOpenApiSpec {
+        id: Some(ApiDefinitionId { value: response.id }),
+        version: response.version,
+        openapi_yaml: response.openapi_yaml,
+    }
 }
 
 #[async_trait]
