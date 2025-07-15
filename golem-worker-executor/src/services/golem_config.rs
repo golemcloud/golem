@@ -22,7 +22,7 @@ use figment::Figment;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
-use golem_common::model::RetryConfig;
+use golem_common::model::{AccountId, ProjectId, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_service_base::config::BlobStorageConfig;
 use http::Uri;
@@ -384,7 +384,10 @@ impl ProjectServiceGrpcConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ProjectServiceDisabledConfig {}
+pub struct ProjectServiceDisabledConfig {
+    pub account_id: AccountId,
+    pub project_id: ProjectId,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]

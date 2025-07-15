@@ -58,7 +58,10 @@ pub fn configured(
             cache_config.max_resolved_project_capacity,
             cache_config.time_to_idle,
         )),
-        ProjectServiceConfig::Disabled(_) => Arc::new(ProjectServiceDisabled),
+        ProjectServiceConfig::Disabled(config) => Arc::new(ProjectServiceDisabled {
+            account_id: config.account_id.clone(),
+            project_id: config.project_id.clone(),
+        }),
     }
 }
 
@@ -277,7 +280,10 @@ where
     )
 }
 
-struct ProjectServiceDisabled;
+struct ProjectServiceDisabled {
+    account_id: AccountId,
+    project_id: ProjectId,
+}
 
 #[async_trait]
 impl ProjectService for ProjectServiceDisabled {
@@ -285,7 +291,7 @@ impl ProjectService for ProjectServiceDisabled {
         &self,
         _project_id: &ProjectId,
     ) -> Result<AccountId, WorkerExecutorError> {
-        todo!()
+        Ok(self.account_id.clone())
     }
 
     async fn resolve_project(
@@ -293,6 +299,6 @@ impl ProjectService for ProjectServiceDisabled {
         _account_id: &AccountId,
         _project_name: &str,
     ) -> Result<Option<ProjectId>, WorkerExecutorError> {
-        todo!()
+        Ok(Some(self.project_id.clone()))
     }
 }

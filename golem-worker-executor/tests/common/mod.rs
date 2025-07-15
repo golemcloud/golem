@@ -254,6 +254,8 @@ pub async fn start_customized(
     info!("Using Redis on port {}", redis.public_port());
 
     let prometheus = golem_worker_executor::metrics::register_all();
+    let admin_account_id = deps.cloud_service.admin_account_id();
+    let admin_project_id = deps.cloud_service.get_default_project(&deps.cloud_service.admin_token()).await.unwrap();
     let mut config = GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
             port: redis.public_port(),
@@ -279,7 +281,10 @@ pub async fn start_customized(
         component_service: ComponentServiceConfig::Local(ComponentServiceLocalConfig {
             root: Path::new("data/components").to_path_buf(),
         }),
-        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {}),
+        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {
+            account_id: admin_account_id,
+            project_id: admin_project_id,
+        }),
         ..Default::default()
     };
     if let Some(retry) = retry_override {
