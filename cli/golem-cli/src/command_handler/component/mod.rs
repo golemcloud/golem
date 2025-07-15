@@ -1015,7 +1015,6 @@ impl ComponentCommandHandler {
                             let account_email = empty_checked_account(segments[0])?.to_string();
                             let account = self
                                 .ctx
-                                .cloud_account_handler()
                                 .select_account_by_email_or_error(&account_email)
                                 .await?;
                             (

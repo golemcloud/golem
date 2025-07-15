@@ -21,7 +21,8 @@ use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use crate::model::component::Component;
 use crate::model::plugin_manifest::{PluginManifest, PluginTypeSpecificManifest};
 use crate::model::{
-    ComponentName, PathBufOrStdin, PluginDefinition, ProjectRefAndId, ProjectReference,
+    ComponentName, PathBufOrStdin, PluginDefinition, PluginReference, ProjectRefAndId,
+    ProjectReference,
 };
 use anyhow::{anyhow, Context as AnyhowContext};
 use golem_client::api::{ComponentClient, PluginClient};
@@ -48,17 +49,11 @@ impl PluginCommandHandler {
     pub async fn handle_command(&self, subcommand: PluginSubcommand) -> anyhow::Result<()> {
         match subcommand {
             PluginSubcommand::List { scope } => self.cmd_list(scope).await,
-            PluginSubcommand::Get {
-                plugin_name,
-                version,
-            } => self.cmd_get(plugin_name, version).await,
+            PluginSubcommand::Get { plugin } => self.cmd_get(plugin.plugin).await,
             PluginSubcommand::Register { scope, manifest } => {
                 self.cmd_register(scope, manifest).await
             }
-            PluginSubcommand::Unregister {
-                plugin_name,
-                version,
-            } => self.cmd_unregister(plugin_name, version).await,
+            PluginSubcommand::Unregister { plugin } => self.cmd_unregister(plugin.plugin).await,
         }
     }
 
@@ -69,10 +64,10 @@ impl PluginCommandHandler {
 
         let plugin_definitions = clients
             .plugin
-            .list_plugins(Some(&plugin_scope(
+            .list_plugins(&plugin_scope(
                 scope_project.as_ref(),
                 scope_component_id.as_ref(),
-            )))
+            ))
             .await
             .map(|plugins| {
                 plugins
@@ -87,8 +82,8 @@ impl PluginCommandHandler {
         Ok(())
     }
 
-    async fn cmd_get(&self, plugin_name: String, version: String) -> anyhow::Result<()> {
-        let plugin_definition = self.get(&plugin_name, &version).await?;
+    async fn cmd_get(&self, reference: PluginReference) -> anyhow::Result<()> {
+        let plugin_definition = self.get(reference).await?;
         self.ctx.log_handler().log_view(&plugin_definition);
         Ok(())
     }
@@ -277,12 +272,15 @@ impl PluginCommandHandler {
         Ok(())
     }
 
-    async fn cmd_unregister(&self, plugin_name: String, version: String) -> anyhow::Result<()> {
+    async fn cmd_unregister(&self, reference: PluginReference) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
+
+        let (account_id, plugin_name, plugin_version) =
+            self.ctx.resolve_plugin_reference(reference).await?;
 
         clients
             .plugin
-            .delete_plugin(&plugin_name, &version)
+            .delete_plugin(&account_id.0, &plugin_name, &plugin_version)
             .await
             .map(|_| ())
             .map_service_error()?;
@@ -292,19 +290,22 @@ impl PluginCommandHandler {
             format!(
                 "plugin: {}/{}",
                 plugin_name.log_color_highlight(),
-                version.log_color_highlight()
+                plugin_version.log_color_highlight()
             ),
         );
 
         Ok(())
     }
 
-    async fn get(&self, name: &str, version: &str) -> anyhow::Result<PluginDefinition> {
+    async fn get(&self, reference: PluginReference) -> anyhow::Result<PluginDefinition> {
         let clients = self.ctx.golem_clients().await?;
+
+        let (account_id, plugin_name, plugin_version) =
+            self.ctx.resolve_plugin_reference(reference).await?;
 
         clients
             .plugin
-            .get_plugin(name, version)
+            .get_plugin(&account_id.0, &plugin_name, &plugin_version)
             .await
             .map(PluginDefinition::from)
             .map_service_error()

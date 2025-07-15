@@ -105,6 +105,77 @@ pub trait HasFormatConfig {
     fn format(&self) -> Option<Format>;
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum PluginReference {
+    RelativeToCurrentAccount {
+        name: String,
+        version: String,
+    },
+    FullyQualified {
+        account_email: String,
+        name: String,
+        version: String,
+    },
+}
+
+impl PluginReference {
+    pub fn account_email(&self) -> Option<String> {
+        match self {
+            Self::FullyQualified { account_email, .. } => Some(account_email.clone()),
+            Self::RelativeToCurrentAccount { .. } => None,
+        }
+    }
+
+    pub fn plugin_name(&self) -> String {
+        match self {
+            Self::FullyQualified { name, .. } => name.clone(),
+            Self::RelativeToCurrentAccount { name, .. } => name.clone(),
+        }
+    }
+
+    pub fn plugin_version(&self) -> String {
+        match self {
+            Self::FullyQualified { version, .. } => version.clone(),
+            Self::RelativeToCurrentAccount { version, .. } => version.clone(),
+        }
+    }
+}
+
+impl FromStr for PluginReference {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut segments = s.split("/").collect::<Vec<_>>();
+        match segments.len() {
+            2 => {
+                let version = segments.pop().unwrap().to_string();
+                let name = segments.pop().unwrap().to_string();
+                Ok(Self::RelativeToCurrentAccount { name, version })
+            },
+            3 => {
+                let version = segments.pop().unwrap().to_string();
+                let name = segments.pop().unwrap().to_string();
+                let account_email = segments.pop().unwrap().to_string();
+                Ok(Self::FullyQualified { account_email, name, version })
+            }
+            _ => Err(format!("Unknown format for plugin: {}. Expected either <PLUGIN_NAME>/<PLUGIN_VERSION> or <ACCOUNT_EMAIL>/<PLUGIN_NAME>/<PLUGIN_VERSION>", s.log_color_highlight()))
+        }
+    }
+}
+
+impl Display for PluginReference {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RelativeToCurrentAccount { name, version } => write!(f, "{name}/{version}"),
+            Self::FullyQualified {
+                account_email,
+                name,
+                version,
+            } => write!(f, "{account_email}/{name}/{version}"),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct ProjectName(pub String);
 
@@ -675,141 +746,6 @@ impl From<golem_client::model::Role> for Role {
         match value {
             golem_client::model::Role::Admin => Role::Admin,
             golem_client::model::Role::MarketingAdmin => Role::MarketingAdmin,
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
-pub enum ProjectPermission {
-    ViewComponent,
-    CreateComponent,
-    UpdateComponent,
-    DeleteComponent,
-    ViewWorker,
-    CreateWorker,
-    UpdateWorker,
-    DeleteWorker,
-    ViewProjectGrants,
-    CreateProjectGrants,
-    DeleteProjectGrants,
-    ViewApiDefinition,
-    CreateApiDefinition,
-    UpdateApiDefinition,
-    DeleteApiDefinition,
-    DeleteProject,
-    ViewPluginInstallations,
-    CreatePluginInstallation,
-    UpdatePluginInstallation,
-    DeletePluginInstallation,
-    UpsertApiDeployment,
-    ViewApiDeployment,
-    DeleteApiDeployment,
-    UpsertApiDomain,
-    ViewApiDomain,
-    DeleteApiDomain,
-}
-
-impl Display for ProjectPermission {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            ProjectPermission::ViewComponent => "ViewComponent",
-            ProjectPermission::CreateComponent => "CreateComponent",
-            ProjectPermission::UpdateComponent => "UpdateComponent",
-            ProjectPermission::DeleteComponent => "DeleteComponent",
-            ProjectPermission::ViewWorker => "ViewWorker",
-            ProjectPermission::CreateWorker => "CreateWorker",
-            ProjectPermission::UpdateWorker => "UpdateWorker",
-            ProjectPermission::DeleteWorker => "DeleteWorker",
-            ProjectPermission::ViewProjectGrants => "ViewProjectGrants",
-            ProjectPermission::CreateProjectGrants => "CreateProjectGrants",
-            ProjectPermission::DeleteProjectGrants => "DeleteProjectGrants",
-            ProjectPermission::ViewApiDefinition => "ViewApiDefinition",
-            ProjectPermission::CreateApiDefinition => "CreateApiDefinition",
-            ProjectPermission::UpdateApiDefinition => "UpdateApiDefinition",
-            ProjectPermission::DeleteApiDefinition => "DeleteApiDefinition",
-            ProjectPermission::DeleteProject => "DeleteProject",
-            ProjectPermission::ViewPluginInstallations => "ViewPluginInstallations",
-            ProjectPermission::CreatePluginInstallation => "CreatePluginInstallation",
-            ProjectPermission::UpdatePluginInstallation => "UpdatePluginInstallation",
-            ProjectPermission::DeletePluginInstallation => "DeletePluginInstallation",
-            ProjectPermission::UpsertApiDeployment => "UpsertApiDeployment",
-            ProjectPermission::ViewApiDeployment => "ViewApiDeployment",
-            ProjectPermission::DeleteApiDeployment => "DeleteApiDeployment",
-            ProjectPermission::UpsertApiDomain => "UpsertApiDomain",
-            ProjectPermission::ViewApiDomain => "ViewApiDomain",
-            ProjectPermission::DeleteApiDomain => "DeleteApiDomain",
-        };
-
-        Display::fmt(s, f)
-    }
-}
-
-impl FromStr for ProjectPermission {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ViewComponent" => Ok(ProjectPermission::ViewComponent),
-            "CreateComponent" => Ok(ProjectPermission::CreateComponent),
-            "UpdateComponent" => Ok(ProjectPermission::UpdateComponent),
-            "DeleteComponent" => Ok(ProjectPermission::DeleteComponent),
-            "ViewWorker" => Ok(ProjectPermission::ViewWorker),
-            "CreateWorker" => Ok(ProjectPermission::CreateWorker),
-            "UpdateWorker" => Ok(ProjectPermission::UpdateWorker),
-            "DeleteWorker" => Ok(ProjectPermission::DeleteWorker),
-            "ViewProjectGrants" => Ok(ProjectPermission::ViewProjectGrants),
-            "CreateProjectGrants" => Ok(ProjectPermission::CreateProjectGrants),
-            "DeleteProjectGrants" => Ok(ProjectPermission::DeleteProjectGrants),
-            _ => {
-                let all = ProjectPermission::iter()
-                    .map(|x| format!("\"{x}\""))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                Err(format!("Unknown action: {s}. Expected one of {all}"))
-            }
-        }
-    }
-}
-
-impl From<ProjectPermission> for golem_client::model::ProjectPermisison {
-    fn from(value: ProjectPermission) -> Self {
-        use golem_client::model::ProjectPermisison as ClientProjectPermission;
-
-        match value {
-            ProjectPermission::ViewComponent => ClientProjectPermission::ViewComponent,
-            ProjectPermission::CreateComponent => ClientProjectPermission::CreateComponent,
-            ProjectPermission::UpdateComponent => ClientProjectPermission::UpdateComponent,
-            ProjectPermission::DeleteComponent => ClientProjectPermission::DeleteComponent,
-            ProjectPermission::ViewWorker => ClientProjectPermission::ViewWorker,
-            ProjectPermission::CreateWorker => ClientProjectPermission::CreateWorker,
-            ProjectPermission::UpdateWorker => ClientProjectPermission::UpdateWorker,
-            ProjectPermission::DeleteWorker => ClientProjectPermission::DeleteWorker,
-            ProjectPermission::ViewProjectGrants => ClientProjectPermission::ViewProjectGrants,
-            ProjectPermission::CreateProjectGrants => ClientProjectPermission::CreateProjectGrants,
-            ProjectPermission::DeleteProjectGrants => ClientProjectPermission::DeleteProjectGrants,
-            ProjectPermission::ViewApiDefinition => ClientProjectPermission::ViewApiDefinition,
-            ProjectPermission::CreateApiDefinition => ClientProjectPermission::CreateApiDefinition,
-            ProjectPermission::UpdateApiDefinition => ClientProjectPermission::UpdateApiDefinition,
-            ProjectPermission::DeleteApiDefinition => ClientProjectPermission::DeleteApiDefinition,
-            ProjectPermission::DeleteProject => ClientProjectPermission::DeleteProject,
-            ProjectPermission::ViewPluginInstallations => {
-                ClientProjectPermission::ViewPluginInstallations
-            }
-            ProjectPermission::CreatePluginInstallation => {
-                ClientProjectPermission::CreatePluginInstallation
-            }
-            ProjectPermission::UpdatePluginInstallation => {
-                ClientProjectPermission::UpdatePluginInstallation
-            }
-            ProjectPermission::DeletePluginInstallation => {
-                ClientProjectPermission::DeletePluginInstallation
-            }
-            ProjectPermission::UpsertApiDeployment => ClientProjectPermission::UpsertApiDeployment,
-            ProjectPermission::ViewApiDeployment => ClientProjectPermission::ViewApiDeployment,
-            ProjectPermission::DeleteApiDeployment => ClientProjectPermission::DeleteApiDeployment,
-            ProjectPermission::UpsertApiDomain => ClientProjectPermission::UpsertApiDomain,
-            ProjectPermission::ViewApiDomain => ClientProjectPermission::ViewApiDomain,
-            ProjectPermission::DeleteApiDomain => ClientProjectPermission::DeleteApiDomain,
         }
     }
 }

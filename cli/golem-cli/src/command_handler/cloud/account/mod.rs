@@ -22,7 +22,6 @@ use crate::error::NonSuccessfulExit;
 use crate::log::log_warn_action;
 use crate::model::text::account::{AccountGetView, AccountNewView};
 use crate::model::text::fmt::log_error;
-use crate::model::AccountDetails;
 use crate::model::AccountId;
 use anyhow::bail;
 use golem_client::api::AccountClient;
@@ -167,27 +166,6 @@ impl CloudAccountCommandHandler {
         match account_id {
             Some(account_id) => Ok(account_id),
             None => Ok(self.account_id_or_err().await?),
-        }
-    }
-
-    pub async fn select_account_by_email_or_error(
-        &self,
-        email: &str,
-    ) -> anyhow::Result<AccountDetails> {
-        let mut result = self
-            .ctx
-            .golem_clients()
-            .await?
-            .account
-            .find_accounts(Some(email))
-            .await?
-            .values;
-
-        if result.len() == 1 {
-            Ok(result.remove(0).into())
-        } else {
-            log_error("referenced account could not be found");
-            bail!(NonSuccessfulExit)
         }
     }
 }

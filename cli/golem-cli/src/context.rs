@@ -23,12 +23,12 @@ use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
 use crate::model::app::{AppBuildStep, ApplicationSourceMode};
 use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileName};
-use crate::model::AccountId;
+use crate::model::text::fmt::log_error;
 use crate::model::{app_raw, Format, ProjectReference};
+use crate::model::{AccountDetails, AccountId, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use futures_util::future::BoxFuture;
-use golem_client::api::AccountSummaryClientLive as AccountSummaryClientCloud;
 use golem_client::api::ApiCertificateClientLive as ApiCertificateClientCloud;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientCloud;
 use golem_client::api::ApiDeploymentClientLive as ApiDeploymentClientCloud;
@@ -45,6 +45,7 @@ use golem_client::api::ProjectGrantClientLive as ProjectGrantClientCloud;
 use golem_client::api::ProjectPolicyClientLive as ProjectPolicyClientCloud;
 use golem_client::api::TokenClientLive as TokenClientCloud;
 use golem_client::api::WorkerClientLive as WorkerClientCloud;
+use golem_client::api::{AccountClient, AccountSummaryClientLive as AccountSummaryClientCloud};
 use golem_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
 use golem_client::{Context as ContextCloud, Security};
 use golem_rib_repl::ReplComponentDependencies;
@@ -346,6 +347,10 @@ impl Context {
         self.client_config.service_http_client_config.allow_insecure
     }
 
+    pub async fn account_id(&self) -> anyhow::Result<AccountId> {
+        Ok(self.golem_clients().await?.account_id())
+    }
+
     pub async fn auth_token(&self) -> anyhow::Result<String> {
         Ok(self.golem_clients().await?.auth_token())
     }
@@ -445,6 +450,51 @@ impl Context {
     ) -> &BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>> {
         self.templates
             .get_or_init(golem_templates::all_composable_app_templates)
+    }
+
+    pub async fn select_account_by_email_or_error(
+        &self,
+        email: &str,
+    ) -> anyhow::Result<AccountDetails> {
+        let mut result = self
+            .golem_clients()
+            .await?
+            .account
+            .find_accounts(Some(email))
+            .await?
+            .values;
+
+        if result.len() == 1 {
+            Ok(result.remove(0).into())
+        } else {
+            log_error("referenced account could not be found");
+            bail!(NonSuccessfulExit)
+        }
+    }
+
+    pub async fn resolve_plugin_reference(
+        &self,
+        reference: PluginReference,
+    ) -> anyhow::Result<(AccountId, String, String)> {
+        match reference {
+            PluginReference::FullyQualified {
+                account_email,
+                name,
+                version,
+            } => {
+                let account_id = self
+                    .select_account_by_email_or_error(&account_email)
+                    .await?
+                    .account_id;
+
+                Ok((account_id, name, version))
+            }
+            PluginReference::RelativeToCurrentAccount { name, version } => {
+                let account_id = self.account_id().await?;
+
+                Ok((account_id, name, version))
+            }
+        }
     }
 }
 

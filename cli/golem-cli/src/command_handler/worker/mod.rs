@@ -1608,7 +1608,6 @@ impl WorkerCommandHandler {
                 let account = if let Some(ref account_email) = account_email {
                     Some(
                         self.ctx
-                            .cloud_account_handler()
                             .select_account_by_email_or_error(account_email)
                             .await?,
                     )

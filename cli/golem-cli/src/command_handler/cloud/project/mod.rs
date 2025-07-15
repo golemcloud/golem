@@ -163,7 +163,6 @@ impl CloudProjectCommandHandler {
             } => {
                 let account = self
                     .ctx
-                    .cloud_account_handler()
                     .select_account_by_email_or_error(account_email)
                     .await?;
 
@@ -266,7 +265,6 @@ impl CloudProjectCommandHandler {
                         .action
                         .unwrap_or_default()
                         .into_iter()
-                        .map(|a| a.into())
                         .collect(),
                     project_policy_name: None,
                 },

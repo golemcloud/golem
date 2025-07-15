@@ -17,9 +17,11 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::text::project::{ProjectPolicyGetView, ProjectPolicyNewView};
-use crate::model::{ProjectPermission, ProjectPolicyId};
+use crate::model::ProjectPolicyId;
 use golem_client::api::ProjectPolicyClient;
 use golem_client::model::{ProjectActions, ProjectPolicyData};
+use golem_common::model::auth::ProjectPermission;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct CloudProjectPolicyCommandHandler {
@@ -54,7 +56,7 @@ impl CloudProjectPolicyCommandHandler {
             .create_project_policy(&ProjectPolicyData {
                 name: policy_name,
                 project_actions: ProjectActions {
-                    actions: actions.into_iter().map(|a| a.into()).collect(),
+                    actions: HashSet::from_iter(actions),
                 },
             })
             .await

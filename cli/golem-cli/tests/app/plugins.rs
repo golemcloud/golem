@@ -18,9 +18,11 @@ use assert2::{assert, check};
 use axum::extract::{DefaultBodyLimit, Multipart};
 use axum::routing::post;
 use axum::Router;
+use base64::Engine;
 use bytes::Bytes;
 use golem_cli::fs;
 use indoc::{formatdoc, indoc};
+use serde_json::json;
 use std::path::Path;
 use test_r::{inherit_test_dep, test};
 use tokio::spawn;
@@ -264,7 +266,7 @@ impl TestPlugin {
         Self { port, handle }
     }
 
-    async fn transform(mut multipart: Multipart) -> Vec<u8> {
+    async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
         let mut component = None;
 
         while let Some(field) = multipart.next_field().await.unwrap() {
@@ -296,8 +298,17 @@ impl TestPlugin {
             }
         }
 
-        Self::transform_component(component.expect("did not receive a component part"))
-            .expect("Failed to transform component")
+        let transformed_bytes =
+            Self::transform_component(component.expect("did not receive a component part"))
+                .expect("Failed to transform component");
+
+        let data_base64 = base64::engine::general_purpose::STANDARD.encode(&transformed_bytes);
+
+        let response = json!({
+            "data": data_base64
+        });
+
+        axum::Json(response)
     }
 
     fn transform_component(component: Bytes) -> anyhow::Result<Vec<u8>> {

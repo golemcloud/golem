@@ -534,7 +534,7 @@ impl PluginInstallationTarget for ComponentPluginInstallationTarget {
 
         clients
             .component
-            .bath_update_installed_plugins(
+            .batch_update_installed_plugins(
                 &self.component.versioned_component_id.component_id,
                 &golem_client::model::BatchPluginInstallationUpdates {
                     actions: self.actions.drain(..).collect(),

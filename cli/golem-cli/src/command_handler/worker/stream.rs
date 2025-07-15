@@ -217,8 +217,8 @@ impl WorkerConnection {
         idempotency_key_to_look_for: Option<IdempotencyKey>,
         goal_reached: Arc<AtomicBool>,
     ) {
-        let _ = read
-            .try_for_each(move |message| {
+        let result = read
+            .try_for_each(|message| {
                 let output = output.clone();
                 let idempotency_key_to_look_for = idempotency_key_to_look_for.clone();
                 let last_seen_idempotency_key = last_seen_idempotency_key.clone();
@@ -270,9 +270,6 @@ impl WorkerConnection {
                                     output.emit_log(timestamp, level, context, message).await;
                                 }
                             }
-                            WorkerEvent::Close => {
-                                output.emit_stream_closed(Timestamp::now_utc()).await;
-                            }
                             WorkerEvent::InvocationStart {
                                 timestamp,
                                 function,
@@ -308,6 +305,16 @@ impl WorkerConnection {
                                     }
                                 }
                             }
+                            WorkerEvent::ClientLagged {
+                                number_of_missed_messages,
+                            } => {
+                                output
+                                    .emit_missed_messages(
+                                        Timestamp::now_utc(),
+                                        number_of_missed_messages,
+                                    )
+                                    .await;
+                            }
                         },
                     }
 
@@ -320,6 +327,16 @@ impl WorkerConnection {
                 }
             })
             .await;
+
+        match result {
+            Ok(()) | Err(tungstenite::error::Error::ConnectionClosed) => {
+                // successful exit
+                output.emit_stream_closed(Timestamp::now_utc()).await;
+            }
+            Err(error) => {
+                output.emit_stream_error(Timestamp::now_utc(), error).await;
+            }
+        }
     }
 
     fn parse_websocket_message(message: Message) -> Option<WorkerEvent> {
@@ -362,7 +379,7 @@ impl WorkerConnection {
                         info!("Connection Closed");
                     }
                 }
-                Some(WorkerEvent::Close)
+                None
             }
             Message::Frame(f) => {
                 debug!("Ignored unexpected frame {f:?}");

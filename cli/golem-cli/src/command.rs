@@ -549,7 +549,7 @@ pub enum GolemCliSubcommand {
 
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
-    use crate::model::AccountId;
+    use crate::model::{AccountId, PluginReference};
     use crate::model::{
         ComponentName, ProjectName, ProjectReference, WorkerName, WorkerUpdateMode,
     };
@@ -720,6 +720,16 @@ pub mod shared_args {
         /// Account ID
         #[arg(long)]
         pub account_id: Option<AccountId>,
+    }
+
+    #[derive(Debug, Args)]
+    pub struct PluginArg {
+        // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
+        /// Plugin, accepted formats:
+        ///   - <PLUGIN_NAME>/<PLUGIN_VERSION>
+        ///   - <ACCOUNT_EMAIL>/<PLUGIN_NAME>/<PLUGIN_VERSION>
+        #[arg(verbatim_doc_comment)]
+        pub plugin: PluginReference,
     }
 
     #[derive(clap::Args, Debug, Clone)]
@@ -1380,6 +1390,7 @@ pub mod api {
 }
 
 pub mod plugin {
+    use super::shared_args::PluginArg;
     use crate::command::shared_args::PluginScopeArgs;
     use crate::model::PathBufOrStdin;
     use clap::Subcommand;
@@ -1394,10 +1405,8 @@ pub mod plugin {
         },
         /// Get information about a registered plugin
         Get {
-            /// Plugin name
-            plugin_name: String,
-            /// Plugin version
-            version: String,
+            #[clap(flatten)]
+            plugin: PluginArg,
         },
         /// Register a new plugin
         Register {
@@ -1408,10 +1417,8 @@ pub mod plugin {
         },
         /// Unregister a plugin
         Unregister {
-            /// Plugin name
-            plugin_name: String,
-            /// Plugin version
-            version: String,
+            #[clap(flatten)]
+            plugin: PluginArg,
         },
     }
 }
@@ -1622,8 +1629,9 @@ pub mod cloud {
 
         use crate::command::cloud::project::plugin::ProjectPluginSubcommand;
         use crate::command::cloud::project::policy::PolicySubcommand;
-        use crate::model::{ProjectName, ProjectPermission, ProjectPolicyId, ProjectReference};
+        use crate::model::{ProjectName, ProjectPolicyId, ProjectReference};
         use clap::Subcommand;
+        use golem_common::model::auth::ProjectPermission;
 
         #[derive(clap::Args, Debug)]
         #[group(required = true, multiple = false)]
@@ -1675,8 +1683,9 @@ pub mod cloud {
         }
 
         pub mod policy {
-            use crate::model::{ProjectPermission, ProjectPolicyId};
+            use crate::model::ProjectPolicyId;
             use clap::Subcommand;
+            use golem_common::model::auth::ProjectPermission;
 
             #[derive(Subcommand, Debug)]
             pub enum PolicySubcommand {

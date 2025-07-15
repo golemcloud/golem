@@ -22,6 +22,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite;
 
 #[derive(Clone)]
 pub struct WorkerStreamOutput {
@@ -160,6 +161,21 @@ impl WorkerStreamOutput {
         }
     }
 
+    pub async fn emit_stream_error(&self, timestamp: Timestamp, error: tungstenite::error::Error) {
+        let mut state = self.state.lock().await;
+
+        if !self
+            .check_already_seen(&mut state, timestamp, "Stream error")
+            .await
+        {
+            let prefix = self.prefix(timestamp, "STREAM");
+            self.colored(
+                LogLevel::Warn,
+                &format!("{prefix}Stream failed with error: {error}"),
+            );
+        }
+    }
+
     pub async fn emit_invocation_start(
         &self,
         timestamp: Timestamp,
@@ -204,6 +220,25 @@ impl WorkerStreamOutput {
             self.colored(
                 LogLevel::Trace,
                 &format!("{prefix}FINISHED {function_name} ({idempotency_key})",),
+            );
+        }
+    }
+
+    pub async fn emit_missed_messages(&self, timestamp: Timestamp, number_of_missed_messages: u64) {
+        let mut state = self.state.lock().await;
+
+        if !self
+            .check_already_seen(
+                &mut state,
+                timestamp,
+                &format!("{number_of_missed_messages} messages missed"),
+            )
+            .await
+        {
+            let prefix = self.prefix(timestamp, "STREAM");
+            self.colored(
+                LogLevel::Warn,
+                &format!("{prefix}Stream output fell behind the server and {number_of_missed_messages} messages were missed",),
             );
         }
     }
