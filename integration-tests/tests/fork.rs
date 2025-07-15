@@ -50,7 +50,13 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = admin
-        .start_worker_with(&component_id, source_worker_name.as_str(), vec![], env)
+        .start_worker_with(
+            &component_id,
+            source_worker_name.as_str(),
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let target_worker_name = Uuid::new_v4().to_string();
@@ -208,7 +214,13 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
 
     let source_worker_name = Uuid::new_v4().to_string();
     let source_worker_id = admin
-        .start_worker_with(&component_id, source_worker_name.as_str(), vec![], env)
+        .start_worker_with(
+            &component_id,
+            source_worker_name.as_str(),
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let target_worker_name = Uuid::new_v4().to_string();
@@ -662,7 +674,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     info!("Using environment: {:?}", env);
 
     let worker_id = admin
-        .start_worker_with(&component_id, "source-worker", vec![], env)
+        .start_worker_with(&component_id, "source-worker", vec![], env, vec![])
         .await;
 
     let _ = admin.log_output(&worker_id).await;

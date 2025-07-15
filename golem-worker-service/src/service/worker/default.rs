@@ -51,6 +51,7 @@ use golem_service_base::service::routing_table::{HasRoutingTableService, Routing
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_wasm_rpc::ValueAndType;
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 use tonic::transport::Channel;
@@ -66,6 +67,7 @@ pub trait WorkerService: Send + Sync {
         component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
+        wasi_config_vars: BTreeMap<String, String>,
         namespace: Namespace,
     ) -> WorkerResult<WorkerId>;
 
@@ -497,6 +499,7 @@ impl WorkerService for WorkerServiceDefault {
         component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
+        wasi_config_vars: BTreeMap<String, String>,
         namespace: Namespace,
     ) -> WorkerResult<WorkerId> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
@@ -516,6 +519,7 @@ impl WorkerService for WorkerServiceDefault {
                     account_id: Some(account_id.clone().into()),
                     project_id: Some(namespace.project_id.clone().into()),
                     account_limits: Some(resource_limits.clone().into()),
+                    wasi_config_vars: Some(wasi_config_vars.clone().into()),
                 }))
             },
             |response| match response.into_inner() {

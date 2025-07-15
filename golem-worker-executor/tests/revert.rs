@@ -257,7 +257,7 @@ async fn revert_manual_update(
 
     let component_id = executor.component("update-test-v2").unique().store().await;
     let worker_id = executor
-        .start_worker_with(&component_id, "revert_manual_update", vec![], env)
+        .start_worker_with(&component_id, "revert_manual_update", vec![], env, vec![])
         .await;
     let _ = executor.log_output(&worker_id).await;
 

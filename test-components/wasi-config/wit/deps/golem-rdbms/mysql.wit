@@ -1,0 +1,140 @@
+package golem:rdbms@0.0.1;
+
+interface mysql {
+  use types.{date, time, timestamp};
+
+  variant error {
+    connection-failure(string),
+    query-parameter-failure(string),
+    query-execution-failure(string),
+    query-response-failure(string),
+    other(string)
+  }
+
+  variant db-column-type {
+     boolean,
+     tinyint,
+     smallint,
+     mediumint,
+     int,
+     bigint,
+     tinyint-unsigned,
+     smallint-unsigned,
+     mediumint-unsigned,
+     int-unsigned,
+     bigint-unsigned,
+     float,
+     double,
+     decimal,
+     date,
+     datetime,
+     timestamp,
+     time,
+     year,
+     fixchar,
+     varchar,
+     tinytext,
+     text,
+     mediumtext,
+     longtext,
+     binary,
+     varbinary,
+     tinyblob,
+     blob,
+     mediumblob,
+     longblob,
+     enumeration,
+     set,
+     bit,
+     json
+  }
+
+  record db-column {
+    ordinal:     u64,
+    name:        string,
+    db-type:     db-column-type,
+    db-type-name: string
+  }
+
+  /// Value descriptor for a single database value
+  variant db-value {
+       boolean(bool),
+       tinyint(s8),
+       smallint(s16),
+       // s24
+       mediumint(s32),
+       int(s32),
+       bigint(s64),
+       tinyint-unsigned(u8),
+       smallint-unsigned(u16),
+       // u24
+       mediumint-unsigned(u32),
+       int-unsigned(u32),
+       bigint-unsigned(u64),
+       float(f32),
+       double(f64),
+       decimal(string),
+       date(date),
+       datetime(timestamp),
+       timestamp(timestamp),
+       time(time),
+       year(u16),
+       fixchar(string),
+       varchar(string),
+       tinytext(string),
+       text(string),
+       mediumtext(string),
+       longtext(string),
+       binary(list<u8>),
+       varbinary(list<u8>),
+       tinyblob(list<u8>),
+       blob(list<u8>),
+       mediumblob(list<u8>),
+       longblob(list<u8>),
+       enumeration(string),
+       set(string),
+       bit(list<bool>),
+       json(string),
+       null
+  }
+
+  /// A single row of values
+  record db-row {
+    values: list<db-value>
+  }
+
+  record db-result {
+    columns: list<db-column>,
+    rows: list<db-row>
+  }
+
+  /// A potentially very large and lazy stream of rows:
+  resource db-result-stream {
+    get-columns: func() -> list<db-column>;
+    get-next: func() -> option<list<db-row>>;
+  }
+
+  resource db-connection {
+    open: static func(address: string) -> result<db-connection, error>;
+
+    query: func(statement: string, params: list<db-value>) -> result<db-result, error>;
+
+    query-stream: func(statement: string, params: list<db-value>) -> result<db-result-stream, error>;
+
+    execute: func(statement: string, params: list<db-value>) -> result<u64, error>;
+
+    begin-transaction: func() -> result<db-transaction, error>;
+  }
+
+  resource db-transaction {
+    query: func(statement: string, params: list<db-value>) -> result<db-result, error>;
+
+    query-stream: func(statement: string, params: list<db-value>) -> result<db-result-stream, error>;
+
+    execute: func(statement: string, params: list<db-value>) -> result<u64, error>;
+
+    commit: func() -> result<_, error>;
+
+    rollback: func() -> result<_, error>;
+  }
+}

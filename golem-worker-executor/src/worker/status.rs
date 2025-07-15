@@ -1016,6 +1016,7 @@ mod test {
                         component_version,
                         vec![],
                         vec![],
+                        BTreeMap::new(),
                         owned_worker_id.project_id(),
                         account_id.clone(),
                         None,

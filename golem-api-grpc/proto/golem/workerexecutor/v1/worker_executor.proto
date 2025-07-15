@@ -25,7 +25,7 @@ import public "golem/worker/worker_status.proto";
 import public "golem/worker/worker_filter.proto";
 import public "golem/worker/v1/worker_execution_error.proto";
 import public "golem/worker/filesystem.proto";
-
+import public "golem/worker/wasi_config_vars.proto";
 import public "wasm/rpc/val.proto";
 import public "wasm/rpc/value_and_type.proto";
 
@@ -133,6 +133,7 @@ message CreateWorkerRequest {
   golem.common.ResourceLimits account_limits = 6;
   // Component's owner project
   golem.common.ProjectId project_id = 7;
+  golem.worker.WasiConfigVars wasi_config_vars = 8;
 }
 
 message CreateWorkerResponse {
