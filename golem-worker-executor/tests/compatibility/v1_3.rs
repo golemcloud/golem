@@ -34,8 +34,8 @@ use golem_wasm_rpc::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
-use uuid::Uuid;
 use test_r::test;
+use uuid::Uuid;
 
 #[test]
 pub fn scheduled_action() {

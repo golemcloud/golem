@@ -32,6 +32,10 @@ pub async fn start_regular_worker_executor(
         context.redis_prefix(),
         context.grpc_port(),
         context.http_port(),
+        deps.cloud_service.admin_account_id(),
+        deps.cloud_service
+            .get_default_project(&deps.cloud_service.admin_token())
+            .await?,
     );
     let handle = Handle::current();
 

@@ -33,6 +33,11 @@ pub async fn start_debug_worker_executor(
         debug_context.redis_prefix(),
         debug_context.grpc_port(),
         debug_context.http_port(),
+        regular_worker_dependencies.cloud_service.admin_account_id(),
+        regular_worker_dependencies
+            .cloud_service
+            .get_default_project(&regular_worker_dependencies.cloud_service.admin_token())
+            .await?,
     );
 
     let handle = Handle::current();

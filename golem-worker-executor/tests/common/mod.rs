@@ -255,7 +255,11 @@ pub async fn start_customized(
 
     let prometheus = golem_worker_executor::metrics::register_all();
     let admin_account_id = deps.cloud_service.admin_account_id();
-    let admin_project_id = deps.cloud_service.get_default_project(&deps.cloud_service.admin_token()).await.unwrap();
+    let admin_project_id = deps
+        .cloud_service
+        .get_default_project(&deps.cloud_service.admin_token())
+        .await
+        .unwrap();
     let mut config = GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
             port: redis.public_port(),

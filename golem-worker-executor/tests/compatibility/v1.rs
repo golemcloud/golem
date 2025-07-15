@@ -24,16 +24,16 @@ use goldenfile::differs::Differ;
 use goldenfile::Mint;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, OplogPayload,
-    PayloadId, TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
+    DurableFunctionType, IndexedResourceKey, LogLevel, OplogIndex, OplogPayload, PayloadId,
+    TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
+use golem_common::model::RetryConfig;
 use golem_common::model::{
-    AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, PromiseId,
-    ScheduledAction, ShardId, SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation,
-    WorkerId, WorkerInvocation, WorkerResourceDescription, WorkerStatus,
+    AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, PromiseId, ShardId,
+    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+    WorkerResourceDescription, WorkerStatus,
 };
-use golem_common::model::{ProjectId, RetryConfig};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_ast::analysis::{
