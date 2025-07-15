@@ -539,47 +539,66 @@ async fn test_security_conversion() {
     .await
     .unwrap();
 
-    // Parse the YAML to verify the structure
-    let yaml_value: serde_yaml::Value =
-        serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
+    // Expected OpenAPI YAML
+    let expected_yaml = r#"openapi: 3.0.0
+info:
+  title: secure-api
+  version: 0.1.0
+paths:
+  /v0.1.0/another-secure-resource:
+    post:
+      responses:
+        default:
+          description: Created
+        '201':
+          description: Created
+      security:
+      - jwt-auth: []
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: shopping-cart
+        component-version: 1
+        response: '"{status: 200, body: "secure data"}"'
+  /v0.1.0/secure-resource:
+    get:
+      responses:
+        default:
+          description: OK
+        '200':
+          description: OK
+      security:
+      - api-key-auth: []
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: shopping-cart
+        component-version: 1
+        response: '"{status: 200, body: "secure data"}"'
+components:
+  securitySchemes:
+    api-key-auth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: API key security scheme for api-key-auth
+    jwt-auth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: API key security scheme for jwt-auth
+security:
+- api-key-auth: []
+- jwt-auth: []
+x-golem-api-definition-id: secure-api
+x-golem-api-definition-version: 0.1.0
+"#;
 
-    // Verify basic properties
-    assert_basic_openapi_properties(&yaml_value, "secure-api", "0.1.0");
+    // Parse both YAMLs to serde_yaml::Value for structural comparison
+    let expected: serde_yaml::Value =
+        serde_yaml::from_str(expected_yaml).expect("Failed to parse expected YAML");
+    let actual: serde_yaml::Value = serde_yaml::from_str(&openapi_response.openapi_yaml)
+        .expect("Failed to parse actual OpenAPI YAML");
 
-    // Verify security schemes in components
-    let security_schemes = &yaml_value["components"]["securitySchemes"];
-    assert!(security_schemes.is_mapping());
-
-    // Verify api-key-auth scheme
-    assert_eq!(security_schemes["api-key-auth"]["type"], "apiKey");
-    assert_eq!(security_schemes["api-key-auth"]["in"], "header");
-    assert_eq!(security_schemes["api-key-auth"]["name"], "Authorization");
-
-    // Verify jwt-auth scheme
-    assert_eq!(security_schemes["jwt-auth"]["type"], "apiKey");
-    assert_eq!(security_schemes["jwt-auth"]["in"], "header");
-    assert_eq!(security_schemes["jwt-auth"]["name"], "Authorization");
-
-    // Verify operation-level security
-    let get_operation = &yaml_value["paths"]["/v0.1.0/secure-resource"]["get"];
-    assert!(get_operation["security"].is_sequence());
-    let get_security = get_operation["security"].as_sequence().unwrap();
-    assert_eq!(get_security.len(), 1);
-    assert!(get_security[0]["api-key-auth"].is_sequence());
-
-    let post_operation = &yaml_value["paths"]["/v0.1.0/another-secure-resource"]["post"];
-    assert!(post_operation["security"].is_sequence());
-    let post_security = post_operation["security"].as_sequence().unwrap();
-    assert_eq!(post_security.len(), 1);
-    assert!(post_security[0]["jwt-auth"].is_sequence());
-
-    // Verify global security
-    let global_security = &yaml_value["security"];
-    assert!(global_security.is_sequence());
-    let global_security_array = global_security.as_sequence().unwrap();
-    assert_eq!(global_security_array.len(), 2);
-    assert!(global_security_array[0]["api-key-auth"].is_sequence());
-    assert!(global_security_array[1]["jwt-auth"].is_sequence());
+    assert_eq!(actual, expected);
 }
 
 // Test 5: Multiple component binding
