@@ -1111,7 +1111,7 @@ async fn start_workers<T: RdbmsType>(
     for _ in 0..n_workers {
         let worker_name = format!("rdbms-service-{}-{}", db_type, Uuid::new_v4());
         let worker_id = executor
-            .start_worker_with(component_id, &worker_name, vec![], env.clone())
+            .start_worker_with(component_id, &worker_name, vec![], env.clone(), vec![])
             .await;
         worker_ids.push(worker_id.clone());
         let _result = executor

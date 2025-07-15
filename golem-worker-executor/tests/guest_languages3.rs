@@ -163,7 +163,13 @@ async fn csharp_example_1(
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "csharp-1", vec!["test-arg".to_string()], env)
+        .start_worker_with(
+            &component_id,
+            "csharp-1",
+            vec!["test-arg".to_string()],
+            env,
+            vec![],
+        )
         .await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -250,7 +256,7 @@ async fn python_http_client(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "python-http-client-1", vec![], env)
+        .start_worker_with(&component_id, "python-http-client-1", vec![], env, vec![])
         .await;
 
     let result = executor

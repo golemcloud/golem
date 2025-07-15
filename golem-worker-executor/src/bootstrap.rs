@@ -39,7 +39,7 @@ use crate::services::worker_fork::DefaultWorkerFork;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{rdbms, resource_limits, All, NoAdditionalDeps};
 use crate::wasi_host::create_linker;
-use crate::workerctx::cloud::Context;
+use crate::workerctx::default::Context;
 use crate::{Bootstrap, RunDetails};
 use async_trait::async_trait;
 use golem_service_base::storage::blob::BlobStorage;

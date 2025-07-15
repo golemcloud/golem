@@ -139,6 +139,7 @@ impl Benchmark for RpcCpuIntensive {
                     &parent_worker_id.worker_name,
                     vec![],
                     env,
+                    vec![],
                 )
                 .await
                 .expect("Failed to start parent worker");

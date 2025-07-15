@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
@@ -57,6 +58,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         account_id: &AccountId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
@@ -78,6 +80,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                             owned_worker_id,
                             worker_args,
                             worker_env,
+                            worker_wasi_config_vars,
                             component_version,
                             parent,
                         )

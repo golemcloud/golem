@@ -115,7 +115,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
         .store()
         .await;
     let _worker_id = admin
-        .start_worker_with(&component_id, "w1", vec![], env.clone())
+        .start_worker_with(&component_id, "w1", vec![], env.clone(), vec![])
         .await;
 
     let api_definition_id = ApiDefinitionId {

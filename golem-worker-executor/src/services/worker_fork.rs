@@ -432,6 +432,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             None,
             None,
             None,
+            None,
         )
         .await?;
 
@@ -443,6 +444,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             project_id,
             env: source_worker_metadata.env.clone(),
             args: source_worker_metadata.args.clone(),
+            wasi_config_vars: source_worker_metadata.wasi_config_vars.clone(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord::default(),

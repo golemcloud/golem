@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -60,6 +60,7 @@ pub trait Rpc: Send + Sync {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<Option<ValueAndType>, RpcError>;
 
@@ -73,6 +74,7 @@ pub trait Rpc: Send + Sync {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError>;
 
@@ -221,6 +223,7 @@ impl Rpc for RemoteInvocationRpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<Option<ValueAndType>, RpcError> {
         Ok(self
@@ -233,6 +236,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_worker_id.clone(),
                 self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
+                self_config,
                 self_stack,
             )
             .await?)
@@ -248,6 +252,7 @@ impl Rpc for RemoteInvocationRpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
         Ok(self
@@ -260,6 +265,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_worker_id.clone(),
                 self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
+                self_config,
                 self_stack,
             )
             .await?)
@@ -591,6 +597,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<Option<ValueAndType>, RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
@@ -613,6 +620,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 owned_worker_id,
                 Some(self_args.to_vec()),
                 Some(self_env.to_vec()),
+                Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
             )
@@ -634,6 +642,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_worker_id,
                     self_args,
                     self_env,
+                    self_config,
                     self_stack,
                 )
                 .await
@@ -650,6 +659,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
@@ -672,6 +682,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 owned_worker_id,
                 Some(self_args.to_vec()),
                 Some(self_env.to_vec()),
+                Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
             )
@@ -692,6 +703,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_worker_id,
                     self_args,
                     self_env,
+                    self_config,
                     self_stack,
                 )
                 .await

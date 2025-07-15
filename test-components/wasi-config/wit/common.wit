@@ -1,0 +1,7 @@
+// This file is used to make the 'wit' directory compatible with tools such as wit-bindgen.
+//
+// Do NOT add anything to this file, rather create a 'deps' directory, and place common WIT dependency packages there.
+// Such dependencies can be referenced in the component WIT definitions, and will automatically be included when needed
+// in the generated component wit directories.
+
+package common:root;
