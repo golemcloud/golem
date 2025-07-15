@@ -15,6 +15,25 @@
 // WASI Host implementation for Golem, delegating to the core WASI implementation (wasmtime_wasi)
 // implementing the Golem specific instrumentation on top of it.
 
+pub mod blobstore;
+mod cli;
+mod clocks;
+mod config;
+pub mod durability;
+mod dynamic_linking;
+mod filesystem;
+pub mod golem;
+pub mod http;
+pub mod io;
+pub mod keyvalue;
+mod logging;
+mod random;
+pub mod rdbms;
+mod replay_state;
+pub mod serialized;
+mod sockets;
+pub mod wasm_rpc;
+
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
@@ -86,7 +105,7 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Add;
@@ -108,24 +127,6 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
-
-pub mod blobstore;
-mod cli;
-mod clocks;
-pub mod durability;
-mod dynamic_linking;
-mod filesystem;
-pub mod golem;
-pub mod http;
-pub mod io;
-pub mod keyvalue;
-mod logging;
-mod random;
-pub mod rdbms;
-mod replay_state;
-pub mod serialized;
-mod sockets;
-pub mod wasm_rpc;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -200,6 +201,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
         .await?;
 
+        // TODO: pass config vars from component metadata
+        let wasi_config_vars = effective_wasi_config_vars(
+            worker_config.initial_wasi_config_vars.clone(),
+            BTreeMap::new(),
+        );
+
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(Stdout);
         let stderr = ManagedStdErr::from_stderr(Stderr);
@@ -256,6 +263,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 file_loader,
                 project_service,
                 worker_config.created_by.clone(),
+                worker_config.initial_wasi_config_vars,
+                wasi_config_vars,
             )
             .await,
             temp_dir,
@@ -565,6 +574,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|last_error| last_error.retry_count)
             .unwrap_or_default()
     }
+
+    pub fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+        self.state.wasi_config_vars.read().unwrap().clone()
+    }
 }
 
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
@@ -822,6 +835,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .await?;
 
         (*self.state.read_only_paths.write().unwrap()) = compute_read_only_paths(&current_files);
+
+        // TODO: take config vars from component metadata
+        (*self.state.wasi_config_vars.write().unwrap()) = effective_wasi_config_vars(
+            self.state.initial_wasi_config_vars.clone(),
+            BTreeMap::new(),
+        );
 
         self.state.component_metadata = new_metadata;
 
@@ -1985,6 +2004,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         None,
                         None,
                         None,
+                        None,
                     )
                     .await?;
                 }
@@ -2008,7 +2028,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     ) -> Result<(), WorkerExecutorError> {
         let worker = this
             .worker_activator()
-            .get_or_create_suspended(account_id, owned_worker_id, None, None, None, None)
+            .get_or_create_suspended(account_id, owned_worker_id, None, None, None, None, None)
             .await?;
 
         let entry = OplogEntry::failed_update(target_version, details.clone());
@@ -2369,6 +2389,10 @@ struct PrivateDurableWorkerState {
     file_loader: Arc<FileLoader>,
 
     project_service: Arc<dyn ProjectService>,
+    /// The initial config vars that the worker was configured with
+    initial_wasi_config_vars: BTreeMap<String, String>,
+    /// The current config vars of the worker, taking into account component version, etc.
+    wasi_config_vars: RwLock<BTreeMap<String, String>>,
 }
 
 impl PrivateDurableWorkerState {
@@ -2399,6 +2423,8 @@ impl PrivateDurableWorkerState {
         file_loader: Arc<FileLoader>,
         project_service: Arc<dyn ProjectService>,
         created_by: AccountId,
+        initial_wasi_config_vars: BTreeMap<String, String>,
+        wasi_config_vars: BTreeMap<String, String>,
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -2448,6 +2474,8 @@ impl PrivateDurableWorkerState {
             file_loader,
             project_service,
             created_by,
+            initial_wasi_config_vars,
+            wasi_config_vars: RwLock::new(wasi_config_vars),
         }
     }
 
@@ -3021,6 +3049,23 @@ fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<P
         _ => None,
     });
     HashSet::from_iter(ro_paths)
+}
+
+fn effective_wasi_config_vars(
+    worker_wasi_config_vars: BTreeMap<String, String>,
+    component_wasi_config_vars: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::new();
+
+    for (k, v) in component_wasi_config_vars {
+        result.insert(k, v);
+    }
+
+    for (k, v) in worker_wasi_config_vars {
+        result.insert(k, v);
+    }
+
+    result
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

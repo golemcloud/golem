@@ -62,6 +62,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::clients::get_authorisation_token;
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use tap::TapFallible;
@@ -762,6 +763,11 @@ impl WorkerGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
 
+        let wasi_config_vars: BTreeMap<String, String> = request
+            .wasi_config_vars
+            .ok_or_else(|| bad_request_error("no wasi_config_vars field"))?
+            .into();
+
         let latest_component = self
             .component_service
             .get_latest(&component_id, &auth)
@@ -786,6 +792,7 @@ impl WorkerGrpcApi {
                 latest_component.versioned_component_id.version,
                 request.args,
                 request.env,
+                wasi_config_vars,
                 namespace,
             )
             .await?;

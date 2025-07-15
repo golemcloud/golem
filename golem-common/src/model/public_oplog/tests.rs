@@ -63,6 +63,7 @@ fn create_serialization_poem_serde_equivalence() {
         created_by: AccountId {
             value: "account_id".to_string(),
         },
+        wasi_config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]).into(),
         project_id: ProjectId::new_v4(),
         parent: Some(WorkerId {
             component_id: ComponentId(

@@ -13,7 +13,7 @@ use golem_service_base::model::RevertWorkerTarget;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 // Worker Proxy will be internally used by fork functionality,
@@ -52,6 +52,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_worker_id: WorkerId,
         _caller_args: Vec<String>,
         _caller_env: HashMap<String, String>,
+        _caller_wasi_config_vars: BTreeMap<String, String>,
         _invocation_context_stack: InvocationContextStack,
     ) -> Result<Option<ValueAndType>, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
@@ -70,6 +71,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_worker_id: WorkerId,
         _caller_args: Vec<String>,
         _caller_env: HashMap<String, String>,
+        _caller_wasi_config_vars: BTreeMap<String, String>,
         _invocation_context_stack: InvocationContextStack,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(

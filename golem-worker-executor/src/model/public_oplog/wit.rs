@@ -47,6 +47,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
+                wasi_config_vars: _,
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 worker_id: worker_id.into(),

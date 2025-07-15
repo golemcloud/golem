@@ -222,6 +222,7 @@ impl DebugServiceDefault {
         if let Some(existing_metadata) = existing_metadata {
             let worker_args = existing_metadata.args;
             let worker_env = existing_metadata.env;
+            let worker_wasi_config_vars = existing_metadata.wasi_config_vars;
             let component_version = existing_metadata.last_known_status.component_version;
 
             let parent = existing_metadata.parent;
@@ -232,6 +233,7 @@ impl DebugServiceDefault {
                 &owned_worker_id,
                 Some(worker_args),
                 Some(worker_env),
+                Some(worker_wasi_config_vars),
                 Some(component_version),
                 parent,
             )
@@ -422,6 +424,7 @@ impl DebugService for DebugServiceDefault {
             owned_worker_id,
             Some(session_data.worker_metadata.args.clone()),
             Some(session_data.worker_metadata.env.clone()),
+            Some(session_data.worker_metadata.wasi_config_vars.clone()),
             Some(
                 session_data
                     .worker_metadata
@@ -548,6 +551,7 @@ impl DebugService for DebugServiceDefault {
             owned_worker_id,
             Some(debug_session_data.worker_metadata.args.clone()),
             Some(debug_session_data.worker_metadata.env.clone()),
+            Some(debug_session_data.worker_metadata.wasi_config_vars.clone()),
             Some(
                 debug_session_data
                     .worker_metadata

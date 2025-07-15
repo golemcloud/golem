@@ -80,7 +80,7 @@ async fn counter_resource_test_2(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-2", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-2", vec![], env, vec![])
         .await;
 
     let result1 = executor
@@ -155,7 +155,7 @@ async fn counter_resource_test_2_with_restart(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-2r", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-2r", vec![], env, vec![])
         .await;
 
     let result1 = executor

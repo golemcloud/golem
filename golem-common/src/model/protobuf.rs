@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::WorkerWasiConfigVarsFilter;
 use crate::model::oplog::OplogIndex;
 use crate::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
@@ -238,6 +239,13 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilte
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Env(filter) => Ok(
                     WorkerFilter::new_env(filter.name, filter.comparator.try_into()?, filter.value),
                 ),
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::WasiConfigVars(
+                    filter,
+                ) => Ok(WorkerFilter::new_wasi_config_vars(
+                    filter.name,
+                    filter.comparator.try_into()?,
+                    filter.value,
+                )),
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Not(filter) => {
                     let filter = *filter.filter.ok_or_else(|| "Missing filter".to_string())?;
                     Ok(WorkerFilter::new_not(filter.try_into()?))
@@ -295,6 +303,17 @@ impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
                 value,
             }) => golem_api_grpc::proto::golem::worker::worker_filter::Filter::Env(
                 golem_api_grpc::proto::golem::worker::WorkerEnvFilter {
+                    name,
+                    comparator: comparator.into(),
+                    value,
+                },
+            ),
+            WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter {
+                name,
+                comparator,
+                value,
+            }) => golem_api_grpc::proto::golem::worker::worker_filter::Filter::WasiConfigVars(
+                golem_api_grpc::proto::golem::worker::WorkerWasiConfigVarsFilter {
                     name,
                     comparator: comparator.into(),
                     value,

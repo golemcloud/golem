@@ -48,6 +48,7 @@ use golem_wasm_rpc::{
     ValueAndType, WasmRpcEntry, WitType, WitValue,
 };
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tracing::{error, Instrument};
@@ -93,6 +94,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<WitValue, golem_wasm_rpc::RpcError>> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
+        let wasi_config_vars = self.wasi_config_vars();
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
@@ -169,6 +171,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self.worker_id(),
                     &args,
                     &env,
+                    wasi_config_vars,
                     stack,
                 )
                 .await;
@@ -228,6 +231,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), golem_wasm_rpc::RpcError>> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
+        let wasi_config_vars = self.wasi_config_vars();
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
@@ -305,6 +309,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self.worker_id(),
                     &args,
                     &env,
+                    wasi_config_vars,
                     stack,
                 )
                 .await;
@@ -332,6 +337,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
+        let wasi_config_vars = self.wasi_config_vars();
 
         let begin_index = self
             .state
@@ -411,6 +417,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             &worker_id,
                             &args,
                             &env,
+                            wasi_config_vars,
                             stack,
                         )
                         .await)
@@ -435,6 +442,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self_created_by: created_by,
                     args,
                     env,
+                    wasi_config_vars,
                     function_name,
                     function_params,
                     idempotency_key,
@@ -628,6 +636,7 @@ enum FutureInvokeResultState {
         self_created_by: AccountId,
         args: Vec<String>,
         env: Vec<(String, String)>,
+        wasi_config_vars: BTreeMap<String, String>,
         function_name: String,
         function_params: Vec<WitValue>,
         idempotency_key: IdempotencyKey,
@@ -817,6 +826,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                     self_created_by,
                                     args,
                                     env,
+                                    wasi_config_vars,
                                     function_name,
                                     function_params,
                                     idempotency_key,
@@ -837,6 +847,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                         &self_worker_id,
                                         &args,
                                         &env,
+                                        wasi_config_vars,
                                         stack,
                                     )
                                     .await)
