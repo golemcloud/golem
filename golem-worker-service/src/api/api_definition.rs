@@ -474,7 +474,7 @@ impl ApiDefinitionApi {
         let auth_ctx = AuthCtx::new(token.secret());
         let namespace = self
             .auth_service
-            .authorize_project_action(&project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .authorize_project_action(&project_id, ProjectAction::ExportApiDefinition, &auth_ctx)
             .await?;
 
         let data = self

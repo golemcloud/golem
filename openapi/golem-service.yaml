@@ -7887,6 +7887,7 @@ components:
       - CreatePluginDefinition
       - UpdatePluginDefinition
       - DeletePluginDefinition
+      - ExportApiDefinition
     ProjectPolicy:
       title: ProjectPolicy
       type: object
