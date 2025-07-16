@@ -39,7 +39,6 @@ mod rib_execution_error;
 mod rib_repl;
 mod value_generator;
 mod worker_name_gen;
-mod agent_adapter;
 
 #[cfg(test)]
 test_r::enable!();

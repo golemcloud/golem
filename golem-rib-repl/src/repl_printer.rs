@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::ReplBootstrapError;
-use colored::{ColoredString, Colorize};
+use colored::{Colorize};
 use golem_wasm_ast::analysis::analysed_type::{record, str, u64};
 use golem_wasm_ast::analysis::{AnalysedResourceMode, AnalysedType, NameTypePair, TypeHandle};
 use golem_wasm_rpc::{Value, ValueAndType};
