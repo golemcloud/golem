@@ -1632,7 +1632,7 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
             ),
             (
                 "initial-file-read-write/files/baz.txt",
-                "/bar/baz.txt",
+                "/baz/baz.txt",
                 ComponentFilePermissions::ReadWrite,
             ),
             (
@@ -1670,7 +1670,7 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         result
             == vec![
                 ComponentFileSystemNode {
-                    name: "bar".to_string(),
+                    name: "baz".to_string(),
                     last_modified: SystemTime::UNIX_EPOCH,
                     details: ComponentFileSystemNodeDetails::Directory
                 },
@@ -1691,6 +1691,54 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
                     }
                 },
             ]
+    );
+
+    let result = admin.list_directory(&worker_id, "/baz").await;
+
+    let mut result = result
+        .into_iter()
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by_key(|e| e.name.clone());
+
+    check!(
+        result
+            == vec![ComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: ComponentFilePermissions::ReadWrite,
+                    size: 4,
+                }
+            },]
+    );
+
+    let result = admin.list_directory(&worker_id, "/baz.txt").await;
+
+    let mut result = result
+        .into_iter()
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by_key(|e| e.name.clone());
+
+    check!(
+        result
+            == vec![ComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: ComponentFilePermissions::ReadWrite,
+                    size: 4,
+                }
+            },]
     );
 }
 
