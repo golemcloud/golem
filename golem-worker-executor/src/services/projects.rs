@@ -308,7 +308,7 @@ impl ProjectService for ProjectServiceDisabled {
                 format!("Account ID passed to ProjectServiceDisabled::resolve_project ({account_id}) does not match the default account")
             ));
         }
-        if project_name != &self.project_name {
+        if project_name != self.project_name {
             return Err(WorkerExecutorError::unknown(
                 format!("Project name passed to ProjectServiceDisabled::resolve_project ({project_name}) does not match the default project name")
             ));
