@@ -387,6 +387,6 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
     }
 
     fn cloud_service(&self) -> Arc<dyn CloudService> {
-        panic!("Not supported")
+        self.cloud_service.clone()
     }
 }
