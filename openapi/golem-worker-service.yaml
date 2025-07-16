@@ -3853,7 +3853,8 @@ components:
       - componentVersion
       - args
       - env
-      - accountId
+      - projectId
+      - createdBy
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
@@ -3874,7 +3875,10 @@ components:
           type: object
           additionalProperties:
             type: string
-        accountId:
+        projectId:
+          type: string
+          format: uuid
+        createdBy:
           type: string
         parent:
           $ref: '#/components/schemas/WorkerId'
@@ -4335,7 +4339,7 @@ components:
       - functionName
       - request
       - response
-      - wrappedFunctionType
+      - durableFunctionType
       properties:
         timestamp:
           type: string
@@ -4346,7 +4350,7 @@ components:
           $ref: '#/components/schemas/ValueAndType'
         response:
           $ref: '#/components/schemas/ValueAndType'
-        wrappedFunctionType:
+        durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
     IndexedWorkerMetadata:
       type: object
@@ -6158,7 +6162,8 @@ components:
       title: WorkerMetadata
       required:
       - workerId
-      - accountId
+      - projectId
+      - createdBy
       - args
       - env
       - status
@@ -6176,7 +6181,10 @@ components:
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-        accountId:
+        projectId:
+          type: string
+          format: uuid
+        createdBy:
           type: string
         args:
           type: array

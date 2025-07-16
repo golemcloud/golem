@@ -86,7 +86,7 @@ pub trait WorkerProxy: Send + Sync {
 
     async fn revert(
         &self,
-        worker_id: WorkerId,
+        worker_id: &WorkerId,
         target: RevertWorkerTarget,
     ) -> Result<(), WorkerProxyError>;
 }
@@ -441,7 +441,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn revert(
         &self,
-        worker_id: WorkerId,
+        worker_id: &WorkerId,
         target: RevertWorkerTarget,
     ) -> Result<(), WorkerProxyError> {
         let response: RevertWorkerResponse = self

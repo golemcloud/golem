@@ -67,8 +67,13 @@ impl Benchmark for LargeDynamicMemory {
         context: &Self::IterationContext,
     ) {
         if let Some(worker_id) = context.worker_ids.first() {
-            let result =
-                invoke_and_await(&benchmark_context.deps.admin(), worker_id, "run", vec![]).await;
+            let result = invoke_and_await(
+                &benchmark_context.deps.admin().await,
+                worker_id,
+                "run",
+                vec![],
+            )
+            .await;
             println!("Warmup invocation took {:?}", result.accumulated_time);
         }
     }

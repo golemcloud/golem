@@ -36,11 +36,11 @@ pub async fn jrpc_handler(
         "current_oplog_index" => {
             if let Some(active_session_data) = active_session.get_active_session().await {
                 let owned_worker_id = OwnedWorkerId::new(
-                    &active_session_data.cloud_namespace.account_id,
+                    &active_session_data.cloud_namespace.project_id,
                     &active_session_data.worker_id,
                 );
 
-                let result = debug_service.current_oplog_index(owned_worker_id).await;
+                let result = debug_service.current_oplog_index(&owned_worker_id).await;
                 to_json_rpc_result(&jrpc_id, result)
             } else {
                 Err(inactive_session_error(&jrpc_id))
@@ -50,7 +50,7 @@ pub async fn jrpc_handler(
             let params: ConnectParams = parse_params(&jrpc_id, json_rpc_request.params)?;
 
             let result = debug_service
-                .connect(&auth_ctx, params.worker_id, active_session)
+                .connect(&auth_ctx, &params.worker_id, active_session)
                 .await;
 
             to_json_rpc_result(&jrpc_id, result)
@@ -60,13 +60,14 @@ pub async fn jrpc_handler(
                 let params: PlaybackParams = parse_params(&jrpc_id, json_rpc_request.params)?;
 
                 let owned_worker_id = OwnedWorkerId::new(
-                    &active_session_data.cloud_namespace.account_id,
+                    &active_session_data.cloud_namespace.project_id,
                     &active_session_data.worker_id,
                 );
 
                 let result = debug_service
                     .playback(
-                        owned_worker_id,
+                        &owned_worker_id,
+                        &active_session_data.cloud_namespace.account_id,
                         params.target_index,
                         params.overrides,
                         params.ensure_invocation_boundary.unwrap_or(true),
@@ -87,13 +88,14 @@ pub async fn jrpc_handler(
                 let params: RewindParams = parse_params(&jrpc_id, json_rpc_request.params)?;
 
                 let owned_worker_id = OwnedWorkerId::new(
-                    &active_session_data.cloud_namespace.account_id,
+                    &active_session_data.cloud_namespace.project_id,
                     &active_session_data.worker_id,
                 );
 
                 let result = debug_service
                     .rewind(
-                        owned_worker_id,
+                        &owned_worker_id,
+                        &active_session_data.cloud_namespace.account_id,
                         params.target_index,
                         params.ensure_invocation_boundary.unwrap_or(true),
                         params
@@ -110,15 +112,16 @@ pub async fn jrpc_handler(
         "fork" => {
             if let Some(active_session_data) = active_session.get_active_session().await {
                 let owned_worker_id = OwnedWorkerId::new(
-                    &active_session_data.cloud_namespace.account_id,
+                    &active_session_data.cloud_namespace.project_id,
                     &active_session_data.worker_id,
                 );
 
                 let params: ForkParams = parse_params(&jrpc_id, json_rpc_request.params)?;
                 let result = debug_service
                     .fork(
-                        owned_worker_id,
-                        params.target_worker_id,
+                        &active_session_data.cloud_namespace.account_id,
+                        &owned_worker_id,
+                        &params.target_worker_id,
                         params.oplog_index_cut_off,
                     )
                     .await;

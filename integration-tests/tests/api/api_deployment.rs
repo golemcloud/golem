@@ -40,7 +40,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let project_id = admin.default_project().await;
 
     let component_id = admin.component("shopping-cart").unique().store().await;
@@ -197,7 +197,7 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let project_id = admin.default_project().await;
 
     let component_id = admin.component("shopping-cart").unique().store().await;
@@ -286,7 +286,7 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
 #[test]
 #[tracing::instrument]
 async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let project_id = admin.default_project().await;
 
     let component_id = admin.component("shopping-cart").unique().store().await;
@@ -418,7 +418,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
 #[test]
 #[tracing::instrument]
 async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").unique().store().await;
     let project_id = admin.default_project().await;
 
@@ -536,7 +536,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
 #[test]
 #[tracing::instrument]
 async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let project_id = admin.default_project().await;
     let component_id = admin.component("shopping-cart").unique().store().await;
 
@@ -793,7 +793,7 @@ async fn create_api_definition(
 #[test]
 #[tracing::instrument]
 async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").unique().store().await;
     let project = admin.default_project().await;
 
@@ -926,7 +926,7 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let project = admin.default_project().await;
 
     let component_id = admin.component("shopping-cart").unique().store().await;

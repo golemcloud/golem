@@ -206,17 +206,17 @@ impl IntoValue for Timestamp {
     }
 }
 
-/// Associates a worker-id with its owner account
+/// Associates a worker-id with its owner project
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
 pub struct OwnedWorkerId {
-    pub account_id: AccountId,
+    pub project_id: ProjectId,
     pub worker_id: WorkerId,
 }
 
 impl OwnedWorkerId {
-    pub fn new(account_id: &AccountId, worker_id: &WorkerId) -> Self {
+    pub fn new(project_id: &ProjectId, worker_id: &WorkerId) -> Self {
         Self {
-            account_id: account_id.clone(),
+            project_id: project_id.clone(),
             worker_id: worker_id.clone(),
         }
     }
@@ -225,8 +225,8 @@ impl OwnedWorkerId {
         self.worker_id.clone()
     }
 
-    pub fn account_id(&self) -> AccountId {
-        self.account_id.clone()
+    pub fn project_id(&self) -> ProjectId {
+        self.project_id.clone()
     }
 
     pub fn component_id(&self) -> ComponentId {
@@ -240,7 +240,7 @@ impl OwnedWorkerId {
 
 impl Display for OwnedWorkerId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.account_id, self.worker_id)
+        write!(f, "{}/{}", self.project_id, self.worker_id)
     }
 }
 
@@ -256,12 +256,14 @@ pub enum ScheduledAction {
     /// Completes a given promise
     CompletePromise {
         account_id: AccountId,
+        project_id: ProjectId,
         promise_id: PromiseId,
     },
     /// Archives all entries from the first non-empty layer of an oplog to the next layer,
     /// if the last oplog index did not change. If there are more layers below, schedules
     /// a next action to archive the next layer.
     ArchiveOplog {
+        account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
         last_oplog_index: OplogIndex,
         next_after: Duration,
@@ -269,6 +271,7 @@ pub enum ScheduledAction {
     /// Invoke the given action on the worker. The invocation will only
     /// be persisted in the oplog when it's actually getting scheduled.
     Invoke {
+        account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
         idempotency_key: IdempotencyKey,
         full_function_name: String,
@@ -281,9 +284,10 @@ impl ScheduledAction {
     pub fn owned_worker_id(&self) -> OwnedWorkerId {
         match self {
             ScheduledAction::CompletePromise {
-                account_id,
+                project_id,
                 promise_id,
-            } => OwnedWorkerId::new(account_id, &promise_id.worker_id),
+                ..
+            } => OwnedWorkerId::new(project_id, &promise_id.worker_id),
             ScheduledAction::ArchiveOplog {
                 owned_worker_id, ..
             } => owned_worker_id.clone(),
@@ -502,19 +506,25 @@ pub struct WorkerMetadata {
     pub worker_id: WorkerId,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
-    pub account_id: AccountId,
+    pub project_id: ProjectId,
+    pub created_by: AccountId,
     pub created_at: Timestamp,
     pub parent: Option<WorkerId>,
     pub last_known_status: WorkerStatusRecord,
 }
 
 impl WorkerMetadata {
-    pub fn default(worker_id: WorkerId, account_id: AccountId) -> WorkerMetadata {
+    pub fn default(
+        worker_id: WorkerId,
+        created_by: AccountId,
+        project_id: ProjectId,
+    ) -> WorkerMetadata {
         WorkerMetadata {
             worker_id,
             args: vec![],
             env: vec![],
-            account_id,
+            project_id,
+            created_by,
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord::default(),
@@ -522,7 +532,7 @@ impl WorkerMetadata {
     }
 
     pub fn owned_worker_id(&self) -> OwnedWorkerId {
-        OwnedWorkerId::new(&self.account_id, &self.worker_id)
+        OwnedWorkerId::new(&self.project_id, &self.worker_id)
     }
 }
 
@@ -1948,8 +1958,8 @@ impl TryFrom<String> for GatewayBindingType {
     }
 }
 
-impl From<crate::model::WorkerId> for golem_wasm_rpc::WorkerId {
-    fn from(worker_id: crate::model::WorkerId) -> Self {
+impl From<WorkerId> for golem_wasm_rpc::WorkerId {
+    fn from(worker_id: WorkerId) -> Self {
         golem_wasm_rpc::WorkerId {
             component_id: worker_id.component_id.into(),
             worker_name: worker_id.worker_name,
@@ -1957,7 +1967,7 @@ impl From<crate::model::WorkerId> for golem_wasm_rpc::WorkerId {
     }
 }
 
-impl From<golem_wasm_rpc::WorkerId> for crate::model::WorkerId {
+impl From<golem_wasm_rpc::WorkerId> for WorkerId {
     fn from(host: golem_wasm_rpc::WorkerId) -> Self {
         Self {
             component_id: host.component_id.into(),
@@ -1966,17 +1976,17 @@ impl From<golem_wasm_rpc::WorkerId> for crate::model::WorkerId {
     }
 }
 
-impl From<golem_wasm_rpc::ComponentId> for crate::model::ComponentId {
+impl From<golem_wasm_rpc::ComponentId> for ComponentId {
     fn from(host: golem_wasm_rpc::ComponentId) -> Self {
         let high_bits = host.uuid.high_bits;
         let low_bits = host.uuid.low_bits;
 
-        Self(uuid::Uuid::from_u64_pair(high_bits, low_bits))
+        Self(Uuid::from_u64_pair(high_bits, low_bits))
     }
 }
 
-impl From<crate::model::ComponentId> for golem_wasm_rpc::ComponentId {
-    fn from(component_id: crate::model::ComponentId) -> Self {
+impl From<ComponentId> for golem_wasm_rpc::ComponentId {
+    fn from(component_id: ComponentId) -> Self {
         let (high_bits, low_bits) = component_id.0.as_u64_pair();
 
         golem_wasm_rpc::ComponentId {
@@ -2000,9 +2010,9 @@ mod tests {
     use crate::model::oplog::OplogIndex;
 
     use crate::model::{
-        AccountId, ComponentFilePath, ComponentId, FilterComparator, IdempotencyKey, ShardId,
-        StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
-        WorkerStatus, WorkerStatusRecord,
+        AccountId, ComponentFilePath, ComponentId, FilterComparator, IdempotencyKey, ProjectId,
+        ShardId, StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId,
+        WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
 
@@ -2180,7 +2190,8 @@ mod tests {
                 ("env1".to_string(), "value1".to_string()),
                 ("env2".to_string(), "value2".to_string()),
             ],
-            account_id: AccountId {
+            project_id: ProjectId::new_v4(),
+            created_by: AccountId {
                 value: "account-1".to_string(),
             },
             created_at: Timestamp::now_utc(),

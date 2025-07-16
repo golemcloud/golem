@@ -268,7 +268,7 @@ async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_component_latest_version(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     // Create component
     let (component_id, _) = admin
@@ -301,7 +301,7 @@ async fn get_component_latest_version(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     // Create component
     let (component_id, component_name) = admin

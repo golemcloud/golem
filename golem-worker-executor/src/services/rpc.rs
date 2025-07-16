@@ -20,15 +20,16 @@ use super::file_loader::FileLoader;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::plugins::Plugins;
+use crate::services::projects::ProjectService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, rdbms,
-    scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
+    scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
     HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins,
-    HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasProjectService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
     HasWorkerForkService, HasWorkerProxy, HasWorkerService,
@@ -38,7 +39,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
@@ -55,6 +56,7 @@ pub trait Rpc: Send + Sync {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
@@ -67,6 +69,7 @@ pub trait Rpc: Send + Sync {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
@@ -214,6 +217,7 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        _self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
@@ -240,6 +244,7 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        _self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
@@ -287,7 +292,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
         Arc<dyn worker_enumeration::RunningWorkerEnumerationService>,
     promise_service: Arc<dyn promise::PromiseService>,
     golem_config: Arc<golem_config::GolemConfig>,
-    shard_service: Arc<dyn shard::ShardService>,
+    shard_service: Arc<dyn ShardService>,
     key_value_service: Arc<dyn key_value::KeyValueService>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService>,
     rdbms_service: Arc<dyn rdbms::RdbmsService>,
@@ -299,6 +304,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     plugins: Arc<dyn Plugins>,
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
+    project_service: Arc<dyn ProjectService>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -330,6 +336,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
+            project_service: self.project_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -442,7 +449,7 @@ impl<Ctx: WorkerCtx> HasExtraDeps<Ctx> for DirectWorkerInvocationRpc<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasShardService for DirectWorkerInvocationRpc<Ctx> {
-    fn shard_service(&self) -> Arc<dyn shard::ShardService> {
+    fn shard_service(&self) -> Arc<dyn ShardService> {
         self.shard_service.clone()
     }
 }
@@ -495,6 +502,12 @@ impl<Ctx: WorkerCtx> HasResourceLimits for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasProjectService for DirectWorkerInvocationRpc<Ctx> {
+    fn project_service(&self) -> Arc<dyn ProjectService> {
+        self.project_service.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
@@ -513,7 +526,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         >,
         promise_service: Arc<dyn promise::PromiseService>,
         golem_config: Arc<golem_config::GolemConfig>,
-        shard_service: Arc<dyn shard::ShardService>,
+        shard_service: Arc<dyn ShardService>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
         key_value_service: Arc<dyn key_value::KeyValueService>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService>,
@@ -526,6 +539,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
+        project_service: Arc<dyn ProjectService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -554,6 +568,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             plugins,
             oplog_processor_plugin,
             resource_limits,
+            project_service,
             extra_deps,
         }
     }
@@ -572,6 +587,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
@@ -593,6 +609,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
             let worker = Worker::get_or_create_running(
                 self,
+                self_created_by,
                 owned_worker_id,
                 Some(self_args.to_vec()),
                 Some(self_env.to_vec()),
@@ -613,6 +630,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     Some(idempotency_key),
                     function_name,
                     function_params,
+                    self_created_by,
                     self_worker_id,
                     self_args,
                     self_env,
@@ -628,6 +646,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
@@ -649,6 +668,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
             let worker = Worker::get_or_create_running(
                 self,
+                self_created_by,
                 owned_worker_id,
                 Some(self_args.to_vec()),
                 Some(self_env.to_vec()),
@@ -668,6 +688,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     Some(idempotency_key),
                     function_name,
                     function_params,
+                    self_created_by,
                     self_worker_id,
                     self_args,
                     self_env,

@@ -36,7 +36,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let component_id = admin
         .component("shopping-cart-resource")
@@ -138,7 +138,7 @@ async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let component_id = admin
         .component("shopping-cart-resource")
@@ -386,7 +386,7 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let component_id_1 = admin
         .component("shopping-cart-resource")
@@ -584,7 +584,7 @@ fn check_equal_api_definition_request_and_response(
 #[test]
 #[tracing::instrument]
 async fn create_openapi_yaml_definition(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let (_component_id, component_name) = admin
         .component("shopping-cart")
@@ -724,7 +724,7 @@ x-golem-api-definition-version: 0.0.1
 #[test]
 #[tracing::instrument]
 async fn create_openapi_json_definition(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let (_component_id, component_name) = admin
         .component("shopping-cart")

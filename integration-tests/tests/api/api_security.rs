@@ -26,7 +26,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let project = admin.default_project().await.unwrap();
     let security_scheme = new_security_scheme();
 
@@ -42,7 +42,7 @@ async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_api_security_scheme(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let project = admin.default_project().await.unwrap();
     let security_scheme = new_security_scheme();
 

@@ -28,7 +28,7 @@ use tracing::Level;
 use crate::components::component_service::ComponentService;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_client::ComponentCompilationServiceClient;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ProjectId};
 
 use super::cloud_service::CloudService;
 
@@ -43,7 +43,12 @@ pub trait ComponentCompilationService: Send + Sync {
         new_client(&self.public_host(), self.public_grpc_port()).await
     }
 
-    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64) {
+    async fn enqueue_compilation(
+        &self,
+        project_id: ProjectId,
+        component_id: &ComponentId,
+        component_version: u64,
+    ) {
         let response = self
             .client()
             .await
@@ -51,6 +56,7 @@ pub trait ComponentCompilationService: Send + Sync {
                 component_id: Some(component_id.clone().into()),
                 component_version,
                 component_service_port: None,
+                project_id: Some(project_id.into()),
             })
             .await
             .expect("Failed to enqueue component compilation")

@@ -29,7 +29,8 @@ pub use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::Cloud
 use golem_api_grpc::proto::golem::auth::v1::{get_account_response, GetAccountRequest};
 pub use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient as ProjectServiceGrpcClient;
 use golem_api_grpc::proto::golem::project::v1::{
-    get_default_project_response, CreateProjectRequest, GetDefaultProjectRequest,
+    get_default_project_response, get_project_response, CreateProjectRequest,
+    GetDefaultProjectRequest, GetProjectRequest,
 };
 pub use golem_api_grpc::proto::golem::token::v1::cloud_token_service_client::CloudTokenServiceClient as TokenServiceGrpcClient;
 use golem_api_grpc::proto::golem::token::v1::CreateTokenRequest;
@@ -176,6 +177,29 @@ pub trait CloudService: Send + Sync {
             GolemClientProtocol::Http => {
                 let client = self.project_http_client(*token).await;
                 Ok(ProjectId(client.get_default_project().await?.project_id))
+            }
+        }
+    }
+
+    async fn get_project_name(&self, project_id: &ProjectId) -> crate::Result<String> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.project_grpc_client().await;
+                let request = GetProjectRequest {
+                    project_id: Some(project_id.clone().into()),
+                };
+                let response = client.get_project(request).await?;
+                match response.into_inner().result.unwrap() {
+                    get_project_response::Result::Success(result) => Ok(result
+                        .data
+                        .ok_or_else(|| anyhow!("Missing data field"))?
+                        .name),
+                    get_project_response::Result::Error(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+            GolemClientProtocol::Http => {
+                let client = self.project_http_client(self.admin_token()).await;
+                Ok(client.get_project(&project_id.0).await?.project_data.name)
             }
         }
     }
@@ -470,6 +494,7 @@ pub struct AdminOnlyStubCloudService {
     admin_account_id: AccountId,
     admin_token: Uuid,
     admin_default_project: ProjectId,
+    admin_default_project_name: String,
 }
 
 impl AdminOnlyStubCloudService {
@@ -477,39 +502,19 @@ impl AdminOnlyStubCloudService {
         admin_account_id: AccountId,
         admin_token: Uuid,
         admin_default_project: ProjectId,
+        admin_default_project_name: String,
     ) -> Self {
         Self {
             admin_account_id,
             admin_token,
             admin_default_project,
+            admin_default_project_name,
         }
     }
 }
 
 #[async_trait]
 impl CloudService for AdminOnlyStubCloudService {
-    fn admin_token(&self) -> Uuid {
-        self.admin_token
-    }
-
-    fn admin_account_id(&self) -> AccountId {
-        self.admin_account_id.clone()
-    }
-
-    async fn get_default_project(&self, token: &Uuid) -> crate::Result<ProjectId> {
-        if *token != self.admin_token {
-            Err(anyhow!("StubCloudService received unexpected token"))?
-        }
-        Ok(self.admin_default_project.clone())
-    }
-
-    async fn get_account_id(&self, token: &Uuid) -> crate::Result<AccountId> {
-        if *token != self.admin_token {
-            Err(anyhow!("StubCloudService received unexpected token"))?
-        }
-        Ok(self.admin_account_id.clone())
-    }
-
     fn client_protocol(&self) -> GolemClientProtocol {
         panic!("no cloud service running");
     }
@@ -532,6 +537,35 @@ impl CloudService for AdminOnlyStubCloudService {
 
     async fn auth_grpc_client(&self) -> AuthServiceGrpcClient<Channel> {
         panic!("no cloud service running");
+    }
+
+    async fn get_account_id(&self, token: &Uuid) -> crate::Result<AccountId> {
+        if *token != self.admin_token {
+            Err(anyhow!("StubCloudService received unexpected token"))?
+        }
+        Ok(self.admin_account_id.clone())
+    }
+
+    async fn get_default_project(&self, token: &Uuid) -> crate::Result<ProjectId> {
+        if *token != self.admin_token {
+            Err(anyhow!("StubCloudService received unexpected token"))?
+        }
+        Ok(self.admin_default_project.clone())
+    }
+
+    async fn get_project_name(&self, project_id: &ProjectId) -> crate::Result<String> {
+        if project_id != &self.admin_default_project {
+            Err(anyhow!("StubCloudService received unexpected project ID"))?
+        }
+        Ok(self.admin_default_project_name.clone())
+    }
+
+    fn admin_token(&self) -> Uuid {
+        self.admin_token
+    }
+
+    fn admin_account_id(&self) -> AccountId {
+        self.admin_account_id.clone()
     }
 
     fn private_host(&self) -> String {

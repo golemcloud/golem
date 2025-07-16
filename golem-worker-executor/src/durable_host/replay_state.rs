@@ -317,20 +317,11 @@ impl ReplayState {
         let oplog_entry = oplog_entries.into_iter().next().unwrap();
 
         // record side effects that need to be applied at the next opportunity
-        match oplog_entry {
-            OplogEntry::SuccessfulUpdate { target_version, .. } => {
-                self.record_replay_event(ReplayEvent::UpdateReplayed {
-                    new_version: target_version,
-                })
-                .await
-            }
-            OplogEntry::SuccessfulUpdateV1 { target_version, .. } => {
-                self.record_replay_event(ReplayEvent::UpdateReplayed {
-                    new_version: target_version,
-                })
-                .await
-            }
-            _ => {}
+        if let OplogEntry::SuccessfulUpdate { target_version, .. } = oplog_entry {
+            self.record_replay_event(ReplayEvent::UpdateReplayed {
+                new_version: target_version,
+            })
+            .await
         }
 
         if read_idx == self.replay_target.get() {
@@ -416,31 +407,6 @@ impl ReplayState {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
                 match &oplog_entry {
-                    OplogEntry::ExportedFunctionInvokedV1 {
-                        function_name,
-                        idempotency_key,
-                        ..
-                    } => {
-                        let request: Vec<golem_wasm_rpc::protobuf::Val> = self
-                            .oplog
-                            .get_payload_of_entry(&oplog_entry)
-                            .await
-                            .expect("failed to deserialize function request payload")
-                            .unwrap();
-                        let request = request
-                            .into_iter()
-                            .map(|val| {
-                                val.try_into()
-                                    .expect("failed to decode serialized protobuf value")
-                            })
-                            .collect::<Vec<Value>>();
-                        break Ok(Some(ExportedFunctionInvoked {
-                            function_name: function_name.to_string(),
-                            function_input: request,
-                            idempotency_key: idempotency_key.clone(),
-                            invocation_context: InvocationContextStack::fresh(),
-                        }));
-                    }
                     OplogEntry::ExportedFunctionInvoked {
                         function_name,
                         idempotency_key,

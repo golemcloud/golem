@@ -30,7 +30,8 @@ use uuid::Uuid;
 #[oai(rename_all = "camelCase")]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
-    pub account_id: AccountId,
+    pub project_id: ProjectId,
+    pub created_by: AccountId,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
@@ -60,7 +61,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            account_id: value.account_id.ok_or("Missing account_id")?.into(),
+            project_id: value.project_id.ok_or("Missing project_id")?.try_into()?,
+            created_by: value.created_by.ok_or("Missing account_id")?.into(),
             args: value.args,
             env: value.env,
             status: value.status.try_into()?,
@@ -104,7 +106,8 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
     fn from(value: WorkerMetadata) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
-            account_id: Some(value.account_id.into()),
+            project_id: Some(value.project_id.into()),
+            created_by: Some(value.created_by.into()),
             args: value.args,
             env: value.env,
             status: value.status.into(),

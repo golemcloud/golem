@@ -72,7 +72,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let account_id = self.state.owned_worker_id.account_id();
+        let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -83,7 +83,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .get_data(account_id, container_name.clone(), name.clone(), start, end)
+                .get_data(project_id, container_name.clone(), name.clone(), start, end)
                 .await;
             durability
                 .persist(self, (container_name, name, start, end), result)
@@ -117,7 +117,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let account_id = self.state.owned_worker_id.account_id();
+        let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -134,7 +134,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .write_data(account_id, container_name.clone(), name.clone(), data)
+                .write_data(project_id, container_name.clone(), name.clone(), data)
                 .await;
             durability
                 .persist(self, (container_name, name, len), result)
@@ -161,7 +161,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let account_id = self.state.owned_worker_id.account_id();
+        let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -172,7 +172,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .list_objects(account_id, container_name.clone())
+                .list_objects(project_id, container_name.clone())
                 .await;
             durability.persist(self, container_name, result).await
         } else {
@@ -204,7 +204,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let account_id = self.state.owned_worker_id.account_id();
+        let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -215,7 +215,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .delete_object(account_id, container_name.clone(), name.clone())
+                .delete_object(project_id, container_name.clone(), name.clone())
                 .await;
             durability
                 .persist(self, (container_name, name), result)
@@ -243,7 +243,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let account_id = self.state.owned_worker_id.account_id();
+        let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -254,7 +254,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .delete_objects(account_id, container_name.clone(), names.clone())
+                .delete_objects(project_id, container_name.clone(), names.clone())
                 .await;
             durability
                 .persist(self, (container_name, names), result)
@@ -282,7 +282,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let account_id = self.state.owned_worker_id.account_id();
+        let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -293,7 +293,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .has_object(account_id, container_name.clone(), name.clone())
+                .has_object(project_id, container_name.clone(), name.clone())
                 .await;
             durability
                 .persist(self, (container_name, name), result)
@@ -322,7 +322,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             )
             .await?;
 
-        let account_id = self.state.owned_worker_id.account_id();
+        let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -333,7 +333,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .object_info(account_id, container_name.clone(), name.clone())
+                .object_info(project_id, container_name.clone(), name.clone())
                 .await;
             durability
                 .persist(self, (container_name, name), result)
@@ -365,7 +365,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let account_id = self.state.owned_worker_id.account_id();
+        let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -376,7 +376,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .clear(account_id, container_name.clone())
+                .clear(project_id, container_name.clone())
                 .await;
             durability.persist(self, container_name, result).await
         } else {

@@ -5,6 +5,7 @@ package golem.workerexecutor.v1;
 import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/common/plugin_installation_id.proto";
+import public "golem/common/project_id.proto";
 import public "golem/common/revert_worker_response.proto";
 import public "golem/worker/idempotency_key.proto";
 import public "golem/worker/invocation_context.proto";
@@ -66,6 +67,7 @@ message ForkWorkerRequest {
   golem.worker.WorkerId source_worker_id = 2;
   golem.worker.WorkerId target_worker_id = 3;
   uint64 oplog_index_cutoff = 4;
+  golem.common.ProjectId project_id = 5;
 }
 
 message ForkWorkerResponse {
@@ -85,6 +87,7 @@ message InvokeWorkerResponse {
 message DeleteWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.common.AccountId account_id = 2;
+  golem.common.ProjectId project_id = 3;
 }
 
 message DeleteWorkerResponse {
@@ -98,6 +101,7 @@ message CompletePromiseRequest {
   golem.worker.PromiseId promise_id = 1;
   bytes data = 2;
   golem.common.AccountId account_id = 3;
+  golem.common.ProjectId project_id = 4;
 }
 
 message CompletePromiseResponse {
@@ -123,8 +127,12 @@ message CreateWorkerRequest {
   uint64 component_version = 2;
   repeated string args = 3;
   map<string, string> env = 4;
+  // Account the request belongs to
   golem.common.AccountId account_id = 5;
+  // Limits associated with the component's owner project's owner account
   golem.common.ResourceLimits account_limits = 6;
+  // Component's owner project
+  golem.common.ProjectId project_id = 7;
 }
 
 message CreateWorkerResponse {
@@ -140,8 +148,12 @@ message InvokeAndAwaitWorkerRequest {
   string name = 2;
   repeated wasm.rpc.Val input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;
-  golem.common.AccountId account_id = 6;
-  golem.common.ResourceLimits account_limits = 7;
+  // Account the request belongs to
+  golem.common.AccountId account_id = 5;
+  // Limits associated with the component's owner project's owner account
+  golem.common.ResourceLimits account_limits = 6;
+  // Component's owner project
+  golem.common.ProjectId project_id = 7;
   optional golem.worker.InvocationContext context = 8;
 }
 
@@ -174,9 +186,13 @@ message InvokeWorkerRequest {
   string name = 2;
   repeated wasm.rpc.Val input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;
+  // Account the request belongs to
   golem.common.AccountId account_id = 5;
+  // Limits associated with the component's owner project's owner account
   golem.common.ResourceLimits account_limits = 6;
-  optional golem.worker.InvocationContext context = 7;
+  // Component's owner project
+  golem.common.ProjectId project_id = 7;
+  optional golem.worker.InvocationContext context = 8;
 }
 
 message InvokeJsonWorkerRequest {
@@ -184,9 +200,13 @@ message InvokeJsonWorkerRequest {
   string name = 2;
   repeated string input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;
+  // Account the request belongs to
   golem.common.AccountId account_id = 5;
+  // Limits associated with the component's owner project's owner account
   golem.common.ResourceLimits account_limits = 6;
-  optional golem.worker.InvocationContext context = 7;
+  // Component's owner project
+  golem.common.ProjectId project_id = 7;
+  optional golem.worker.InvocationContext context = 8;
 }
 
 message InvokeAndAwaitWorkerJsonRequest {
@@ -194,21 +214,30 @@ message InvokeAndAwaitWorkerJsonRequest {
   string name = 2;
   repeated string input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;
-  golem.common.AccountId account_id = 6;
-  golem.common.ResourceLimits account_limits = 7;
+  // Account the request belongs to
+  golem.common.AccountId account_id = 5;
+  // Limits associated with the component's owner project's owner account
+  golem.common.ResourceLimits account_limits = 6;
+  // Component's owner project
+  golem.common.ProjectId project_id = 7;
   optional golem.worker.InvocationContext context = 8;
 }
 
 message ConnectWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
+  // Account the request belongs to
   golem.common.AccountId account_id = 2;
+  // Limits associated with the component's owner project's owner account
   golem.common.ResourceLimits account_limits = 3;
+  // Component's owner project
+  golem.common.ProjectId project_id = 4;
 }
 
 message InterruptWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   bool recover_immediately = 2;
   golem.common.AccountId account_id = 3;
+  golem.common.ProjectId project_id = 4;
 }
 
 message RevokeShardsRequest {
@@ -235,7 +264,7 @@ message AssignShardsResponse {
 
 message GetWorkerMetadataRequest {
   golem.worker.WorkerId worker_id = 1;
-  golem.common.AccountId account_id = 2;
+  golem.common.ProjectId project_id = 3;
 }
 
 message GetWorkerMetadataResponse {
@@ -249,6 +278,7 @@ message ResumeWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.common.AccountId account_id = 2;
   optional bool force = 3;
+  golem.common.ProjectId project_id = 4;
 }
 
 message ResumeWorkerResponse {
@@ -282,6 +312,7 @@ message GetWorkersMetadataRequest {
   uint64 count = 4;
   bool precise = 5;
   golem.common.AccountId account_id = 6;
+  golem.common.ProjectId project_id = 7;
 }
 
 message GetWorkersMetadataResponse {
@@ -301,6 +332,7 @@ message UpdateWorkerRequest {
   uint64 target_version = 2;
   golem.worker.UpdateMode mode = 3;
   golem.common.AccountId account_id = 4;
+  golem.common.ProjectId project_id = 5;
 }
 
 message UpdateWorkerResponse {
@@ -312,10 +344,10 @@ message UpdateWorkerResponse {
 
 message GetOplogRequest {
   golem.worker.WorkerId worker_id = 1;
-  golem.common.AccountId account_id = 2;
   uint64 from_oplog_index = 3;
   optional golem.worker.OplogCursor cursor = 4;
   uint64 count = 5;
+  golem.common.ProjectId project_id = 6;
 }
 
 message GetOplogResponse {
@@ -334,10 +366,10 @@ message GetOplogSuccessResponse {
 
 message SearchOplogRequest {
   golem.worker.WorkerId worker_id = 1;
-  golem.common.AccountId account_id = 2;
   string query = 3;
   optional golem.worker.OplogCursor cursor = 5;
   uint64 count = 6;
+  golem.common.ProjectId project_id = 7;
 }
 
 message SearchOplogResponse {
@@ -355,9 +387,13 @@ message SearchOplogSuccessResponse {
 
 message ListDirectoryRequest {
   golem.worker.TargetWorkerId worker_id = 1;
+  // Account the request belongs to
   golem.common.AccountId account_id = 2;
+  // Limits associated with the component's owner project's owner account
   golem.common.ResourceLimits account_limits = 3;
-  string path = 4;
+  // Component's owner project
+  golem.common.ProjectId project_id = 4;
+  string path = 5;
 }
 
 message ListDirectoryResponse {
@@ -375,9 +411,13 @@ message ListDirectorySuccessResponse {
 
 message GetFileContentsRequest {
   golem.worker.TargetWorkerId worker_id = 1;
+  // Account the request belongs to
   golem.common.AccountId account_id = 2;
+  // Limits associated with the component's owner project's owner account
   golem.common.ResourceLimits account_limits = 3;
-  string file_path = 4;
+  // Component's owner project
+  golem.common.ProjectId project_id = 4;
+  string file_path = 5;
 }
 
 message GetFileContentsResponse {
@@ -401,6 +441,7 @@ message ActivatePluginRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.common.AccountId account_id = 2;
   golem.common.PluginInstallationId installation_id = 3;
+  golem.common.ProjectId project_id = 4;
 }
 
 message ActivatePluginResponse {
@@ -414,6 +455,7 @@ message DeactivatePluginRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.common.AccountId account_id = 2;
   golem.common.PluginInstallationId installation_id = 3;
+  golem.common.ProjectId project_id = 4;
 }
 
 message DeactivatePluginResponse {
@@ -427,6 +469,7 @@ message RevertWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.common.AccountId account_id = 2;
   golem.common.RevertWorkerTarget target = 3;
+  golem.common.ProjectId project_id = 4;
 }
 
 message RevertWorkerResponse {
@@ -440,6 +483,7 @@ message CancelInvocationRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.worker.IdempotencyKey idempotency_key = 2;
   golem.common.AccountId account_id = 3;
+  golem.common.ProjectId project_id = 4;
 }
 
 message CancelInvocationResponse {

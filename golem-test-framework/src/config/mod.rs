@@ -28,7 +28,7 @@ pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 use golem_client::model::AccountData;
-use golem_common::model::AccountId;
+use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
@@ -63,27 +63,39 @@ pub trait TestDependencies: Send + Sync {
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
     fn cloud_service(&self) -> Arc<dyn CloudService>;
 
-    fn admin(&self) -> TestDependenciesDsl<&Self> {
+    // TODO: this need to be cached, especially when using in benchmarks
+    async fn admin(&self) -> TestDependenciesDsl<&Self> {
         TestDependenciesDsl {
             deps: self,
             account_id: self.cloud_service().admin_account_id(),
             account_email: self.cloud_service().admin_email(),
+            default_project_id: self
+                .cloud_service()
+                .get_default_project(&self.cloud_service().admin_token())
+                .await
+                .expect("failed to get default project for admin"),
             token: self.cloud_service().admin_token(),
         }
     }
 
-    fn into_admin(self) -> TestDependenciesDsl<Self>
+    async fn into_admin(self) -> TestDependenciesDsl<Self>
     where
         Self: Sized,
     {
         let account_id = self.cloud_service().admin_account_id();
         let token = self.cloud_service().admin_token();
         let account_email = self.cloud_service().admin_email();
+        let default_project_id = self
+            .cloud_service()
+            .get_default_project(&token)
+            .await
+            .expect("failed to get default project for admin");
 
         TestDependenciesDsl {
             deps: self,
             account_id,
             account_email,
+            default_project_id,
             token,
         }
     }
@@ -100,12 +112,18 @@ pub trait TestDependencies: Send + Sync {
             .create_account(&self.cloud_service().admin_token(), &account_data)
             .await
             .expect("failed to create user");
+        let default_project_id = self
+            .cloud_service()
+            .get_default_project(&account.token)
+            .await
+            .expect("failed to get default project for user");
 
         TestDependenciesDsl {
             deps: self,
             account_id: account.id,
             account_email: account.email,
             token: account.token,
+            default_project_id,
         }
     }
 
@@ -124,12 +142,18 @@ pub trait TestDependencies: Send + Sync {
             .create_account(&self.cloud_service().admin_token(), &account_data)
             .await
             .expect("failed to create user");
+        let default_project_id = self
+            .cloud_service()
+            .get_default_project(&account.token)
+            .await
+            .expect("failed to get default project for user");
 
         TestDependenciesDsl {
             deps: self,
             account_id: account.id,
             account_email: account.email,
             token: account.token,
+            default_project_id,
         }
     }
 
@@ -195,6 +219,7 @@ pub struct TestDependenciesDsl<Deps> {
     pub deps: Deps,
     pub account_id: AccountId,
     pub account_email: String,
+    pub default_project_id: ProjectId,
     pub token: Uuid,
 }
 

@@ -67,6 +67,7 @@ impl Benchmark for DurabilityOverhead {
         let component_id = benchmark_context
             .deps
             .admin()
+            .await
             .component("durability-overhead")
             .unique()
             .store()

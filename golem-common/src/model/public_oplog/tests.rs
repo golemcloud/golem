@@ -26,7 +26,8 @@ use crate::model::public_oplog::{
     SuccessfulUpdateParameters, TimestampParameter,
 };
 use crate::model::{
-    AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
+    AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, ProjectId, Timestamp,
+    WorkerId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -59,9 +60,10 @@ fn create_serialization_poem_serde_equivalence() {
         env: vec![("x".to_string(), "y".to_string())]
             .into_iter()
             .collect(),
-        account_id: AccountId {
+        created_by: AccountId {
             value: "account_id".to_string(),
         },
+        project_id: ProjectId::new_v4(),
         parent: Some(WorkerId {
             component_id: ComponentId(
                 Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
@@ -99,7 +101,7 @@ fn imported_function_invoked_serialization_poem_serde_equivalence() {
             value: Value::List(vec![Value::U64(1)]),
             typ: list(u64()),
         },
-        wrapped_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

@@ -22,7 +22,7 @@ use figment::Figment;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
-use golem_common::model::RetryConfig;
+use golem_common::model::{AccountId, ProjectId, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_service_base::config::BlobStorageConfig;
 use http::Uri;
@@ -351,7 +351,6 @@ pub struct ComponentCacheConfig {
     pub max_capacity: usize,
     pub max_metadata_capacity: usize,
     pub max_resolved_component_capacity: usize,
-    pub max_resolved_project_capacity: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
 }
@@ -371,6 +370,9 @@ pub struct ProjectServiceGrpcConfig {
     pub retries: RetryConfig,
     #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
+    pub max_resolved_project_cache_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub cache_time_to_idle: Duration,
 }
 
 impl ProjectServiceGrpcConfig {
@@ -384,7 +386,11 @@ impl ProjectServiceGrpcConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ProjectServiceDisabledConfig {}
+pub struct ProjectServiceDisabledConfig {
+    pub account_id: AccountId,
+    pub project_id: ProjectId,
+    pub project_name: String,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
@@ -673,7 +679,6 @@ impl Default for ComponentCacheConfig {
             max_capacity: 32,
             max_metadata_capacity: 16384,
             max_resolved_component_capacity: 1024,
-            max_resolved_project_capacity: 1024,
             time_to_idle: Duration::from_secs(12 * 60 * 60),
         }
     }
@@ -712,6 +717,8 @@ impl Default for ProjectServiceGrpcConfig {
             access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
             retries: RetryConfig::max_attempts_3(),
             connect_timeout: Duration::from_secs(30),
+            max_resolved_project_cache_capacity: 1024,
+            cache_time_to_idle: Duration::from_secs(12 * 60 * 60),
         }
     }
 }
