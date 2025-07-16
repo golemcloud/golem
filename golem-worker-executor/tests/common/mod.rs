@@ -258,8 +258,11 @@ pub async fn start_customized(
     let admin_project_id = deps
         .cloud_service
         .get_default_project(&deps.cloud_service.admin_token())
-        .await
-        .unwrap();
+        .await?;
+    let admin_project_name = deps
+        .cloud_service
+        .get_project_name(&admin_project_id)
+        .await?;
     let mut config = GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
             port: redis.public_port(),
@@ -288,6 +291,7 @@ pub async fn start_customized(
         project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {
             account_id: admin_account_id,
             project_id: admin_project_id,
+            project_name: admin_project_name,
         }),
         ..Default::default()
     };

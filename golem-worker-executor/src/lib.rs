@@ -399,10 +399,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
     let (plugins, plugins_observations) = bootstrap.create_plugins(&golem_config);
 
-    let project_service = services::projects::configured(
-        &golem_config.project_service,
-        &golem_config.component_cache,
-    );
+    let project_service = services::projects::configured(&golem_config.project_service);
 
     let component_service = bootstrap.create_component_service(
         &golem_config,

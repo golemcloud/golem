@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
-use crate::services::golem_config::{ComponentCacheConfig, ProjectServiceConfig};
+use crate::services::golem_config::ProjectServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -42,10 +42,7 @@ pub trait ProjectService: Send + Sync {
     ) -> Result<Option<ProjectId>, WorkerExecutorError>;
 }
 
-pub fn configured(
-    config: &ProjectServiceConfig,
-    cache_config: &ComponentCacheConfig,
-) -> Arc<dyn ProjectService> {
+pub fn configured(config: &ProjectServiceConfig) -> Arc<dyn ProjectService> {
     match config {
         ProjectServiceConfig::Grpc(config) => Arc::new(ProjectServiceGrpc::new(
             config.uri(),
@@ -55,12 +52,13 @@ pub fn configured(
                 .expect("Access token must be an UUID"),
             config.retries.clone(),
             config.connect_timeout,
-            cache_config.max_resolved_project_capacity,
-            cache_config.time_to_idle,
+            config.max_resolved_project_cache_capacity,
+            config.cache_time_to_idle,
         )),
         ProjectServiceConfig::Disabled(config) => Arc::new(ProjectServiceDisabled {
             account_id: config.account_id.clone(),
             project_id: config.project_id.clone(),
+            project_name: config.project_name.clone(),
         }),
     }
 }
@@ -283,22 +281,38 @@ where
 struct ProjectServiceDisabled {
     account_id: AccountId,
     project_id: ProjectId,
+    project_name: String,
 }
 
 #[async_trait]
 impl ProjectService for ProjectServiceDisabled {
     async fn get_project_owner(
         &self,
-        _project_id: &ProjectId,
+        project_id: &ProjectId,
     ) -> Result<AccountId, WorkerExecutorError> {
-        Ok(self.account_id.clone())
+        if project_id != &self.project_id {
+            Err(WorkerExecutorError::unknown(
+                format!("Project ID passed to ProjectServiceDisabled::get_project_owner ({project_id}) is not the default project ID")))
+        } else {
+            Ok(self.account_id.clone())
+        }
     }
 
     async fn resolve_project(
         &self,
-        _account_id: &AccountId,
-        _project_name: &str,
+        account_id: &AccountId,
+        project_name: &str,
     ) -> Result<Option<ProjectId>, WorkerExecutorError> {
+        if account_id != &self.account_id {
+            return Err(WorkerExecutorError::unknown(
+                format!("Account ID passed to ProjectServiceDisabled::resolve_project ({account_id}) does not match the default account")
+            ));
+        }
+        if project_name != &self.project_name {
+            return Err(WorkerExecutorError::unknown(
+                format!("Project name passed to ProjectServiceDisabled::resolve_project ({project_name}) does not match the default project name")
+            ));
+        }
         Ok(Some(self.project_id.clone()))
     }
 }
