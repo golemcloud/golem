@@ -1798,6 +1798,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let component_id = executor.component("write-stdout").store().await;
 
     let worker_id = executor.start_worker(&component_id, "bad-wasm-2").await;
+    let project_id = executor.default_project().await;
 
     // worker is idle. if we restart the server it will get recovered
     drop(executor);
@@ -1807,7 +1808,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     debug!("Current directory: {cwd:?}");
     let component_path = cwd.join(format!("data/components/wasms/{component_id}-0.wasm"));
     let compiled_component_path = cwd.join(Path::new(&format!(
-        "data/blobs/compilation_cache/{component_id}/0.cwasm"
+        "data/blobs/compilation_cache/{project_id}/{component_id}/0.cwasm"
     )));
 
     let span = Span::current();
