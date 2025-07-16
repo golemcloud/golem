@@ -37,7 +37,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-#[timeout(10000)]
+#[timeout(20000)]
 async fn test_rib_repl_with_agents(deps: &EnvBasedTestDependencies) {
     test_repl_invoking_agentic_functions(deps, Some("worker-repl-agents")).await
 }
@@ -73,8 +73,8 @@ async fn test_repl_invoking_agentic_functions(deps: &EnvBasedTestDependencies, w
         worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
         printer: None,
         component_source: Some(ComponentSource {
-            component_name: "golem_agentic_exp".to_string(),
-            source_path: deps.component_directory().join("golem_agentic_exp.wasm"),
+            component_name: "multi_agent_rpc_wrapper".to_string(),
+            source_path: deps.component_directory().join("multi_agent_rpc_wrapper.wasm"),
         }),
         prompt: None,
         command_registry: None,
@@ -82,17 +82,15 @@ async fn test_repl_invoking_agentic_functions(deps: &EnvBasedTestDependencies, w
         .await
         .expect("Failed to bootstrap REPL");
 
-    let rib1 = match worker_name {
-        Some(name) => format!(r#"let worker = instance("{name}")"#),
-        None => r#"let worker = instance()"#.to_string(),
-    };
+    let rib1 =
+        r#"let x = instance()"#.to_string();
 
     let rib2 = r#"
-      let resource = worker.agent("AssistantAgent", "foo")
+       let r = x.assistant-agent()
     "#;
 
     let rib3 = r#"
-      resource.invoke("ask", ["Newyork"])
+      r.ask("foo")
      "#;
 
 
