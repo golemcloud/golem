@@ -1429,6 +1429,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 ),
             },
+            ListDirectoryResult::File(file_node) => ListDirectoryResponse {
+                result: Some(
+                    golem::workerexecutor::v1::list_directory_response::Result::Success(
+                        golem::workerexecutor::v1::ListDirectorySuccessResponse {
+                            nodes: vec![file_node.into()],
+                        },
+                    ),
+                ),
+            },
         };
 
         Ok(response)

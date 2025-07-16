@@ -2017,16 +2017,43 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
             };
         }
 
-        {
-            let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to get metadata: {e}"),
-                }
-            })?;
-            if !metadata.is_dir() {
-                return Ok(ListDirectoryResult::NotADirectory);
+        let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
+            WorkerExecutorError::FileSystemError {
+                path: path.to_string(),
+                reason: format!("Failed to get metadata: {e}"),
+            }
+        })?;
+
+        if metadata.is_file() {
+            let is_readonly_by_host = metadata.permissions().readonly();
+            let is_readonly_by_us = self.state.read_only_paths.read().unwrap().contains(&target);
+
+            let permissions = if is_readonly_by_host || is_readonly_by_us {
+                ComponentFilePermissions::ReadOnly
+            } else {
+                ComponentFilePermissions::ReadWrite
             };
+
+            let last_modified = metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH);
+            let file_name = target
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let file_node = ComponentFileSystemNode {
+                name: file_name,
+                last_modified,
+                details: ComponentFileSystemNodeDetails::File {
+                    size: metadata.len(),
+                    permissions,
+                },
+            };
+
+            return Ok(ListDirectoryResult::File(file_node));
+        }
+
+        if !metadata.is_dir() {
+            return Ok(ListDirectoryResult::NotADirectory);
         }
 
         let mut entries = tokio::fs::read_dir(target).await.map_err(|e| {

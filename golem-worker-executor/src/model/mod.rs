@@ -344,6 +344,7 @@ pub enum LookupResult {
 pub enum ListDirectoryResult {
     Ok(Vec<ComponentFileSystemNode>),
     NotFound,
+    File(ComponentFileSystemNode),
     NotADirectory,
 }
 
