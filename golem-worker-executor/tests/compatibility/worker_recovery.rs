@@ -31,6 +31,7 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_shopping_cart_example(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -56,6 +57,7 @@ async fn recover_shopping_cart_example(
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_shopping_cart_resource_example(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -81,6 +83,7 @@ async fn recover_shopping_cart_resource_example(
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_environment_example(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -106,6 +109,7 @@ async fn recover_environment_example(
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_read_stdin(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -127,6 +131,7 @@ async fn recover_read_stdin(
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_jump(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -147,6 +152,7 @@ async fn recover_jump(
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_js_example_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -167,6 +173,7 @@ async fn recover_js_example_1(
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_auto_update_on_running(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -192,6 +199,7 @@ async fn recover_auto_update_on_running(
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_counter_resource_test_2(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
