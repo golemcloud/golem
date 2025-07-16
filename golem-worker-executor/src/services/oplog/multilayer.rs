@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, OwnedWorkerId, ScanCursor, WorkerMetadata,
+    ComponentId, ComponentType, OwnedWorkerId, ProjectId, ScanCursor, WorkerMetadata,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use nonempty_collections::NEVec;
@@ -59,7 +59,7 @@ pub trait OplogArchiveService: Debug + Send + Sync {
 
     async fn scan_for_component(
         &self,
-        account_id: &AccountId,
+        account_id: &ProjectId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
@@ -404,7 +404,7 @@ impl OplogService for MultiLayerOplogService {
 
     async fn scan_for_component(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
@@ -413,7 +413,7 @@ impl OplogService for MultiLayerOplogService {
             0 => {
                 let (new_cursor, unfiltered_ids) = self
                     .primary
-                    .scan_for_component(account_id, component_id, cursor, count)
+                    .scan_for_component(project_id, component_id, cursor, count)
                     .await?;
 
                 let ids = self
@@ -436,7 +436,7 @@ impl OplogService for MultiLayerOplogService {
             }
             layer if layer <= self.lower.len().get() => {
                 let (new_cursor, unfiltered_ids) = self.lower[layer - 1]
-                    .scan_for_component(account_id, component_id, cursor, count)
+                    .scan_for_component(project_id, component_id, cursor, count)
                     .await?;
                 let ids = self
                     .filter_ids_existing_on_lower_layers(unfiltered_ids, layer)

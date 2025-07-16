@@ -24,8 +24,12 @@ async fn test_connect_non_invoked_worker(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
 
@@ -59,8 +63,12 @@ async fn test_connect_invoked_worker(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -115,8 +123,12 @@ async fn test_connect_and_playback(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -164,8 +176,12 @@ async fn test_connect_and_playback_to_middle_of_invocation(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -216,8 +232,12 @@ async fn test_playback_from_breakpoint(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -290,8 +310,12 @@ async fn test_playback_and_rewind(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -349,8 +373,12 @@ async fn test_playback_and_fork(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -441,8 +469,12 @@ async fn test_playback_with_overrides(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;

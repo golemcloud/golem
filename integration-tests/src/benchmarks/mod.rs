@@ -87,6 +87,7 @@ pub async fn setup_iteration(
     // Upload test component
     let component_id = deps
         .admin()
+        .await
         .component(component_name)
         .unique()
         .store()
@@ -105,6 +106,7 @@ pub async fn start_workers(worker_ids: &[WorkerId], deps: &CliTestDependencies) 
     for worker_id in worker_ids {
         let _ = deps
             .admin()
+            .await
             .start_worker(&worker_id.component_id, &worker_id.worker_name)
             .await;
     }
@@ -137,7 +139,7 @@ pub async fn setup_simple_iteration(
 
 pub async fn delete_workers(deps: &CliTestDependencies, worker_ids: &[WorkerId]) {
     for worker_id in worker_ids {
-        if let Err(err) = deps.admin().delete_worker(worker_id).await {
+        if let Err(err) = deps.admin().await.delete_worker(worker_id).await {
             warn!("Failed to delete worker: {:?}", err);
         }
     }
@@ -151,7 +153,7 @@ pub async fn warmup_workers(
 ) {
     let mut fibers = JoinSet::new();
     for worker_id in worker_ids {
-        let deps_clone = deps.clone().into_admin();
+        let deps_clone = deps.clone().into_admin().await;
         let worker_id_clone = worker_id.clone();
         let params_clone = params.clone();
         let function_clone = function.to_string();
@@ -177,7 +179,7 @@ pub async fn benchmark_invocations(
     // Invoke each worker a 'length' times in parallel and record the duration
     let mut fibers = JoinSet::new();
     for (n, worker_id) in worker_ids.iter().enumerate() {
-        let deps_clone = deps.clone().into_admin();
+        let deps_clone = deps.clone().into_admin().await;
         let function_clone = function.to_string();
         let params_clone = params.clone();
         let worker_id_clone = worker_id.clone();

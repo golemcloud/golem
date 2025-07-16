@@ -25,8 +25,9 @@ use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActiva
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    HasProjectService, HasPromiseService, HasRunningWorkerEnumerationService,
+    HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService,
+    UsesAllDeps,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -57,7 +58,7 @@ use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentType, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, ScanCursor, ShardId, TimestampedWorkerInvocation, WorkerEvent,
+    PluginInstallationId, ProjectId, ScanCursor, ShardId, TimestampedWorkerInvocation, WorkerEvent,
     WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
@@ -257,11 +258,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: golem::workerexecutor::v1::CreateWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+        let account_id = extract_account_id(&request, |r| &r.account_id)?;
+
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         if let Some(limits) = request.account_limits {
-            Ctx::record_last_known_limits(self, &owned_worker_id.account_id, &limits.into())
+            Ctx::record_last_known_limits(self, &owned_worker_id.project_id, &limits.into())
                 .await?;
         }
 
@@ -283,6 +286,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker = Worker::get_or_create_suspended(
             self,
+            &account_id,
             &owned_worker_id,
             Some(args),
             Some(env),
@@ -330,8 +334,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_worker_id = extract_owned_worker_id(
             &(&request, promise_id.clone()),
             |(_, r)| &r.worker_id,
-            |(r, _)| &r.account_id,
+            |(r, _)| &r.project_id,
         )?;
+        let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let data = request.data;
@@ -360,8 +365,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             // By making sure the worker is in memory. If it was suspended because of waiting
             // for a promise, replaying that call will now not suspend as the promise has been
             // completed, and the worker will continue running.
-            Worker::get_or_create_running(&self.services, &owned_worker_id, None, None, None, None)
-                .await?;
+            Worker::get_or_create_running(
+                &self.services,
+                &account_id,
+                &owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await?;
         }
 
         let success = golem::workerexecutor::v1::CompletePromiseSuccess { completed };
@@ -374,7 +387,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: DeleteWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+        let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         if let Some(metadata) =
@@ -389,9 +403,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             };
 
             if should_interrupt {
-                let worker =
-                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None, None)
-                        .await?;
+                let worker = Worker::get_or_create_suspended(
+                    self,
+                    &account_id,
+                    &owned_worker_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
 
                 if let Some(mut await_interrupted) =
                     worker.set_interrupting(InterruptKind::Interrupt).await
@@ -419,7 +440,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .clone()
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
 
-        let account_id = account_id_proto.into();
+        let account_id: AccountId = account_id_proto.into();
+
+        let project_id_proto = request
+            .project_id
+            .ok_or(WorkerExecutorError::invalid_request("project_id not found"))?;
+        let project_id: ProjectId = project_id_proto
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
 
         let target_worker_id_proto = request
             .target_worker_id
@@ -430,7 +458,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let owned_target_worker_id = OwnedWorkerId::new(&account_id, &target_worker_id);
+        let owned_target_worker_id = OwnedWorkerId::new(&project_id, &target_worker_id);
 
         let source_worker_id_proto = request
             .source_worker_id
@@ -441,11 +469,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let owned_source_worker_id = OwnedWorkerId::new(&account_id, &source_worker_id);
+        let owned_source_worker_id = OwnedWorkerId::new(&project_id, &source_worker_id);
 
         self.services
             .worker_fork_service()
             .fork(
+                &account_id,
                 &owned_source_worker_id,
                 &owned_target_worker_id.worker_id,
                 OplogIndex::from_u64(request.oplog_index_cutoff),
@@ -466,7 +495,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: RevertWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+        let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let target = request
@@ -480,9 +510,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match metadata {
             Some(_) => {
-                let worker =
-                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None, None)
-                        .await?;
+                let worker = Worker::get_or_create_suspended(
+                    self,
+                    &account_id,
+                    &owned_worker_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
                 worker.revert(target).await?;
                 Ok(())
             }
@@ -497,7 +534,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: CancelInvocationRequest,
     ) -> Result<bool, WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+        let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let idempotency_key = request
@@ -521,6 +559,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 {
                     let worker = Worker::get_or_create_suspended(
                         self,
+                        &account_id,
                         &owned_worker_id,
                         None,
                         None,
@@ -551,7 +590,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: golem::workerexecutor::v1::InterruptWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+        let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await?;
@@ -591,6 +631,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     debug!("Marking suspended worker as interrupted");
                     let worker = Worker::get_or_create_suspended(
                         self,
+                        &account_id,
                         &owned_worker_id,
                         None,
                         None,
@@ -606,6 +647,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     debug!("Marking worker scheduled to be retried as interrupted");
                     let worker = Worker::get_or_create_suspended(
                         self,
+                        &account_id,
                         &owned_worker_id,
                         None,
                         None,
@@ -620,6 +662,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerStatus::Running => {
                     let worker = Worker::get_or_create_suspended(
                         self,
+                        &account_id,
                         &owned_worker_id,
                         None,
                         None,
@@ -649,7 +692,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: golem::workerexecutor::v1::ResumeWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+        let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let force_resume = request.force.unwrap_or(false);
@@ -670,6 +714,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 );
                 let _ = Worker::get_or_create_running(
                     &self.services,
+                    &account_id,
                     &owned_worker_id,
                     None,
                     None,
@@ -686,6 +731,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 );
                 let _ = Worker::get_or_create_running(
                     &self.services,
+                    &account_id,
                     &owned_worker_id,
                     None,
                     None,
@@ -772,6 +818,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let target_worker_id = request.worker_id()?;
+        let project_id = request.project_id()?;
 
         let current_assignment = self.shard_service().current_assignment()?;
 
@@ -789,7 +836,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         let account_id: AccountId = request.account_id()?;
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
         let metadata = self.worker_service().get(&owned_worker_id).await;
@@ -799,11 +846,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         if let Some(limits) = request.account_limits() {
-            Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
+            Ctx::record_last_known_limits(self, &project_id, &limits.into()).await?;
         }
 
         Worker::get_or_create_suspended(
             self,
+            &account_id,
             &owned_worker_id,
             request.args(),
             request.env(),
@@ -888,7 +936,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: golem::workerexecutor::v1::GetWorkerMetadataRequest,
     ) -> Result<golem::worker::WorkerMetadata, WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
@@ -946,10 +994,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .and_then(|t| t.try_into().ok())
             .ok_or(WorkerExecutorError::invalid_request("Invalid component id"))?;
 
-        let account_id: AccountId = request
-            .account_id
-            .map(|t| t.into())
-            .ok_or(WorkerExecutorError::invalid_request("Invalid account id"))?;
+        let project_id: ProjectId = request
+            .project_id
+            .and_then(|t| t.try_into().ok())
+            .ok_or(WorkerExecutorError::invalid_request("Invalid project id"))?;
 
         let filter: Option<WorkerFilter> = match request.filter {
             Some(f) => Some(f.try_into().map_err(WorkerExecutorError::invalid_request)?),
@@ -959,7 +1007,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (new_cursor, workers) = self
             .worker_enumeration_service()
             .get(
-                &account_id,
+                &project_id,
                 &component_id,
                 filter,
                 request
@@ -1002,7 +1050,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: UpdateWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+        let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let mut metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
@@ -1020,7 +1069,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let component_metadata = self
             .component_service()
             .get_metadata(
-                &owned_worker_id.account_id,
+                &owned_worker_id.project_id,
                 &owned_worker_id.worker_id.component_id,
                 Some(metadata.last_known_status.component_version),
             )
@@ -1066,6 +1115,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         debug!("Activating worker for update",);
                         let worker = Worker::get_or_create_suspended(
                             self,
+                            &account_id,
                             &owned_worker_id,
                             None,
                             None,
@@ -1101,6 +1151,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         // to begin the update.
                         let worker = Worker::get_or_create_suspended(
                             self,
+                            &account_id,
                             &owned_worker_id,
                             None,
                             None,
@@ -1133,9 +1184,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 // This is in a race condition with other worker invocations, so the whole update
                 // process need to be initiated through the worker's invocation queue.
 
-                let worker =
-                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None, None)
-                        .await?;
+                let worker = Worker::get_or_create_suspended(
+                    self,
+                    &account_id,
+                    &owned_worker_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
                 worker.enqueue_manual_update(request.target_version).await;
             }
         }
@@ -1147,17 +1205,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: ConnectWorkerRequest,
     ) -> ResponseResult<<Self as WorkerExecutor>::ConnectWorkerStream> {
-        let worker_id: WorkerId = request
-            .worker_id
-            .ok_or(WorkerExecutorError::invalid_request("missing worker_id"))?
-            .try_into()
-            .map_err(WorkerExecutorError::invalid_request)?;
-        let account_id: AccountId = request
-            .account_id
-            .ok_or(WorkerExecutorError::invalid_request("missing account_id"))?
-            .into();
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
-        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+        let account_id = extract_account_id(&request, |r| &r.account_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
             .await?
@@ -1168,10 +1219,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_not_failed(&owned_worker_id, &metadata).await?;
 
         if metadata.last_known_status.status != WorkerStatus::Interrupted {
-            let event_service =
-                Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None, None)
-                    .await?
-                    .event_service();
+            let event_service = Worker::get_or_create_suspended(
+                self,
+                &account_id,
+                &owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await?
+            .event_service();
 
             let receiver = event_service.receiver();
 
@@ -1193,7 +1251,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: GetOplogRequest,
     ) -> Result<GetOplogResponse, WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let chunk = match request.cursor {
@@ -1201,6 +1259,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self.component_service(),
                 self.oplog_service(),
                 self.plugins(),
+                self.project_service(),
                 &owned_worker_id,
                 cursor.current_component_version,
                 OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1221,6 +1280,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     self.plugins(),
+                    self.project_service(),
                     &owned_worker_id,
                     initial_component_version,
                     start,
@@ -1267,7 +1327,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: SearchOplogRequest,
     ) -> Result<SearchOplogResponse, WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let chunk = match request.cursor {
@@ -1275,6 +1335,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self.component_service(),
                 self.oplog_service(),
                 self.plugins(),
+                self.project_service(),
                 &owned_worker_id,
                 cursor.current_component_version,
                 OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1295,6 +1356,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     self.plugins(),
+                    self.project_service(),
                     &owned_worker_id,
                     initial_component_version,
                     start,
@@ -1465,7 +1527,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: ActivatePluginRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+        let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let plugin_installation_id =
@@ -1496,7 +1559,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let component_metadata = self
                         .component_service()
                         .get_metadata(
-                            &owned_worker_id.account_id,
+                            &owned_worker_id.project_id,
                             &owned_worker_id.worker_id.component_id,
                             Some(metadata.last_known_status.component_version),
                         )
@@ -1509,6 +1572,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     {
                         let worker = Worker::get_or_create_suspended(
                             self,
+                            &account_id,
                             &owned_worker_id,
                             None,
                             None,
@@ -1536,7 +1600,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: DeactivatePluginRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.account_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+        let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let plugin_installation_id =
@@ -1567,7 +1632,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let component_metadata = self
                         .component_service()
                         .get_metadata(
-                            &owned_worker_id.account_id,
+                            &owned_worker_id.project_id,
                             &owned_worker_id.worker_id.component_id,
                             Some(metadata.last_known_status.component_version),
                         )
@@ -1580,6 +1645,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     {
                         let worker = Worker::get_or_create_suspended(
                             self,
+                            &account_id,
                             &owned_worker_id,
                             None,
                             None,
@@ -1673,9 +1739,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         golem::worker::WorkerMetadata {
             worker_id: Some(metadata.worker_id.into()),
+            project_id: Some(metadata.project_id.into()),
             args: metadata.args.clone(),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
-            account_id: Some(metadata.account_id.into()),
+            created_by: Some(metadata.created_by.into()),
             component_version: latest_status.component_version,
             status: Into::<golem::worker::WorkerStatus>::into(latest_status.status.clone()).into(),
             retry_count: last_error_and_retry_count
@@ -2750,7 +2817,7 @@ impl Stream for WorkerEventStream {
 fn extract_owned_worker_id<T>(
     request: &T,
     get_worker_id: impl FnOnce(&T) -> &Option<golem::worker::WorkerId>,
-    get_account_id: impl FnOnce(&T) -> &Option<golem::common::AccountId>,
+    get_project_id: impl FnOnce(&T) -> &Option<golem::common::ProjectId>,
 ) -> Result<OwnedWorkerId, WorkerExecutorError> {
     let worker_id = get_worker_id(request)
         .as_ref()
@@ -2760,10 +2827,22 @@ fn extract_owned_worker_id<T>(
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
 
+    let project_id = get_project_id(request)
+        .as_ref()
+        .ok_or(WorkerExecutorError::invalid_request("project_id not found"))?;
+    let project_id: ProjectId = (*project_id)
+        .try_into()
+        .map_err(WorkerExecutorError::invalid_request)?;
+
+    Ok(OwnedWorkerId::new(&project_id, &worker_id))
+}
+
+fn extract_account_id<T>(
+    request: &T,
+    get_account_id: impl FnOnce(&T) -> &Option<golem::common::AccountId>,
+) -> Result<AccountId, WorkerExecutorError> {
     let account_id = get_account_id(request)
         .as_ref()
         .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
-    let account_id: AccountId = account_id.clone().into();
-
-    Ok(OwnedWorkerId::new(&account_id, &worker_id))
+    Ok(account_id.clone().into())
 }

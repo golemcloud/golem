@@ -142,7 +142,11 @@ async fn auto_update_on_running(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -220,7 +224,11 @@ async fn auto_update_on_idle(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -265,7 +273,11 @@ async fn failing_auto_update_on_idle(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -328,7 +340,11 @@ async fn auto_update_on_idle_with_non_diverging_history(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -385,7 +401,11 @@ async fn failing_auto_update_on_running(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -470,7 +490,11 @@ async fn manual_update_on_idle(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -536,7 +560,11 @@ async fn manual_update_on_idle_without_save_snapshot(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -601,7 +629,11 @@ async fn auto_update_on_running_followed_by_manual(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -697,7 +729,11 @@ async fn manual_update_on_idle_with_failing_load(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -761,7 +797,11 @@ async fn manual_update_on_idle_using_v11(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -836,7 +876,11 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -911,7 +955,11 @@ async fn auto_update_on_idle_to_non_existing(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -968,7 +1016,11 @@ async fn update_component_version_environment_variable(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let component_id = executor.component("update-test-env-var").store().await;
 

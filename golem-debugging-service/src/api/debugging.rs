@@ -154,8 +154,8 @@ async fn close_on_error(
     if let Some(active_session_data) = active_session.get_active_session().await {
         let worker_id = active_session_data.worker_id;
         let namespace = active_session_data.cloud_namespace;
-        let owned_worker_id = OwnedWorkerId::new(&namespace.account_id, &worker_id);
-        debug_service.terminate_session(owned_worker_id).await.ok();
+        let owned_worker_id = OwnedWorkerId::new(&namespace.project_id, &worker_id);
+        debug_service.terminate_session(&owned_worker_id).await.ok();
     }
 
     let result = sink
@@ -179,9 +179,9 @@ async fn close(
     if let Some(active_session_data) = active_session_data {
         let worker_id = active_session_data.worker_id;
         let namespace = active_session_data.cloud_namespace;
-        let owned_worker_id = OwnedWorkerId::new(&namespace.account_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(&namespace.project_id, &worker_id);
 
-        debug_service.terminate_session(owned_worker_id).await.ok();
+        debug_service.terminate_session(&owned_worker_id).await.ok();
     }
 
     sink.send(Message::Close(Some((

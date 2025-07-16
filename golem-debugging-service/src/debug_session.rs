@@ -270,7 +270,8 @@ fn get_oplog_entry_from_public_oplog_entry(
             component_version,
             args,
             env,
-            account_id,
+            project_id,
+            created_by,
             parent,
             component_size,
             initial_total_linear_memory_size,
@@ -281,7 +282,8 @@ fn get_oplog_entry_from_public_oplog_entry(
             component_version,
             args,
             env: env.into_iter().collect(),
-            account_id,
+            project_id,
+            created_by,
             parent,
             component_size,
             initial_total_linear_memory_size,
@@ -294,7 +296,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             timestamp,
             function_name,
             response,
-            wrapped_function_type,
+            durable_function_type: wrapped_function_type,
             request,
         }) => {
             let response: OplogPayload = convert_response_value_and_type_to_oplog_payload(
@@ -320,7 +322,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 function_name,
                 request,
                 response,
-                wrapped_function_type: durable_function_type,
+                durable_function_type,
             })
         }
         PublicOplogEntry::ExportedFunctionInvoked(exported_function_invoked_parameters) => {

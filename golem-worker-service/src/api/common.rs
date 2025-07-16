@@ -159,6 +159,7 @@ impl From<WorkerServiceError> for ApiEndpointError {
 
             WorkerServiceError::GolemError(inner) => inner.into(),
             WorkerServiceError::Component(inner) => inner.into(),
+            WorkerServiceError::Project(inner) => inner.into(),
             WorkerServiceError::InternalCallError(inner) => inner.into(),
             WorkerServiceError::LimitError(inner) => inner.into(),
         }

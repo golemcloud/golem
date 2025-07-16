@@ -14,8 +14,8 @@ use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, RetryConfig, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    PluginInstallationId, ProjectId, RetryConfig, TargetWorkerId, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -59,6 +59,7 @@ use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::{Oplog, OplogService};
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
+use golem_worker_executor::services::projects::ProjectService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
@@ -253,6 +254,15 @@ pub async fn start_customized(
     info!("Using Redis on port {}", redis.public_port());
 
     let prometheus = golem_worker_executor::metrics::register_all();
+    let admin_account_id = deps.cloud_service.admin_account_id();
+    let admin_project_id = deps
+        .cloud_service
+        .get_default_project(&deps.cloud_service.admin_token())
+        .await?;
+    let admin_project_name = deps
+        .cloud_service
+        .get_project_name(&admin_project_id)
+        .await?;
     let mut config = GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
             port: redis.public_port(),
@@ -278,7 +288,11 @@ pub async fn start_customized(
         component_service: ComponentServiceConfig::Local(ComponentServiceLocalConfig {
             root: Path::new("data/components").to_path_buf(),
         }),
-        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {}),
+        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {
+            account_id: admin_account_id,
+            project_id: admin_project_id,
+            project_name: admin_project_name,
+        }),
         ..Default::default()
     };
     if let Some(retry) = retry_override {
@@ -427,12 +441,12 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
 
     async fn record_last_known_limits<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
         DurableWorkerCtx::<TestWorkerCtx>::record_last_known_limits(
             this,
-            account_id,
+            project_id,
             last_known_limits,
         )
         .await
@@ -453,12 +467,14 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
 
     async fn on_worker_update_failed_to_start<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         details: Option<String>,
     ) -> Result<(), WorkerExecutorError> {
         DurableWorkerCtx::<TestWorkerCtx>::on_worker_update_failed_to_start(
             this,
+            account_id,
             owned_worker_id,
             target_version,
             details,
@@ -617,6 +633,7 @@ impl WorkerCtx for TestWorkerCtx {
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
     async fn create(
+        _account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
@@ -641,6 +658,7 @@ impl WorkerCtx for TestWorkerCtx {
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Result<Self, WorkerExecutorError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -664,6 +682,7 @@ impl WorkerCtx for TestWorkerCtx {
             file_loader,
             plugins,
             worker_fork,
+            project_service,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -957,14 +976,15 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         golem_worker_executor::services::component::configured(
             &golem_config.component_service,
-            &golem_config.project_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage,
             plugin_observations,
+            project_service,
         )
     }
 
@@ -993,6 +1013,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);
         let worker_fork = Arc::new(DefaultWorkerFork::new(
@@ -1024,6 +1045,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
             (),
         ));
 
@@ -1056,6 +1078,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
             (),
         ));
         Ok(All::new(
@@ -1085,6 +1108,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins,
             oplog_processor_plugin,
             resource_limits,
+            project_service,
             (),
         ))
     }

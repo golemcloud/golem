@@ -52,7 +52,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[timeout(120000)]
 #[allow(clippy::await_holding_lock)]
 async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let host_http_port = 8588;
 
     let contexts = Arc::new(Mutex::new(Vec::new()));

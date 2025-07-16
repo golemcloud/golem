@@ -39,7 +39,11 @@ async fn counter_resource_test_2(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
     let caller_component_id = executor
@@ -110,7 +114,11 @@ async fn counter_resource_test_2_with_restart(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
     let caller_component_id = executor
@@ -159,7 +167,11 @@ async fn counter_resource_test_2_with_restart(
         .await;
 
     drop(executor);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let result2 = executor
         .invoke_and_await(

@@ -26,6 +26,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::plugins::Plugins;
+use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
@@ -47,7 +48,7 @@ use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+    PluginInstallationId, ProjectId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -102,7 +103,7 @@ pub trait WorkerCtx:
     /// - `scheduler_service`: The scheduler implementation responsible for waking up suspended workers
     /// - `recovery_management`: The service for deciding if a worker should be recovered
     /// - `rpc`: The RPC implementation used for worker to worker communication
-    /// - `worker_proyx`: Access to the worker proxy above the worker executor cluster
+    /// - `worker_proxy`: Access to the worker proxy above the worker executor cluster
     /// - `extra_deps`: Extra dependencies that are required by this specific worker context
     /// - `config`: The shared worker configuration
     /// - `worker_config`: Configuration for this specific worker
@@ -110,6 +111,7 @@ pub trait WorkerCtx:
     /// - `file_loader`: The service for loading files and making them available to workers
     #[allow(clippy::too_many_arguments)]
     async fn create(
+        account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
@@ -134,6 +136,7 @@ pub trait WorkerCtx:
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -400,7 +403,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError>;
 
@@ -418,6 +421,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Called when an update attempt has failed before the worker context has been created
     async fn on_worker_update_failed_to_start<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         details: Option<String>,

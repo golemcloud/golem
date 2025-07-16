@@ -63,35 +63,39 @@ impl FileSystemBlobStorage {
         let mut result = self.root.clone();
 
         match namespace {
-            BlobStorageNamespace::CompilationCache => result.push("compilation_cache"),
-            BlobStorageNamespace::CustomStorage(account_id) => {
+            BlobStorageNamespace::CompilationCache { project_id } => {
+                result.push("compilation_cache");
+                result.push(project_id.to_string());
+            }
+            BlobStorageNamespace::CustomStorage { project_id } => {
                 result.push("custom_data");
-                result.push(account_id.to_string());
+                result.push(project_id.to_string());
             }
             BlobStorageNamespace::OplogPayload {
-                account_id,
+                project_id,
                 worker_id,
             } => {
                 result.push("oplog_payload");
-                result.push(account_id.to_string());
+                result.push(project_id.to_string());
                 result.push(worker_id.to_string());
             }
             BlobStorageNamespace::CompressedOplog {
-                account_id,
+                project_id,
                 component_id,
                 level,
             } => {
                 result.push("compressed_oplog");
-                result.push(account_id.to_string());
+                result.push(project_id.to_string());
                 result.push(component_id.to_string());
                 result.push(level.to_string());
             }
-            BlobStorageNamespace::InitialComponentFiles { account_id } => {
+            BlobStorageNamespace::InitialComponentFiles { project_id } => {
                 result.push("initial_component_files");
-                result.push(account_id.to_string());
+                result.push(project_id.to_string());
             }
-            BlobStorageNamespace::Components => {
+            BlobStorageNamespace::Components { project_id } => {
                 result.push("component_store");
+                result.push(project_id.to_string());
             }
             BlobStorageNamespace::PluginWasmFiles { account_id } => {
                 result.push("plugin_wasm_files");

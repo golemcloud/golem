@@ -31,7 +31,7 @@ async fn measure(
 ) {
     let mut system = System::new_all();
     let ctx = TestContext::new(last_unique_id);
-    let executor = start(deps, &ctx).await.unwrap().into_admin();
+    let executor = start(deps, &ctx).await.unwrap().into_admin().await;
 
     // collect
     let mut paths = Vec::new();

@@ -52,11 +52,13 @@ impl UploadWorker {
         let CompiledComponent {
             component_and_version,
             component,
+            project_id,
         } = compiled_component;
 
         let upload_result = self
             .compiled_component_service
             .put(
+                &project_id,
                 &component_and_version.id,
                 component_and_version.version,
                 &component,
