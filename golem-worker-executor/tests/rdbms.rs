@@ -225,7 +225,7 @@ async fn rdbms_postgres_crud(
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids1 =
@@ -367,7 +367,7 @@ async fn rdbms_postgres_idempotency(
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids =
@@ -940,7 +940,7 @@ async fn rdbms_mysql_crud(
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids1 =
@@ -1082,7 +1082,7 @@ async fn rdbms_mysql_idempotency(
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 1).await;
@@ -1705,7 +1705,7 @@ async fn rdbms_component_test<T: RdbmsType>(
     n_workers: u8,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
     let worker_ids = start_workers::<T>(&executor, &component_id, db_address, "", n_workers).await;
 
@@ -2083,7 +2083,7 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
             );
 
             check!(
-                v.wrapped_function_type
+                v.durable_function_type
                     == PublicDurableFunctionType::WriteRemoteTransaction(
                         WriteRemoteTransactionParameters {
                             index: Some(oplog_begin_index)

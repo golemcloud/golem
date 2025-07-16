@@ -1466,9 +1466,10 @@ fn http_worker_metadata_to_grpc(
 ) -> WorkerMetadata {
     WorkerMetadata {
         worker_id: Some(worker_metadata.worker_id.into()),
-        account_id: Some(AccountId {
+        created_by: Some(AccountId {
             name: "1".to_string(),
         }),
+        project_id: Some(ProjectId(worker_metadata.project_id).into()),
         args: worker_metadata.args,
         env: worker_metadata.env,
         status: worker_metadata.status.into(),

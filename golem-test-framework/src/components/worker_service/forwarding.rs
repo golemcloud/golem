@@ -104,6 +104,7 @@ impl WorkerService for ForwardingWorkerService {
         request: LaunchNewWorkerRequest,
     ) -> crate::Result<LaunchNewWorkerResponse> {
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
 
         let component_id = (*request
             .component_id
@@ -129,6 +130,7 @@ impl WorkerService for ForwardingWorkerService {
                 .await?
                 .create_worker(CreateWorkerRequest {
                     worker_id: Some(worker_id.clone()),
+                    project_id: Some(project_id.clone().into()),
                     component_version: latest_component_version,
                     args: request.args.clone(),
                     env: request.env.clone(),
@@ -182,6 +184,7 @@ impl WorkerService for ForwardingWorkerService {
     ) -> crate::Result<DeleteWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
             let account_id = account_id.clone();
             let result = self
@@ -191,6 +194,7 @@ impl WorkerService for ForwardingWorkerService {
                 .delete_worker(workerexecutor::v1::DeleteWorkerRequest {
                     worker_id: request.worker_id.clone(),
                     account_id: Some(account_id.into()),
+                    project_id: Some(project_id.clone().into()),
                 })
                 .await;
 
@@ -232,9 +236,8 @@ impl WorkerService for ForwardingWorkerService {
         request: GetWorkerMetadataRequest,
     ) -> crate::Result<GetWorkerMetadataResponse> {
         let mut retry_count = Self::RETRY_COUNT;
-        let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
-            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
@@ -246,7 +249,7 @@ impl WorkerService for ForwardingWorkerService {
                             .clone()
                             .ok_or(anyhow!("Worker ID is required"))?,
                     ),
-                    account_id: Some(account_id.into()),
+                    project_id: Some(project_id.clone().into()),
                 })
                 .await;
 
@@ -289,6 +292,7 @@ impl WorkerService for ForwardingWorkerService {
     ) -> crate::Result<GetWorkersMetadataResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
             let account_id = account_id.clone();
             let result = self
@@ -302,6 +306,7 @@ impl WorkerService for ForwardingWorkerService {
                     count: request.count,
                     precise: request.precise,
                     account_id: Some(account_id.into()),
+                    project_id: Some(project_id.clone().into()),
                 })
                 .await;
 
@@ -351,6 +356,7 @@ impl WorkerService for ForwardingWorkerService {
     ) -> crate::Result<InvokeResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
             let account_id = account_id.clone();
 
@@ -360,6 +366,7 @@ impl WorkerService for ForwardingWorkerService {
                 .await?
                 .invoke_worker(workerexecutor::v1::InvokeWorkerRequest {
                     worker_id: Some(worker_id.clone()),
+                    project_id: Some(project_id.clone().into()),
                     idempotency_key: idempotency_key.clone(),
                     name: function.clone(),
                     input: invoke_parameters
@@ -423,6 +430,7 @@ impl WorkerService for ForwardingWorkerService {
     ) -> crate::Result<InvokeAndAwaitResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
             let account_id = account_id.clone();
             let result = self
@@ -431,6 +439,7 @@ impl WorkerService for ForwardingWorkerService {
                 .await?
                 .invoke_and_await_worker(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
                     worker_id: Some(worker_id.clone()),
+                    project_id: Some(project_id.clone().into()),
                     idempotency_key: idempotency_key.clone(),
                     name: function.clone(),
                     input: invoke_parameters
@@ -492,6 +501,7 @@ impl WorkerService for ForwardingWorkerService {
     ) -> crate::Result<InvokeAndAwaitTypedResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
             let account_id = account_id.clone();
             let result = self
@@ -500,6 +510,7 @@ impl WorkerService for ForwardingWorkerService {
                 .await?
                 .invoke_and_await_worker_typed(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
                     worker_id: Some(worker_id.clone()),
+                    project_id: Some(project_id.clone().into()),
                     idempotency_key: idempotency_key.clone(),
                     name: function.clone(),
                     input: invoke_parameters
@@ -567,6 +578,7 @@ impl WorkerService for ForwardingWorkerService {
     ) -> crate::Result<Box<dyn WorkerLogEventStream>> {
         let mut retry_count = Self::RETRY_COUNT;
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
             let account_id = account_id.clone();
             let result = self
@@ -575,6 +587,7 @@ impl WorkerService for ForwardingWorkerService {
                 .await?
                 .connect_worker(workerexecutor::v1::ConnectWorkerRequest {
                     worker_id: request.worker_id.clone(),
+                    project_id: Some(project_id.clone().into()),
                     account_id: Some(account_id.into()),
                     account_limits: Some(ResourceLimits {
                         available_fuel: i64::MAX,
@@ -604,6 +617,7 @@ impl WorkerService for ForwardingWorkerService {
     ) -> crate::Result<ResumeWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
             let account_id = account_id.clone();
             let result = self
@@ -613,6 +627,7 @@ impl WorkerService for ForwardingWorkerService {
                 .resume_worker(workerexecutor::v1::ResumeWorkerRequest {
                     worker_id: request.worker_id.clone(),
                     account_id: Some(account_id.into()),
+                    project_id: Some(project_id.clone().into()),
                     force: request.force,
                 })
                 .await;
@@ -656,6 +671,7 @@ impl WorkerService for ForwardingWorkerService {
     ) -> crate::Result<InterruptWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
             let account_id = account_id.clone();
             let result = self
@@ -666,6 +682,7 @@ impl WorkerService for ForwardingWorkerService {
                     worker_id: request.worker_id.clone(),
                     recover_immediately: request.recover_immediately,
                     account_id: Some(account_id.into()),
+                    project_id: Some(project_id.clone().into()),
                 })
                 .await;
 
@@ -708,6 +725,7 @@ impl WorkerService for ForwardingWorkerService {
     ) -> crate::Result<UpdateWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
             let account_id = account_id.clone();
             let result = self
@@ -719,6 +737,7 @@ impl WorkerService for ForwardingWorkerService {
                     target_version: request.target_version,
                     mode: request.mode,
                     account_id: Some(account_id.into()),
+                    project_id: Some(project_id.clone().into()),
                 })
                 .await;
 
@@ -760,16 +779,15 @@ impl WorkerService for ForwardingWorkerService {
         request: GetOplogRequest,
     ) -> crate::Result<GetOplogResponse> {
         let mut retry_count = Self::RETRY_COUNT;
-        let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
-            let account_id = account_id.clone();
             let result = self
                 .worker_executor
                 .client()
                 .await?
                 .get_oplog(workerexecutor::v1::GetOplogRequest {
                     worker_id: request.worker_id.clone(),
-                    account_id: Some(account_id.into()),
+                    project_id: Some(project_id.clone().into()),
                     from_oplog_index: request.from_oplog_index,
                     cursor: request.cursor,
                     count: request.count,
@@ -816,14 +834,14 @@ impl WorkerService for ForwardingWorkerService {
         token: &Uuid,
         request: SearchOplogRequest,
     ) -> crate::Result<SearchOplogResponse> {
-        let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = self
             .worker_executor
             .client()
             .await?
             .search_oplog(workerexecutor::v1::SearchOplogRequest {
                 worker_id: request.worker_id,
-                account_id: Some(account_id.into()),
+                project_id: Some(project_id.into()),
                 query: request.query,
                 cursor: request.cursor,
                 count: request.count,
@@ -864,6 +882,7 @@ impl WorkerService for ForwardingWorkerService {
         request: ListDirectoryRequest,
     ) -> crate::Result<ListDirectoryResponse> {
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = self
             .worker_executor
             .client()
@@ -871,6 +890,7 @@ impl WorkerService for ForwardingWorkerService {
             .list_directory(workerexecutor::v1::ListDirectoryRequest {
                 worker_id: request.worker_id,
                 account_id: Some(account_id.into()),
+                project_id: Some(project_id.into()),
                 account_limits: Some(ResourceLimits {
                     available_fuel: i64::MAX,
                     max_memory_per_worker: i64::MAX,
@@ -912,6 +932,7 @@ impl WorkerService for ForwardingWorkerService {
         request: GetFileContentsRequest,
     ) -> crate::Result<Bytes> {
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let mut stream = self
             .worker_executor
             .client()
@@ -919,6 +940,7 @@ impl WorkerService for ForwardingWorkerService {
             .get_file_contents(workerexecutor::v1::GetFileContentsRequest {
                 worker_id: request.worker_id,
                 account_id: Some(account_id.into()),
+                project_id: Some(project_id.into()),
                 account_limits: Some(ResourceLimits {
                     available_fuel: i64::MAX,
                     max_memory_per_worker: i64::MAX,
@@ -964,6 +986,7 @@ impl WorkerService for ForwardingWorkerService {
     ) -> crate::Result<ForkWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = loop {
             let account_id = account_id.clone();
             let result = self
@@ -974,6 +997,7 @@ impl WorkerService for ForwardingWorkerService {
                     source_worker_id: fork_worker_request.source_worker_id.clone(),
                     target_worker_id: fork_worker_request.target_worker_id.clone(),
                     account_id: Some(account_id.into()),
+                    project_id: Some(project_id.clone().into()),
                     oplog_index_cutoff: fork_worker_request.oplog_index_cutoff,
                 })
                 .await;
@@ -1014,6 +1038,7 @@ impl WorkerService for ForwardingWorkerService {
         request: RevertWorkerRequest,
     ) -> crate::Result<RevertWorkerResponse> {
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = self
             .worker_executor
             .client()
@@ -1021,6 +1046,7 @@ impl WorkerService for ForwardingWorkerService {
             .revert_worker(workerexecutor::v1::RevertWorkerRequest {
                 worker_id: request.worker_id.clone(),
                 account_id: Some(account_id.into()),
+                project_id: Some(project_id.clone().into()),
                 target: request.target,
             })
             .await;
@@ -1052,6 +1078,7 @@ impl WorkerService for ForwardingWorkerService {
         request: CancelInvocationRequest,
     ) -> crate::Result<CancelInvocationResponse> {
         let account_id = self.cloud_service.get_account_id(token).await?;
+        let project_id = self.cloud_service.get_default_project(token).await?;
         let result = self
             .worker_executor
             .client()
@@ -1060,6 +1087,7 @@ impl WorkerService for ForwardingWorkerService {
                 worker_id: request.worker_id.clone(),
                 idempotency_key: request.idempotency_key.clone(),
                 account_id: Some(account_id.into()),
+                project_id: Some(project_id.clone().into()),
             })
             .await;
 

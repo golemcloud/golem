@@ -15,7 +15,7 @@
 use crate::services::golem_config::CompiledComponentServiceConfig;
 use crate::Engine;
 use async_trait::async_trait;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ProjectId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::path::{Path, PathBuf};
@@ -29,12 +29,14 @@ use wasmtime::component::Component;
 pub trait CompiledComponentService: Send + Sync {
     async fn get(
         &self,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: u64,
         engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError>;
     async fn put(
         &self,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: u64,
         component: &Component,
@@ -59,6 +61,7 @@ impl DefaultCompiledComponentService {
 impl CompiledComponentService for DefaultCompiledComponentService {
     async fn get(
         &self,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: u64,
         engine: &Engine,
@@ -68,7 +71,9 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             .get_raw(
                 "compiled_component",
                 "get",
-                BlobStorageNamespace::CompilationCache,
+                BlobStorageNamespace::CompilationCache {
+                    project_id: project_id.clone(),
+                },
                 &Self::key(component_id, component_version),
             )
             .await
@@ -106,6 +111,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
 
     async fn put(
         &self,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: u64,
         component: &Component,
@@ -117,7 +123,9 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             .put_raw(
                 "compiled_component",
                 "put",
-                BlobStorageNamespace::CompilationCache,
+                BlobStorageNamespace::CompilationCache {
+                    project_id: project_id.clone(),
+                },
                 &Self::key(component_id, component_version),
                 &bytes,
             )
@@ -164,6 +172,7 @@ impl CompiledComponentServiceDisabled {
 impl CompiledComponentService for CompiledComponentServiceDisabled {
     async fn get(
         &self,
+        _project_id: &ProjectId,
         _component_id: &ComponentId,
         _component_version: u64,
         _engine: &Engine,
@@ -173,6 +182,7 @@ impl CompiledComponentService for CompiledComponentServiceDisabled {
 
     async fn put(
         &self,
+        _project_id: &ProjectId,
         _component_id: &ComponentId,
         _component_version: u64,
         _component: &Component,

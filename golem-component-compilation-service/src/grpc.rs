@@ -108,8 +108,9 @@ impl CompileGrpcService {
     ) -> Result<(), ComponentCompilationError> {
         let component_id = make_component_id(request.component_id)?;
         let component_version = request.component_version;
+        let project_id = make_project_id(request.project_id)?;
         self.service
-            .enqueue_compilation(component_id, component_version, sender)
+            .enqueue_compilation(component_id, component_version, project_id, sender)
             .await?;
         Ok(())
     }
@@ -144,6 +145,16 @@ fn make_component_id(
     let id: ComponentId = id
         .try_into()
         .map_err(|_| bad_request_error("Invalid component id"))?;
+    Ok(id)
+}
+
+fn make_project_id(
+    id: Option<golem_api_grpc::proto::golem::common::ProjectId>,
+) -> Result<golem_common::model::ProjectId, ComponentCompilationError> {
+    let id = id.ok_or_else(|| bad_request_error("Missing project id"))?;
+    let id: golem_common::model::ProjectId = id
+        .try_into()
+        .map_err(|_| bad_request_error("Invalid project id"))?;
     Ok(id)
 }
 

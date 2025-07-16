@@ -36,7 +36,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let (component_id, _) = admin
         .component("environment-service")

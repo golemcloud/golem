@@ -138,7 +138,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 component_version: create.component_version,
                 args: create.args,
                 env: create.env.into_iter().collect(),
-                account_id: create.account_id.ok_or("Missing account_id field")?.into(),
+                project_id: create
+                    .project_id
+                    .ok_or("Missing project_id field")?
+                    .try_into()?,
+                created_by: create.created_by.ok_or("Missing created_by field")?.into(),
                 parent: match create.parent {
                     Some(parent) => Some(parent.try_into()?),
                     None => None,
@@ -168,7 +172,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .response
                         .ok_or("Missing response field")?
                         .try_into()?,
-                    wrapped_function_type: imported_function_invoked
+                    durable_function_type: imported_function_invoked
                         .wrapped_function_type
                         .ok_or("Missing wrapped_function_type field")?
                         .try_into()?,
@@ -527,7 +531,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         component_version: create.component_version,
                         args: create.args,
                         env: create.env.into_iter().collect(),
-                        account_id: Some(create.account_id.into()),
+                        created_by: Some(create.created_by.into()),
+                        project_id: Some(create.project_id.into()),
                         parent: create.parent.map(Into::into),
                         component_size: create.component_size,
                         initial_total_linear_memory_size: create.initial_total_linear_memory_size,
@@ -556,7 +561,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                                 },
                             )?),
                             wrapped_function_type: Some(
-                                imported_function_invoked.wrapped_function_type.into(),
+                                imported_function_invoked.durable_function_type.into(),
                             ),
                         },
                     )),

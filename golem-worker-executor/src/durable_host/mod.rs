@@ -32,6 +32,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::plugins::Plugins;
+use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
@@ -40,7 +41,9 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
+use crate::services::{
+    worker_enumeration, HasAll, HasConfig, HasOplog, HasProjectService, HasWorker,
+};
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
 use crate::worker::invocation::{
@@ -69,9 +72,9 @@ use golem_common::model::oplog::{
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{exports, PluginInstallationId};
+use golem_common::model::{exports, AccountId, PluginInstallationId, ProjectId};
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
+    ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
     FailedUpdateRecord, IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor,
     ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
@@ -147,7 +150,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
-        rdbms_service: Arc<dyn crate::services::rdbms::RdbmsService>,
+        rdbms_service: Arc<dyn RdbmsService>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
@@ -162,6 +165,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Result<Self, WorkerExecutorError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -183,7 +187,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let component_metadata = component_service
             .get_metadata(
-                &owned_worker_id.account_id,
+                &owned_worker_id.project_id,
                 &owned_worker_id.component_id(),
                 Some(worker_config.component_version_for_replay),
             )
@@ -191,7 +195,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let files = prepare_filesystem(
             &file_loader,
-            &owned_worker_id.account_id,
+            &owned_worker_id.project_id,
             temp_dir.path(),
             &component_metadata.files,
         )
@@ -251,6 +255,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 RwLock::new(compute_read_only_paths(&files)),
                 TRwLock::new(files),
                 file_loader,
+                project_service,
+                worker_config.created_by.clone(),
             )
             .await,
             temp_dir,
@@ -309,6 +315,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn owned_worker_id(&self) -> &OwnedWorkerId {
         &self.owned_worker_id
+    }
+
+    pub fn created_by(&self) -> &AccountId {
+        &self.state.created_by
     }
 
     pub fn component_metadata(&self) -> &ComponentMetadata {
@@ -777,7 +787,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let new_metadata = self
             .component_service()
             .get_metadata(
-                &self.owned_worker_id.account_id,
+                &self.owned_worker_id.project_id,
                 &self.owned_worker_id.component_id(),
                 Some(new_version),
             )
@@ -787,7 +797,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         update_filesystem(
             &mut current_files,
             &self.state.file_loader,
-            &self.owned_worker_id.account_id,
+            &self.owned_worker_id.project_id,
             self.temp_dir.path(),
             &new_metadata.files,
         )
@@ -948,6 +958,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
                 .schedule(
                     at,
                     ScheduledAction::ArchiveOplog {
+                        account_id: self.state.created_by.clone(),
                         owned_worker_id: self.owned_worker_id.clone(),
                         last_oplog_index: self.public_state.oplog.current_oplog_index().await,
                         next_after: self.state.config.oplog.archive_interval,
@@ -1880,7 +1891,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         _this: &T,
-        _account_id: &AccountId,
+        _project_id: &ProjectId,
         _last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
         Ok(())
@@ -1909,6 +1920,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let default_retry_config = &this.config().retry;
         for worker in workers {
             let owned_worker_id = worker.owned_worker_id();
+            let created_by = worker.created_by.clone();
             let latest_worker_status =
                 calculate_last_known_status(this, &owned_worker_id, &Some(worker)).await?;
             let last_error =
@@ -1930,6 +1942,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 RetryDecision::Immediate | RetryDecision::ReacquirePermits => {
                     let _ = Worker::get_or_create_running(
                         this,
+                        &created_by,
                         &owned_worker_id,
                         None,
                         None,
@@ -1951,13 +1964,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
     async fn on_worker_update_failed_to_start<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         details: Option<String>,
     ) -> Result<(), WorkerExecutorError> {
         let worker = this
             .worker_activator()
-            .get_or_create_suspended(owned_worker_id, None, None, None, None)
+            .get_or_create_suspended(account_id, owned_worker_id, None, None, None, None)
             .await?;
 
         let entry = OplogEntry::failed_update(target_version, details.clone());
@@ -2212,7 +2226,6 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     break;
                 }
             }
-            Some((_, OplogEntry::ExportedFunctionInvokedV1 { .. })) => break,
             Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
             _ => {}
         }
@@ -2263,6 +2276,7 @@ struct PrivateDurableWorkerState {
     plugins: Arc<dyn Plugins>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
+    created_by: AccountId,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -2293,6 +2307,8 @@ struct PrivateDurableWorkerState {
     read_only_paths: RwLock<HashSet<PathBuf>>,
     files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
     file_loader: Arc<FileLoader>,
+
+    project_service: Arc<dyn ProjectService>,
 }
 
 impl PrivateDurableWorkerState {
@@ -2321,6 +2337,8 @@ impl PrivateDurableWorkerState {
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
+        project_service: Arc<dyn ProjectService>,
+        created_by: AccountId,
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -2368,6 +2386,8 @@ impl PrivateDurableWorkerState {
             read_only_paths,
             files,
             file_loader,
+            project_service,
+            created_by,
         }
     }
 
@@ -2684,7 +2704,8 @@ impl PrivateDurableWorkerState {
             .schedule(
                 when,
                 ScheduledAction::CompletePromise {
-                    account_id: self.owned_worker_id.account_id(),
+                    account_id: self.created_by.clone(),
+                    project_id: self.owned_worker_id.project_id(),
                     promise_id,
                 },
             )
@@ -2716,7 +2737,7 @@ impl PrivateDurableWorkerState {
     ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
         self.worker_enumeration_service
             .get(
-                &self.owned_worker_id.account_id,
+                &self.owned_worker_id.project_id,
                 component_id,
                 filter,
                 cursor,
@@ -2773,6 +2794,12 @@ impl HasConfig for PrivateDurableWorkerState {
 impl HasPlugins for PrivateDurableWorkerState {
     fn plugins(&self) -> Arc<dyn Plugins> {
         self.plugins.clone()
+    }
+}
+
+impl HasProjectService for PrivateDurableWorkerState {
+    fn project_service(&self) -> Arc<dyn ProjectService> {
+        self.project_service.clone()
     }
 }
 
@@ -2905,7 +2932,7 @@ enum IFSWorkerFile {
 
 async fn prepare_filesystem(
     file_loader: &Arc<FileLoader>,
-    account_id: &AccountId,
+    project_id: &ProjectId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError> {
@@ -2919,7 +2946,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
-                        .get_read_only_to(account_id, &file.key, &path)
+                        .get_read_only_to(project_id, &file.key, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>((
                         path,
@@ -2932,7 +2959,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadWrite => {
                     debug!("Loading read-write file {}", path.display());
                     file_loader
-                        .get_read_write_to(account_id, &file.key, &path)
+                        .get_read_write_to(project_id, &file.key, &path)
                         .await?;
                     Ok((path, IFSWorkerFile::Rw))
                 }
@@ -2945,7 +2972,7 @@ async fn prepare_filesystem(
 async fn update_filesystem(
     current_state: &mut HashMap<PathBuf, IFSWorkerFile>,
     file_loader: &Arc<FileLoader>,
-    account_id: &AccountId,
+    project_id: &ProjectId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<(), WorkerExecutorError> {
@@ -3002,17 +3029,17 @@ async fn update_filesystem(
                         tokio::fs::remove_dir(&path).await.map_err(|e|
                             WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Tried replacing an existing non-empty path with ro file during update: {e}")
+                                reason: format!("Tried replacing an existing non-empty path with ro file during update: {e}"),
                             }
                         )?;
                     };
 
                     let token = file_loader
-                        .get_read_only_to(account_id, &file.key, &path)
+                        .get_read_only_to(project_id, &file.key, &path)
                         .await?;
 
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
-                },
+                }
                 (ComponentFilePermissions::ReadOnly, Some(IFSWorkerFile::Ro { file: existing_file, .. })) => {
                     if existing_file.key == file.key {
                         Ok(UpdateFileSystemResult::NoChanges)
@@ -3021,11 +3048,11 @@ async fn update_filesystem(
                         tokio::fs::remove_file(&path).await.map_err(|e|
                             WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Failed deleting file during update: {e}")
+                                reason: format!("Failed deleting file during update: {e}"),
                             }
                         )?;
                         let token = file_loader
-                            .get_read_only_to(account_id, &file.key, &path)
+                            .get_read_only_to(project_id, &file.key, &path)
                             .await?;
                         Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }
@@ -3033,7 +3060,7 @@ async fn update_filesystem(
                 (ComponentFilePermissions::ReadOnly, Some(IFSWorkerFile::Rw)) => {
                     Err(WorkerExecutorError::FileSystemError {
                         path: file.path.to_rel_string(),
-                        reason: "Tried updating rw file to ro during update".to_string()
+                        reason: "Tried updating rw file to ro during update".to_string(),
                     })
                 }
                 (ComponentFilePermissions::ReadWrite, None) => {
@@ -3045,45 +3072,45 @@ async fn update_filesystem(
                         let metadata = tokio::fs::metadata(&path).await.map_err(|e|
                             WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Failed getting metadata of path: {e}")
+                                reason: format!("Failed getting metadata of path: {e}"),
                             }
                         )?;
 
                         if metadata.is_file() {
-                            return Ok(UpdateFileSystemResult::NoChanges)
+                            return Ok(UpdateFileSystemResult::NoChanges);
                         }
 
                         // Try removing it if it's an empty directory, this will fail otherwise and we can report the error.
                         tokio::fs::remove_dir(&path).await.map_err(|e|
                             WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}")
+                                reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}"),
                             }
                         )?;
                     }
 
                     file_loader
-                        .get_read_write_to(account_id, &file.key, &path)
+                        .get_read_write_to(project_id, &file.key, &path)
                         .await?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw})
-                },
+                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
+                }
                 (ComponentFilePermissions::ReadWrite, Some(IFSWorkerFile::Ro { .. })) => {
                     debug!("Updating ro file to rw {}", path.display());
                     tokio::fs::remove_file(&path).await.map_err(|e|
                         WorkerExecutorError::FileSystemError {
                             path: file.path.to_rel_string(),
-                            reason: format!("Failed deleting file during update: {e}")
+                            reason: format!("Failed deleting file during update: {e}"),
                         }
                     )?;
                     file_loader
-                        .get_read_write_to(account_id, &file.key, &path)
+                        .get_read_write_to(project_id, &file.key, &path)
                         .await?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw})
-                },
+                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
+                }
                 (ComponentFilePermissions::ReadWrite, Some(IFSWorkerFile::Rw)) => {
                     debug!("Updating rw file {}", path.display());
                     Ok(UpdateFileSystemResult::NoChanges)
-                },
+                }
             }
         }
     });

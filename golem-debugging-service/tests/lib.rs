@@ -88,6 +88,9 @@ pub fn get_golem_config(
     redis_prefix: String,
     grpc_port: u16,
     http_port: u16,
+    account_id: AccountId,
+    default_project_id: ProjectId,
+    default_project_name: String,
 ) -> GolemConfig {
     GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
@@ -115,7 +118,11 @@ pub fn get_golem_config(
             connect_timeout: Duration::from_secs(120),
         },
         memory: MemoryConfig::default(),
-        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {}),
+        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {
+            account_id,
+            project_id: default_project_id,
+            project_name: default_project_name,
+        }),
         ..Default::default()
     }
 }
@@ -250,6 +257,7 @@ impl RegularWorkerExecutorTestDependencies {
             Path::new("../golem-debugging-service/test-components").to_path_buf();
         let account_id = AccountId::generate();
         let project_id = ProjectId::new_v4();
+        let project_name = "default".to_string();
         let token = Uuid::new_v4();
         let component_service: Arc<dyn ComponentService> = Arc::new(
             FileSystemComponentService::new(
@@ -262,7 +270,10 @@ impl RegularWorkerExecutorTestDependencies {
         );
 
         let cloud_service = Arc::new(AdminOnlyStubCloudService::new(
-            account_id, token, project_id,
+            account_id,
+            token,
+            project_id,
+            project_name,
         ));
 
         Self {
@@ -376,6 +387,6 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
     }
 
     fn cloud_service(&self) -> Arc<dyn CloudService> {
-        panic!("Not supported")
+        self.cloud_service.clone()
     }
 }

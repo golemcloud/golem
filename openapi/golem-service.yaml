@@ -9262,7 +9262,10 @@ components:
           type: object
           additionalProperties:
             type: string
-        accountId:
+        projectId:
+          type: string
+          format: uuid
+        createdBy:
           type: string
         parent:
           $ref: '#/components/schemas/WorkerId'
@@ -9282,7 +9285,8 @@ components:
       - componentVersion
       - args
       - env
-      - accountId
+      - projectId
+      - createdBy
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
@@ -9714,14 +9718,14 @@ components:
           $ref: '#/components/schemas/ValueAndType'
         response:
           $ref: '#/components/schemas/ValueAndType'
-        wrappedFunctionType:
+        durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
       required:
       - timestamp
       - functionName
       - request
       - response
-      - wrappedFunctionType
+      - durableFunctionType
     IndexedWorkerMetadata:
       title: IndexedWorkerMetadata
       type: object
@@ -11458,7 +11462,10 @@ components:
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-        accountId:
+        projectId:
+          type: string
+          format: uuid
+        createdBy:
           type: string
         args:
           type: array
@@ -11518,7 +11525,8 @@ components:
             $ref: '#/components/schemas/OplogRegion'
       required:
       - workerId
-      - accountId
+      - projectId
+      - createdBy
       - args
       - env
       - status

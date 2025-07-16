@@ -26,10 +26,10 @@ use crate::model::oplog::{
 };
 use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
-use crate::model::RetryConfig;
 use crate::model::{
     AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
 };
+use crate::model::{ProjectId, RetryConfig};
 use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
@@ -249,7 +249,8 @@ pub struct CreateParameters {
     pub component_version: ComponentVersion,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
-    pub account_id: AccountId,
+    pub project_id: ProjectId,
+    pub created_by: AccountId,
     pub parent: Option<WorkerId>,
     pub component_size: u64,
     pub initial_total_linear_memory_size: u64,
@@ -267,7 +268,7 @@ pub struct ImportedFunctionInvokedParameters {
     pub request: ValueAndType,
     #[wit_field(convert = WitValue)]
     pub response: ValueAndType,
-    pub wrapped_function_type: PublicDurableFunctionType, // TODO: rename in Golem 2.0
+    pub durable_function_type: PublicDurableFunctionType,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue)]
