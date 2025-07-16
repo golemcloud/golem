@@ -337,7 +337,7 @@ async fn rdbms_postgres_crud(
 
     drop(executor);
 
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     rdbms_workers_test::<PostgresType>(
         &executor,
@@ -452,7 +452,7 @@ async fn rdbms_postgres_idempotency(
 
     drop(executor);
 
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let select_tests = postgres_select_statements(table_name, vec![]);
     let test = RdbmsTest::new(select_tests.clone(), None);
@@ -490,7 +490,7 @@ async fn postgres_transaction_recovery_test(
 ) {
     let db_address = postgres.public_connection_string();
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids = start_workers::<PostgresType>(
@@ -574,7 +574,7 @@ async fn postgres_transaction_recovery_test(
 
     drop(executor);
 
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
@@ -1052,7 +1052,7 @@ async fn rdbms_mysql_crud(
     workers_interrupt_test(&executor, worker_ids3.clone()).await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     rdbms_workers_test::<MysqlType>(
         &executor,
@@ -1162,7 +1162,7 @@ async fn rdbms_mysql_idempotency(
     check!(result2 == result1);
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let select_tests = mysql_select_statements(table_name, vec![]);
     let test = RdbmsTest::new(select_tests.clone(), None);
@@ -1200,7 +1200,7 @@ async fn mysql_transaction_recovery_test(
 ) {
     let db_address = mysql.public_connection_string();
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids = start_workers::<MysqlType>(
@@ -1281,7 +1281,7 @@ async fn mysql_transaction_recovery_test(
 
     drop(executor);
 
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
@@ -1632,7 +1632,7 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
 ) {
     let db_address = mysql.public_connection_string();
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 1).await;
