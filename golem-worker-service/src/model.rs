@@ -15,6 +15,7 @@
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
 use derive_more::FromStr;
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AccountId, PluginInstallationId, ScanCursor, WorkerId};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
 use golem_service_base::model::{ResourceMetadata, UpdateRecord};
@@ -29,7 +30,8 @@ use uuid::Uuid;
 #[oai(rename_all = "camelCase")]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
-    pub account_id: AccountId,
+    pub project_id: ProjectId,
+    pub created_by: AccountId,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
@@ -43,6 +45,12 @@ pub struct WorkerMetadata {
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<u64, ResourceMetadata>,
     pub active_plugins: HashSet<PluginInstallationId>,
+    /// Oplog regions that are skipped during the worker's state recovery, but describe
+    /// the history of the worker. For example if an atomic region gets restarted, its partially
+    /// recorded oplog entries will be skipped on retry.
+    pub skipped_regions: Vec<OplogRegion>,
+    /// Oplog regions permanently deleted from the workers using the revert functionality.
+    pub deleted_regions: Vec<OplogRegion>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -53,7 +61,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            account_id: value.account_id.ok_or("Missing account_id")?.into(),
+            project_id: value.project_id.ok_or("Missing project_id")?.try_into()?,
+            created_by: value.created_by.ok_or("Missing account_id")?.into(),
             args: value.args,
             env: value.env,
             status: value.status.try_into()?,
@@ -79,6 +88,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
                 .into_iter()
                 .map(|id| id.try_into())
                 .collect::<Result<HashSet<_>, _>>()?,
+            skipped_regions: value
+                .skipped_regions
+                .into_iter()
+                .map(OplogRegion::from)
+                .collect::<Vec<_>>(),
+            deleted_regions: value
+                .deleted_regions
+                .into_iter()
+                .map(OplogRegion::from)
+                .collect::<Vec<_>>(),
         })
     }
 }
@@ -87,7 +106,8 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
     fn from(value: WorkerMetadata) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
-            account_id: Some(value.account_id.into()),
+            project_id: Some(value.project_id.into()),
+            created_by: Some(value.created_by.into()),
             args: value.args,
             env: value.env,
             status: value.status.into(),
@@ -108,6 +128,16 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
                 .active_plugins
                 .into_iter()
                 .map(|id| id.into())
+                .collect(),
+            skipped_regions: value
+                .skipped_regions
+                .into_iter()
+                .map(|region| region.into())
+                .collect(),
+            deleted_regions: value
+                .deleted_regions
+                .into_iter()
+                .map(|region| region.into())
                 .collect(),
         }
     }

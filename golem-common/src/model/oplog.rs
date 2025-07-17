@@ -15,11 +15,11 @@
 pub use crate::base_model::OplogIndex;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
-use crate::model::RetryConfig;
 use crate::model::{
     AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
     WorkerInvocation,
 };
+use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -280,31 +280,6 @@ pub enum PersistenceLevel {
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
-    CreateV1 {
-        timestamp: Timestamp,
-        worker_id: WorkerId,
-        component_version: ComponentVersion,
-        args: Vec<String>,
-        env: Vec<(String, String)>,
-        account_id: AccountId,
-        parent: Option<WorkerId>,
-        component_size: u64,
-        initial_total_linear_memory_size: u64,
-    },
-    /// The worker invoked a host function (original 1.0 version)
-    ImportedFunctionInvokedV1 {
-        timestamp: Timestamp,
-        function_name: String,
-        response: OplogPayload,
-        wrapped_function_type: DurableFunctionType, // TODO: rename in Golem 2.0
-    },
-    /// The worker has been invoked
-    ExportedFunctionInvokedV1 {
-        timestamp: Timestamp,
-        function_name: String,
-        request: OplogPayload,
-        idempotency_key: IdempotencyKey,
-    },
     /// The worker has completed an invocation
     ExportedFunctionCompleted {
         timestamp: Timestamp,
@@ -371,12 +346,6 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         description: UpdateDescription,
     },
-    /// An update was successfully applied
-    SuccessfulUpdateV1 {
-        timestamp: Timestamp,
-        target_version: ComponentVersion,
-        new_component_size: u64,
-    },
     /// An update failed to be applied
     FailedUpdate {
         timestamp: Timestamp,
@@ -416,16 +385,17 @@ pub enum OplogEntry {
         function_name: String,
         request: OplogPayload,
         response: OplogPayload,
-        wrapped_function_type: DurableFunctionType, // TODO: rename in Golem 2.0
+        durable_function_type: DurableFunctionType,
     },
-    /// The current version of the Create entry (previous is CreateV1)
+    /// The first entry of every oplog
     Create {
         timestamp: Timestamp,
         worker_id: WorkerId,
         component_version: ComponentVersion,
         args: Vec<String>,
         env: Vec<(String, String)>,
-        account_id: AccountId,
+        project_id: ProjectId,
+        created_by: AccountId,
         parent: Option<WorkerId>,
         component_size: u64,
         initial_total_linear_memory_size: u64,
@@ -501,7 +471,8 @@ impl OplogEntry {
         component_version: ComponentVersion,
         args: Vec<String>,
         env: Vec<(String, String)>,
-        account_id: AccountId,
+        project_id: ProjectId,
+        created_by: AccountId,
         parent: Option<WorkerId>,
         component_size: u64,
         initial_total_linear_memory_size: u64,
@@ -513,7 +484,8 @@ impl OplogEntry {
             component_version,
             args,
             env,
-            account_id,
+            project_id,
+            created_by,
             parent,
             component_size,
             initial_total_linear_memory_size,
@@ -754,9 +726,9 @@ impl OplogEntry {
     pub fn no_concurrent_side_effect(&self, idx: OplogIndex) -> bool {
         match self {
             OplogEntry::ImportedFunctionInvoked {
-                wrapped_function_type,
+                durable_function_type,
                 ..
-            } => match wrapped_function_type {
+            } => match durable_function_type {
                 DurableFunctionType::WriteRemoteBatched(Some(begin_index))
                     if *begin_index == idx =>
                 {
@@ -783,7 +755,6 @@ impl OplogEntry {
                 | OplogEntry::PendingWorkerInvocation { .. }
                 | OplogEntry::PendingUpdate { .. }
                 | OplogEntry::SuccessfulUpdate { .. }
-                | OplogEntry::SuccessfulUpdateV1 { .. }
                 | OplogEntry::FailedUpdate { .. }
                 | OplogEntry::GrowMemory { .. }
                 | OplogEntry::CreateResource { .. }
@@ -801,8 +772,6 @@ impl OplogEntry {
     pub fn timestamp(&self) -> Timestamp {
         match self {
             OplogEntry::Create { timestamp, .. }
-            | OplogEntry::ImportedFunctionInvokedV1 { timestamp, .. }
-            | OplogEntry::ExportedFunctionInvokedV1 { timestamp, .. }
             | OplogEntry::ExportedFunctionCompleted { timestamp, .. }
             | OplogEntry::Suspend { timestamp }
             | OplogEntry::Error { timestamp, .. }
@@ -826,8 +795,6 @@ impl OplogEntry {
             | OplogEntry::Log { timestamp, .. }
             | OplogEntry::Restart { timestamp }
             | OplogEntry::ImportedFunctionInvoked { timestamp, .. }
-            | OplogEntry::CreateV1 { timestamp, .. }
-            | OplogEntry::SuccessfulUpdateV1 { timestamp, .. }
             | OplogEntry::ActivatePlugin { timestamp, .. }
             | OplogEntry::DeactivatePlugin { timestamp, .. }
             | OplogEntry::Revert { timestamp, .. }
@@ -845,44 +812,20 @@ impl OplogEntry {
             OplogEntry::Create {
                 component_version, ..
             } => Some(*component_version),
-            OplogEntry::CreateV1 {
-                component_version, ..
-            } => Some(*component_version),
             OplogEntry::SuccessfulUpdate { target_version, .. } => Some(*target_version),
-            OplogEntry::SuccessfulUpdateV1 { target_version, .. } => Some(*target_version),
             _ => None,
         }
     }
 
     pub fn update_worker_id(&self, worker_id: &WorkerId) -> Option<OplogEntry> {
         match self {
-            OplogEntry::CreateV1 {
-                timestamp,
-                component_version,
-                args,
-                env,
-                account_id,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                worker_id: _,
-            } => Some(OplogEntry::CreateV1 {
-                timestamp: *timestamp,
-                worker_id: worker_id.clone(),
-                component_version: *component_version,
-                args: args.clone(),
-                env: env.clone(),
-                account_id: account_id.clone(),
-                parent: parent.clone(),
-                component_size: *component_size,
-                initial_total_linear_memory_size: *initial_total_linear_memory_size,
-            }),
             OplogEntry::Create {
                 timestamp,
                 component_version,
                 args,
                 env,
-                account_id,
+                project_id,
+                created_by,
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
@@ -894,7 +837,8 @@ impl OplogEntry {
                 component_version: *component_version,
                 args: args.clone(),
                 env: env.clone(),
-                account_id: account_id.clone(),
+                project_id: project_id.clone(),
+                created_by: created_by.clone(),
                 parent: parent.clone(),
                 component_size: *component_size,
                 initial_total_linear_memory_size: *initial_total_linear_memory_size,
@@ -968,7 +912,7 @@ pub enum DurableFunctionType {
 }
 
 /// Describes the error that occurred in the worker
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum WorkerError {
     Unknown(String),
     InvalidRequest(String),
@@ -977,23 +921,29 @@ pub enum WorkerError {
 }
 
 impl WorkerError {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Unknown(message) => message,
+            Self::InvalidRequest(message) => message,
+            Self::StackOverflow => "Stack overflow",
+            Self::OutOfMemory => "Out of memory",
+        }
+    }
+
     pub fn to_string(&self, error_logs: &str) -> String {
+        let message = self.message();
         let error_logs = if !error_logs.is_empty() {
             format!("\n\n{error_logs}")
         } else {
             "".to_string()
         };
-        match self {
-            WorkerError::Unknown(message) => format!("{message}{error_logs}"),
-            WorkerError::InvalidRequest(message) => format!("{message}{error_logs}"),
-            WorkerError::StackOverflow => format!("Stack overflow{error_logs}"),
-            WorkerError::OutOfMemory => format!("Out of memory{error_logs}"),
-        }
+        format!("{message}{error_logs}")
     }
 }
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
+    use super::WorkerError;
     use crate::model::oplog::{IndexedResourceKey, PersistenceLevel};
 
     impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
@@ -1037,6 +987,40 @@ mod protobuf {
                 golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistRemoteSideEffects => PersistenceLevel::PersistRemoteSideEffects,
                 golem_api_grpc::proto::golem::worker::PersistenceLevel::Smart => PersistenceLevel::Smart,
             }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerError> for WorkerError {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::WorkerError,
+        ) -> Result<Self, Self::Error> {
+            use golem_api_grpc::proto::golem::worker::worker_error::Error;
+            match value.error.ok_or("no error field")? {
+                Error::StackOverflow(_) => Ok(Self::StackOverflow),
+                Error::OutOfMemory(_) => Ok(Self::OutOfMemory),
+                Error::InvalidRequest(inner) => Ok(Self::InvalidRequest(inner.details)),
+                Error::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
+            }
+        }
+    }
+
+    impl From<WorkerError> for golem_api_grpc::proto::golem::worker::WorkerError {
+        fn from(value: WorkerError) -> Self {
+            use golem_api_grpc::proto::golem::worker as grpc_worker;
+            use golem_api_grpc::proto::golem::worker::worker_error::Error;
+            let error = match value {
+                WorkerError::StackOverflow => Error::StackOverflow(grpc_worker::StackOverflow {}),
+                WorkerError::OutOfMemory => Error::OutOfMemory(grpc_worker::OutOfMemory {}),
+                WorkerError::InvalidRequest(details) => {
+                    Error::InvalidRequest(grpc_worker::InvalidRequest { details })
+                }
+                WorkerError::Unknown(details) => {
+                    Error::UnknownError(grpc_worker::UnknownError { details })
+                }
+            };
+            Self { error: Some(error) }
         }
     }
 }

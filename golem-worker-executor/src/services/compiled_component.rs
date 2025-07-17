@@ -12,36 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::golem_config::CompiledComponentServiceConfig;
+use crate::Engine;
+use async_trait::async_trait;
+use golem_common::model::{ComponentId, ProjectId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-use async_trait::async_trait;
 use tokio::time::Instant;
 use tracing::debug;
 use wasmtime::component::Component;
-
-use golem_common::model::ComponentId;
-
-use crate::error::GolemError;
-use crate::services::golem_config::CompiledComponentServiceConfig;
-use crate::Engine;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 
 /// Service for storing compiled native binaries of WebAssembly components
 #[async_trait]
 pub trait CompiledComponentService: Send + Sync {
     async fn get(
         &self,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: u64,
         engine: &Engine,
-    ) -> Result<Option<Component>, GolemError>;
+    ) -> Result<Option<Component>, WorkerExecutorError>;
     async fn put(
         &self,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: u64,
         component: &Component,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 pub struct DefaultCompiledComponentService {
@@ -62,16 +61,19 @@ impl DefaultCompiledComponentService {
 impl CompiledComponentService for DefaultCompiledComponentService {
     async fn get(
         &self,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: u64,
         engine: &Engine,
-    ) -> Result<Option<Component>, GolemError> {
+    ) -> Result<Option<Component>, WorkerExecutorError> {
         match self
             .blob_storage
             .get_raw(
                 "compiled_component",
                 "get",
-                BlobStorageNamespace::CompilationCache,
+                BlobStorageNamespace::CompilationCache {
+                    project_id: project_id.clone(),
+                },
                 &Self::key(component_id, component_version),
             )
             .await
@@ -81,7 +83,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                 let start = Instant::now();
                 let component = unsafe {
                     Component::deserialize(engine, &bytes).map_err(|err| {
-                        GolemError::component_download_failed(
+                        WorkerExecutorError::component_download_failed(
                             component_id.clone(),
                             component_version,
                             format!("Could not deserialize compiled component: {err}"),
@@ -99,7 +101,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
 
                 Ok(Some(component))
             }
-            Err(err) => Err(GolemError::component_download_failed(
+            Err(err) => Err(WorkerExecutorError::component_download_failed(
                 component_id.clone(),
                 component_version,
                 format!("Could not download compiled component: {err}"),
@@ -109,10 +111,11 @@ impl CompiledComponentService for DefaultCompiledComponentService {
 
     async fn put(
         &self,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: u64,
         component: &Component,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         let bytes = component
             .serialize()
             .expect("Could not serialize component");
@@ -120,13 +123,15 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             .put_raw(
                 "compiled_component",
                 "put",
-                BlobStorageNamespace::CompilationCache,
+                BlobStorageNamespace::CompilationCache {
+                    project_id: project_id.clone(),
+                },
                 &Self::key(component_id, component_version),
                 &bytes,
             )
             .await
             .map_err(|err| {
-                GolemError::component_download_failed(
+                WorkerExecutorError::component_download_failed(
                     component_id.clone(),
                     component_version,
                     format!("Could not store compiled component: {err}"),
@@ -167,19 +172,21 @@ impl CompiledComponentServiceDisabled {
 impl CompiledComponentService for CompiledComponentServiceDisabled {
     async fn get(
         &self,
+        _project_id: &ProjectId,
         _component_id: &ComponentId,
         _component_version: u64,
         _engine: &Engine,
-    ) -> Result<Option<Component>, GolemError> {
+    ) -> Result<Option<Component>, WorkerExecutorError> {
         Ok(None)
     }
 
     async fn put(
         &self,
+        _project_id: &ProjectId,
         _component_id: &ComponentId,
         _component_version: u64,
         _component: &Component,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
 }

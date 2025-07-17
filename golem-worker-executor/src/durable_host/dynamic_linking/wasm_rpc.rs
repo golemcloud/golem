@@ -824,7 +824,7 @@ async fn create_default_durable_rpc_target<Ctx: WorkerCtx>(
             worker_name,
         };
         let remote_worker_id = OwnedWorkerId::new(
-            &store.data().owned_worker_id().account_id,
+            &store.data().owned_worker_id().project_id,
             &remote_worker_id,
         );
         let demand = store.data().rpc().create_demand(&remote_worker_id).await;
@@ -876,7 +876,7 @@ async fn create_durable_rpc_target<Ctx: WorkerCtx>(
     let remote_worker_id = decode_worker_id(worker_id.clone()).ok_or_else(|| anyhow!("Missing or invalid worker id parameter. Expected to get a worker-id value as a custom constructor parameter, got {worker_id:?}"))?;
 
     let remote_worker_id = OwnedWorkerId::new(
-        &store.data().owned_worker_id().account_id,
+        &store.data().owned_worker_id().project_id,
         &remote_worker_id,
     );
     let demand = store.data().rpc().create_demand(&remote_worker_id).await;
@@ -905,7 +905,7 @@ async fn create_default_ephemeral_rpc_target<Ctx: WorkerCtx>(
             })
             .await?;
         let remote_worker_id = OwnedWorkerId::new(
-            &store.data().owned_worker_id().account_id,
+            &store.data().owned_worker_id().project_id,
             &remote_worker_id,
         );
         let demand = store.data().rpc().create_demand(&remote_worker_id).await;
@@ -928,7 +928,7 @@ async fn create_ephemeral_rpc_target<Ctx: WorkerCtx>(
         })
         .await?;
     let remote_worker_id = OwnedWorkerId::new(
-        &store.data().owned_worker_id().account_id,
+        &store.data().owned_worker_id().project_id,
         &remote_worker_id,
     );
     let demand = store.data().rpc().create_demand(&remote_worker_id).await;

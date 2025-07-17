@@ -632,9 +632,15 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .map_item(|i| i.map_err(widen_infallible))
             .map_error(widen_infallible);
 
+        let project_id = self
+            .deps
+            .cloud_service()
+            .get_default_project(&self.token)
+            .await
+            .expect("Failed to get default project");
         self.deps
             .initial_component_files_service()
-            .put_if_not_exists(&self.account_id, stream)
+            .put_if_not_exists(&project_id, stream)
             .await
             .expect("Failed to add initial component file")
     }
@@ -1965,8 +1971,8 @@ pub fn worker_error_message(error: &Error) -> String {
                     "Invalid shard id: {:?}; ids: {:?}",
                     error.shard_id, error.shard_ids
                 ),
-                worker_execution_error::Error::PreviousInvocationFailed(error) => {
-                    format!("Previous invocation failed: {}", error.details)
+                worker_execution_error::Error::PreviousInvocationFailed(_) => {
+                    "Previous invocation failed".to_string()
                 }
                 worker_execution_error::Error::Unknown(error) => {
                     format!("Unknown error: {}", error.details)
@@ -1989,8 +1995,43 @@ pub fn worker_error_message(error: &Error) -> String {
                 worker_execution_error::Error::FileSystemError(error) => {
                     format!("File system error: {}", error.reason)
                 }
+                worker_execution_error::Error::InvocationFailed(_) => {
+                    "Invocation failed".to_string()
+                }
             },
         },
+    }
+}
+
+pub fn worker_error_underlying_error(
+    error: &Error,
+) -> Option<golem_common::model::oplog::WorkerError> {
+    match error {
+        Error::InternalError(error) => match &error.error {
+            Some(worker_execution_error::Error::InvocationFailed(error)) => {
+                Some(error.error.clone().unwrap().try_into().unwrap())
+            }
+            Some(worker_execution_error::Error::PreviousInvocationFailed(error)) => {
+                Some(error.error.clone().unwrap().try_into().unwrap())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+pub fn worker_error_logs(error: &Error) -> Option<String> {
+    match error {
+        Error::InternalError(error) => match &error.error {
+            Some(worker_execution_error::Error::InvocationFailed(error)) => {
+                Some(error.stderr.clone())
+            }
+            Some(worker_execution_error::Error::PreviousInvocationFailed(error)) => {
+                Some(error.stderr.clone())
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -2012,8 +2053,13 @@ pub fn to_worker_metadata(
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect::<Vec<_>>(),
-            account_id: metadata
-                .account_id
+            project_id: metadata
+                .project_id
+                .expect("no project_id")
+                .try_into()
+                .expect("invalid project_id"),
+            created_by: metadata
+                .created_by
                 .clone()
                 .expect("no account_id")
                 .clone()

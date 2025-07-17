@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::common::ApiEndpointError;
-use crate::api::common::ApiTags;
 use crate::model;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
@@ -31,6 +30,7 @@ use golem_common::model::{
     TargetWorkerId, WorkerFilter, WorkerId,
 };
 use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{GolemSecurityScheme, WrappedGolemSecuritySchema};
 use golem_service_base::model::*;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};

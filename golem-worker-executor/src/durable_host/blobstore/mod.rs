@@ -33,7 +33,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
-        let account_id = self.state.owned_worker_id.account_id();
+        let account_id = self.state.owned_worker_id.project_id();
         let durability = Durability::<u64, SerializableError>::new(
             self,
             "golem blobstore::blobstore",
@@ -69,7 +69,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
-        let account_id = self.state.owned_worker_id.account_id();
+        let account_id = self.state.owned_worker_id.project_id();
         let durability = Durability::<Option<u64>, SerializableError>::new(
             self,
             "golem blobstore::blobstore",
@@ -102,7 +102,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
-        let account_id = self.state.owned_worker_id.account_id();
+        let account_id = self.state.owned_worker_id.project_id();
         let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::blobstore",
@@ -131,7 +131,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<bool, Error>> {
-        let account_id = self.state.owned_worker_id.account_id();
+        let account_id = self.state.owned_worker_id.project_id();
         let durability = Durability::<bool, SerializableError>::new(
             self,
             "golem blobstore::blobstore",
@@ -161,7 +161,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         src: ObjectId,
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
-        let account_id = self.state.owned_worker_id.account_id();
+        let account_id = self.state.owned_worker_id.project_id();
         let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::blobstore",
@@ -203,7 +203,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         src: ObjectId,
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
-        let account_id = self.state.owned_worker_id.account_id();
+        let account_id = self.state.owned_worker_id.project_id();
         let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::blobstore",

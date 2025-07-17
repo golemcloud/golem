@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ApiError, ApiResult, ApiTags};
+use super::{ApiError, ApiResult};
 use crate::model::*;
 use crate::service::api_mapper::ApiMapper;
 use crate::service::auth::AuthService;
 use crate::service::project::ProjectService;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use golem_common::model::auth::{AccountAction, ProjectAction, ProjectPermisison};
+use golem_common::model::auth::{AccountAction, ProjectAction, ProjectPermission};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
 use golem_common::model::{Empty, PluginInstallationId, ProjectId};
 use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::dto;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_service_base::model::BatchPluginInstallationUpdates;
@@ -258,7 +259,7 @@ impl ProjectApi {
         &self,
         project_id: Path<ProjectId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Vec<ProjectPermisison>>> {
+    ) -> ApiResult<Json<Vec<ProjectPermission>>> {
         let record = recorded_http_api_request!(
             "get_project_actions",
             project_id = project_id.0.to_string(),
@@ -275,7 +276,7 @@ impl ProjectApi {
         &self,
         project_id: ProjectId,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Vec<ProjectPermisison>>> {
+    ) -> ApiResult<Json<Vec<ProjectPermission>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let result = self
             .auth_service
@@ -482,9 +483,9 @@ impl ProjectApi {
     #[oai(
         path = "/:project_id/latest/plugins/installs/batch",
         method = "post",
-        operation_id = "bath_update_installed_plugins_of_project"
+        operation_id = "batch_update_installed_plugins_of_project"
     )]
-    async fn bath_update_installed_plugins(
+    async fn batch_update_installed_plugins(
         &self,
         project_id: Path<ProjectId>,
         updates: Json<BatchPluginInstallationUpdates>,

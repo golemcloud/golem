@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::metrics::oplog::record_oplog_call;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
@@ -22,8 +21,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId};
 use golem_common::model::{
-    AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId, WorkerMetadata,
+    ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerId, WorkerMetadata,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -106,7 +106,7 @@ impl PrimaryOplogService {
                     "oplog",
                     "upload_payload",
                     BlobStorageNamespace::OplogPayload {
-                        account_id: owned_worker_id.account_id(),
+                        project_id: owned_worker_id.project_id(),
                         worker_id: owned_worker_id.worker_id(),
                     },
                     Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
@@ -139,7 +139,7 @@ impl PrimaryOplogService {
                         "oplog",
                         "download_payload",
                         BlobStorageNamespace::OplogPayload {
-                            account_id: owned_worker_id.account_id(),
+                            project_id: owned_worker_id.project_id(),
                             worker_id: owned_worker_id.worker_id(),
                         },
                         Path::new(&format!("{}/{}", hex::encode(md5_hash), payload_id.0)),
@@ -298,11 +298,11 @@ impl OplogService for PrimaryOplogService {
 
     async fn scan_for_component(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         record_oplog_call("scan");
 
         let (cursor, keys) = self
@@ -324,7 +324,7 @@ impl OplogService for PrimaryOplogService {
             keys.into_iter()
                 .map(|key| OwnedWorkerId {
                     worker_id: Self::get_worker_id_from_key(&key, component_id),
-                    account_id: account_id.clone(),
+                    project_id: project_id.clone(),
                 })
                 .collect(),
         ))

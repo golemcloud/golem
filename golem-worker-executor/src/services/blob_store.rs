@@ -19,7 +19,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 
-use golem_common::model::AccountId;
+use golem_common::model::ProjectId;
 
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
 use golem_wasm_rpc_derive::IntoValue;
@@ -27,17 +27,17 @@ use golem_wasm_rpc_derive::IntoValue;
 /// Interface for storing blobs in a persistent storage.
 #[async_trait]
 pub trait BlobStoreService: Send + Sync {
-    async fn clear(&self, account_id: AccountId, container_name: String) -> anyhow::Result<()>;
+    async fn clear(&self, project_id: ProjectId, container_name: String) -> anyhow::Result<()>;
 
     async fn container_exists(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
     ) -> anyhow::Result<bool>;
 
     async fn copy_object(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         source_container_name: String,
         source_object_name: String,
         destination_container_name: String,
@@ -46,39 +46,39 @@ pub trait BlobStoreService: Send + Sync {
 
     async fn create_container(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
     ) -> anyhow::Result<()>;
 
     async fn delete_container(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
     ) -> anyhow::Result<()>;
 
     async fn delete_object(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_name: String,
     ) -> anyhow::Result<()>;
 
     async fn delete_objects(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_names: Vec<String>,
     ) -> anyhow::Result<()>;
 
     async fn get_container(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
     ) -> anyhow::Result<Option<u64>>;
 
     async fn get_data(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_name: String,
         start: u64,
@@ -87,20 +87,20 @@ pub trait BlobStoreService: Send + Sync {
 
     async fn has_object(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_name: String,
     ) -> anyhow::Result<bool>;
 
     async fn list_objects(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
     ) -> anyhow::Result<Vec<String>>;
 
     async fn move_object(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         source_container_name: String,
         source_object_name: String,
         destination_container_name: String,
@@ -109,14 +109,14 @@ pub trait BlobStoreService: Send + Sync {
 
     async fn object_info(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_name: String,
     ) -> anyhow::Result<ObjectMetadata>;
 
     async fn write_data(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_name: String,
         data: Vec<u8>,
@@ -135,12 +135,12 @@ impl DefaultBlobStoreService {
 
 #[async_trait]
 impl BlobStoreService for DefaultBlobStoreService {
-    async fn clear(&self, account_id: AccountId, container_name: String) -> anyhow::Result<()> {
+    async fn clear(&self, project_id: ProjectId, container_name: String) -> anyhow::Result<()> {
         self.blob_storage
             .delete_dir(
                 "blob_store",
                 "clear",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 Path::new(&container_name),
             )
             .await
@@ -150,14 +150,14 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn container_exists(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
     ) -> anyhow::Result<bool> {
         self.blob_storage
             .exists(
                 "blob_store",
                 "container_exists",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 Path::new(&container_name),
             )
             .await
@@ -171,7 +171,7 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn copy_object(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         source_container_name: String,
         source_object_name: String,
         destination_container_name: String,
@@ -181,7 +181,7 @@ impl BlobStoreService for DefaultBlobStoreService {
             .copy(
                 "blob_store",
                 "copy_object",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 &Path::new(&source_container_name).join(&source_object_name),
                 &Path::new(&destination_container_name).join(&destination_object_name),
             )
@@ -191,14 +191,14 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn create_container(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
     ) -> anyhow::Result<()> {
         self.blob_storage
             .create_dir(
                 "blob_store",
                 "create_container",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 Path::new(&container_name),
             )
             .await
@@ -208,14 +208,14 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn delete_container(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
     ) -> anyhow::Result<()> {
         self.blob_storage
             .delete_dir(
                 "blob_store",
                 "delete_container",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 Path::new(&container_name),
             )
             .await
@@ -225,7 +225,7 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn delete_object(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_name: String,
     ) -> anyhow::Result<()> {
@@ -233,7 +233,7 @@ impl BlobStoreService for DefaultBlobStoreService {
             .delete_dir(
                 "blob_store",
                 "delete_object",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 &Path::new(&container_name).join(&object_name),
             )
             .await
@@ -243,7 +243,7 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn delete_objects(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_names: Vec<String>,
     ) -> anyhow::Result<()> {
@@ -255,7 +255,7 @@ impl BlobStoreService for DefaultBlobStoreService {
             .delete_many(
                 "blob_store",
                 "delete_objects",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 &paths,
             )
             .await
@@ -264,14 +264,14 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn get_container(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
     ) -> anyhow::Result<Option<u64>> {
         self.blob_storage
             .get_metadata(
                 "blob_store",
                 "get_container",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 Path::new(&container_name),
             )
             .await
@@ -281,7 +281,7 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn get_data(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_name: String,
         start: u64,
@@ -292,7 +292,7 @@ impl BlobStoreService for DefaultBlobStoreService {
             .get_raw_slice(
                 "blob_store",
                 "get_data",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 &Path::new(&container_name).join(&object_name),
                 start,
                 end,
@@ -308,7 +308,7 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn has_object(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_name: String,
     ) -> anyhow::Result<bool> {
@@ -316,7 +316,7 @@ impl BlobStoreService for DefaultBlobStoreService {
             .exists(
                 "blob_store",
                 "has_object",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 &Path::new(&container_name).join(&object_name),
             )
             .await
@@ -330,14 +330,14 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn list_objects(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
     ) -> anyhow::Result<Vec<String>> {
         self.blob_storage
             .list_dir(
                 "blob_store",
                 "list_objects",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 Path::new(&container_name),
             )
             .await
@@ -352,7 +352,7 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn move_object(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         source_container_name: String,
         source_object_name: String,
         destination_container_name: String,
@@ -362,7 +362,7 @@ impl BlobStoreService for DefaultBlobStoreService {
             .r#move(
                 "blob_store",
                 "move_object",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 &Path::new(&source_container_name).join(&source_object_name),
                 &Path::new(&destination_container_name).join(&destination_object_name),
             )
@@ -372,7 +372,7 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn object_info(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_name: String,
     ) -> anyhow::Result<ObjectMetadata> {
@@ -381,7 +381,7 @@ impl BlobStoreService for DefaultBlobStoreService {
             .get_metadata(
                 "blob_store",
                 "object_info",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 &Path::new(&container_name).join(&object_name),
             )
             .await
@@ -399,7 +399,7 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn write_data(
         &self,
-        account_id: AccountId,
+        project_id: ProjectId,
         container_name: String,
         object_name: String,
         data: Vec<u8>,
@@ -408,7 +408,7 @@ impl BlobStoreService for DefaultBlobStoreService {
             .put_raw(
                 "blob_store",
                 "write_data",
-                BlobStorageNamespace::CustomStorage(account_id),
+                BlobStorageNamespace::CustomStorage { project_id },
                 &Path::new(&container_name).join(&object_name),
                 &data,
             )
@@ -434,60 +434,54 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use golem_common::model::AccountId;
+    use golem_common::model::ProjectId;
 
     use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
     use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 
     async fn test_container_exists(blob_store: &impl BlobStoreService) {
-        let account1 = AccountId {
-            value: "account1".to_string(),
-        };
+        let project_id = ProjectId::new_v4();
         assert!(!blob_store
-            .container_exists(account1.clone(), "container1".to_string())
+            .container_exists(project_id.clone(), "container1".to_string())
             .await
             .unwrap());
         blob_store
-            .create_container(account1.clone(), "container1".to_string())
+            .create_container(project_id.clone(), "container1".to_string())
             .await
             .unwrap();
         assert!(blob_store
-            .container_exists(account1.clone(), "container1".to_string())
+            .container_exists(project_id.clone(), "container1".to_string())
             .await
             .unwrap());
     }
 
     async fn test_container_delete(blob_store: &impl BlobStoreService) {
-        let account1 = AccountId {
-            value: "account1".to_string(),
-        };
+        let project_id = ProjectId::new_v4();
         blob_store
-            .create_container(account1.clone(), "container1".to_string())
+            .create_container(project_id.clone(), "container1".to_string())
             .await
             .unwrap();
         blob_store
-            .delete_container(account1.clone(), "container1".to_string())
+            .delete_container(project_id.clone(), "container1".to_string())
             .await
             .unwrap();
         assert!(!blob_store
-            .container_exists(account1.clone(), "container1".to_string())
+            .container_exists(project_id.clone(), "container1".to_string())
             .await
             .unwrap());
     }
 
     async fn test_container_has_write_read_has(blob_store: &impl BlobStoreService) {
-        let account1 = AccountId {
-            value: "account1".to_string(),
-        };
+        let project_id = ProjectId::new_v4();
 
         blob_store
-            .create_container(account1.clone(), "container1".to_string())
+            .create_container(project_id.clone(), "container1".to_string())
             .await
             .unwrap();
         assert!(!blob_store
             .has_object(
-                account1.clone(),
+                project_id.clone(),
                 "container1".to_string(),
                 "obj1".to_string()
             )
@@ -497,7 +491,7 @@ mod tests {
         let original_data = vec![1, 2, 3, 4];
         blob_store
             .write_data(
-                account1.clone(),
+                project_id.clone(),
                 "container1".to_string(),
                 "obj1".to_string(),
                 original_data.clone(),
@@ -507,7 +501,7 @@ mod tests {
 
         let read_data = blob_store
             .get_data(
-                account1.clone(),
+                project_id.clone(),
                 "container1".to_string(),
                 "obj1".to_string(),
                 0,
@@ -519,7 +513,7 @@ mod tests {
         assert_eq!(original_data, read_data);
         assert!(blob_store
             .has_object(
-                account1.clone(),
+                project_id.clone(),
                 "container1".to_string(),
                 "obj1".to_string()
             )
@@ -528,21 +522,19 @@ mod tests {
     }
 
     async fn test_container_list_copy_move_list(blob_store: &impl BlobStoreService) {
-        let account1 = AccountId {
-            value: "account1".to_string(),
-        };
+        let project_id = ProjectId::new_v4();
 
         blob_store
-            .create_container(account1.clone(), "container1".to_string())
+            .create_container(project_id.clone(), "container1".to_string())
             .await
             .unwrap();
         blob_store
-            .create_container(account1.clone(), "container2".to_string())
+            .create_container(project_id.clone(), "container2".to_string())
             .await
             .unwrap();
 
         assert!(blob_store
-            .list_objects(account1.clone(), "container1".to_string(),)
+            .list_objects(project_id.clone(), "container1".to_string(),)
             .await
             .unwrap()
             .is_empty());
@@ -550,7 +542,7 @@ mod tests {
         let original_data = vec![1, 2, 3, 4];
         blob_store
             .write_data(
-                account1.clone(),
+                project_id.clone(),
                 "container1".to_string(),
                 "obj1".to_string(),
                 original_data.clone(),
@@ -560,7 +552,7 @@ mod tests {
 
         blob_store
             .copy_object(
-                account1.clone(),
+                project_id.clone(),
                 "container1".to_string(),
                 "obj1".to_string(),
                 "container1".to_string(),
@@ -570,7 +562,7 @@ mod tests {
             .unwrap();
 
         let mut result = blob_store
-            .list_objects(account1.clone(), "container1".to_string())
+            .list_objects(project_id.clone(), "container1".to_string())
             .await
             .unwrap();
 
@@ -580,7 +572,7 @@ mod tests {
 
         blob_store
             .move_object(
-                account1.clone(),
+                project_id.clone(),
                 "container1".to_string(),
                 "obj1".to_string(),
                 "container2".to_string(),
@@ -591,7 +583,7 @@ mod tests {
 
         assert_eq!(
             blob_store
-                .list_objects(account1.clone(), "container1".to_string(),)
+                .list_objects(project_id.clone(), "container1".to_string(),)
                 .await
                 .unwrap(),
             vec!["obj2"]
@@ -599,7 +591,7 @@ mod tests {
 
         assert_eq!(
             blob_store
-                .list_objects(account1.clone(), "container2".to_string(),)
+                .list_objects(project_id.clone(), "container2".to_string(),)
                 .await
                 .unwrap(),
             vec!["obj3"]

@@ -18,18 +18,17 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
 use tracing::{debug, Instrument};
 
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::{OwnedWorkerId, WorkerId};
-
-use crate::error::GolemError;
 use crate::services::golem_config::MemoryConfig;
 use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::{AccountId, OwnedWorkerId, WorkerId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 /// Holds the metadata and wasmtime structures of currently active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
-    workers: Cache<WorkerId, (), Arc<Worker<Ctx>>, GolemError>,
+    workers: Cache<WorkerId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
     worker_memory: Arc<Semaphore>,
     priority_allocation_lock: Arc<Mutex<()>>,
     acquire_retry_delay: Duration,
@@ -55,17 +54,19 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         &self,
         deps: &T,
         owned_worker_id: &OwnedWorkerId,
+        account_id: &AccountId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
-    ) -> Result<Arc<Worker<Ctx>>, GolemError>
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         let worker_id = owned_worker_id.worker_id();
 
         let owned_worker_id = owned_worker_id.clone();
+        let account_id = account_id.clone();
         let deps = deps.clone();
         self.workers
             .get_or_insert_simple(&worker_id, || {
@@ -73,6 +74,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                     Ok(Arc::new(
                         Worker::new(
                             &deps,
+                            &account_id,
                             owned_worker_id,
                             worker_args,
                             worker_env,

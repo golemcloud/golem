@@ -21,7 +21,6 @@ use crate::durable_host::wasm_rpc::serialized::{
     SerializableInvokeRequest, SerializableInvokeResult, SerializableInvokeResultV1,
 };
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
-use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
@@ -34,10 +33,11 @@ use golem_common::model::exports::function_by_name;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
 use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction,
+    AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ProjectId, ScheduledAction,
     TargetWorkerId, WorkerId,
 };
 use golem_common::serialization::try_deserialize;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, Pollable,
@@ -147,7 +147,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 function_name: function_name.clone(),
                 function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
-                    &remote_worker_id.account_id,
+                    &remote_worker_id.project_id,
                     &remote_worker_id.worker_id.component_id,
                     &function_name,
                     &function_params,
@@ -165,6 +165,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     Some(idempotency_key),
                     function_name,
                     function_params,
+                    self.created_by(),
                     self.worker_id(),
                     &args,
                     &env,
@@ -177,12 +178,17 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             result.map(|value_and_type| value_and_type.map(WitValue::from))
         } else {
             let (bytes, _oplog_entry_version) = durability.replay_raw(self).await?;
-            let typed_value: Result<Result<Option<ValueAndType>, SerializableError>, GolemError> =
-                try_deserialize(&bytes)
-                    .map_err(|err| {
-                        GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
-                    })
-                    .map(|ok| ok.expect("Empty payload"));
+            let typed_value: Result<
+                Result<Option<ValueAndType>, SerializableError>,
+                WorkerExecutorError,
+            > = try_deserialize(&bytes)
+                .map_err(|err| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "ImportedFunctionInvoked payload",
+                        err,
+                    )
+                })
+                .map(|ok| ok.expect("Empty payload"));
 
             match typed_value {
                 Ok(Ok(value_and_type)) => Ok(value_and_type.map(WitValue::from)),
@@ -277,7 +283,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 function_name: function_name.clone(),
                 function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
-                    &remote_worker_id.account_id,
+                    &remote_worker_id.project_id,
                     &remote_worker_id.worker_id.component_id,
                     &function_name,
                     &function_params,
@@ -295,6 +301,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     Some(idempotency_key),
                     function_name,
                     function_params,
+                    self.created_by(),
                     self.worker_id(),
                     &args,
                     &env,
@@ -371,13 +378,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .await?;
 
         let worker_id = self.worker_id().clone();
+        let created_by = self.created_by().clone();
         let request = SerializableInvokeRequest {
             remote_worker_id: remote_worker_id.worker_id(),
             idempotency_key: idempotency_key.clone(),
             function_name: function_name.clone(),
             function_params: try_get_typed_parameters(
                 self.state.component_service.clone(),
-                &remote_worker_id.account_id,
+                &remote_worker_id.project_id,
                 &remote_worker_id.worker_id.component_id,
                 &function_name,
                 &function_params,
@@ -399,6 +407,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             Some(idempotency_key),
                             function_name,
                             function_params,
+                            &created_by,
                             &worker_id,
                             &args,
                             &env,
@@ -423,6 +432,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 payload: Box::new(FutureInvokeResultState::Deferred {
                     remote_worker_id,
                     self_worker_id: worker_id,
+                    self_created_by: created_by,
                     args,
                     env,
                     function_name,
@@ -464,7 +474,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<golem_wasm_rpc::golem_rpc_0_2_x::types::WitValue>,
     ) -> anyhow::Result<Resource<CancellationToken>> {
-        let durability = Durability::<SerializableScheduleId, GolemError>::new(
+        let durability = Durability::<SerializableScheduleId, WorkerExecutorError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "schedule_invocation",
@@ -495,7 +505,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 function_name: function_name.clone(),
                 function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
-                    &remote_worker_id.account_id,
+                    &remote_worker_id.project_id,
                     &remote_worker_id.worker_id.component_id,
                     &function_name,
                     &function_params,
@@ -509,6 +519,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .invocation_context
                 .clone_as_inherited_stack(&self.state.current_span_id);
             let action = ScheduledAction::Invoke {
+                account_id: self.created_by().clone(),
                 owned_worker_id: remote_worker_id,
                 idempotency_key,
                 full_function_name: function_name,
@@ -535,7 +546,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             serializable_schedule_id
         } else {
             durability
-                .replay::<SerializableScheduleId, GolemError>(self)
+                .replay::<SerializableScheduleId, WorkerExecutorError>(self)
                 .await?
         };
 
@@ -614,6 +625,7 @@ enum FutureInvokeResultState {
     Deferred {
         remote_worker_id: OwnedWorkerId,
         self_worker_id: WorkerId,
+        self_created_by: AccountId,
         args: Vec<String>,
         env: Vec<(String, String)>,
         function_name: String,
@@ -802,6 +814,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                 let FutureInvokeResultState::Deferred {
                                     remote_worker_id,
                                     self_worker_id,
+                                    self_created_by,
                                     args,
                                     env,
                                     function_name,
@@ -820,6 +833,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                         Some(idempotency_key),
                                         function_name,
                                         function_params,
+                                        &self_created_by,
                                         &self_worker_id,
                                         &args,
                                         &env,
@@ -846,7 +860,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             function_name: function_name.clone(),
                             function_params: try_get_typed_parameters(
                                 component_service,
-                                &remote_worker_id.account_id,
+                                &remote_worker_id.project_id,
                                 &remote_worker_id.worker_id.component_id,
                                 function_name,
                                 function_params,
@@ -923,10 +937,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 Err(err) => Err(err),
             }
         } else if self.state.persistence_level == PersistenceLevel::PersistNothing {
-            Err(
-                GolemError::runtime("Trying to replay an RPC call in a PersistNothing block")
-                    .into(),
+            Err(WorkerExecutorError::runtime(
+                "Trying to replay an RPC call in a PersistNothing block",
             )
+            .into())
         } else {
             let (_, oplog_entry) =
                 get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked)
@@ -1039,7 +1053,7 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
             data: entry.schedule_id.clone(),
         };
 
-        let durability = Durability::<(), GolemError>::new(
+        let durability = Durability::<(), WorkerExecutorError>::new(
             self,
             "golem::rpc::cancellation-token",
             "cancel",
@@ -1056,7 +1070,7 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
                 .persist_serializable(self, schedule_id, Ok(()))
                 .await?;
         } else {
-            durability.replay::<(), GolemError>(self).await?;
+            durability.replay::<(), WorkerExecutorError>(self).await?;
         };
 
         Ok(())
@@ -1111,7 +1125,7 @@ async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
 
     let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
 
-    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.account_id, &remote_worker_id);
+    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.project_id, &remote_worker_id);
     let demand = ctx.rpc().create_demand(&remote_worker_id).await;
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload::Interface {
@@ -1131,13 +1145,13 @@ async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
 /// This should only be used for generating "debug information" for the stored oplog entries.
 async fn try_get_typed_parameters(
     components: Arc<dyn ComponentService>,
-    account_id: &AccountId,
+    project_id: &ProjectId,
     component_id: &ComponentId,
     function_name: &str,
     params: &[WitValue],
 ) -> Vec<ValueAndType> {
     if let Ok(metadata) = components
-        .get_metadata(account_id, component_id, None)
+        .get_metadata(project_id, component_id, None)
         .await
     {
         if let Ok(Some(function)) = function_by_name(&metadata.exports, function_name) {

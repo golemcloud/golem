@@ -12,20 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
-
-use crate::model::InterruptKind;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
+use golem_common::SafeDisplay;
 use golem_wasm_rpc::wasmtime::EncodingError;
+use golem_wasm_rpc_derive::IntoValue;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 use tonic::Status;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
-pub enum GolemError {
+pub enum WorkerExecutorError {
     InvalidRequest {
         details: String,
     },
@@ -41,7 +43,7 @@ pub enum GolemError {
     },
     FailedToResumeWorker {
         worker_id: WorkerId,
-        reason: Box<GolemError>,
+        reason: Box<WorkerExecutorError>,
     },
     ComponentDownloadFailed {
         component_id: ComponentId,
@@ -80,6 +82,7 @@ pub enum GolemError {
         expected: String,
         got: String,
     },
+    /// The golem runtime encountered an error while exeucting the user error. Difference to ComponentTrapped is that the user component did not directly error here.
     Runtime {
         details: String,
     },
@@ -88,8 +91,10 @@ pub enum GolemError {
         shard_ids: Vec<ShardId>,
     },
     InvalidAccount,
+    /// The worker failed with a TrapType::Error in a previous attempt
     PreviousInvocationFailed {
-        details: String,
+        error: WorkerError,
+        stderr: String,
     },
     PreviousInvocationExited,
     Unknown {
@@ -104,29 +109,34 @@ pub enum GolemError {
         path: String,
         reason: String,
     },
+    /// The worker failed with a TrapType::Error
+    InvocationFailed {
+        error: WorkerError,
+        stderr: String,
+    },
 }
 
-impl GolemError {
-    pub fn failed_to_resume_worker(worker_id: WorkerId, reason: GolemError) -> Self {
-        GolemError::FailedToResumeWorker {
+impl WorkerExecutorError {
+    pub fn failed_to_resume_worker(worker_id: WorkerId, reason: WorkerExecutorError) -> Self {
+        Self::FailedToResumeWorker {
             worker_id,
             reason: Box::new(reason),
         }
     }
 
     pub fn worker_creation_failed(worker_id: WorkerId, details: impl Into<String>) -> Self {
-        GolemError::WorkerCreationFailed {
+        Self::WorkerCreationFailed {
             worker_id,
             details: details.into(),
         }
     }
 
     pub fn worker_not_found(worker_id: WorkerId) -> Self {
-        GolemError::WorkerNotFound { worker_id }
+        Self::WorkerNotFound { worker_id }
     }
 
     pub fn worker_already_exists(worker_id: WorkerId) -> Self {
-        GolemError::WorkerAlreadyExists { worker_id }
+        Self::WorkerAlreadyExists { worker_id }
     }
 
     pub fn component_download_failed(
@@ -134,7 +144,7 @@ impl GolemError {
         component_version: u64,
         reason: impl Into<String>,
     ) -> Self {
-        GolemError::ComponentDownloadFailed {
+        Self::ComponentDownloadFailed {
             component_id,
             component_version,
             reason: reason.into(),
@@ -142,61 +152,61 @@ impl GolemError {
     }
 
     pub fn initial_file_download_failed(path: String, reason: String) -> Self {
-        GolemError::InitialComponentFileDownloadFailed { path, reason }
+        Self::InitialComponentFileDownloadFailed { path, reason }
     }
 
     pub fn invalid_request(details: impl Into<String>) -> Self {
-        GolemError::InvalidRequest {
+        Self::InvalidRequest {
             details: details.into(),
         }
     }
 
     pub fn invalid_shard_id(shard_id: ShardId, shard_ids: HashSet<ShardId>) -> Self {
-        GolemError::InvalidShardId {
+        Self::InvalidShardId {
             shard_id,
             shard_ids: shard_ids.into_iter().collect(),
         }
     }
 
     pub fn runtime(details: impl Into<String>) -> Self {
-        GolemError::Runtime {
+        Self::Runtime {
             details: details.into(),
         }
     }
 
     pub fn unexpected_oplog_entry(expected: impl Into<String>, got: impl Into<String>) -> Self {
-        GolemError::UnexpectedOplogEntry {
+        Self::UnexpectedOplogEntry {
             expected: expected.into(),
             got: got.into(),
         }
     }
 
     pub fn unknown(details: impl Into<String>) -> Self {
-        GolemError::Unknown {
+        Self::Unknown {
             details: details.into(),
         }
     }
 }
 
-impl Display for GolemError {
+impl Display for WorkerExecutorError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            GolemError::InvalidRequest { details } => {
+            Self::InvalidRequest { details } => {
                 write!(f, "Invalid request: {details}")
             }
-            GolemError::WorkerAlreadyExists { worker_id } => {
+            Self::WorkerAlreadyExists { worker_id } => {
                 write!(f, "Worker already exists: {worker_id}")
             }
-            GolemError::WorkerNotFound { worker_id } => {
+            Self::WorkerNotFound { worker_id } => {
                 write!(f, "Worker not found: {worker_id}")
             }
-            GolemError::WorkerCreationFailed { worker_id, details } => {
+            Self::WorkerCreationFailed { worker_id, details } => {
                 write!(f, "Failed to create worker: {worker_id}: {details}")
             }
-            GolemError::FailedToResumeWorker { worker_id, reason } => {
+            Self::FailedToResumeWorker { worker_id, reason } => {
                 write!(f, "Failed to resume worker: {worker_id}: {reason}")
             }
-            GolemError::ComponentDownloadFailed {
+            Self::ComponentDownloadFailed {
                 component_id,
                 component_version,
                 reason,
@@ -206,7 +216,7 @@ impl Display for GolemError {
                     "Failed to download component: {component_id}#{component_version}: {reason}"
                 )
             }
-            GolemError::ComponentParseFailed {
+            Self::ComponentParseFailed {
                 component_id,
                 component_version,
                 reason,
@@ -216,7 +226,7 @@ impl Display for GolemError {
                     "Failed to parse downloaded component: {component_id}#{component_version}: {reason}"
                 )
             }
-            GolemError::GetLatestVersionOfComponentFailed {
+            Self::GetLatestVersionOfComponentFailed {
                 component_id,
                 reason,
             } => {
@@ -225,231 +235,237 @@ impl Display for GolemError {
                     "Failed to get latest version of component {component_id}: {reason}"
                 )
             }
-            GolemError::InitialComponentFileDownloadFailed { path, reason } => {
+            Self::InitialComponentFileDownloadFailed { path, reason } => {
                 write!(
                     f,
                     "Failed to download initial file for component to {path}: {reason}"
                 )
             }
-            GolemError::PromiseNotFound { promise_id } => {
+            Self::PromiseNotFound { promise_id } => {
                 write!(f, "Promise not found: {promise_id}")
             }
-            GolemError::PromiseDropped { promise_id } => {
+            Self::PromiseDropped { promise_id } => {
                 write!(f, "Promise dropped: {promise_id}")
             }
-            GolemError::PromiseAlreadyCompleted { promise_id } => {
+            Self::PromiseAlreadyCompleted { promise_id } => {
                 write!(f, "Promise already completed: {promise_id}")
             }
-            GolemError::Interrupted { kind } => {
+            Self::Interrupted { kind } => {
                 write!(f, "{kind}")
             }
-            GolemError::ParamTypeMismatch { details } => {
+            Self::ParamTypeMismatch { details } => {
                 write!(f, "Parameter type mismatch: {details}")
             }
-            GolemError::NoValueInMessage => {
+            Self::NoValueInMessage => {
                 write!(f, "No value in message")
             }
-            GolemError::ValueMismatch { details } => {
+            Self::ValueMismatch { details } => {
                 write!(f, "Value mismatch: {details}")
             }
-            GolemError::UnexpectedOplogEntry { expected, got } => {
+            Self::UnexpectedOplogEntry { expected, got } => {
                 write!(f, "Unexpected oplog entry: expected {expected}, got {got}")
             }
-            GolemError::Runtime { details } => {
+            Self::Runtime { details } => {
                 write!(f, "Runtime error: {details}")
             }
-            GolemError::InvalidShardId {
+            Self::InvalidShardId {
                 shard_id,
                 shard_ids,
             } => {
                 write!(f, "{shard_id} is not in shards {shard_ids:?}")
             }
-            GolemError::InvalidAccount => {
+            Self::InvalidAccount => {
                 write!(f, "Invalid account")
             }
-            GolemError::PreviousInvocationFailed { details } => {
-                write!(f, "The previously invoked function failed: {details}")
+            Self::PreviousInvocationFailed { error, stderr } => {
+                write!(f, "Previous invocation failed: {}", error.to_string(stderr))
             }
-            GolemError::PreviousInvocationExited => {
+            Self::PreviousInvocationExited => {
                 write!(f, "The previously invoked function exited")
             }
-            GolemError::Unknown { details } => {
+            Self::Unknown { details } => {
                 write!(f, "Unknown error: {details}")
             }
-            GolemError::ShardingNotReady => {
+            Self::ShardingNotReady => {
                 write!(f, "Sharding not ready")
             }
-            GolemError::FileSystemError { path, reason } => {
+            Self::FileSystemError { path, reason } => {
                 write!(
                     f,
                     "Failed to access file in worker filesystem {path}: {reason}"
                 )
             }
+            Self::InvocationFailed { error, stderr } => {
+                write!(f, "Component trapped: {}", error.to_string(stderr))
+            }
         }
     }
 }
 
-impl Error for GolemError {
+impl SafeDisplay for WorkerExecutorError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl Error for WorkerExecutorError {
     fn description(&self) -> &str {
         match self {
-            GolemError::InvalidRequest { .. } => "Invalid request",
-            GolemError::WorkerAlreadyExists { .. } => "Worker already exists",
-            GolemError::WorkerNotFound { .. } => "Worker not found",
-            GolemError::WorkerCreationFailed { .. } => "Failed to create worker",
-            GolemError::FailedToResumeWorker { .. } => "Failed to resume worker",
-            GolemError::ComponentDownloadFailed { .. } => "Failed to download component",
-            GolemError::ComponentParseFailed { .. } => "Failed to parse downloaded component",
-            GolemError::GetLatestVersionOfComponentFailed { .. } => {
+            Self::InvalidRequest { .. } => "Invalid request",
+            Self::WorkerAlreadyExists { .. } => "Worker already exists",
+            Self::WorkerNotFound { .. } => "Worker not found",
+            Self::WorkerCreationFailed { .. } => "Failed to create worker",
+            Self::FailedToResumeWorker { .. } => "Failed to resume worker",
+            Self::ComponentDownloadFailed { .. } => "Failed to download component",
+            Self::ComponentParseFailed { .. } => "Failed to parse downloaded component",
+            Self::GetLatestVersionOfComponentFailed { .. } => {
                 "Failed to get latest version of component"
             }
-            GolemError::PromiseNotFound { .. } => "Promise not found",
-            GolemError::PromiseDropped { .. } => "Promise dropped",
-            GolemError::PromiseAlreadyCompleted { .. } => "Promise already completed",
-            GolemError::Interrupted { .. } => "Interrupted",
-            GolemError::InitialComponentFileDownloadFailed { .. } => {
-                "Failed to download initial file"
-            }
-            GolemError::ParamTypeMismatch { .. } => "Parameter type mismatch",
-            GolemError::NoValueInMessage => "No value in message",
-            GolemError::ValueMismatch { .. } => "Value mismatch",
-            GolemError::UnexpectedOplogEntry { .. } => "Unexpected oplog entry",
-            GolemError::InvalidShardId { .. } => "Invalid shard",
-            GolemError::InvalidAccount => "Invalid account",
-            GolemError::Runtime { .. } => "Runtime error",
-            GolemError::PreviousInvocationFailed { .. } => "The previously invoked function failed",
-            GolemError::PreviousInvocationExited => "The previously invoked function exited",
-            GolemError::Unknown { .. } => "Unknown error",
-            GolemError::ShardingNotReady => "Sharding not ready",
-            GolemError::FileSystemError { .. } => "File system error",
+            Self::PromiseNotFound { .. } => "Promise not found",
+            Self::PromiseDropped { .. } => "Promise dropped",
+            Self::PromiseAlreadyCompleted { .. } => "Promise already completed",
+            Self::Interrupted { .. } => "Interrupted",
+            Self::InitialComponentFileDownloadFailed { .. } => "Failed to download initial file",
+            Self::ParamTypeMismatch { .. } => "Parameter type mismatch",
+            Self::NoValueInMessage => "No value in message",
+            Self::ValueMismatch { .. } => "Value mismatch",
+            Self::UnexpectedOplogEntry { .. } => "Unexpected oplog entry",
+            Self::InvalidShardId { .. } => "Invalid shard",
+            Self::InvalidAccount => "Invalid account",
+            Self::Runtime { .. } => "Runtime error",
+            Self::InvocationFailed { .. } => "The invoked function failed",
+            Self::PreviousInvocationFailed { .. } => "The previously invoked function failed",
+            Self::PreviousInvocationExited => "The previously invoked function exited",
+            Self::Unknown { .. } => "Unknown error",
+            Self::ShardingNotReady => "Sharding not ready",
+            Self::FileSystemError { .. } => "File system error",
         }
     }
 }
 
-impl TraceErrorKind for GolemError {
+impl TraceErrorKind for WorkerExecutorError {
     fn trace_error_kind(&self) -> &'static str {
         match self {
-            GolemError::InvalidRequest { .. } => "InvalidRequest",
-            GolemError::WorkerAlreadyExists { .. } => "WorkerAlreadyExists",
-            GolemError::WorkerNotFound { .. } => "WorkerNotFound",
-            GolemError::WorkerCreationFailed { .. } => "WorkerCreationFailed",
-            GolemError::FailedToResumeWorker { .. } => "FailedToResumeWorker",
-            GolemError::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
-            GolemError::ComponentParseFailed { .. } => "ComponentParseFailed",
-            GolemError::GetLatestVersionOfComponentFailed { .. } => {
-                "GetLatestVersionOfComponentFailed"
-            }
-            GolemError::InitialComponentFileDownloadFailed { .. } => {
-                "InitialComponentFileDownloadFailed"
-            }
-            GolemError::PromiseNotFound { .. } => "PromiseNotFound",
-            GolemError::PromiseDropped { .. } => "PromiseDropped",
-            GolemError::PromiseAlreadyCompleted { .. } => "PromiseAlreadyCompleted",
-            GolemError::Interrupted { .. } => "Interrupted",
-            GolemError::ParamTypeMismatch { .. } => "ParamTypeMismatch",
-            GolemError::NoValueInMessage => "NoValueInMessage",
-            GolemError::ValueMismatch { .. } => "ValueMismatch",
-            GolemError::UnexpectedOplogEntry { .. } => "UnexpectedOplogEntry",
-            GolemError::InvalidShardId { .. } => "InvalidShardId",
-            GolemError::InvalidAccount => "InvalidAccount",
-            GolemError::Runtime { .. } => "Runtime",
-            GolemError::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
-            GolemError::PreviousInvocationExited => "PreviousInvocationExited",
-            GolemError::Unknown { .. } => "Unknown",
-            GolemError::ShardingNotReady => "ShardingNotReady",
-            GolemError::FileSystemError { .. } => "FileSystemError",
+            Self::InvalidRequest { .. } => "InvalidRequest",
+            Self::WorkerAlreadyExists { .. } => "WorkerAlreadyExists",
+            Self::WorkerNotFound { .. } => "WorkerNotFound",
+            Self::WorkerCreationFailed { .. } => "WorkerCreationFailed",
+            Self::FailedToResumeWorker { .. } => "FailedToResumeWorker",
+            Self::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
+            Self::ComponentParseFailed { .. } => "ComponentParseFailed",
+            Self::GetLatestVersionOfComponentFailed { .. } => "GetLatestVersionOfComponentFailed",
+            Self::InitialComponentFileDownloadFailed { .. } => "InitialComponentFileDownloadFailed",
+            Self::PromiseNotFound { .. } => "PromiseNotFound",
+            Self::PromiseDropped { .. } => "PromiseDropped",
+            Self::PromiseAlreadyCompleted { .. } => "PromiseAlreadyCompleted",
+            Self::Interrupted { .. } => "Interrupted",
+            Self::ParamTypeMismatch { .. } => "ParamTypeMismatch",
+            Self::NoValueInMessage => "NoValueInMessage",
+            Self::ValueMismatch { .. } => "ValueMismatch",
+            Self::UnexpectedOplogEntry { .. } => "UnexpectedOplogEntry",
+            Self::InvalidShardId { .. } => "InvalidShardId",
+            Self::InvalidAccount => "InvalidAccount",
+            Self::Runtime { .. } => "Runtime",
+            Self::InvocationFailed { .. } => "InvocationFailed",
+            Self::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
+            Self::PreviousInvocationExited => "PreviousInvocationExited",
+            Self::Unknown { .. } => "Unknown",
+            Self::ShardingNotReady => "ShardingNotReady",
+            Self::FileSystemError { .. } => "FileSystemError",
         }
     }
 
     fn is_expected(&self) -> bool {
         match self {
-            GolemError::WorkerAlreadyExists { .. }
-            | GolemError::WorkerNotFound { .. }
-            | GolemError::PromiseNotFound { .. }
-            | GolemError::PromiseDropped { .. }
-            | GolemError::PromiseAlreadyCompleted { .. }
-            | GolemError::Interrupted { .. }
-            | GolemError::InvalidShardId { .. } => true,
-            GolemError::InvalidRequest { .. }
-            | GolemError::WorkerCreationFailed { .. }
-            | GolemError::FailedToResumeWorker { .. }
-            | GolemError::ComponentDownloadFailed { .. }
-            | GolemError::ComponentParseFailed { .. }
-            | GolemError::GetLatestVersionOfComponentFailed { .. }
-            | GolemError::InitialComponentFileDownloadFailed { .. }
-            | GolemError::ParamTypeMismatch { .. }
-            | GolemError::NoValueInMessage
-            | GolemError::ValueMismatch { .. }
-            | GolemError::UnexpectedOplogEntry { .. }
-            | GolemError::InvalidAccount
-            | GolemError::Runtime { .. }
-            | GolemError::PreviousInvocationFailed { .. }
-            | GolemError::PreviousInvocationExited
-            | GolemError::Unknown { .. }
-            | GolemError::ShardingNotReady
-            | GolemError::FileSystemError { .. } => false,
+            Self::WorkerAlreadyExists { .. }
+            | Self::WorkerNotFound { .. }
+            | Self::PromiseNotFound { .. }
+            | Self::PromiseDropped { .. }
+            | Self::PromiseAlreadyCompleted { .. }
+            | Self::Interrupted { .. }
+            | Self::InvalidShardId { .. } => true,
+            Self::InvalidRequest { .. }
+            | Self::WorkerCreationFailed { .. }
+            | Self::FailedToResumeWorker { .. }
+            | Self::ComponentDownloadFailed { .. }
+            | Self::ComponentParseFailed { .. }
+            | Self::GetLatestVersionOfComponentFailed { .. }
+            | Self::InitialComponentFileDownloadFailed { .. }
+            | Self::ParamTypeMismatch { .. }
+            | Self::NoValueInMessage
+            | Self::ValueMismatch { .. }
+            | Self::UnexpectedOplogEntry { .. }
+            | Self::InvalidAccount
+            | Self::Runtime { .. }
+            | Self::InvocationFailed { .. }
+            | Self::PreviousInvocationFailed { .. }
+            | Self::PreviousInvocationExited
+            | Self::Unknown { .. }
+            | Self::ShardingNotReady
+            | Self::FileSystemError { .. } => false,
         }
     }
 }
 
-impl From<InterruptKind> for GolemError {
+impl From<InterruptKind> for WorkerExecutorError {
     fn from(kind: InterruptKind) -> Self {
-        GolemError::Interrupted { kind }
+        Self::Interrupted { kind }
     }
 }
 
-impl From<anyhow::Error> for GolemError {
+impl From<anyhow::Error> for WorkerExecutorError {
     fn from(error: anyhow::Error) -> Self {
         match error.root_cause().downcast_ref::<InterruptKind>() {
-            Some(kind) => GolemError::Interrupted { kind: kind.clone() },
-            None => GolemError::runtime(format!("{error:#?}")),
+            Some(kind) => Self::Interrupted { kind: kind.clone() },
+            None => Self::runtime(format!("{error:#?}")),
         }
     }
 }
 
-impl From<std::io::Error> for GolemError {
+impl From<std::io::Error> for WorkerExecutorError {
     fn from(value: std::io::Error) -> Self {
-        GolemError::Unknown {
+        Self::Unknown {
             details: format!("{value}"),
         }
     }
 }
 
-impl From<GolemError> for Status {
-    fn from(value: GolemError) -> Self {
+impl From<WorkerExecutorError> for Status {
+    fn from(value: WorkerExecutorError) -> Self {
         match value {
-            GolemError::InvalidRequest { details } => Status::invalid_argument(details),
-            GolemError::PromiseNotFound { promise_id } => {
-                Status::not_found(format!("Promise not found: {promise_id}"))
+            WorkerExecutorError::InvalidRequest { details } => Self::invalid_argument(details),
+            WorkerExecutorError::PromiseNotFound { promise_id } => {
+                Self::not_found(format!("Promise not found: {promise_id}"))
             }
-            GolemError::WorkerNotFound { worker_id } => {
-                Status::not_found(format!("Worker not found: {worker_id}"))
+            WorkerExecutorError::WorkerNotFound { worker_id } => {
+                Self::not_found(format!("Worker not found: {worker_id}"))
             }
-            GolemError::ParamTypeMismatch { details } => {
-                Status::invalid_argument(format!("Parameter type mismatch: {details}"))
+            WorkerExecutorError::ParamTypeMismatch { details } => {
+                Self::invalid_argument(format!("Parameter type mismatch: {details}"))
             }
-            GolemError::NoValueInMessage => {
-                Status::invalid_argument("No value in message".to_string())
+            WorkerExecutorError::NoValueInMessage => {
+                Self::invalid_argument("No value in message".to_string())
             }
-            GolemError::ValueMismatch { details } => {
-                Status::invalid_argument(format!("Value mismatch: {details}"))
+            WorkerExecutorError::ValueMismatch { details } => {
+                Self::invalid_argument(format!("Value mismatch: {details}"))
             }
-            GolemError::Unknown { details } => Status::unknown(details),
-            _ => Status::internal(format!("{value}")),
+            WorkerExecutorError::Unknown { details } => Self::unknown(details),
+            _ => Self::internal(format!("{value}")),
         }
     }
 }
 
-impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
-    fn from(value: GolemError) -> Self {
+impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
+    fn from(value: WorkerExecutorError) -> Self {
         match value {
-            GolemError::InvalidRequest { details } => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::InvalidRequest { details } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::InvalidRequest(
                         golem::worker::v1::InvalidRequest { details },
                     ),
                 ),
             },
-            GolemError::WorkerAlreadyExists { worker_id } => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::WorkerAlreadyExists { worker_id } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::WorkerAlreadyExists(
                         golem::worker::v1::WorkerAlreadyExists {
@@ -458,7 +474,7 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            GolemError::WorkerNotFound { worker_id } => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::WorkerNotFound { worker_id } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::WorkerNotFound(
                         golem::worker::v1::WorkerNotFound {
@@ -467,8 +483,7 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            GolemError::WorkerCreationFailed { worker_id, details } => {
-                golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::WorkerCreationFailed { worker_id, details } => Self {
                     error: Some(
                         golem::worker::v1::worker_execution_error::Error::WorkerCreationFailed(
                             golem::worker::v1::WorkerCreationFailed {
@@ -477,10 +492,9 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                             },
                         ),
                     ),
-                }
-            }
-            GolemError::FailedToResumeWorker { worker_id, reason } => {
-                golem::worker::v1::WorkerExecutionError {
+                },
+            WorkerExecutorError::FailedToResumeWorker { worker_id, reason } =>
+                Self {
                     error: Some(
                         golem::worker::v1::worker_execution_error::Error::FailedToResumeWorker(
                             Box::new(golem::worker::v1::FailedToResumeWorker {
@@ -489,13 +503,12 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                             }),
                         ),
                     ),
-                }
-            }
-            GolemError::ComponentDownloadFailed {
+                },
+            WorkerExecutorError::ComponentDownloadFailed {
                 component_id,
                 component_version,
                 reason,
-            } => golem::worker::v1::WorkerExecutionError {
+            } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::ComponentDownloadFailed(
                         golem::worker::v1::ComponentDownloadFailed {
@@ -506,11 +519,11 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            GolemError::ComponentParseFailed {
+            WorkerExecutorError::ComponentParseFailed {
                 component_id,
                 component_version,
                 reason,
-            } => golem::worker::v1::WorkerExecutionError {
+            } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::ComponentParseFailed(
                         golem::worker::v1::ComponentParseFailed {
@@ -521,10 +534,10 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            GolemError::GetLatestVersionOfComponentFailed {
+            WorkerExecutorError::GetLatestVersionOfComponentFailed {
                 component_id,
                 reason,
-            } => golem::worker::v1::WorkerExecutionError {
+            } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::GetLatestVersionOfComponentFailed(
                         golem::worker::v1::GetLatestVersionOfComponentFailed {
@@ -534,16 +547,14 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            GolemError::InitialComponentFileDownloadFailed { path, reason } => {
-                golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::InitialComponentFileDownloadFailed { path, reason } => Self {
                     error: Some(
                         golem::worker::v1::worker_execution_error::Error::InitialComponentFileDownloadFailed(
                             golem::worker::v1::InitialComponentFileDownloadFailed { path, reason },
                         ),
                     ),
-                }
-            }
-            GolemError::PromiseNotFound { promise_id } => golem::worker::v1::WorkerExecutionError {
+                },
+            WorkerExecutorError::PromiseNotFound { promise_id } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::PromiseNotFound(
                         golem::worker::v1::PromiseNotFound {
@@ -552,7 +563,7 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            GolemError::PromiseDropped { promise_id } => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::PromiseDropped { promise_id } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::PromiseDropped(
                         golem::worker::v1::PromiseDropped {
@@ -561,8 +572,7 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            GolemError::PromiseAlreadyCompleted { promise_id } => {
-                golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::PromiseAlreadyCompleted { promise_id } => Self {
                     error: Some(
                         golem::worker::v1::worker_execution_error::Error::PromiseAlreadyCompleted(
                             golem::worker::v1::PromiseAlreadyCompleted {
@@ -570,52 +580,49 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                             },
                         ),
                     ),
-                }
-            }
-            GolemError::Interrupted { kind } => golem::worker::v1::WorkerExecutionError {
+                },
+            WorkerExecutorError::Interrupted { kind } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::Interrupted(
                     golem::worker::v1::Interrupted {
                         recover_immediately: kind == InterruptKind::Restart,
                     },
                 )),
             },
-            GolemError::ParamTypeMismatch { details } => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::ParamTypeMismatch { details } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::ParamTypeMismatch(
                         golem::worker::v1::ParamTypeMismatch { details },
                     ),
                 ),
             },
-            GolemError::NoValueInMessage => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::NoValueInMessage => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::NoValueInMessage(
                         golem::worker::v1::NoValueInMessage {},
                     ),
                 ),
             },
-            GolemError::ValueMismatch { details } => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::ValueMismatch { details } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::ValueMismatch(
                     golem::worker::v1::ValueMismatch { details },
                 )),
             },
-            GolemError::UnexpectedOplogEntry { expected, got } => {
-                golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::UnexpectedOplogEntry { expected, got } => Self {
                     error: Some(
                         golem::worker::v1::worker_execution_error::Error::UnexpectedOplogEntry(
                             golem::worker::v1::UnexpectedOplogEntry { expected, got },
                         ),
                     ),
-                }
-            }
-            GolemError::Runtime { details } => golem::worker::v1::WorkerExecutionError {
+                },
+            WorkerExecutorError::Runtime { details } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
                     golem::worker::v1::RuntimeError { details },
                 )),
             },
-            GolemError::InvalidShardId {
+            WorkerExecutorError::InvalidShardId {
                 shard_id,
                 shard_ids,
-            } => golem::worker::v1::WorkerExecutionError {
+            } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::InvalidShardId(
                         golem::worker::v1::InvalidShardId {
@@ -628,53 +635,60 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            GolemError::InvalidAccount => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::InvalidAccount => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::InvalidAccount(
                         golem::worker::v1::InvalidAccount {},
                     ),
                 ),
             },
-            GolemError::PreviousInvocationFailed { details } => {
-                golem::worker::v1::WorkerExecutionError {
-                    error: Some(
-                        golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailed(
-                            golem::worker::v1::PreviousInvocationFailed { details },
-                        ),
-                    ),
-                }
-            }
-            GolemError::PreviousInvocationExited => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::PreviousInvocationFailed { error, stderr } => Self {
+                error: Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailed(
+                    golem::worker::v1::PreviousInvocationFailed {
+                        error: Some(error.into()),
+                        stderr
+                    }
+                ))
+            },
+            WorkerExecutorError::PreviousInvocationExited => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::PreviousInvocationExited(
                         golem::worker::v1::PreviousInvocationExited {},
                     ),
                 ),
             },
-            GolemError::Unknown { details } => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::Unknown { details } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::Unknown(
                     golem::worker::v1::UnknownError { details },
                 )),
             },
-            GolemError::ShardingNotReady => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::ShardingNotReady => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::ShardingNotReady(
                         golem::worker::v1::ShardingNotReady {},
                     ),
                 ),
             },
-            GolemError::FileSystemError { path, reason } => golem::worker::v1::WorkerExecutionError {
+            WorkerExecutorError::FileSystemError { path, reason } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::FileSystemError(
                         golem::worker::v1::FileSystemError { path, reason },
                     ),
                 ),
             },
+            WorkerExecutorError::InvocationFailed { error, stderr } => Self {
+                error: Some(golem::worker::v1::worker_execution_error::Error::InvocationFailed(
+                    golem::worker::v1::InvocationFailed {
+                        error: Some(error.into()),
+                        stderr
+                    }
+                ))
+            },
         }
     }
 }
 
-impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
+impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
     type Error = String;
 
     fn try_from(value: golem::worker::v1::WorkerExecutionError) -> Result<Self, Self::Error> {
@@ -682,12 +696,12 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             None => Err("Unknown error".to_string()),
             Some(golem::worker::v1::worker_execution_error::Error::InvalidRequest(
                 invalid_request,
-            )) => Ok(GolemError::InvalidRequest {
+            )) => Ok(Self::InvalidRequest {
                 details: invalid_request.details,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::WorkerAlreadyExists(
                 worker_already_exists,
-            )) => Ok(GolemError::WorkerAlreadyExists {
+            )) => Ok(Self::WorkerAlreadyExists {
                 worker_id: worker_already_exists
                     .worker_id
                     .ok_or("Missing worker_id")?
@@ -695,7 +709,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             }),
             Some(golem::worker::v1::worker_execution_error::Error::WorkerNotFound(
                 worker_not_found,
-            )) => Ok(GolemError::WorkerNotFound {
+            )) => Ok(Self::WorkerNotFound {
                 worker_id: worker_not_found
                     .worker_id
                     .ok_or("Missing worker_id")?
@@ -703,7 +717,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             }),
             Some(golem::worker::v1::worker_execution_error::Error::WorkerCreationFailed(
                 worker_creation_failed,
-            )) => Ok(GolemError::WorkerCreationFailed {
+            )) => Ok(Self::WorkerCreationFailed {
                 worker_id: worker_creation_failed
                     .worker_id
                     .ok_or("Missing worker_id")?
@@ -712,7 +726,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             }),
             Some(golem::worker::v1::worker_execution_error::Error::FailedToResumeWorker(
                 failed_to_resume_worker,
-            )) => Ok(GolemError::FailedToResumeWorker {
+            )) => Ok(Self::FailedToResumeWorker {
                 worker_id: failed_to_resume_worker
                     .worker_id
                     .ok_or("Missing worker_id")?
@@ -723,7 +737,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             }),
             Some(golem::worker::v1::worker_execution_error::Error::ComponentDownloadFailed(
                 component_download_failed,
-            )) => Ok(GolemError::ComponentDownloadFailed {
+            )) => Ok(Self::ComponentDownloadFailed {
                 component_id: component_download_failed
                     .component_id
                     .ok_or("Missing component_id")?
@@ -733,7 +747,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             }),
             Some(golem::worker::v1::worker_execution_error::Error::ComponentParseFailed(
                 component_parse_failed,
-            )) => Ok(GolemError::ComponentParseFailed {
+            )) => Ok(Self::ComponentParseFailed {
                 component_id: component_parse_failed
                     .component_id
                     .ok_or("Missing component_id")?
@@ -745,7 +759,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
                 golem::worker::v1::worker_execution_error::Error::GetLatestVersionOfComponentFailed(
                     get_latest_version_of_component_failed,
                 ),
-            ) => Ok(GolemError::GetLatestVersionOfComponentFailed {
+            ) => Ok(Self::GetLatestVersionOfComponentFailed {
                 component_id: get_latest_version_of_component_failed
                     .component_id
                     .ok_or("Missing component_id")?
@@ -754,7 +768,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             }),
             Some(golem::worker::v1::worker_execution_error::Error::PromiseNotFound(
                 promise_not_found,
-            )) => Ok(GolemError::PromiseNotFound {
+            )) => Ok(Self::PromiseNotFound {
                 promise_id: promise_not_found
                     .promise_id
                     .ok_or("Missing promise_id")?
@@ -762,7 +776,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             }),
             Some(golem::worker::v1::worker_execution_error::Error::PromiseDropped(
                 promise_dropped,
-            )) => Ok(GolemError::PromiseDropped {
+            )) => Ok(Self::PromiseDropped {
                 promise_id: promise_dropped
                     .promise_id
                     .ok_or("Missing promise_id")?
@@ -770,14 +784,14 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             }),
             Some(golem::worker::v1::worker_execution_error::Error::PromiseAlreadyCompleted(
                 promise_already_completed,
-            )) => Ok(GolemError::PromiseAlreadyCompleted {
+            )) => Ok(Self::PromiseAlreadyCompleted {
                 promise_id: promise_already_completed
                     .promise_id
                     .ok_or("Missing promise_id")?
                     .try_into()?,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::Interrupted(interrupted)) => {
-                Ok(GolemError::Interrupted {
+                Ok(Self::Interrupted {
                     kind: if interrupted.recover_immediately {
                         InterruptKind::Restart
                     } else {
@@ -786,27 +800,27 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
                 })
             }
             Some(golem::worker::v1::worker_execution_error::Error::ParamTypeMismatch(_)) => {
-                Ok(GolemError::ParamTypeMismatch {
+                Ok(Self::ParamTypeMismatch {
                     details: "".to_string(),
                 })
             }
             Some(golem::worker::v1::worker_execution_error::Error::NoValueInMessage(_)) => {
-                Ok(GolemError::NoValueInMessage)
+                Ok(Self::NoValueInMessage)
             }
             Some(golem::worker::v1::worker_execution_error::Error::ValueMismatch(
                 value_mismatch,
-            )) => Ok(GolemError::ValueMismatch {
+            )) => Ok(Self::ValueMismatch {
                 details: value_mismatch.details,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::UnexpectedOplogEntry(
                 unexpected_oplog_entry,
-            )) => Ok(GolemError::UnexpectedOplogEntry {
+            )) => Ok(Self::UnexpectedOplogEntry {
                 expected: unexpected_oplog_entry.expected,
                 got: unexpected_oplog_entry.got,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::InvalidShardId(
                 invalid_shard_id,
-            )) => Ok(GolemError::InvalidShardId {
+            )) => Ok(Self::InvalidShardId {
                 shard_id: invalid_shard_id.shard_id.ok_or("Missing shard_id")?.into(),
                 shard_ids: invalid_shard_id
                     .shard_ids
@@ -815,53 +829,58 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
                     .collect(),
             }),
             Some(golem::worker::v1::worker_execution_error::Error::InvalidAccount(_)) => {
-                Ok(GolemError::InvalidAccount)
+                Ok(Self::InvalidAccount)
             }
             Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(runtime_error)) => {
-                Ok(GolemError::Runtime {
+                Ok(Self::Runtime {
                     details: runtime_error.details,
                 })
             }
             Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailed(
-                previous_invocation_failed,
-            )) => Ok(GolemError::PreviousInvocationFailed {
-                details: previous_invocation_failed.details,
-            }),
+                inner,
+            )) => Ok(Self::PreviousInvocationFailed {
+                error: inner.error.ok_or("no trap_cause field")?.try_into()?,
+                stderr: inner.stderr
+             }),
             Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationExited(_)) => {
-                Ok(GolemError::PreviousInvocationExited)
+                Ok(Self::PreviousInvocationExited)
             }
             Some(golem::worker::v1::worker_execution_error::Error::Unknown(unknown_error)) => {
-                Ok(GolemError::Unknown {
+                Ok(Self::Unknown {
                     details: unknown_error.details,
                 })
             }
             Some(golem::worker::v1::worker_execution_error::Error::ShardingNotReady(_)) => {
-                Ok(GolemError::ShardingNotReady)
+                Ok(Self::ShardingNotReady)
             }
             Some(golem::worker::v1::worker_execution_error::Error::InitialComponentFileDownloadFailed(
                 initial_file_download_failed,
-            )) => Ok(GolemError::InitialComponentFileDownloadFailed {
+            )) => Ok(Self::InitialComponentFileDownloadFailed {
                 path: initial_file_download_failed.path,
                 reason: initial_file_download_failed.reason,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::FileSystemError(
                 file_system_error,
-            )) => Ok(GolemError::FileSystemError {
+            )) => Ok(Self::FileSystemError {
                 path: file_system_error.path,
                 reason: file_system_error.reason,
             }),
+            Some(golem::worker::v1::worker_execution_error::Error::InvocationFailed(
+                inner,
+            )) => Ok(Self::InvocationFailed {
+                error: inner.error.ok_or("no trap_cause field")?.try_into()?,
+                stderr: inner.stderr
+             }),
         }
     }
 }
 
-impl From<EncodingError> for GolemError {
+impl From<EncodingError> for WorkerExecutorError {
     fn from(value: EncodingError) -> Self {
         match value {
-            EncodingError::ParamTypeMismatch { details } => {
-                GolemError::ParamTypeMismatch { details }
-            }
-            EncodingError::ValueMismatch { details } => GolemError::ValueMismatch { details },
-            EncodingError::Unknown { details } => GolemError::Unknown { details },
+            EncodingError::ParamTypeMismatch { details } => Self::ParamTypeMismatch { details },
+            EncodingError::ValueMismatch { details } => Self::ValueMismatch { details },
+            EncodingError::Unknown { details } => Self::Unknown { details },
         }
     }
 }
@@ -876,3 +895,44 @@ impl Display for WorkerOutOfMemory {
 }
 
 impl Error for WorkerOutOfMemory {}
+
+#[derive(
+    Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue,
+)]
+pub enum InterruptKind {
+    Interrupt,
+    Restart,
+    Suspend,
+    Jump,
+}
+
+impl Display for InterruptKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InterruptKind::Interrupt => write!(f, "Interrupted via the Golem API"),
+            InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
+            InterruptKind::Suspend => write!(f, "Suspended"),
+            InterruptKind::Jump => write!(f, "Jumping back in time"),
+        }
+    }
+}
+
+impl Error for InterruptKind {}
+
+#[cfg(feature = "worker-executor")]
+mod service {
+    use super::WorkerExecutorError;
+    use anyhow::anyhow;
+
+    impl From<WorkerExecutorError> for wasmtime_wasi::p2::StreamError {
+        fn from(value: WorkerExecutorError) -> Self {
+            Self::Trap(anyhow!(value))
+        }
+    }
+
+    impl From<WorkerExecutorError> for wasmtime_wasi::p2::SocketError {
+        fn from(value: WorkerExecutorError) -> Self {
+            Self::trap(value)
+        }
+    }
+}

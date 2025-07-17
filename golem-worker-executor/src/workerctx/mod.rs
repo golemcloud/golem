@@ -14,13 +14,9 @@
 
 pub mod cloud;
 
-use std::collections::HashSet;
-use std::sync::{Arc, RwLock, Weak};
-
-use crate::error::GolemError;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
-    ReadFileResult, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, LastError, ListDirectoryResult, ReadFileResult,
+    TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
@@ -30,6 +26,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::plugins::Plugins;
+use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
@@ -51,11 +48,14 @@ use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+    PluginInstallationId, ProjectId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Value, ValueAndType};
+use std::collections::HashSet;
+use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
@@ -103,7 +103,7 @@ pub trait WorkerCtx:
     /// - `scheduler_service`: The scheduler implementation responsible for waking up suspended workers
     /// - `recovery_management`: The service for deciding if a worker should be recovered
     /// - `rpc`: The RPC implementation used for worker to worker communication
-    /// - `worker_proyx`: Access to the worker proxy above the worker executor cluster
+    /// - `worker_proxy`: Access to the worker proxy above the worker executor cluster
     /// - `extra_deps`: Extra dependencies that are required by this specific worker context
     /// - `config`: The shared worker configuration
     /// - `worker_config`: Configuration for this specific worker
@@ -111,6 +111,7 @@ pub trait WorkerCtx:
     /// - `file_loader`: The service for loading files and making them available to workers
     #[allow(clippy::too_many_arguments)]
     async fn create(
+        account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
@@ -135,7 +136,8 @@ pub trait WorkerCtx:
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
-    ) -> Result<Self, GolemError>;
+        project_service: Arc<dyn ProjectService>,
+    ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
     fn as_wasi_http_view(&mut self) -> impl WasiHttpView;
@@ -176,7 +178,7 @@ pub trait WorkerCtx:
     async fn generate_unique_local_worker_id(
         &mut self,
         remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, GolemError>;
+    ) -> Result<WorkerId, WorkerExecutorError>;
 }
 
 /// The fuel management interface of a worker context is responsible for borrowing and returning
@@ -200,7 +202,7 @@ pub trait FuelManagement {
     /// Borrows some fuel for the execution. The amount borrowed is not used by the execution engine,
     /// but the worker context can store it and use it in `is_out_of_fuel` to check if the worker is
     /// within the limits.
-    async fn borrow_fuel(&mut self) -> Result<(), GolemError>;
+    async fn borrow_fuel(&mut self) -> Result<(), WorkerExecutorError>;
 
     /// Same as `borrow_fuel` but synchronous as it is called from the epoch_deadline_callback.
     /// This assumes that there is a cached available resource limits that can be used to calculate
@@ -209,7 +211,7 @@ pub trait FuelManagement {
 
     /// Returns the remaining fuel that was previously borrowed. The remaining amount can be calculated
     /// by the current fuel level and some internal state of the worker context.
-    async fn return_fuel(&mut self, current_level: i64) -> Result<i64, GolemError>;
+    async fn return_fuel(&mut self, current_level: i64) -> Result<i64, WorkerExecutorError>;
 }
 
 /// The invocation management interface of a worker context is responsible for connecting
@@ -233,7 +235,7 @@ pub trait InvocationManagement {
     async fn set_current_invocation_context(
         &mut self,
         invocation_context: InvocationContextStack,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Gets the current invocation context stack
     async fn get_current_invocation_context(&self) -> InvocationContextStack;
@@ -256,7 +258,7 @@ pub trait StatusManagement {
     fn check_interrupt(&self) -> Option<InterruptKind>;
 
     /// Sets the worker status to suspended
-    async fn set_suspended(&self) -> Result<(), GolemError>;
+    async fn set_suspended(&self) -> Result<(), WorkerExecutorError>;
 
     /// Sets the worker status to running
     fn set_running(&self);
@@ -288,7 +290,7 @@ pub trait InvocationHooks {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Called when a worker invocation fails
     async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision;
@@ -306,7 +308,7 @@ pub trait InvocationHooks {
         function_input: &Vec<Value>,
         consumed_fuel: i64,
         output: Option<ValueAndType>,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 #[async_trait]
@@ -378,7 +380,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         this: &T,
         owned_worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
-    ) -> Result<WorkerStatusRecord, GolemError>;
+    ) -> Result<WorkerStatusRecord, WorkerExecutorError>;
 
     /// Resume the replay of a worker instance. Note that if the previous replay
     /// hasn't reached the end of the replay (which is usually last index in oplog)
@@ -386,7 +388,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
-    ) -> Result<RetryDecision, GolemError>;
+    ) -> Result<RetryDecision, WorkerExecutorError>;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker but by general it can be no-op.
@@ -396,20 +398,20 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<RetryDecision, GolemError>;
+    ) -> Result<RetryDecision, WorkerExecutorError>;
 
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Callback called when a worker is deleted
     async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Callback called when the executor's shard assignment has been changed
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
@@ -419,10 +421,11 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Called when an update attempt has failed before the worker context has been created
     async fn on_worker_update_failed_to_start<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         details: Option<String>,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 /// A required interface to be implemented by the worker context's public state.
@@ -443,8 +446,11 @@ pub trait FileSystemReading {
     async fn list_directory(
         &self,
         path: &ComponentFilePath,
-    ) -> Result<ListDirectoryResult, GolemError>;
-    async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError>;
+    ) -> Result<ListDirectoryResult, WorkerExecutorError>;
+    async fn read_file(
+        &self,
+        path: &ComponentFilePath,
+    ) -> Result<ReadFileResult, WorkerExecutorError>;
 }
 
 /// Functions to manipulate and query the current invocation context
@@ -453,25 +459,25 @@ pub trait InvocationContextManagement {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, GolemError>;
+    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
     async fn start_child_span(
         &mut self,
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, GolemError>;
+    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
 
     /// Removes an inherited span without finishing it
-    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError>;
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError>;
 
     /// Removes and finishes a local span
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError>;
+    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError>;
 
     async fn set_span_attribute(
         &mut self,
         span_id: &SpanId,
         key: &str,
         value: AttributeValue,
-    ) -> Result<(), GolemError>;
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 #[async_trait]

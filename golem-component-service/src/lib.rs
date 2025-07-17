@@ -40,7 +40,7 @@ use poem_openapi::OpenApiService;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::task::JoinSet;
-use tracing::{info, Instrument};
+use tracing::{debug, info, Instrument};
 
 #[cfg(test)]
 test_r::enable!();
@@ -69,10 +69,7 @@ impl ComponentService {
         config: ComponentServiceConfig,
         prometheus_registry: Registry,
     ) -> Result<Self, anyhow::Error> {
-        info!(
-            "Starting cloud server on ports: http: {}, grpc: {}",
-            config.http_port, config.grpc_port
-        );
+        debug!("Initializing component service");
 
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
 
@@ -106,6 +103,9 @@ impl ComponentService {
     ) -> Result<RunDetails, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_http_server(join_set).await?;
+
+        info!("Started component service on ports: http: {http_port}, grpc: {grpc_port}");
+
         self.services
             .compilation_service
             .set_self_grpc_port(grpc_port);

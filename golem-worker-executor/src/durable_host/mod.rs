@@ -19,12 +19,11 @@ use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::serialized::SerializableError;
-use crate::error::GolemError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, InvocationContext, LastError,
-    ListDirectoryResult, ReadFileResult, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InvocationContext, LastError, ListDirectoryResult,
+    ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
@@ -33,6 +32,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::plugins::Plugins;
+use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
@@ -41,7 +41,9 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
+use crate::services::{
+    worker_enumeration, HasAll, HasConfig, HasOplog, HasProjectService, HasWorker,
+};
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
 use crate::worker::invocation::{
@@ -70,9 +72,9 @@ use golem_common::model::oplog::{
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{exports, PluginInstallationId};
+use golem_common::model::{exports, AccountId, PluginInstallationId, ProjectId};
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
+    ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
     FailedUpdateRecord, IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor,
     ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
@@ -80,6 +82,7 @@ use golem_common::model::{
 };
 use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
@@ -146,7 +149,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
-        rdbms_service: Arc<dyn crate::services::rdbms::RdbmsService>,
+        rdbms_service: Arc<dyn RdbmsService>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
@@ -161,9 +164,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
-    ) -> Result<Self, GolemError> {
+        project_service: Arc<dyn ProjectService>,
+    ) -> Result<Self, WorkerExecutorError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
-            |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
+            |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
         )?);
         debug!(
             "Created temporary file system root at {:?}",
@@ -182,7 +186,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let component_metadata = component_service
             .get_metadata(
-                &owned_worker_id.account_id,
+                &owned_worker_id.project_id,
                 &owned_worker_id.component_id(),
                 Some(worker_config.component_version_for_replay),
             )
@@ -190,7 +194,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let files = prepare_filesystem(
             &file_loader,
-            &owned_worker_id.account_id,
+            &owned_worker_id.project_id,
             temp_dir.path(),
             &component_metadata.files,
         )
@@ -212,7 +216,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             |duration| anyhow!(SuspendForSleep(duration)),
             config.suspend.suspend_after,
         )
-        .map_err(|e| GolemError::runtime(format!("Could not create WASI context: {e}")))?;
+        .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
         let wasi_http = WasiHttpCtx::new();
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
@@ -250,6 +254,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 RwLock::new(compute_read_only_paths(&files)),
                 TRwLock::new(files),
                 file_loader,
+                project_service,
+                worker_config.created_by.clone(),
             )
             .await,
             temp_dir,
@@ -308,6 +314,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn owned_worker_id(&self) -> &OwnedWorkerId {
         &self.owned_worker_id
+    }
+
+    pub fn created_by(&self) -> &AccountId {
+        &self.state.created_by
     }
 
     pub fn component_metadata(&self) -> &ComponentMetadata {
@@ -417,15 +427,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Restart) => RetryDecision::Immediate,
             TrapType::Interrupt(InterruptKind::Jump) => RetryDecision::Immediate,
             TrapType::Exit => RetryDecision::None,
-            TrapType::Error(error) => {
-                if is_worker_error_retriable(retry_config, error, previous_tries) {
-                    if error == &WorkerError::OutOfMemory {
-                        RetryDecision::ReacquirePermits
-                    } else {
-                        match get_delay(retry_config, previous_tries) {
-                            Some(delay) => RetryDecision::Delayed(delay),
-                            None => RetryDecision::None,
-                        }
+            TrapType::Error(WorkerError::OutOfMemory) => RetryDecision::ReacquirePermits,
+            TrapType::Error(WorkerError::InvalidRequest(_)) => RetryDecision::None,
+            TrapType::Error(WorkerError::StackOverflow) => RetryDecision::None,
+            TrapType::Error(WorkerError::Unknown(_)) => {
+                let retryable = previous_tries < (retry_config.max_attempts as u64);
+                if retryable {
+                    match get_delay(retry_config, previous_tries) {
+                        Some(delay) => RetryDecision::Delayed(delay),
+                        None => RetryDecision::None,
                     }
                 } else {
                     RetryDecision::None
@@ -501,7 +511,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn generate_unique_local_worker_id(
         &mut self,
         remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, GolemError> {
+    ) -> Result<WorkerId, WorkerExecutorError> {
         match remote_worker_id.clone().try_into_worker_id() {
             Some(worker_id) => Ok(worker_id),
             None => {
@@ -692,7 +702,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub async fn process_pending_replay_events(&mut self) -> Result<(), GolemError> {
+    pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
         debug!("Applying pending side effects accumulated during replay");
 
         let replay_events = self.state.replay_state.take_new_replay_events().await;
@@ -765,7 +775,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn update_state_to_new_component_version(
         &mut self,
         new_version: ComponentVersion,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         let current_metadata = &self.state.component_metadata;
 
         if new_version <= current_metadata.version {
@@ -776,7 +786,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let new_metadata = self
             .component_service()
             .get_metadata(
-                &self.owned_worker_id.account_id,
+                &self.owned_worker_id.project_id,
                 &self.owned_worker_id.component_id(),
                 Some(new_version),
             )
@@ -786,7 +796,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         update_filesystem(
             &mut current_files,
             &self.state.file_loader,
-            &self.owned_worker_id.account_id,
+            &self.owned_worker_id.project_id,
             self.temp_dir.path(),
             &new_metadata.files,
         )
@@ -813,9 +823,10 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     async fn set_current_invocation_context(
         &mut self,
         invocation_context: InvocationContextStack,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         let (invocation_context, current_span_id) =
-            InvocationContext::from_stack(invocation_context).map_err(GolemError::runtime)?;
+            InvocationContext::from_stack(invocation_context)
+                .map_err(WorkerExecutorError::runtime)?;
 
         self.state.invocation_context.switch_to(invocation_context);
         self.state.current_span_id = current_span_id;
@@ -849,7 +860,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn set_suspended(&self) -> Result<(), GolemError> {
+    async fn set_suspended(&self) -> Result<(), WorkerExecutorError> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
@@ -946,6 +957,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
                 .schedule(
                     at,
                     ScheduledAction::ArchiveOplog {
+                        account_id: self.state.created_by.clone(),
                         owned_worker_id: self.owned_worker_id.clone(),
                         last_oplog_index: self.public_state.oplog.current_oplog_index().await,
                         next_after: self.state.config.oplog.archive_interval,
@@ -970,7 +982,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_none() {
             let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
                 .iter()
@@ -1074,7 +1086,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         function_input: &Vec<Value>,
         consumed_fuel: i64,
         output: Option<ValueAndType>,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         let is_live_after = self.state.is_live();
 
         if is_live_after {
@@ -1106,7 +1118,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             if let Some(function_output) = response {
                 let is_diverged = function_output != output;
                 if is_diverged {
-                    return Err(GolemError::unexpected_oplog_entry(
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
                         format!("{full_function_name}({function_input:?}) => {function_output:?}"),
                         format!("{full_function_name}({function_input:?}) => {output:?}"),
                     ));
@@ -1321,7 +1333,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
         let span_id = self.state.current_span_id.clone();
         let span = self.start_child_span(&span_id, initial_attributes).await?;
         self.state.current_span_id = span.span_id().clone();
@@ -1332,7 +1344,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         &mut self,
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, GolemError> {
+    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
         let current_span_id = &self.state.current_span_id;
 
         let is_live = self.is_live();
@@ -1344,7 +1356,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             self.state
                 .invocation_context
                 .start_span(current_span_id, None)
-                .map_err(GolemError::runtime)?
+                .map_err(WorkerExecutorError::runtime)?
         } else if let Some((_, entry)) = self
             .state
             .replay_state
@@ -1369,7 +1381,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             self.state
                 .invocation_context
                 .start_span(current_span_id, None)
-                .map_err(GolemError::runtime)?
+                .map_err(WorkerExecutorError::runtime)?
         };
 
         if current_span_id != parent
@@ -1386,7 +1398,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             self.state
                 .invocation_context
                 .add_link(span.span_id(), parent)
-                .map_err(GolemError::runtime)?;
+                .map_err(WorkerExecutorError::runtime)?;
         };
 
         for (name, value) in initial_attributes {
@@ -1409,7 +1421,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         Ok(span)
     }
 
-    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if &self.state.current_span_id == span_id {
             self.state.current_span_id = self
                 .state
@@ -1424,11 +1436,11 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             .state
             .invocation_context
             .finish_span(span_id)
-            .map_err(GolemError::runtime);
+            .map_err(WorkerExecutorError::runtime);
         Ok(())
     }
 
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
             self.state
                 .oplog
@@ -1459,7 +1471,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             .state
             .invocation_context
             .finish_span(span_id)
-            .map_err(GolemError::runtime);
+            .map_err(WorkerExecutorError::runtime);
         Ok(())
     }
 
@@ -1468,11 +1480,11 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         span_id: &SpanId,
         key: &str,
         value: AttributeValue,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.state
             .invocation_context
             .set_attribute(span_id, key.to_string(), value.clone())
-            .map_err(GolemError::runtime)?;
+            .map_err(WorkerExecutorError::runtime)?;
         if self.is_live() {
             self.state
                 .oplog
@@ -1510,14 +1522,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         this: &T,
         owned_worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
-    ) -> Result<WorkerStatusRecord, GolemError> {
+    ) -> Result<WorkerStatusRecord, WorkerExecutorError> {
         calculate_last_known_status(this, owned_worker_id, metadata).await
     }
 
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
-    ) -> Result<RetryDecision, GolemError> {
+    ) -> Result<RetryDecision, WorkerExecutorError> {
         let mut number_of_replayed_functions = 0;
 
         let resume_result = loop {
@@ -1608,8 +1620,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         if let Some(value) = value {
                                             let result =
                                                 interpret_function_result(output, value.result)
-                                                    .map_err(|e| GolemError::ValueMismatch {
-                                                        details: e.join(", "),
+                                                    .map_err(|e| {
+                                                        WorkerExecutorError::ValueMismatch {
+                                                            details: e.join(", "),
+                                                        }
                                                     })?;
                                             if let Err(err) = store
                                                 .as_context_mut()
@@ -1637,9 +1651,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                 .on_invocation_failure(&trap_type)
                                                 .await;
 
-                                            break Err(GolemError::invalid_request(format!(
-                                                "Function {full_function_name} not found"
-                                            )));
+                                            break Err(WorkerExecutorError::invalid_request(
+                                                format!("Function {full_function_name} not found"),
+                                            ));
                                         }
                                     }
                                     Err(err) => {
@@ -1654,7 +1668,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                             .on_invocation_failure(&trap_type)
                                             .await;
 
-                                        break Err(GolemError::invalid_request(format!(
+                                        break Err(WorkerExecutorError::invalid_request(format!(
                                             "Function {full_function_name} not found: {err}"
                                         )));
                                     }
@@ -1682,15 +1696,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                             match trap_type {
                                                 TrapType::Interrupt(interrupt_kind) => {
                                                     if interrupt_kind == InterruptKind::Interrupt {
-                                                        break Err(GolemError::runtime(
+                                                        break Err(WorkerExecutorError::runtime(
                                                             "Interrupted via the Golem API",
                                                         ));
                                                     } else {
-                                                        break Err(GolemError::runtime(format!("The worker could not finish replaying a function {function_name}")));
+                                                        break Err(WorkerExecutorError::runtime(format!("The worker could not finish replaying a function {function_name}")));
                                                     }
                                                 }
                                                 TrapType::Exit => {
-                                                    break Err(GolemError::runtime(
+                                                    break Err(WorkerExecutorError::runtime(
                                                         "Process exited",
                                                     ))
                                                 }
@@ -1701,9 +1715,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                         .get_public_state()
                                                         .event_service()
                                                         .get_last_invocation_errors();
-                                                    break Err(GolemError::runtime(
-                                                        error.to_string(&stderr),
-                                                    ));
+                                                    break Err(
+                                                        WorkerExecutorError::InvocationFailed {
+                                                            error,
+                                                            stderr,
+                                                        },
+                                                    );
                                                 }
                                             }
                                         }
@@ -1738,7 +1755,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<RetryDecision, GolemError> {
+    ) -> Result<RetryDecision, WorkerExecutorError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
         store.as_context_mut().data_mut().set_running();
@@ -1863,7 +1880,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     Ok(RetryDecision::None)
                 }
                 Ok(other) => Ok(other),
-                Err(error) => Err(GolemError::failed_to_resume_worker(
+                Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
                     worker_id.clone(),
                     error,
                 )),
@@ -1873,16 +1890,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         _this: &T,
-        _account_id: &AccountId,
+        _project_id: &ProjectId,
         _last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
 
     async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
         _this: &T,
         _worker_id: &WorkerId,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
 
@@ -1902,6 +1919,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let default_retry_config = &this.config().retry;
         for worker in workers {
             let owned_worker_id = worker.owned_worker_id();
+            let created_by = worker.created_by.clone();
             let latest_worker_status =
                 calculate_last_known_status(this, &owned_worker_id, &Some(worker)).await?;
             let last_error =
@@ -1923,6 +1941,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 RetryDecision::Immediate | RetryDecision::ReacquirePermits => {
                     let _ = Worker::get_or_create_running(
                         this,
+                        &created_by,
                         &owned_worker_id,
                         None,
                         None,
@@ -1944,13 +1963,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
     async fn on_worker_update_failed_to_start<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         details: Option<String>,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         let worker = this
             .worker_activator()
-            .get_or_create_suspended(owned_worker_id, None, None, None, None)
+            .get_or_create_suspended(account_id, owned_worker_id, None, None, None, None)
             .await?;
 
         let entry = OplogEntry::failed_update(target_version, details.clone());
@@ -1981,53 +2001,51 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
     async fn list_directory(
         &self,
         path: &ComponentFilePath,
-    ) -> Result<ListDirectoryResult, GolemError> {
+    ) -> Result<ListDirectoryResult, WorkerExecutorError> {
         let root = self.temp_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
-            let exists =
-                tokio::fs::try_exists(&target)
-                    .await
-                    .map_err(|e| GolemError::FileSystemError {
-                        path: path.to_string(),
-                        reason: format!("Failed to check whether file exists: {e}"),
-                    })?;
+            let exists = tokio::fs::try_exists(&target).await.map_err(|e| {
+                WorkerExecutorError::FileSystemError {
+                    path: path.to_string(),
+                    reason: format!("Failed to check whether file exists: {e}"),
+                }
+            })?;
             if !exists {
                 return Ok(ListDirectoryResult::NotFound);
             };
         }
 
         {
-            let metadata =
-                tokio::fs::metadata(&target)
-                    .await
-                    .map_err(|e| GolemError::FileSystemError {
-                        path: path.to_string(),
-                        reason: format!("Failed to get metadata: {e}"),
-                    })?;
+            let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
+                WorkerExecutorError::FileSystemError {
+                    path: path.to_string(),
+                    reason: format!("Failed to get metadata: {e}"),
+                }
+            })?;
             if !metadata.is_dir() {
                 return Ok(ListDirectoryResult::NotADirectory);
             };
         }
 
-        let mut entries =
-            tokio::fs::read_dir(target)
-                .await
-                .map_err(|e| GolemError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to list directory: {e}"),
-                })?;
+        let mut entries = tokio::fs::read_dir(target).await.map_err(|e| {
+            WorkerExecutorError::FileSystemError {
+                path: path.to_string(),
+                reason: format!("Failed to list directory: {e}"),
+            }
+        })?;
 
         let mut result = Vec::new();
         while let Some(entry) = entries.next_entry().await? {
-            let metadata = entry
-                .metadata()
-                .await
-                .map_err(|e| GolemError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to get file metadata {e}"),
-                })?;
+            let metadata =
+                entry
+                    .metadata()
+                    .await
+                    .map_err(|e| WorkerExecutorError::FileSystemError {
+                        path: path.to_string(),
+                        reason: format!("Failed to get file metadata {e}"),
+                    })?;
 
             let entry_name = entry.file_name().to_string_lossy().to_string();
 
@@ -2068,31 +2086,32 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
         Ok(ListDirectoryResult::Ok(result))
     }
 
-    async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError> {
+    async fn read_file(
+        &self,
+        path: &ComponentFilePath,
+    ) -> Result<ReadFileResult, WorkerExecutorError> {
         let root = self.temp_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
-            let exists =
-                tokio::fs::try_exists(&target)
-                    .await
-                    .map_err(|e| GolemError::FileSystemError {
-                        path: path.to_string(),
-                        reason: format!("Failed to check whether file exists: {e}"),
-                    })?;
+            let exists = tokio::fs::try_exists(&target).await.map_err(|e| {
+                WorkerExecutorError::FileSystemError {
+                    path: path.to_string(),
+                    reason: format!("Failed to check whether file exists: {e}"),
+                }
+            })?;
             if !exists {
                 return Ok(ReadFileResult::NotFound);
             };
         }
 
         {
-            let metadata =
-                tokio::fs::metadata(&target)
-                    .await
-                    .map_err(|e| GolemError::FileSystemError {
-                        path: path.to_string(),
-                        reason: format!("Failed to get metadata: {e}"),
-                    })?;
+            let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
+                WorkerExecutorError::FileSystemError {
+                    path: path.to_string(),
+                    reason: format!("Failed to get metadata: {e}"),
+                }
+            })?;
             if !metadata.is_file() {
                 return Ok(ReadFileResult::NotAFile);
             };
@@ -2103,7 +2122,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
         let stream = tokio::fs::File::open(target)
             .map_ok(|file| FramedRead::new(file, BytesCodec::new()).map_ok(BytesMut::freeze))
             .try_flatten_stream()
-            .map_err(move |e| GolemError::FileSystemError {
+            .map_err(move |e| WorkerExecutorError::FileSystemError {
                 path: path_clone.to_string(),
                 reason: format!("Failed to open file: {e}"),
             });
@@ -2206,7 +2225,6 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     break;
                 }
             }
-            Some((_, OplogEntry::ExportedFunctionInvokedV1 { .. })) => break,
             Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
             _ => {}
         }
@@ -2257,6 +2275,7 @@ struct PrivateDurableWorkerState {
     plugins: Arc<dyn Plugins>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
+    created_by: AccountId,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -2287,6 +2306,8 @@ struct PrivateDurableWorkerState {
     read_only_paths: RwLock<HashSet<PathBuf>>,
     files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
     file_loader: Arc<FileLoader>,
+
+    project_service: Arc<dyn ProjectService>,
 }
 
 impl PrivateDurableWorkerState {
@@ -2315,6 +2336,8 @@ impl PrivateDurableWorkerState {
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
+        project_service: Arc<dyn ProjectService>,
+        created_by: AccountId,
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -2362,13 +2385,15 @@ impl PrivateDurableWorkerState {
             read_only_paths,
             files,
             file_loader,
+            project_service,
+            created_by,
         }
     }
 
     pub async fn begin_function(
         &mut self,
         function_type: &DurableFunctionType,
-    ) -> Result<OplogIndex, GolemError> {
+    ) -> Result<OplogIndex, WorkerExecutorError> {
         if (*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
             || matches!(
                 *function_type,
@@ -2392,7 +2417,7 @@ impl PrivateDurableWorkerState {
                     if end_index.is_none() {
                         // Must switch to live mode before failing to be able to commit an Error entry
                         self.replay_state.switch_to_live().await;
-                        Err(GolemError::runtime(
+                        Err(WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ))
                     } else {
@@ -2444,7 +2469,7 @@ impl PrivateDurableWorkerState {
         &mut self,
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         if (*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
             || matches!(
                 *function_type,
@@ -2486,7 +2511,7 @@ impl PrivateDurableWorkerState {
         !self.is_live()
     }
 
-    pub async fn sleep_until(&self, when: DateTime<Utc>) -> Result<(), GolemError> {
+    pub async fn sleep_until(&self, when: DateTime<Utc>) -> Result<(), WorkerExecutorError> {
         let promise_id = self
             .promise_service
             .create(
@@ -2500,7 +2525,8 @@ impl PrivateDurableWorkerState {
             .schedule(
                 when,
                 ScheduledAction::CompletePromise {
-                    account_id: self.owned_worker_id.account_id(),
+                    account_id: self.created_by.clone(),
+                    project_id: self.owned_worker_id.project_id(),
                     promise_id,
                 },
             )
@@ -2529,10 +2555,10 @@ impl PrivateDurableWorkerState {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
         self.worker_enumeration_service
             .get(
-                &self.owned_worker_id.account_id,
+                &self.owned_worker_id.project_id,
                 component_id,
                 filter,
                 cursor,
@@ -2589,6 +2615,12 @@ impl HasConfig for PrivateDurableWorkerState {
 impl HasPlugins for PrivateDurableWorkerState {
     fn plugins(&self) -> Arc<dyn Plugins> {
         self.plugins.clone()
+    }
+}
+
+impl HasProjectService for PrivateDurableWorkerState {
+    fn project_service(&self) -> Arc<dyn ProjectService> {
+        self.project_service.clone()
     }
 }
 
@@ -2721,10 +2753,10 @@ enum IFSWorkerFile {
 
 async fn prepare_filesystem(
     file_loader: &Arc<FileLoader>,
-    account_id: &AccountId,
+    project_id: &ProjectId,
     root: &Path,
     files: &[InitialComponentFile],
-) -> Result<HashMap<PathBuf, IFSWorkerFile>, GolemError> {
+) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError> {
     let futures = files.iter().map(|file| {
         let path = root.join(PathBuf::from(file.path.to_rel_string()));
         let file = file.clone();
@@ -2735,9 +2767,9 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
-                        .get_read_only_to(account_id, &file.key, &path)
+                        .get_read_only_to(project_id, &file.key, &path)
                         .await?;
-                    Ok::<_, GolemError>((
+                    Ok::<_, WorkerExecutorError>((
                         path,
                         IFSWorkerFile::Ro {
                             file,
@@ -2748,7 +2780,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadWrite => {
                     debug!("Loading read-write file {}", path.display());
                     file_loader
-                        .get_read_write_to(account_id, &file.key, &path)
+                        .get_read_write_to(project_id, &file.key, &path)
                         .await?;
                     Ok((path, IFSWorkerFile::Rw))
                 }
@@ -2761,10 +2793,10 @@ async fn prepare_filesystem(
 async fn update_filesystem(
     current_state: &mut HashMap<PathBuf, IFSWorkerFile>,
     file_loader: &Arc<FileLoader>,
-    account_id: &AccountId,
+    project_id: &ProjectId,
     root: &Path,
     files: &[InitialComponentFile],
-) -> Result<(), GolemError> {
+) -> Result<(), WorkerExecutorError> {
     enum UpdateFileSystemResult {
         NoChanges,
         Remove(PathBuf),
@@ -2786,12 +2818,12 @@ async fn update_filesystem(
             match file {
                 IFSWorkerFile::Ro { file, .. } if !should_keep => {
                     tokio::fs::remove_dir(&path).await.map_err(|e| {
-                        GolemError::FileSystemError {
+                        WorkerExecutorError::FileSystemError {
                             path: file.path.to_rel_string(),
                             reason: format!("Failed deleting file during update: {e}"),
                         }
                     })?;
-                    Ok::<_, GolemError>(UpdateFileSystemResult::Remove(path))
+                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Remove(path))
                 }
                 _ => Ok(UpdateFileSystemResult::NoChanges),
             }
@@ -2811,95 +2843,95 @@ async fn update_filesystem(
                 (ComponentFilePermissions::ReadOnly, None) => {
                     debug!("Loading read-only file {}", path.display());
 
-                    let exists = tokio::fs::try_exists(&path).map_err(|e| GolemError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
+                    let exists = tokio::fs::try_exists(&path).map_err(|e| WorkerExecutorError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
 
                     if exists {
                         // Try removing it if it's an empty directory, this will fail otherwise and we can report the error.
                         tokio::fs::remove_dir(&path).await.map_err(|e|
-                            GolemError::FileSystemError {
+                            WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Tried replacing an existing non-empty path with ro file during update: {e}")
+                                reason: format!("Tried replacing an existing non-empty path with ro file during update: {e}"),
                             }
                         )?;
                     };
 
                     let token = file_loader
-                        .get_read_only_to(account_id, &file.key, &path)
+                        .get_read_only_to(project_id, &file.key, &path)
                         .await?;
 
-                    Ok::<_, GolemError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
-                },
+                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
+                }
                 (ComponentFilePermissions::ReadOnly, Some(IFSWorkerFile::Ro { file: existing_file, .. })) => {
                     if existing_file.key == file.key {
                         Ok(UpdateFileSystemResult::NoChanges)
                     } else {
                         debug!("updating ro file {}", path.display());
                         tokio::fs::remove_file(&path).await.map_err(|e|
-                            GolemError::FileSystemError {
+                            WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Failed deleting file during update: {e}")
+                                reason: format!("Failed deleting file during update: {e}"),
                             }
                         )?;
                         let token = file_loader
-                            .get_read_only_to(account_id, &file.key, &path)
+                            .get_read_only_to(project_id, &file.key, &path)
                             .await?;
-                        Ok::<_, GolemError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
+                        Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }
                 }
                 (ComponentFilePermissions::ReadOnly, Some(IFSWorkerFile::Rw)) => {
-                    Err(GolemError::FileSystemError {
+                    Err(WorkerExecutorError::FileSystemError {
                         path: file.path.to_rel_string(),
-                        reason: "Tried updating rw file to ro during update".to_string()
+                        reason: "Tried updating rw file to ro during update".to_string(),
                     })
                 }
                 (ComponentFilePermissions::ReadWrite, None) => {
                     debug!("Loading rw file {}", path.display());
 
-                    let exists = tokio::fs::try_exists(&path).map_err(|e| GolemError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
+                    let exists = tokio::fs::try_exists(&path).map_err(|e| WorkerExecutorError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
 
                     if exists {
                         let metadata = tokio::fs::metadata(&path).await.map_err(|e|
-                            GolemError::FileSystemError {
+                            WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Failed getting metadata of path: {e}")
+                                reason: format!("Failed getting metadata of path: {e}"),
                             }
                         )?;
 
                         if metadata.is_file() {
-                            return Ok(UpdateFileSystemResult::NoChanges)
+                            return Ok(UpdateFileSystemResult::NoChanges);
                         }
 
                         // Try removing it if it's an empty directory, this will fail otherwise and we can report the error.
                         tokio::fs::remove_dir(&path).await.map_err(|e|
-                            GolemError::FileSystemError {
+                            WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}")
+                                reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}"),
                             }
                         )?;
                     }
 
                     file_loader
-                        .get_read_write_to(account_id, &file.key, &path)
+                        .get_read_write_to(project_id, &file.key, &path)
                         .await?;
-                    Ok::<_, GolemError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw})
-                },
+                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
+                }
                 (ComponentFilePermissions::ReadWrite, Some(IFSWorkerFile::Ro { .. })) => {
                     debug!("Updating ro file to rw {}", path.display());
                     tokio::fs::remove_file(&path).await.map_err(|e|
-                        GolemError::FileSystemError {
+                        WorkerExecutorError::FileSystemError {
                             path: file.path.to_rel_string(),
-                            reason: format!("Failed deleting file during update: {e}")
+                            reason: format!("Failed deleting file during update: {e}"),
                         }
                     )?;
                     file_loader
-                        .get_read_write_to(account_id, &file.key, &path)
+                        .get_read_write_to(project_id, &file.key, &path)
                         .await?;
-                    Ok::<_, GolemError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw})
-                },
+                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
+                }
                 (ComponentFilePermissions::ReadWrite, Some(IFSWorkerFile::Rw)) => {
                     debug!("Updating rw file {}", path.display());
                     Ok(UpdateFileSystemResult::NoChanges)
-                },
+                }
             }
         }
     });
@@ -2945,7 +2977,7 @@ macro_rules! get_oplog_entry {
                 })+
                 entry if entry.is_hint() => {}
                 _ => {
-                    break Err($crate::error::GolemError::unexpected_oplog_entry(
+                    break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
                         stringify!($($cases |)+),
                         format!("{:?}", oplog_entry),
                     ));

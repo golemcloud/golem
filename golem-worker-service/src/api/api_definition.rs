@@ -14,7 +14,7 @@
 
 use super::dto::HttpApiDefinitionRequest;
 use super::dto::HttpApiDefinitionResponseData;
-use crate::api::common::{ApiEndpointError, ApiTags};
+use crate::api::common::ApiEndpointError;
 use crate::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
 use crate::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
@@ -26,6 +26,7 @@ use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe};
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;

@@ -45,8 +45,8 @@ use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationAction, PluginInstallationCreation,
     PluginInstallationUpdate,
 };
-use golem_common::model::AccountId;
 use golem_common::model::InitialComponentFile;
+use golem_common::model::ProjectId;
 use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::{ComponentId, ComponentType, ComponentVersion, PluginInstallationId};
 use golem_common::repo::ComponentOwnerRow;
@@ -717,7 +717,7 @@ impl ComponentServiceDefault {
 
     async fn upload_component_files(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         payload: InitialComponentFilesArchiveAndPermissions,
     ) -> Result<Vec<InitialComponentFile>, ComponentError> {
         let path_permissions: HashMap<ComponentFilePath, ComponentFilePermissions> =
@@ -737,7 +737,7 @@ impl ComponentServiceDefault {
                 info!("Uploading file: {}", path.to_string());
 
                 self.initial_component_files_service
-                    .put_if_not_exists(account_id, &stream)
+                    .put_if_not_exists(project_id, &stream)
                     .await
                     .map_err(|e| {
                         ComponentError::initial_component_file_upload_error(
@@ -903,7 +903,11 @@ impl ComponentServiceDefault {
         };
 
         self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version)
+            .enqueue_compilation(
+                &owner.project_id,
+                component_id,
+                component.versioned_component_id.version,
+            )
             .await;
 
         Ok(component)
@@ -980,6 +984,7 @@ impl ComponentServiceDefault {
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         let result = self.component_repo.create(&record).await;
+
         match result {
             Err(RepoError::UniqueViolation(_)) => Err(ComponentError::ConcurrentUpdate {
                 component_id: component_id.clone(),
@@ -990,7 +995,11 @@ impl ComponentServiceDefault {
         };
 
         self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version)
+            .enqueue_compilation(
+                &owner.project_id,
+                component_id,
+                component.versioned_component_id.version,
+            )
             .await;
 
         Ok(component)
@@ -1002,7 +1011,11 @@ impl ComponentServiceDefault {
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
         self.object_store
-            .put(&component.user_object_store_key(), data)
+            .put(
+                &component.owner.project_id,
+                &component.user_object_store_key(),
+                data,
+            )
             .await
             .map_err(|e| {
                 ComponentError::component_store_error("Failed to upload user component", e)
@@ -1015,7 +1028,11 @@ impl ComponentServiceDefault {
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
         self.object_store
-            .put(&component.protected_object_store_key(), data)
+            .put(
+                &component.owner.project_id,
+                &component.transformed_object_store_key(),
+                data,
+            )
             .await
             .map_err(|e| {
                 ComponentError::component_store_error("Failed to upload protected component", e)
@@ -1122,7 +1139,7 @@ impl ComponentServiceDefault {
 
             let key = self
                 .initial_component_files_service
-                .put_if_not_exists(&component.owner.account_id, content_stream)
+                .put_if_not_exists(&component.owner.project_id, content_stream)
                 .await
                 .map_err(|e| {
                     ComponentError::initial_component_file_upload_error(
@@ -1230,7 +1247,7 @@ impl ComponentService for ComponentServiceDefault {
 
         let uploaded_files = match files {
             Some(files) => {
-                self.upload_component_files(&owner.account_id, files)
+                self.upload_component_files(&owner.project_id, files)
                     .await?
             }
             None => vec![],
@@ -1271,7 +1288,7 @@ impl ComponentService for ComponentServiceDefault {
         for file in &files {
             let exists = self
                 .initial_component_files_service
-                .exists(&owner.account_id, &file.key)
+                .exists(&owner.project_id, &file.key)
                 .await
                 .map_err(|e| {
                     ComponentError::initial_component_file_upload_error(
@@ -1315,7 +1332,7 @@ impl ComponentService for ComponentServiceDefault {
 
         let uploaded_files = match files {
             Some(files) => Some(
-                self.upload_component_files(&owner.account_id, files)
+                self.upload_component_files(&owner.project_id, files)
                     .await?,
             ),
             None => None,
@@ -1348,7 +1365,7 @@ impl ComponentService for ComponentServiceDefault {
         for file in files.iter().flatten() {
             let exists = self
                 .initial_component_files_service
-                .exists(&owner.account_id, &file.key)
+                .exists(&owner.project_id, &file.key)
                 .await
                 .map_err(|e| {
                     ComponentError::initial_component_file_upload_error(
@@ -1400,7 +1417,10 @@ impl ComponentService for ComponentServiceDefault {
             info!(owner = %owner, component_id = %component.versioned_component_id, "Download component");
 
             self.object_store
-                .get(&component.protected_object_store_key())
+                .get(
+                    &component.owner.project_id,
+                    &component.transformed_object_store_key(),
+                )
                 .await
                 .tap_err(|e| error!(owner = %owner, "Error downloading component - error: {}", e))
                 .map_err(|e| {
@@ -1432,7 +1452,7 @@ impl ComponentService for ComponentServiceDefault {
         };
 
         if let Some(component) = component {
-            let protected_object_store_key = component.protected_object_store_key();
+            let protected_object_store_key = component.transformed_object_store_key();
 
             info!(
                 owner = %owner,
@@ -1442,7 +1462,7 @@ impl ComponentService for ComponentServiceDefault {
             );
 
             self.object_store
-                .get_stream(&protected_object_store_key)
+                .get_stream(&component.owner.project_id, &protected_object_store_key)
                 .await
                 .map_err(|e| {
                     ComponentError::component_store_error("Error downloading component", e)
@@ -1479,7 +1499,7 @@ impl ComponentService for ComponentServiceDefault {
 
             let stream = self
                 .initial_component_files_service
-                .get(&owner.account_id, &file.key)
+                .get(&owner.project_id, &file.key)
                 .await
                 .map_err(|e| {
                     ComponentError::initial_component_file_upload_error(
@@ -1669,15 +1689,24 @@ impl ComponentService for ComponentServiceDefault {
         let mut object_store_keys = Vec::new();
 
         for component in components {
-            object_store_keys.push(component.protected_object_store_key());
-            object_store_keys.push(component.user_object_store_key());
+            object_store_keys.push((
+                component.owner.project_id.clone(),
+                component.transformed_object_store_key(),
+            ));
+            object_store_keys.push((
+                component.owner.project_id.clone(),
+                component.user_object_store_key(),
+            ));
         }
 
         if !object_store_keys.is_empty() {
-            for key in object_store_keys {
-                self.object_store.delete(&key).await.map_err(|e| {
-                    ComponentError::component_store_error("Failed to delete component data", e)
-                })?;
+            for (project_id, key) in object_store_keys {
+                self.object_store
+                    .delete(&project_id, &key)
+                    .await
+                    .map_err(|e| {
+                        ComponentError::component_store_error("Failed to delete component data", e)
+                    })?;
             }
             self.component_repo
                 .delete(&owner.to_string(), component_id.0)
@@ -1916,7 +1945,6 @@ impl ComponentService for ComponentServiceDefault {
 
                     existing.priority = update.priority;
                     existing.parameters = update.parameters.clone();
-
                     result.push(None);
                 }
                 PluginInstallationAction::Uninstall(uninstallation) => {
@@ -1939,7 +1967,10 @@ impl ComponentService for ComponentServiceDefault {
 
         let data = self
             .object_store
-            .get(&component.user_object_store_key())
+            .get(
+                &component.owner.project_id,
+                &component.user_object_store_key(),
+            )
             .await
             .map_err(|err| {
                 ComponentError::component_store_error("Failed to download user component", err)
@@ -1948,7 +1979,11 @@ impl ComponentService for ComponentServiceDefault {
         let (component, transformed_data) = self.apply_transformations(component, data).await?;
 
         self.object_store
-            .put(&component.protected_object_store_key(), transformed_data)
+            .put(
+                &component.owner.project_id,
+                &component.transformed_object_store_key(),
+                transformed_data,
+            )
             .await
             .map_err(|e| {
                 ComponentError::component_store_error("Failed to upload protected component", e)
@@ -1983,8 +2018,8 @@ impl ZipEntryStream {
 }
 
 impl ReplayableStream for ZipEntryStream {
-    type Error = String;
     type Item = Result<Bytes, String>;
+    type Error = String;
 
     async fn make_stream(&self) -> Result<impl Stream<Item = Self::Item> + Send + 'static, String> {
         let reopened = self

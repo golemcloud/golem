@@ -24,17 +24,18 @@ use goldenfile::differs::Differ;
 use goldenfile::Mint;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, OplogPayload,
-    PayloadId, TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
+    DurableFunctionType, IndexedResourceKey, LogLevel, OplogIndex, OplogPayload, PayloadId,
+    TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
 use golem_common::model::{
-    AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, PromiseId,
-    ScheduledAction, ShardId, SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation,
-    WorkerId, WorkerInvocation, WorkerResourceDescription, WorkerStatus,
+    AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, PromiseId, ShardId,
+    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+    WorkerResourceDescription, WorkerStatus,
 };
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_ast::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
     TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption,
@@ -52,8 +53,6 @@ use golem_worker_executor::durable_host::serialized::{
     SerializableIpAddresses, SerializableStreamError,
 };
 use golem_worker_executor::durable_host::wasm_rpc::serialized::SerializableInvokeResultV1;
-use golem_worker_executor::error::GolemError;
-use golem_worker_executor::model::InterruptKind;
 use golem_worker_executor::services::blob_store;
 use golem_worker_executor::services::promise::RedisPromiseState;
 use golem_worker_executor::services::rpc::RpcError;
@@ -497,43 +496,6 @@ pub fn promise_id() {
 }
 
 #[test]
-pub fn scheduled_action() {
-    let sa1 = ScheduledAction::CompletePromise {
-        account_id: AccountId {
-            value: "account_id".to_string(),
-        },
-        promise_id: PromiseId {
-            worker_id: WorkerId {
-                component_id: ComponentId(
-                    Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-                ),
-                worker_name: "worker_name".to_string(),
-            },
-            oplog_idx: OplogIndex::from_u64(100),
-        },
-    };
-    let sa2 = ScheduledAction::ArchiveOplog {
-        owned_worker_id: OwnedWorkerId {
-            account_id: AccountId {
-                value: "account_id".to_string(),
-            },
-            worker_id: WorkerId {
-                component_id: ComponentId(
-                    Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-                ),
-                worker_name: "worker_name".to_string(),
-            },
-        },
-        last_oplog_index: OplogIndex::from_u64(100),
-        next_after: Duration::from_secs(10),
-    };
-
-    let mut mint = Mint::new("tests/goldenfiles");
-    backward_compatible("scheduled_action_complete_promise", &mut mint, sa1);
-    backward_compatible("scheduled_action_archive_oplog", &mut mint, sa2);
-}
-
-#[test]
 pub fn wrapped_function_type() {
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible(
@@ -596,267 +558,6 @@ pub fn log_level() {
 }
 
 #[test]
-pub fn oplog_entry() {
-    // Special differ ignoring the invocation_context field
-    fn is_deserializable_ignoring_invocation_context(old: &Path, new: &Path) {
-        let old = std::fs::read(old).unwrap();
-        let new = std::fs::read(new).unwrap();
-
-        // Both the old and the latest binary can be deserialized
-        let mut old_decoded: OplogEntry = deserialize(&old).unwrap();
-        let new_decoded: OplogEntry = deserialize(&new).unwrap();
-
-        if let (
-            OplogEntry::PendingWorkerInvocation {
-                invocation:
-                    WorkerInvocation::ExportedFunction {
-                        invocation_context: old,
-                        ..
-                    },
-                ..
-            },
-            OplogEntry::PendingWorkerInvocation {
-                invocation:
-                    WorkerInvocation::ExportedFunction {
-                        invocation_context: new,
-                        ..
-                    },
-                ..
-            },
-        ) = (&mut old_decoded, &new_decoded)
-        {
-            *old = new.clone();
-        }
-
-        // And they represent the same value
-        assert_eq!(old_decoded, new_decoded);
-    }
-
-    let oe1a = OplogEntry::CreateV1 {
-        timestamp: Timestamp::from(1724701938466),
-        worker_id: WorkerId {
-            component_id: ComponentId(
-                Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-            ),
-            worker_name: "worker_name".to_string(),
-        },
-        component_version: 0,
-        args: vec!["hello".to_string(), "world".to_string()],
-        env: vec![
-            ("key1".to_string(), "value1".to_string()),
-            ("key2".to_string(), "value2".to_string()),
-        ],
-        account_id: AccountId {
-            value: "account_id".to_string(),
-        },
-        parent: None,
-        component_size: 100_000_000,
-        initial_total_linear_memory_size: 100_000_000,
-    };
-    let oe1b = OplogEntry::CreateV1 {
-        timestamp: Timestamp::from(1724701938466),
-        worker_id: WorkerId {
-            component_id: ComponentId(
-                Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-            ),
-            worker_name: "worker_name".to_string(),
-        },
-        component_version: 0,
-        args: vec!["hello".to_string(), "world".to_string()],
-        env: vec![
-            ("key1".to_string(), "value1".to_string()),
-            ("key2".to_string(), "value2".to_string()),
-        ],
-        account_id: AccountId {
-            value: "account_id".to_string(),
-        },
-        parent: Some(WorkerId {
-            component_id: ComponentId(
-                Uuid::parse_str("90BB3957-2C4E-4711-A488-902B7018100F").unwrap(),
-            ),
-            worker_name: "parent_worker_name".to_string(),
-        }),
-        component_size: 100_000_000,
-        initial_total_linear_memory_size: 100_000_000,
-    };
-
-    let oe2 = OplogEntry::ImportedFunctionInvokedV1 {
-        timestamp: Timestamp::from(1724701938466),
-        function_name: "test:pkg/iface.{fn}".to_string(),
-        response: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
-        wrapped_function_type: DurableFunctionType::ReadLocal,
-    };
-
-    let oe3 = OplogEntry::ExportedFunctionInvokedV1 {
-        timestamp: Timestamp::from(1724701938466),
-        function_name: "test:pkg/iface.{fn}".to_string(),
-        request: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
-        idempotency_key: IdempotencyKey {
-            value: "id1".to_string(),
-        },
-    };
-
-    let oe4 = OplogEntry::ExportedFunctionCompleted {
-        timestamp: Timestamp::from(1724701938466),
-        response: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
-        consumed_fuel: 12345678910,
-    };
-
-    let oe5 = OplogEntry::Suspend {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe6 = OplogEntry::Error {
-        timestamp: Timestamp::from(1724701938466),
-        error: WorkerError::OutOfMemory,
-    };
-
-    let oe7 = OplogEntry::NoOp {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe8 = OplogEntry::Jump {
-        timestamp: Timestamp::from(1724701938466),
-        jump: OplogRegion {
-            start: OplogIndex::from_u64(0),
-            end: OplogIndex::from_u64(10),
-        },
-    };
-
-    let oe9 = OplogEntry::Interrupted {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe10 = OplogEntry::Exited {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe11 = OplogEntry::ChangeRetryPolicy {
-        timestamp: Timestamp::from(1724701938466),
-        new_policy: RetryConfig::default(),
-    };
-
-    let oe12 = OplogEntry::BeginAtomicRegion {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe13 = OplogEntry::EndAtomicRegion {
-        timestamp: Timestamp::from(1724701938466),
-        begin_index: OplogIndex::from_u64(0),
-    };
-
-    let oe14 = OplogEntry::BeginRemoteWrite {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe15 = OplogEntry::EndRemoteWrite {
-        timestamp: Timestamp::from(1724701938466),
-        begin_index: OplogIndex::from_u64(0),
-    };
-
-    let oe16 = OplogEntry::PendingWorkerInvocation {
-        timestamp: Timestamp::from(1724701938466),
-        invocation: WorkerInvocation::ExportedFunction {
-            idempotency_key: IdempotencyKey {
-                value: "idempotency_key".to_string(),
-            },
-            full_function_name: "function-name".to_string(),
-            function_input: vec![Value::Bool(true)],
-            invocation_context: InvocationContextStack::fresh(),
-        },
-    };
-
-    let oe17 = OplogEntry::PendingUpdate {
-        timestamp: Timestamp::from(1724701938466),
-        description: UpdateDescription::Automatic {
-            target_version: 100,
-        },
-    };
-
-    let oe18 = OplogEntry::SuccessfulUpdateV1 {
-        timestamp: Timestamp::from(1724701938466),
-        target_version: 10,
-        new_component_size: 1234,
-    };
-
-    let oe19a = OplogEntry::FailedUpdate {
-        timestamp: Timestamp::from(1724701938466),
-        target_version: 10,
-        details: None,
-    };
-
-    let oe19b = OplogEntry::FailedUpdate {
-        timestamp: Timestamp::from(1724701938466),
-        target_version: 10,
-        details: Some("details".to_string()),
-    };
-
-    let oe20 = OplogEntry::GrowMemory {
-        timestamp: Timestamp::from(1724701938466),
-        delta: 100_000_000,
-    };
-
-    let oe21 = OplogEntry::CreateResource {
-        timestamp: Timestamp::from(1724701938466),
-        id: WorkerResourceId(1),
-    };
-
-    let oe22 = OplogEntry::DropResource {
-        timestamp: Timestamp::from(1724701938466),
-        id: WorkerResourceId(1),
-    };
-
-    let oe23 = OplogEntry::DescribeResource {
-        timestamp: Timestamp::from(1724701938466),
-        id: WorkerResourceId(1),
-        indexed_resource: IndexedResourceKey {
-            resource_name: "r1".to_string(),
-            resource_params: vec!["a".to_string(), "b".to_string()],
-        },
-    };
-
-    let oe24 = OplogEntry::Log {
-        timestamp: Timestamp::from(1724701938466),
-        level: LogLevel::Error,
-        context: "context".to_string(),
-        message: "message".to_string(),
-    };
-
-    let mut mint = Mint::new("tests/goldenfiles");
-    backward_compatible("oplog_entry_create", &mut mint, oe1a);
-    backward_compatible("oplog_entry_create_with_parent", &mut mint, oe1b);
-    backward_compatible("oplog_entry_imported_function_invoked", &mut mint, oe2);
-    backward_compatible("oplog_entry_exported_function_invoked", &mut mint, oe3);
-    backward_compatible("oplog_entry_exported_function_completed", &mut mint, oe4);
-    backward_compatible("oplog_entry_suspend", &mut mint, oe5);
-    backward_compatible("oplog_entry_error", &mut mint, oe6);
-    backward_compatible("oplog_entry_no_op", &mut mint, oe7);
-    backward_compatible("oplog_entry_jump", &mut mint, oe8);
-    backward_compatible("oplog_entry_interrupted", &mut mint, oe9);
-    backward_compatible("oplog_entry_exited", &mut mint, oe10);
-    backward_compatible("oplog_entry_change_retry_policy", &mut mint, oe11);
-    backward_compatible("oplog_entry_begin_atomic_region", &mut mint, oe12);
-    backward_compatible("oplog_entry_end_atomic_region", &mut mint, oe13);
-    backward_compatible("oplog_entry_begin_remote_write", &mut mint, oe14);
-    backward_compatible("oplog_entry_end_remote_write", &mut mint, oe15);
-    backward_compatible_custom(
-        "oplog_entry_pending_worker_invocation",
-        &mut mint,
-        oe16,
-        Box::new(is_deserializable_ignoring_invocation_context),
-    );
-    backward_compatible("oplog_entry_pending_update", &mut mint, oe17);
-    backward_compatible("oplog_entry_successful_update", &mut mint, oe18);
-    backward_compatible("oplog_entry_failed_update_no_details", &mut mint, oe19a);
-    backward_compatible("oplog_entry_failed_update_with_details", &mut mint, oe19b);
-    backward_compatible("oplog_entry_grow_memory", &mut mint, oe20);
-    backward_compatible("oplog_entry_create_resource", &mut mint, oe21);
-    backward_compatible("oplog_entry_drop_resource", &mut mint, oe22);
-    backward_compatible("oplog_entry_describe_resource", &mut mint, oe23);
-    backward_compatible("oplog_entry_log", &mut mint, oe24);
-}
-
-#[test]
 pub fn blob_store_object_metadata() {
     let om1 = blob_store::ObjectMetadata {
         name: "item".to_string(),
@@ -899,75 +600,90 @@ pub fn golem_error() {
         oplog_idx: OplogIndex::from_u64(100),
     };
 
-    let g1 = GolemError::InvalidRequest {
+    let g1 = WorkerExecutorError::InvalidRequest {
         details: "invalid request".to_string(),
     };
-    let g2 = GolemError::WorkerAlreadyExists {
+    let g2 = WorkerExecutorError::WorkerAlreadyExists {
         worker_id: wid.clone(),
     };
-    let g3 = GolemError::WorkerNotFound {
+    let g3 = WorkerExecutorError::WorkerNotFound {
         worker_id: wid.clone(),
     };
-    let g4 = GolemError::WorkerCreationFailed {
+    let g4 = WorkerExecutorError::WorkerCreationFailed {
         worker_id: wid.clone(),
         details: "details".to_string(),
     };
-    let g5 = GolemError::FailedToResumeWorker {
+    let g5 = WorkerExecutorError::FailedToResumeWorker {
         worker_id: wid.clone(),
-        reason: Box::new(GolemError::InvalidRequest {
+        reason: Box::new(WorkerExecutorError::InvalidRequest {
             details: "invalid request".to_string(),
         }),
     };
-    let g6 = GolemError::ComponentDownloadFailed {
+    let g6 = WorkerExecutorError::ComponentDownloadFailed {
         component_id: wid.component_id.clone(),
         component_version: 0,
         reason: "reason".to_string(),
     };
-    let g7 = GolemError::ComponentParseFailed {
+    let g7 = WorkerExecutorError::ComponentParseFailed {
         component_id: wid.component_id.clone(),
         component_version: 0,
         reason: "reason".to_string(),
     };
-    let g8 = GolemError::GetLatestVersionOfComponentFailed {
+    let g8 = WorkerExecutorError::GetLatestVersionOfComponentFailed {
         component_id: wid.component_id.clone(),
         reason: "reason".to_string(),
     };
-    let g9 = GolemError::PromiseNotFound {
+    let g9 = WorkerExecutorError::PromiseNotFound {
         promise_id: pid.clone(),
     };
-    let g10 = GolemError::PromiseDropped {
+    let g10 = WorkerExecutorError::PromiseDropped {
         promise_id: pid.clone(),
     };
-    let g11 = GolemError::PromiseAlreadyCompleted {
+    let g11 = WorkerExecutorError::PromiseAlreadyCompleted {
         promise_id: pid.clone(),
     };
-    let g12 = GolemError::Interrupted {
+    let g12 = WorkerExecutorError::Interrupted {
         kind: InterruptKind::Interrupt,
     };
-    let g13 = GolemError::ParamTypeMismatch {
+    let g13 = WorkerExecutorError::ParamTypeMismatch {
         details: "details".to_string(),
     };
-    let g14 = GolemError::NoValueInMessage;
-    let g15 = GolemError::ValueMismatch {
+    let g14 = WorkerExecutorError::NoValueInMessage;
+    let g15 = WorkerExecutorError::ValueMismatch {
         details: "details".to_string(),
     };
-    let g16 = GolemError::UnexpectedOplogEntry {
+    let g16 = WorkerExecutorError::UnexpectedOplogEntry {
         expected: "expected".to_string(),
         got: "actual".to_string(),
     };
-    let g17 = GolemError::Runtime {
+    let g17 = WorkerExecutorError::Runtime {
         details: "details".to_string(),
     };
-    let g18 = GolemError::InvalidShardId {
+    let g18 = WorkerExecutorError::InvalidShardId {
         shard_id: ShardId::new(1),
         shard_ids: vec![ShardId::new(1)],
     };
-    let g19 = GolemError::InvalidAccount;
-    let g20 = GolemError::PreviousInvocationFailed {
+    let g19 = WorkerExecutorError::InvalidAccount;
+    let g20 = WorkerExecutorError::PreviousInvocationFailed {
+        error: WorkerError::Unknown("cause".to_string()),
+        stderr: "stderr".to_string(),
+    };
+    let g21 = WorkerExecutorError::PreviousInvocationExited;
+    let g22 = WorkerExecutorError::Unknown {
         details: "details".to_string(),
     };
-    let g21 = GolemError::Unknown {
-        details: "details".to_string(),
+    let g23 = WorkerExecutorError::ShardingNotReady;
+    let g24 = WorkerExecutorError::InitialComponentFileDownloadFailed {
+        path: "path".to_string(),
+        reason: "reason".to_string(),
+    };
+    let g25 = WorkerExecutorError::FileSystemError {
+        path: "path".to_string(),
+        reason: "reason".to_string(),
+    };
+    let g26 = WorkerExecutorError::InvocationFailed {
+        error: WorkerError::Unknown("cause".to_string()),
+        stderr: "stderr".to_string(),
     };
 
     let mut mint = Mint::new("tests/goldenfiles");
@@ -995,7 +711,16 @@ pub fn golem_error() {
     backward_compatible("golem_error_invalid_shard_id", &mut mint, g18);
     backward_compatible("golem_error_invalid_account", &mut mint, g19);
     backward_compatible("golem_error_previous_invocation_failed", &mut mint, g20);
-    backward_compatible("golem_error_unknown", &mut mint, g21);
+    backward_compatible("golem_error_previous_invocation_exited", &mut mint, g21);
+    backward_compatible("golem_error_unknown", &mut mint, g22);
+    backward_compatible("golem_error_sharding_not_ready", &mut mint, g23);
+    backward_compatible(
+        "golem_error_initial_component_file_download_failed",
+        &mut mint,
+        g24,
+    );
+    backward_compatible("golem_error_file_system_error", &mut mint, g25);
+    backward_compatible("golem_error_invocation_failed", &mut mint, g26);
 }
 
 #[test]
@@ -1027,7 +752,7 @@ pub fn worker_proxy_error() {
     let wpe3 = WorkerProxyError::LimitExceeded("limit exceeded".to_string());
     let wpe4 = WorkerProxyError::NotFound("not found".to_string());
     let wpe5 = WorkerProxyError::AlreadyExists("already exists".to_string());
-    let wpe6 = WorkerProxyError::InternalError(GolemError::unknown("internal error"));
+    let wpe6 = WorkerProxyError::InternalError(WorkerExecutorError::unknown("internal error"));
 
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_proxy_error_bad_request", &mut mint, wpe1);
@@ -1045,7 +770,7 @@ pub fn serializable_error() {
         message: "hello world".to_string(),
     };
     let se3 = SerializableError::Golem {
-        error: GolemError::Interrupted {
+        error: WorkerExecutorError::Interrupted {
             kind: InterruptKind::Restart,
         },
     };

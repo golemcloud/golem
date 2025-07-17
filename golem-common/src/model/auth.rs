@@ -328,7 +328,7 @@ impl Display for ProjectAction {
     EnumIter,
 )]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
-pub enum ProjectPermisison {
+pub enum ProjectPermission {
     ViewComponent,
     CreateComponent,
     UpdateComponent,
@@ -361,7 +361,7 @@ pub enum ProjectPermisison {
     DeletePluginDefinition,
 }
 
-impl TryFrom<ProjectAction> for ProjectPermisison {
+impl TryFrom<ProjectAction> for ProjectPermission {
     type Error = String;
 
     fn try_from(value: ProjectAction) -> Result<Self, Self::Error> {
@@ -403,13 +403,13 @@ impl TryFrom<ProjectAction> for ProjectPermisison {
     }
 }
 
-impl From<ProjectPermisison> for i32 {
-    fn from(value: ProjectPermisison) -> Self {
+impl From<ProjectPermission> for i32 {
+    fn from(value: ProjectPermission) -> Self {
         value as i32
     }
 }
 
-impl Display for ProjectPermisison {
+impl Display for ProjectPermission {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Self::ViewComponent => write!(f, "ViewComponent"),
@@ -446,7 +446,7 @@ impl Display for ProjectPermisison {
     }
 }
 
-impl FromStr for ProjectPermisison {
+impl FromStr for ProjectPermission {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -489,7 +489,7 @@ impl FromStr for ProjectPermisison {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct ProjectActions {
-    pub actions: HashSet<ProjectPermisison>,
+    pub actions: HashSet<ProjectPermission>,
 }
 
 impl ProjectActions {
@@ -500,8 +500,8 @@ impl ProjectActions {
     }
 
     pub fn all() -> ProjectActions {
-        let actions: HashSet<ProjectPermisison> =
-            ProjectPermisison::iter().collect::<HashSet<ProjectPermisison>>();
+        let actions: HashSet<ProjectPermission> =
+            ProjectPermission::iter().collect::<HashSet<ProjectPermission>>();
         ProjectActions { actions }
     }
 }
@@ -577,7 +577,7 @@ mod protobuf {
 #[cfg(test)]
 mod test {
     use super::Role;
-    use super::{ProjectAction, ProjectPermisison};
+    use super::{ProjectAction, ProjectPermission};
     use std::str::FromStr;
     use strum::IntoEnumIterator;
     use test_r::test;
@@ -607,9 +607,9 @@ mod test {
 
     #[test]
     fn project_permission_to_from() {
-        for permission in ProjectPermisison::iter() {
+        for permission in ProjectPermission::iter() {
             let permission_as_str = permission.to_string();
-            let deserialized_permission = ProjectPermisison::from_str(&permission_as_str).unwrap();
+            let deserialized_permission = ProjectPermission::from_str(&permission_as_str).unwrap();
             assert_eq!(permission, deserialized_permission);
         }
     }

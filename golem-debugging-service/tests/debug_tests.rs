@@ -9,7 +9,7 @@ use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_ast::analysis::analysed_type::{record, str, variant};
 use golem_wasm_ast::analysis::{NameOptionTypePair, NameTypePair};
-use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(RegularWorkerExecutorTestDependencies);
@@ -24,8 +24,12 @@ async fn test_connect_non_invoked_worker(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
 
@@ -59,8 +63,12 @@ async fn test_connect_invoked_worker(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -88,12 +96,12 @@ async fn test_connect_invoked_worker(
         .invoke_and_await(
             worker_id.clone(),
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -115,8 +123,12 @@ async fn test_connect_and_playback(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -164,8 +176,12 @@ async fn test_connect_and_playback_to_middle_of_invocation(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -216,8 +232,12 @@ async fn test_playback_from_breakpoint(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -290,8 +310,12 @@ async fn test_playback_and_rewind(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -349,8 +373,12 @@ async fn test_playback_and_fork(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -409,12 +437,12 @@ async fn test_playback_and_fork(
         .invoke_and_await(
             target_worker_id.clone(),
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -441,8 +469,12 @@ async fn test_playback_with_overrides(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -572,7 +604,7 @@ async fn start_debug_executor(
         .unwrap_or_else(|e| {
             panic!(
                 "Failed to start debug executor at port {}: {}",
-                context.debug_server_port(),
+                context.grpc_port(),
                 e
             )
         })
@@ -626,12 +658,12 @@ async fn run_shopping_cart_initialize_and_add(
         .invoke_and_await(
             worker_id.clone(),
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -657,12 +689,12 @@ async fn run_shopping_cart_workflow(
         .invoke_and_await(
             worker_id.clone(),
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;

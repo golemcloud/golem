@@ -32,11 +32,11 @@ use golem_common::model::{
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
     drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
-    worker_error_message, TestDslUnsafe,
+    worker_error_logs, worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType, TypeStr};
-use golem_wasm_rpc::IntoValue;
+use golem_wasm_rpc::{IntoValue, Record};
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use redis::Commands;
 use std::collections::HashMap;
@@ -68,7 +68,7 @@ async fn interruption(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("interruption").store().await;
     let worker_id = executor.start_worker(&component_id, "interruption-1").await;
@@ -106,7 +106,7 @@ async fn simulated_crash(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("interruption").store().await;
     let worker_id = executor
@@ -148,7 +148,7 @@ async fn shopping_cart_example(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
@@ -170,12 +170,12 @@ async fn shopping_cart_example(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -184,12 +184,12 @@ async fn shopping_cart_example(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1001".into_value_and_type()),
                 ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                 ("price", 999999.0f32.into_value_and_type()),
                 ("quantity", 1u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -198,12 +198,12 @@ async fn shopping_cart_example(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -268,7 +268,7 @@ async fn dynamic_worker_creation(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("environment-service").store().await;
     let worker_id = WorkerId {
@@ -343,7 +343,7 @@ async fn dynamic_worker_creation_without_name(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("environment-service").store().await;
     let worker_id = TargetWorkerId {
@@ -382,7 +382,7 @@ async fn ephemeral_worker_creation_without_name(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor
         .component("environment-service")
@@ -425,7 +425,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("counters").ephemeral().store().await;
     let worker_id = TargetWorkerId {
@@ -465,7 +465,7 @@ async fn promise(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("promise").store().await;
     let worker_id = executor.start_worker(&component_id, "promise-1").await;
@@ -518,6 +518,7 @@ async fn promise(
             ),
             data: vec![42],
             account_id: Some(executor.account_id.clone().into()),
+            project_id: Some(executor.default_project_id.clone().into()),
         })
         .await
         .unwrap();
@@ -550,7 +551,7 @@ async fn get_workers_from_worker(
     #[tagged_as("golem_host")] type_resolve: &SharedAnalysedTypeResolve,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("runtime-service").store().await;
 
@@ -571,14 +572,14 @@ async fn get_workers_from_worker(
     ) {
         let component_id_val_and_type = {
             let (high, low) = worker_id.component_id.0.as_u64_pair();
-            vec![(
+            Record(vec![(
                 "uuid",
-                vec![
+                Record(vec![
                     ("high-bits", high.into_value_and_type()),
                     ("low-bits", low.into_value_and_type()),
-                ]
+                ])
                 .into_value_and_type(),
-            )]
+            )])
             .into_value_and_type()
         };
 
@@ -652,7 +653,7 @@ async fn get_metadata_from_worker(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("runtime-service").store().await;
 
@@ -763,7 +764,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
@@ -776,12 +777,12 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
             &worker_id,
             &idempotency_key,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -792,12 +793,12 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
             &worker_id,
             &idempotency_key,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -830,7 +831,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
@@ -843,31 +844,31 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
             &worker_id,
             &idempotency_key,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
         .unwrap();
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let _result2 = executor
         .invoke_and_await_with_key(
             &worker_id,
             &idempotency_key,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -900,7 +901,7 @@ async fn component_env_variables(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor
         .component("environment-service")
@@ -950,7 +951,7 @@ async fn component_env_variables_update(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor
         .component("environment-service")
@@ -1000,7 +1001,7 @@ async fn component_env_and_worker_env_priority(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor
         .component("environment-service")
@@ -1035,7 +1036,7 @@ async fn optional_parameters(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -1064,10 +1065,10 @@ async fn optional_parameters(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{todo}",
-            vec![vec![
+            vec![Record(vec![
                 ("name", "todo".into_value_and_type()),
                 ("description", Some("description").into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -1077,10 +1078,10 @@ async fn optional_parameters(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{todo}",
-            vec![vec![
+            vec![Record(vec![
                 ("name", "todo".into_value_and_type()),
                 ("description", Some("description").into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -1108,7 +1109,7 @@ async fn flags_parameters(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("flags-service").store().await;
     let worker_id = executor
@@ -1119,7 +1120,7 @@ async fn flags_parameters(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-task}",
-            vec![vec![
+            vec![Record(vec![
                 ("name", "t1".into_value_and_type()),
                 (
                     "permissions",
@@ -1128,7 +1129,7 @@ async fn flags_parameters(
                         typ: analysed_type::flags(&["read", "write", "exec", "close"]),
                     },
                 ),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -1171,7 +1172,7 @@ async fn variants_with_no_payloads(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("variant-service").store().await;
     let worker_id = executor
@@ -1196,7 +1197,7 @@ async fn delete_worker(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -1262,7 +1263,7 @@ async fn get_workers(
     }
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("option-service").store().await;
 
@@ -1383,7 +1384,7 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -1407,7 +1408,7 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -1440,7 +1441,7 @@ async fn get_worker_metadata(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("clock-service").store().await;
 
@@ -1492,7 +1493,7 @@ async fn get_worker_metadata(
     check!(metadata2.last_known_status.status == WorkerStatus::Idle);
     check!(metadata1.last_known_status.component_version == 0);
     check!(metadata1.worker_id == worker_id);
-    check!(metadata1.account_id == executor.account_id);
+    check!(metadata1.created_by == executor.account_id);
 
     check!(metadata2.last_known_status.component_size == expected_component_size);
     check!(metadata2.last_known_status.total_linear_memory_size == 1245184);
@@ -1506,7 +1507,7 @@ async fn create_invoke_delete_create_invoke(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
@@ -1517,12 +1518,12 @@ async fn create_invoke_delete_create_invoke(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -1537,12 +1538,12 @@ async fn create_invoke_delete_create_invoke(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -1562,7 +1563,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("shopping-cart").unique().store().await;
     let worker_id = executor
@@ -1576,12 +1577,12 @@ async fn recovering_an_old_worker_after_updating_a_component(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -1611,7 +1612,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
 
     // Restarting the server to force worker recovery
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     // Call the first worker again to check if it is still working
     let r3 = executor
@@ -1646,7 +1647,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("shopping-cart").unique().store().await;
     let worker_id = executor
@@ -1660,12 +1661,12 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -1717,7 +1718,7 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message(
     let context = TestContext::new(last_unique_id);
     // case: WASM is an old version, rejected by protector
 
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor
         .component("old-component")
@@ -1748,7 +1749,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 ) {
     let context = TestContext::new(last_unique_id);
     // case: WASM can be parsed but wasmtime does not support it
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("write-stdout").store().await;
 
     let cwd = env::current_dir().expect("Failed to get current directory");
@@ -1793,10 +1794,11 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("write-stdout").store().await;
 
     let worker_id = executor.start_worker(&component_id, "bad-wasm-2").await;
+    let project_id = executor.default_project().await;
 
     // worker is idle. if we restart the server it will get recovered
     drop(executor);
@@ -1806,7 +1808,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     debug!("Current directory: {cwd:?}");
     let component_path = cwd.join(format!("data/components/wasms/{component_id}-0.wasm"));
     let compiled_component_path = cwd.join(Path::new(&format!(
-        "data/blobs/compilation_cache/{component_id}/0.cwasm"
+        "data/blobs/compilation_cache/{project_id}/{component_id}/0.cwasm"
     )));
 
     let span = Span::current();
@@ -1829,7 +1831,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     .await
     .unwrap();
 
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     debug!("Trying to invoke recovered worker");
 
@@ -1857,7 +1859,7 @@ async fn long_running_poll_loop_works_as_expected(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1927,7 +1929,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1997,7 +1999,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2139,7 +2141,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2221,7 +2223,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2293,7 +2295,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2422,7 +2424,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2491,7 +2493,7 @@ async fn shopping_cart_resource_example(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("shopping-cart-resource").store().await;
     let worker_id = executor
@@ -2517,12 +2519,12 @@ async fn shopping_cart_resource_example(
                     value: cart[0].clone(),
                     typ: analysed_type::u64(),
                 },
-                vec![
+                Record(vec![
                     ("product-id", "G1000".into_value_and_type()),
                     ("name", "Golem T-Shirt M".into_value_and_type()),
                     ("price", 100.0f32.into_value_and_type()),
                     ("quantity", 5u32.into_value_and_type()),
-                ]
+                ])
                 .into_value_and_type(),
             ],
         )
@@ -2537,12 +2539,12 @@ async fn shopping_cart_resource_example(
                     value: cart[0].clone(),
                     typ: analysed_type::u64(),
                 },
-                vec![
+                Record(vec![
                     ("product-id", "G1001".into_value_and_type()),
                     ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                     ("price", 999999.0f32.into_value_and_type()),
                     ("quantity", 1u32.into_value_and_type()),
-                ]
+                ])
                 .into_value_and_type(),
             ],
         )
@@ -2557,12 +2559,12 @@ async fn shopping_cart_resource_example(
                     value: cart[0].clone(),
                     typ: analysed_type::u64(),
                 },
-                vec![
+                Record(vec![
                     ("product-id", "G1002".into_value_and_type()),
                     ("name", "Mud Golem".into_value_and_type()),
                     ("price", 11.0f32.into_value_and_type()),
                     ("quantity", 10u32.into_value_and_type()),
-                ]
+                ])
                 .into_value_and_type(),
             ],
         )
@@ -2640,7 +2642,7 @@ async fn counter_resource_test_1(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("counters").store().await;
     let worker_id = executor.start_worker(&component_id, "counters-1").await;
@@ -2767,7 +2769,7 @@ async fn counter_resource_test_2(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("counters").store().await;
     let worker_id = executor.start_worker(&component_id, "counters-2").await;
@@ -2920,7 +2922,7 @@ async fn reconstruct_interrupted_state(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("interruption").store().await;
     let worker_id = executor.start_worker(&component_id, "interruption-1").await;
@@ -2979,7 +2981,7 @@ async fn invocation_queue_is_persistent(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -3050,7 +3052,7 @@ async fn invocation_queue_is_persistent(
         .await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     executor
         .invoke(&worker_id, "golem:it/api.{increment}", vec![])
@@ -3087,7 +3089,7 @@ async fn invoke_with_non_existing_function(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -3125,7 +3127,7 @@ async fn invoke_with_wrong_parameters(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -3165,7 +3167,7 @@ async fn stderr_returned_for_failed_component(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("failing-component").store().await;
     let worker_id = executor
@@ -3211,10 +3213,16 @@ async fn stderr_returned_for_failed_component(
     check!(result2.is_err());
     check!(result3.is_err());
 
-    let expected_stderr = "\n\nthread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+    let expected_stderr = "thread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
 
-    check!(worker_error_message(&result2.clone().err().unwrap()).ends_with(&expected_stderr));
-    check!(worker_error_message(&result3.clone().err().unwrap()).ends_with(&expected_stderr));
+    println!("result3: {result3:?}");
+
+    check!(worker_error_logs(&result2.clone().err().unwrap())
+        .unwrap()
+        .ends_with(&expected_stderr));
+    check!(worker_error_logs(&result3.clone().err().unwrap())
+        .unwrap()
+        .ends_with(&expected_stderr));
 
     check!(metadata.last_known_status.status == WorkerStatus::Failed);
     check!(last_error.is_some());
@@ -3236,7 +3244,7 @@ async fn cancelling_pending_invocations(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("counters").store().await;
     let worker_id = executor
@@ -3325,6 +3333,7 @@ async fn cancelling_pending_invocations(
             ),
             data: vec![42],
             account_id: Some(executor.account_id.clone().into()),
+            project_id: Some(executor.default_project_id.clone().into()),
         })
         .await
         .unwrap();
@@ -3356,7 +3365,7 @@ async fn resolve_components_from_name(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     // Make sure the name is unique
     let counter_component_id = executor
@@ -3417,7 +3426,7 @@ async fn scheduled_invocation_test(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let server_component = executor.component(server_component_name).store().await;
 
@@ -3619,7 +3628,7 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor

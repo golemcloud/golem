@@ -20,11 +20,12 @@ use crate::model::params::*;
 use async_trait::async_trait;
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use gethostname::gethostname;
+use golem_common::base_model::ProjectId;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
-use golem_worker_executor::model::InterruptKind;
+use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::oplog::Oplog;
 use golem_worker_executor::services::{
     All, HasConfig, HasExtraDeps, HasOplog, HasShardManagerService, HasShardService,
@@ -38,17 +39,18 @@ use std::time::Duration;
 use tracing::{error, info};
 
 #[async_trait]
-pub trait DebugService {
+pub trait DebugService: Send + Sync {
     async fn connect(
         &self,
         authentication_context: &AuthCtx,
-        source_worker_id: WorkerId,
+        source_worker_id: &WorkerId,
         active_session: Arc<ActiveSession>,
     ) -> Result<ConnectResult, DebugServiceError>;
 
     async fn playback(
         &self,
-        owned_worker_id: OwnedWorkerId,
+        owned_worker_id: &OwnedWorkerId,
+        account_id: &AccountId,
         target_index: OplogIndex,
         overrides: Option<Vec<PlaybackOverride>>,
         ensure_invocation_boundary: bool,
@@ -57,7 +59,8 @@ pub trait DebugService {
 
     async fn rewind(
         &self,
-        owned_worker_id: OwnedWorkerId,
+        owned_worker_id: &OwnedWorkerId,
+        account_id: &AccountId,
         target_index: OplogIndex,
         ensure_invocation_boundary: bool,
         timeout: Duration,
@@ -65,17 +68,18 @@ pub trait DebugService {
 
     async fn fork(
         &self,
-        source_owned_worker_id: OwnedWorkerId,
-        target_worker_id: WorkerId,
+        account_id: &AccountId,
+        source_owned_worker_id: &OwnedWorkerId,
+        target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<ForkResult, DebugServiceError>;
 
     async fn current_oplog_index(
         &self,
-        worker_id: OwnedWorkerId,
+        worker_id: &OwnedWorkerId,
     ) -> Result<OplogIndex, DebugServiceError>;
 
-    async fn terminate_session(&self, worker_id: OwnedWorkerId) -> Result<(), DebugServiceError>;
+    async fn terminate_session(&self, worker_id: &OwnedWorkerId) -> Result<(), DebugServiceError>;
 }
 
 #[derive(Clone, Debug)]
@@ -187,9 +191,10 @@ impl DebugServiceDefault {
     async fn connect_worker(
         &self,
         worker_id: WorkerId,
-        account_id: AccountId,
+        account_id: &AccountId,
+        project_id: &ProjectId,
     ) -> Result<WorkerMetadata, DebugServiceError> {
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(project_id, &worker_id);
 
         // This get will only look at the oplogs to see if a worker presumably exists in the real executor.
         // This is only used to get the existing metadata that was/is running in the real executor
@@ -225,6 +230,7 @@ impl DebugServiceDefault {
 
             let worker = Worker::get_or_create_suspended(
                 &self.all,
+                account_id,
                 &owned_worker_id,
                 Some(worker_args),
                 Some(worker_env),
@@ -251,6 +257,7 @@ impl DebugServiceDefault {
     async fn rewind(
         &self,
         owned_worker_id: &OwnedWorkerId,
+        account_id: &AccountId,
         target_index: &OplogIndex,
         ensure_invocation_boundary: bool,
         wait_time: Duration,
@@ -269,6 +276,7 @@ impl DebugServiceDefault {
         if let Some(current_oplog_index) = debug_session_data.target_oplog_index {
             let worker = Worker::get_or_create_suspended(
                 &self.all,
+                account_id,
                 owned_worker_id,
                 debug_session_data
                     .worker_metadata
@@ -348,7 +356,8 @@ impl DebugServiceDefault {
             // If this is the first step in a debugging session, then rewind is more or less
             // playback to that index
             self.playback(
-                owned_worker_id.clone(),
+                owned_worker_id,
+                account_id,
                 *target_index,
                 None,
                 ensure_invocation_boundary,
@@ -368,13 +377,14 @@ impl DebugServiceDefault {
         &self,
         worker_id: &WorkerId,
         account_id: &AccountId,
+        project_id: &ProjectId,
         existing_target_oplog_index: Option<OplogIndex>,
         target_index: OplogIndex,
         playback_overrides: Option<Vec<PlaybackOverride>>,
         ensure_invocation_boundary: bool,
         timeout: Duration,
     ) -> Result<OplogIndex, DebugServiceError> {
-        let owned_worker_id = OwnedWorkerId::new(account_id, worker_id);
+        let owned_worker_id = OwnedWorkerId::new(project_id, worker_id);
 
         let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
 
@@ -404,7 +414,8 @@ impl DebugServiceDefault {
             // allowing replaying to (potentially) stop at this index
             let worker = Worker::get_or_create_suspended(
                 &self.all,
-                &OwnedWorkerId::new(account_id, worker_id),
+                account_id,
+                &owned_worker_id,
                 Some(worker_metadata.args.clone()),
                 Some(worker_metadata.env.clone()),
                 Some(worker_metadata.last_known_status.component_version),
@@ -531,7 +542,7 @@ impl DebugService for DebugServiceDefault {
     async fn connect(
         &self,
         auth_ctx: &AuthCtx,
-        worker_id: WorkerId,
+        worker_id: &WorkerId,
         active_session: Arc<ActiveSession>,
     ) -> Result<ConnectResult, DebugServiceError> {
         let namespace = self
@@ -544,7 +555,7 @@ impl DebugService for DebugServiceDefault {
             .await
             .map_err(|e| DebugServiceError::unauthorized(format!("Unauthorized: {e}")))?;
 
-        let owned_worker_id = OwnedWorkerId::new(&namespace.account_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(&namespace.project_id, worker_id);
 
         let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
 
@@ -562,7 +573,11 @@ impl DebugService for DebugServiceDefault {
 
         // This simply migrates the worker to the debug mode, but it doesn't start the worker
         let metadata = self
-            .connect_worker(worker_id.clone(), namespace.account_id.clone())
+            .connect_worker(
+                worker_id.clone(),
+                &namespace.account_id,
+                &namespace.project_id,
+            )
             .await?;
 
         self.debug_session
@@ -586,7 +601,8 @@ impl DebugService for DebugServiceDefault {
 
     async fn playback(
         &self,
-        owned_worker_id: OwnedWorkerId,
+        owned_worker_id: &OwnedWorkerId,
+        account_id: &AccountId,
         target_index: OplogIndex,
         overrides: Option<Vec<PlaybackOverride>>,
         ensure_invocation_boundary: bool,
@@ -608,7 +624,8 @@ impl DebugService for DebugServiceDefault {
         let stopped_at_index = self
             .resume_replay_with_target_index(
                 &owned_worker_id.worker_id,
-                &owned_worker_id.account_id,
+                account_id,
+                &owned_worker_id.project_id,
                 existing_target_index,
                 target_index,
                 overrides,
@@ -630,7 +647,8 @@ impl DebugService for DebugServiceDefault {
 
     async fn rewind(
         &self,
-        owned_worker_id: OwnedWorkerId,
+        owned_worker_id: &OwnedWorkerId,
+        account_id: &AccountId,
         target_oplog_index: OplogIndex,
         ensure_invocation_boundary: bool,
         timeout: Duration,
@@ -641,7 +659,8 @@ impl DebugService for DebugServiceDefault {
         );
 
         self.rewind(
-            &owned_worker_id,
+            owned_worker_id,
+            account_id,
             &target_oplog_index,
             ensure_invocation_boundary,
             timeout,
@@ -651,8 +670,9 @@ impl DebugService for DebugServiceDefault {
 
     async fn fork(
         &self,
-        source_worker_id: OwnedWorkerId,
-        target_worker_id: WorkerId,
+        account_id: &AccountId,
+        source_worker_id: &OwnedWorkerId,
+        target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<ForkResult, DebugServiceError> {
         info!(
@@ -665,7 +685,12 @@ impl DebugService for DebugServiceDefault {
         // debugging executor
         self.all
             .worker_fork_service()
-            .fork(&source_worker_id, &target_worker_id, oplog_index_cut_off)
+            .fork(
+                account_id,
+                source_worker_id,
+                target_worker_id,
+                oplog_index_cut_off,
+            )
             .await
             .map_err(|e| {
                 DebugServiceError::internal(e.to_string(), Some(source_worker_id.worker_id.clone()))
@@ -681,7 +706,7 @@ impl DebugService for DebugServiceDefault {
 
     async fn current_oplog_index(
         &self,
-        worker_id: OwnedWorkerId,
+        worker_id: &OwnedWorkerId,
     ) -> Result<OplogIndex, DebugServiceError> {
         let debug_session_id = DebugSessionId::new(worker_id.clone());
 
@@ -695,14 +720,14 @@ impl DebugService for DebugServiceDefault {
             Some(index) => Ok(index),
             None => Err(DebugServiceError::internal(
                 "No debug session found".to_string(),
-                Some(worker_id.worker_id),
+                Some(worker_id.worker_id()),
             )),
         }
     }
 
     async fn terminate_session(
         &self,
-        owned_worker_id: OwnedWorkerId,
+        owned_worker_id: &OwnedWorkerId,
     ) -> Result<(), DebugServiceError> {
         let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
 
@@ -711,7 +736,7 @@ impl DebugService for DebugServiceDefault {
             .await
             .ok_or(DebugServiceError::internal(
                 "No debug session found".to_string(),
-                Some(owned_worker_id.worker_id),
+                Some(owned_worker_id.worker_id()),
             ))?;
 
         Ok(())
@@ -721,7 +746,7 @@ impl DebugService for DebugServiceDefault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Bytes;
+    use bytes::Bytes;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
     use golem_common::model::Timestamp;
@@ -780,21 +805,6 @@ mod tests {
 
     #[async_trait]
     impl Oplog for TestOplog {
-        async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-            if oplog_index == OplogIndex::from_u64(self.invocation_completion_index) {
-                OplogEntry::ExportedFunctionCompleted {
-                    timestamp: Timestamp::now_utc(),
-                    response: OplogPayload::Inline(Bytes::new().into()),
-                    consumed_fuel: 0,
-                }
-            } else {
-                // Any other oplog entry other than export function completed
-                OplogEntry::NoOp {
-                    timestamp: Timestamp::now_utc(),
-                }
-            }
-        }
-
         async fn add(&self, _entry: OplogEntry) {
             unimplemented!()
         }
@@ -813,6 +823,21 @@ mod tests {
 
         async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
             unimplemented!()
+        }
+
+        async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+            if oplog_index == OplogIndex::from_u64(self.invocation_completion_index) {
+                OplogEntry::ExportedFunctionCompleted {
+                    timestamp: Timestamp::now_utc(),
+                    response: OplogPayload::Inline(Bytes::new().into()),
+                    consumed_fuel: 0,
+                }
+            } else {
+                // Any other oplog entry other than export function completed
+                OplogEntry::NoOp {
+                    timestamp: Timestamp::now_utc(),
+                }
+            }
         }
 
         async fn length(&self) -> u64 {

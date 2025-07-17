@@ -42,7 +42,7 @@ async fn http_client(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -99,7 +99,7 @@ async fn http_client_using_reqwest(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
@@ -166,7 +166,7 @@ async fn http_client_using_reqwest_async(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
@@ -233,7 +233,7 @@ async fn http_client_using_reqwest_async_parallel(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let captured_body: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let captured_body_clone = captured_body.clone();
 
@@ -338,7 +338,7 @@ async fn outgoing_http_contains_idempotency_key(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -408,7 +408,8 @@ async fn http_response_request_chaining(
     let executor = start_customized(deps, &context, None, Some(RetryConfig::no_retries()))
         .await
         .unwrap()
-        .into_admin();
+        .into_admin()
+        .await;
 
     let component_id = executor.component("fetch").store().await;
     let mut env = HashMap::new();

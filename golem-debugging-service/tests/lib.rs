@@ -86,8 +86,11 @@ pub async fn test_dependencies(_tracing: &Tracing) -> RegularWorkerExecutorTestD
 pub fn get_golem_config(
     redis_public_port: u16,
     redis_prefix: String,
-    server_port: u16, // This can be grpc port for regular worker executor or http port for debug worker executor
+    grpc_port: u16,
     http_port: u16,
+    account_id: AccountId,
+    default_project_id: ProjectId,
+    default_project_name: String,
 ) -> GolemConfig {
     GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
@@ -99,7 +102,7 @@ pub fn get_golem_config(
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
             root: Path::new("data/blobs").to_path_buf(),
         }),
-        port: server_port,
+        port: grpc_port,
         http_port,
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
@@ -109,13 +112,17 @@ pub fn get_golem_config(
         ),
         public_worker_api: WorkerServiceGrpcConfig {
             host: "localhost".to_string(),
-            port: server_port,
+            port: grpc_port,
             access_token: "03494299-B515-4427-8C37-4C1C915679B7".to_string(),
             retries: RetryConfig::max_attempts_5(),
             connect_timeout: Duration::from_secs(120),
         },
         memory: MemoryConfig::default(),
-        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {}),
+        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {
+            account_id,
+            project_id: default_project_id,
+            project_name: default_project_name,
+        }),
         ..Default::default()
     }
 }
@@ -250,6 +257,7 @@ impl RegularWorkerExecutorTestDependencies {
             Path::new("../golem-debugging-service/test-components").to_path_buf();
         let account_id = AccountId::generate();
         let project_id = ProjectId::new_v4();
+        let project_name = "default".to_string();
         let token = Uuid::new_v4();
         let component_service: Arc<dyn ComponentService> = Arc::new(
             FileSystemComponentService::new(
@@ -262,7 +270,10 @@ impl RegularWorkerExecutorTestDependencies {
         );
 
         let cloud_service = Arc::new(AdminOnlyStubCloudService::new(
-            account_id, token, project_id,
+            account_id,
+            token,
+            project_id,
+            project_name,
         ));
 
         Self {
@@ -376,6 +387,6 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
     }
 
     fn cloud_service(&self) -> Arc<dyn CloudService> {
-        panic!("Not supported")
+        self.cloud_service.clone()
     }
 }

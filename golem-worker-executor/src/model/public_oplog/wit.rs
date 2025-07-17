@@ -15,6 +15,7 @@
 use crate::model::public_oplog::{PublicOplogEntry, PublicUpdateDescription};
 use crate::preview2::golem_api_1_x::oplog;
 use crate::preview2::wasi::clocks::wall_clock::Datetime;
+use golem_common::base_model::ProjectId;
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
     ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters,
@@ -40,7 +41,8 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 component_version,
                 args,
                 env,
-                account_id,
+                created_by,
+                project_id,
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
@@ -51,9 +53,10 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 component_version,
                 args,
                 env: env.into_iter().collect(),
-                account_id: oplog::AccountId {
-                    value: account_id.value,
+                created_by: oplog::AccountId {
+                    value: created_by.value,
                 },
+                project_id: project_id.into(),
                 parent: parent.map(|id| id.into()),
                 component_size,
                 initial_total_linear_memory_size,
@@ -67,7 +70,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 function_name,
                 request,
                 response,
-                wrapped_function_type,
+                durable_function_type: wrapped_function_type,
             }) => Self::ImportedFunctionInvoked(oplog::ImportedFunctionInvokedParameters {
                 timestamp: timestamp.into(),
                 function_name,
@@ -437,6 +440,14 @@ impl From<PublicAttributeValue> for oplog::AttributeValue {
     fn from(value: PublicAttributeValue) -> Self {
         match value {
             PublicAttributeValue::String(StringAttributeValue { value }) => Self::String(value),
+        }
+    }
+}
+
+impl From<ProjectId> for oplog::ProjectId {
+    fn from(value: ProjectId) -> Self {
+        Self {
+            uuid: value.0.into(),
         }
     }
 }

@@ -23,10 +23,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::durable_host::recover_stderr_logs;
-use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::model::{
-    ExecutionStatus, InterruptKind, ListDirectoryResult, LookupResult, ReadFileResult, TrapType,
-    WorkerConfig,
+    ExecutionStatus, ListDirectoryResult, LookupResult, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
@@ -34,9 +32,9 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPlugins,
-    HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService,
-    HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
-    HasWorkerService, UsesAllDeps,
+    HasProjectService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasSchedulerService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerForkService,
+    HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
@@ -48,11 +46,14 @@ use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::RetryConfig;
+use golem_common::model::{AccountId, RetryConfig};
 use golem_common::model::{ComponentFilePath, ComponentType, PluginInstallationId};
 use golem_common::model::{
     ComponentVersion, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
     WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
+};
+use golem_service_base::error::worker_executor::{
+    InterruptKind, WorkerExecutorError, WorkerOutOfMemory,
 };
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
@@ -117,12 +118,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker, but does not start it
     pub async fn get_or_create_suspended<T>(
         deps: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
-    ) -> Result<Arc<Self>, GolemError>
+    ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
@@ -130,6 +132,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_or_add(
                 deps,
                 owned_worker_id,
+                account_id,
                 worker_args,
                 worker_env,
                 component_version,
@@ -141,17 +144,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker and makes sure it is running
     pub async fn get_or_create_running<T>(
         deps: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
-    ) -> Result<Arc<Self>, GolemError>
+    ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_or_create_suspended(
             deps,
+            account_id,
             owned_worker_id,
             worker_args,
             worker_env,
@@ -168,7 +173,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     >(
         deps: &T,
         owned_worker_id: &OwnedWorkerId,
-    ) -> Result<Option<WorkerMetadata>, GolemError> {
+    ) -> Result<Option<WorkerMetadata>, WorkerExecutorError> {
         if let Some(worker) = deps.active_workers().try_get(owned_worker_id).await {
             Ok(Some(worker.get_metadata()?))
         } else if let Some(previous_metadata) = deps.worker_service().get(owned_worker_id).await {
@@ -188,14 +193,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn new<T: HasAll<Ctx>>(
         deps: &T,
+        account_id: &AccountId,
         owned_worker_id: OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
-    ) -> Result<Self, GolemError> {
+    ) -> Result<Self, WorkerExecutorError> {
         let (worker_metadata, execution_status) = Self::get_or_create_worker_metadata(
             deps,
+            account_id,
             &owned_worker_id,
             component_version,
             worker_args,
@@ -207,7 +214,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let initial_component_metadata = deps
             .component_service()
             .get_metadata(
-                &owned_worker_id.account_id,
+                &owned_worker_id.project_id,
                 &owned_worker_id.worker_id.component_id,
                 Some(worker_metadata.last_known_status.component_version),
             )
@@ -295,14 +302,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self.oom_retry_config
     }
 
-    pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<bool, GolemError> {
+    pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<bool, WorkerExecutorError> {
         Self::start_if_needed_internal(this, 0).await
     }
 
     async fn start_if_needed_internal(
         this: Arc<Worker<Ctx>>,
         oom_retry_count: u64,
-    ) -> Result<bool, GolemError> {
+    ) -> Result<bool, WorkerExecutorError> {
         let mut instance = this.instance.lock().await;
         if instance.is_unloaded() {
             this.mark_as_loading();
@@ -415,7 +422,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Updates the cached metadata in execution_status
-    async fn update_metadata(&self) -> Result<(), GolemError> {
+    async fn update_metadata(&self) -> Result<(), WorkerExecutorError> {
         let previous_metadata = self.get_metadata()?;
         let last_known_status = calculate_last_known_status(
             self,
@@ -428,7 +435,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
-    pub fn get_metadata(&self) -> Result<WorkerMetadata, GolemError> {
+    pub fn get_metadata(&self) -> Result<WorkerMetadata, WorkerExecutorError> {
         let updated_status = self
             .execution_status
             .read()
@@ -485,7 +492,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn resume_replay(&self) -> Result<(), GolemError> {
+    pub async fn resume_replay(&self) -> Result<(), WorkerExecutorError> {
         match &*self.instance.lock().await {
             WorkerInstance::Running(running) => {
                 running
@@ -496,7 +503,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(())
             }
             WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
-                Err(GolemError::invalid_request(
+                Err(WorkerExecutorError::invalid_request(
                     "Explicit resume is not supported for uninitialized workers",
                 ))
             }
@@ -509,7 +516,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         full_function_name: String,
         function_input: Vec<Value>,
         invocation_context: InvocationContextStack,
-    ) -> Result<ResultOrSubscription, GolemError> {
+    ) -> Result<ResultOrSubscription, WorkerExecutorError> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
 
         match output {
@@ -544,7 +551,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         full_function_name: String,
         function_input: Vec<Value>,
         invocation_context: InvocationContextStack,
-    ) -> Result<Option<ValueAndType>, GolemError> {
+    ) -> Result<Option<ValueAndType>, WorkerExecutorError> {
         match self
             .invoke(
                 idempotency_key.clone(),
@@ -568,13 +575,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Ok(LookupResult::Complete(Ok(output))) => Ok(output),
                     Ok(LookupResult::Complete(Err(err))) => Err(err),
                     Ok(LookupResult::Interrupted) => Err(InterruptKind::Interrupt.into()),
-                    Ok(LookupResult::Pending) => Err(GolemError::unknown(
+                    Ok(LookupResult::Pending) => Err(WorkerExecutorError::unknown(
                         "Unexpected pending result after invoke",
                     )),
-                    Ok(LookupResult::New) => Err(GolemError::unknown(
+                    Ok(LookupResult::New) => Err(WorkerExecutorError::unknown(
                         "Unexpected missing result after invoke",
                     )),
-                    Err(recv_error) => Err(GolemError::unknown(format!(
+                    Err(recv_error) => Err(WorkerExecutorError::unknown(format!(
                         "Failed waiting for invocation result: {recv_error}"
                     ))),
                 }
@@ -768,7 +775,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Gets the estimated memory requirement of the worker
-    pub fn memory_requirement(&self) -> Result<u64, GolemError> {
+    pub fn memory_requirement(&self) -> Result<u64, WorkerExecutorError> {
         let metadata = self.get_metadata()?;
 
         let ml = metadata.last_known_status.total_linear_memory_size as f64;
@@ -881,7 +888,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn list_directory(
         &self,
         path: ComponentFilePath,
-    ) -> Result<ListDirectoryResult, GolemError> {
+    ) -> Result<ListDirectoryResult, WorkerExecutorError> {
         let (sender, receiver) = oneshot::channel();
 
         let mutex = self.instance.lock().await;
@@ -904,7 +911,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         receiver.await.unwrap()
     }
 
-    pub async fn read_file(&self, path: ComponentFilePath) -> Result<ReadFileResult, GolemError> {
+    pub async fn read_file(
+        &self,
+        path: ComponentFilePath,
+    ) -> Result<ReadFileResult, WorkerExecutorError> {
         let (sender, receiver) = oneshot::channel();
 
         let mutex = self.instance.lock().await;
@@ -926,7 +936,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn activate_plugin(
         &self,
         plugin_installation_id: PluginInstallationId,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.oplog
             .add_and_commit(OplogEntry::activate_plugin(plugin_installation_id))
             .await;
@@ -937,7 +947,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn deactivate_plugin(
         &self,
         plugin_installation_id: PluginInstallationId,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.oplog
             .add_and_commit(OplogEntry::deactivate_plugin(plugin_installation_id))
             .await;
@@ -950,7 +960,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// The revert operations is implemented by inserting a special oplog entry that
     /// extends the worker's deleted oplog regions, skipping entries from the end of the oplog.
-    pub async fn revert(&self, target: RevertWorkerTarget) -> Result<(), GolemError> {
+    pub async fn revert(&self, target: RevertWorkerTarget) -> Result<(), WorkerExecutorError> {
         match target {
             RevertWorkerTarget::RevertToOplogIndex(target) => {
                 self.revert_to_last_oplog_index(target.last_oplog_index)
@@ -964,7 +974,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.revert_to_last_oplog_index(last_oplog_index.previous())
                         .await
                 } else {
-                    Err(GolemError::invalid_request(format!(
+                    Err(WorkerExecutorError::invalid_request(format!(
                         "Could not find {} invocations to revert",
                         target.number_of_invocations
                     )))
@@ -976,7 +986,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn cancel_invocation(
         &self,
         idempotency_key: IdempotencyKey,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         let mut queue = self.queue.write().await;
         for item in queue.iter_mut() {
             if item.matches_idempotency_key(&idempotency_key) {
@@ -1019,7 +1029,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn revert_to_last_oplog_index(
         &self,
         last_oplog_index: OplogIndex,
-    ) -> Result<(), GolemError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.stop().await;
 
         let region_end = self.oplog.current_oplog_index().await;
@@ -1031,7 +1041,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .skipped_regions
             .is_in_deleted_region(region_start)
         {
-            Err(GolemError::invalid_request(format!(
+            Err(WorkerExecutorError::invalid_request(format!(
                 "Attempted to revert to a deleted region in oplog to index {last_oplog_index}"
             )))
         } else {
@@ -1135,7 +1145,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             stderr,
                         }),
                     ..
-                } => LookupResult::Complete(Err(GolemError::runtime(error.to_string(&stderr)))),
+                } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed {
+                    error,
+                    stderr,
+                })),
                 InvocationResult::Cached {
                     result:
                         Err(FailedInvocationResult {
@@ -1143,7 +1156,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             ..
                         }),
                     ..
-                } => LookupResult::Complete(Err(GolemError::runtime("Process exited"))),
+                } => LookupResult::Complete(Err(WorkerExecutorError::runtime("Process exited"))),
                 InvocationResult::Lazy { .. } => {
                     panic!("Unexpected lazy result after InvocationResult.cache")
                 }
@@ -1165,7 +1178,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn stop_internal(
         &self,
         called_from_invocation_loop: bool,
-        fail_pending_invocations: Option<GolemError>,
+        fail_pending_invocations: Option<WorkerExecutorError>,
     ) {
         // we don't want to re-enter stop from within the invocation loop
         if self
@@ -1187,7 +1200,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         mut instance: MutexGuard<'_, WorkerInstance>,
         called_from_invocation_loop: bool,
-        fail_pending_invocations: Option<GolemError>,
+        fail_pending_invocations: Option<WorkerExecutorError>,
     ) {
         if let WorkerInstance::Running(running) = instance.unload() {
             debug!("Stopping running worker ({called_from_invocation_loop})");
@@ -1248,7 +1261,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         called_from_invocation_loop: bool,
         delay: Option<Duration>,
         oom_retry_count: u64,
-    ) -> Result<bool, GolemError> {
+    ) -> Result<bool, WorkerExecutorError> {
         this.stop_internal(called_from_invocation_loop, None).await;
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
@@ -1260,17 +1273,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasWorkerService + HasComponentService + HasConfig + HasOplogService + Sync,
     >(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         component_version: Option<ComponentVersion>,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         parent: Option<WorkerId>,
-    ) -> Result<(WorkerMetadata, Arc<std::sync::RwLock<ExecutionStatus>>), GolemError> {
+    ) -> Result<(WorkerMetadata, Arc<std::sync::RwLock<ExecutionStatus>>), WorkerExecutorError>
+    {
         let component_id = owned_worker_id.component_id();
         let component_metadata = this
             .component_service()
             .get_metadata(
-                &owned_worker_id.account_id,
+                &owned_worker_id.project_id,
                 &component_id,
                 component_version,
             )
@@ -1286,7 +1301,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     worker_id: owned_worker_id.worker_id(),
                     args: worker_args.unwrap_or_default(),
                     env: worker_env,
-                    account_id: owned_worker_id.account_id(),
+                    project_id: owned_worker_id.project_id(),
+                    created_by: account_id.clone(),
                     created_at: Timestamp::now_utc(),
                     parent,
                     last_known_status: WorkerStatusRecord {
@@ -1546,8 +1562,8 @@ impl RunningWorker {
 
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
-    ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), GolemError> {
-        let account_id = parent.owned_worker_id.account_id();
+    ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), WorkerExecutorError> {
+        let project_id = parent.owned_worker_id.project_id();
         let component_id = parent.owned_worker_id.component_id();
         let worker_metadata = parent.get_metadata()?;
 
@@ -1576,7 +1592,7 @@ impl RunningWorker {
                 .component_service()
                 .get(
                     &parent.engine(),
-                    &account_id,
+                    &project_id,
                     &component_id,
                     component_version,
                 )
@@ -1593,6 +1609,7 @@ impl RunningWorker {
                         parent.pop_pending_update().await;
                         Ctx::on_worker_update_failed_to_start(
                             &parent.deps,
+                            &parent.initial_worker_metadata.created_by,
                             &parent.owned_worker_id,
                             component_version,
                             Some(error.to_string()),
@@ -1603,7 +1620,7 @@ impl RunningWorker {
                             .component_service()
                             .get(
                                 &parent.engine(),
-                                &account_id,
+                                &project_id,
                                 &component_id,
                                 worker_metadata.last_known_status.component_version,
                             )
@@ -1635,7 +1652,8 @@ impl RunningWorker {
             );
 
         let context = Ctx::create(
-            OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
+            worker_metadata.created_by,
+            OwnedWorkerId::new(&worker_metadata.project_id, &worker_metadata.worker_id),
             parent.promise_service(),
             parent.worker_service(),
             parent.worker_enumeration_service(),
@@ -1661,12 +1679,14 @@ impl RunningWorker {
                 worker_metadata.last_known_status.skipped_regions.clone(),
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
+                parent.initial_worker_metadata.created_by.clone(),
             ),
             parent.execution_status.clone(),
             parent.file_loader(),
             parent.plugins(),
             parent.worker_fork_service(),
             parent.resource_limits(),
+            parent.project_service(),
         )
         .await?;
 
@@ -1698,7 +1718,7 @@ impl RunningWorker {
             .link(&engine, &mut linker, &component, &component_metadata)?;
 
         let instance_pre = linker.instantiate_pre(&component).map_err(|e| {
-            GolemError::worker_creation_failed(
+            WorkerExecutorError::worker_creation_failed(
                 parent.owned_worker_id.worker_id(),
                 format!(
                     "Failed to pre-instantiate worker {}: {e}",
@@ -1711,7 +1731,7 @@ impl RunningWorker {
             .instantiate_async(&mut store)
             .await
             .map_err(|e| {
-                GolemError::worker_creation_failed(
+                WorkerExecutorError::worker_creation_failed(
                     parent.owned_worker_id.worker_id(),
                     format!(
                         "Failed to instantiate worker {}: {e}",
@@ -1843,12 +1863,12 @@ pub enum QueuedWorkerInvocation {
     },
     ListDirectory {
         path: ComponentFilePath,
-        sender: oneshot::Sender<Result<ListDirectoryResult, GolemError>>,
+        sender: oneshot::Sender<Result<ListDirectoryResult, WorkerExecutorError>>,
     },
     // The worker will suspend execution until the stream is dropped, so consume in a timely manner.
     ReadFile {
         path: ComponentFilePath,
-        sender: oneshot::Sender<Result<ReadFileResult, GolemError>>,
+        sender: oneshot::Sender<Result<ReadFileResult, WorkerExecutorError>>,
     },
 }
 
@@ -1874,7 +1894,7 @@ impl QueuedWorkerInvocation {
 }
 
 pub enum ResultOrSubscription {
-    Finished(Result<Option<ValueAndType>, GolemError>),
+    Finished(Result<Option<ValueAndType>, WorkerExecutorError>),
     Pending(EventsSubscription),
 }
 

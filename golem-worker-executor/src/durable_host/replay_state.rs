@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::services::oplog::{Oplog, OplogOps, OplogService};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
@@ -20,6 +19,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{Value, ValueAndType};
 use metrohash::MetroHash128;
 use std::collections::HashSet;
@@ -317,20 +317,11 @@ impl ReplayState {
         let oplog_entry = oplog_entries.into_iter().next().unwrap();
 
         // record side effects that need to be applied at the next opportunity
-        match oplog_entry {
-            OplogEntry::SuccessfulUpdate { target_version, .. } => {
-                self.record_replay_event(ReplayEvent::UpdateReplayed {
-                    new_version: target_version,
-                })
-                .await
-            }
-            OplogEntry::SuccessfulUpdateV1 { target_version, .. } => {
-                self.record_replay_event(ReplayEvent::UpdateReplayed {
-                    new_version: target_version,
-                })
-                .await
-            }
-            _ => {}
+        if let OplogEntry::SuccessfulUpdate { target_version, .. } = oplog_entry {
+            self.record_replay_event(ReplayEvent::UpdateReplayed {
+                new_version: target_version,
+            })
+            .await
         }
 
         if read_idx == self.replay_target.get() {
@@ -411,36 +402,11 @@ impl ReplayState {
     // TODO: can we rewrite this on top of get_oplog_entry?
     pub async fn get_oplog_entry_exported_function_invoked(
         &mut self,
-    ) -> Result<Option<ExportedFunctionInvoked>, GolemError> {
+    ) -> Result<Option<ExportedFunctionInvoked>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
                 match &oplog_entry {
-                    OplogEntry::ExportedFunctionInvokedV1 {
-                        function_name,
-                        idempotency_key,
-                        ..
-                    } => {
-                        let request: Vec<golem_wasm_rpc::protobuf::Val> = self
-                            .oplog
-                            .get_payload_of_entry(&oplog_entry)
-                            .await
-                            .expect("failed to deserialize function request payload")
-                            .unwrap();
-                        let request = request
-                            .into_iter()
-                            .map(|val| {
-                                val.try_into()
-                                    .expect("failed to decode serialized protobuf value")
-                            })
-                            .collect::<Vec<Value>>();
-                        break Ok(Some(ExportedFunctionInvoked {
-                            function_name: function_name.to_string(),
-                            function_input: request,
-                            idempotency_key: idempotency_key.clone(),
-                            invocation_context: InvocationContextStack::fresh(),
-                        }));
-                    }
                     OplogEntry::ExportedFunctionInvoked {
                         function_name,
                         idempotency_key,
@@ -475,7 +441,7 @@ impl ReplayState {
                     }
                     entry if entry.is_hint() => {}
                     _ => {
-                        break Err(GolemError::unexpected_oplog_entry(
+                        break Err(WorkerExecutorError::unexpected_oplog_entry(
                             "ExportedFunctionInvoked",
                             format!("{oplog_entry:?}"),
                         ));
@@ -490,7 +456,7 @@ impl ReplayState {
     // TODO: can we rewrite this on top of get_oplog_entry?
     pub async fn get_oplog_entry_exported_function_completed(
         &mut self,
-    ) -> Result<Option<Option<ValueAndType>>, GolemError> {
+    ) -> Result<Option<Option<ValueAndType>>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
@@ -507,7 +473,7 @@ impl ReplayState {
                     }
                     entry if entry.is_hint() => {}
                     _ => {
-                        break Err(GolemError::unexpected_oplog_entry(
+                        break Err(WorkerExecutorError::unexpected_oplog_entry(
                             "ExportedFunctionCompleted",
                             format!("{oplog_entry:?}"),
                         ));

@@ -1,4 +1,3 @@
-use crate::error::GolemError;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
@@ -8,8 +7,9 @@ use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::{
-    AccountId, ComponentId, ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus,
+    ComponentId, ProjectId, ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tracing::{info, Instrument};
 
@@ -19,7 +19,7 @@ pub trait RunningWorkerEnumerationService: Send + Sync {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-    ) -> Result<Vec<WorkerMetadata>, GolemError>;
+    ) -> Result<Vec<WorkerMetadata>, WorkerExecutorError>;
 }
 
 #[derive(Clone)]
@@ -35,7 +35,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-    ) -> Result<Vec<WorkerMetadata>, GolemError> {
+    ) -> Result<Vec<WorkerMetadata>, WorkerExecutorError> {
         info!(
             "Get workers - filter: {}",
             filter
@@ -71,13 +71,13 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationServiceDefault<Ctx> {
 pub trait WorkerEnumerationService: Send + Sync {
     async fn get(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError>;
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError>;
 }
 
 #[derive(Clone)]
@@ -102,18 +102,18 @@ impl DefaultWorkerEnumerationService {
 
     async fn get_internal(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
         let mut workers: Vec<WorkerMetadata> = vec![];
 
         let (new_cursor, keys) = self
             .oplog_service
-            .scan_for_component(account_id, component_id, cursor, count)
+            .scan_for_component(project_id, component_id, cursor, count)
             .instrument(tracing::info_span!("scan_for_component"))
             .await?;
 
@@ -173,22 +173,24 @@ impl HasConfig for DefaultWorkerEnumerationService {
 impl WorkerEnumerationService for DefaultWorkerEnumerationService {
     async fn get(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
         info!(
-            "Get workers - filter: {}, cursor: {}, count: {}, precise: {}",
-            filter
+            project_id = %project_id,
+            component_id = %component_id,
+            filter = filter
                 .clone()
                 .map(|f| f.to_string())
                 .unwrap_or("N/A".to_string()),
-            cursor,
-            count,
-            precise
+            cursor = %cursor,
+            count = %count,
+            precise = %precise,
+            "Enumerating workers"
         );
         let mut new_cursor: Option<ScanCursor> = Some(cursor);
         let mut workers: Vec<WorkerMetadata> = vec![];
@@ -198,7 +200,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
 
             let (next_cursor, workers_page) = self
                 .get_internal(
-                    account_id,
+                    project_id,
                     component_id,
                     filter.clone(),
                     new_cursor.unwrap_or_default(),

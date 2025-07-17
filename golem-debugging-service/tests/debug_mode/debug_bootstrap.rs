@@ -8,7 +8,7 @@ use golem_debugging_service::auth::AuthService;
 use golem_debugging_service::debug_context::DebugContext;
 use golem_debugging_service::debug_session::{DebugSessions, DebugSessionsDefault};
 use golem_debugging_service::oplog::debug_oplog_service::DebugOplogService;
-use golem_debugging_service::{create_debug_wasmtime_linker, run_debug_server};
+use golem_debugging_service::{create_debug_wasmtime_linker, run_debug_worker_executor};
 use golem_service_base::storage::blob::BlobStorage;
 use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
@@ -23,6 +23,7 @@ use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
+use golem_worker_executor::services::projects::ProjectService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms;
 use golem_worker_executor::services::resource_limits;
@@ -38,7 +39,8 @@ use golem_worker_executor::services::worker_enumeration::{
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::All;
-use golem_worker_executor::Bootstrap;
+use golem_worker_executor::{Bootstrap, RunDetails};
+use prometheus::Registry;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -82,24 +84,25 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         golem_worker_executor::services::component::configured(
             &get_component_service_config(),
-            &golem_config.project_service,
             &get_component_cache_config(),
             &golem_config.compiled_component_service,
             blob_storage,
             plugin_observations,
+            project_service,
         )
     }
 
     async fn run_grpc_server(
         &self,
-        service_dependencies: All<DebugContext>,
+        _service_dependencies: All<DebugContext>,
         _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext>>,
-        join_set: &mut JoinSet<Result<(), Error>>,
+        _join_set: &mut JoinSet<Result<(), Error>>,
     ) -> anyhow::Result<u16> {
-        run_debug_server(service_dependencies, join_set).await
+        panic!("no debug server running")
     }
 
     async fn create_services(
@@ -127,6 +130,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
     ) -> anyhow::Result<All<DebugContext>> {
         let auth_service: Arc<dyn AuthService> = Arc::new(TestAuthService);
 
@@ -139,6 +143,9 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
                 self.regular_worker_executor_context.grpc_port(),
                 true,
             )),
+            project_resolver: self
+                .regular_worker_executor_context
+                .create_project_resolver(),
         });
 
         let debug_sessions: Arc<dyn DebugSessions> = Arc::new(DebugSessionsDefault::default());
@@ -182,6 +189,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
             addition_deps.clone(),
         ));
 
@@ -214,6 +222,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
             addition_deps.clone(),
         ));
 
@@ -244,11 +253,30 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
+            project_service,
             addition_deps,
         ))
     }
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<DebugContext>> {
         create_debug_wasmtime_linker(engine)
+    }
+
+    async fn run(
+        &self,
+        golem_config: GolemConfig,
+        prometheus_registry: Registry,
+        runtime: Handle,
+        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    ) -> anyhow::Result<RunDetails> {
+        run_debug_worker_executor(
+            self,
+            golem_config,
+            ".*",
+            prometheus_registry,
+            runtime,
+            join_set,
+        )
+        .await
     }
 }

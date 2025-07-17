@@ -1,8 +1,7 @@
 ## Generated from default config
-grpc_address = "0.0.0.0"
+cors_origin_regex = "https://*.golem.cloud"
 http_address = "0.0.0.0"
 http_port = 8082
-port = 9000
 tracing_file_name_with_port = true
 
 [active_workers]
@@ -36,7 +35,6 @@ type = "Enabled"
 max_capacity = 32
 max_metadata_capacity = 16384
 max_resolved_component_capacity = 1024
-max_resolved_project_capacity = 1024
 time_to_idle = "12h"
 
 [component_service]
@@ -129,8 +127,10 @@ type = "Grpc"
 
 [project_service.config]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+cache_time_to_idle = "12h"
 connect_timeout = "30s"
 host = "localhost"
+max_resolved_project_cache_capacity = 1024
 port = 9091
 
 [project_service.config.retries]
@@ -222,10 +222,9 @@ without_time = false
 
 
 ## Generated from example config: default-debug-config
-# grpc_address = "0.0.0.0"
+# cors_origin_regex = "https://*.golem.cloud"
 # http_address = "0.0.0.0"
 # http_port = 8082
-# port = 9000
 # tracing_file_name_with_port = true
 # 
 # [active_workers]
@@ -259,7 +258,6 @@ without_time = false
 # max_capacity = 32
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
-# max_resolved_project_capacity = 1024
 # time_to_idle = "12h"
 # 
 # [component_service]
@@ -352,8 +350,10 @@ without_time = false
 # 
 # [project_service.config]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# cache_time_to_idle = "12h"
 # connect_timeout = "30s"
 # host = "localhost"
+# max_resolved_project_cache_capacity = 1024
 # port = 9091
 # 
 # [project_service.config.retries]

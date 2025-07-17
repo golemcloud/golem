@@ -268,7 +268,7 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
         if let Some(file) = matching_ro_file {
             let data = self
                 .initial_component_files_service
-                .get(&namespace.account_id, &file.key)
+                .get(&namespace.project_id, &file.key)
                 .await
                 .map_err(|e| {
                     FileServerBindingError::InternalError(format!(

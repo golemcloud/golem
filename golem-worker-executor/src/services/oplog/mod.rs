@@ -12,15 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::{Any, TypeId};
-use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
-use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
-use std::time::Duration;
-
-use crate::error::GolemError;
 use crate::model::ExecutionStatus;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
@@ -33,12 +24,20 @@ use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, UpdateDescription,
 };
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp,
+    ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, ScanCursor, Timestamp,
     WorkerId, WorkerMetadata,
 };
 use golem_common::serialization::{serialize, try_deserialize};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
+use std::any::{Any, TypeId};
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 mod blob;
 mod compressed;
@@ -131,11 +130,11 @@ pub trait OplogService: Debug + Send + Sync {
     /// Pages can be empty. This operation is slow and is not locking the oplog.
     async fn scan_for_component(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError>;
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError>;
 
     /// Uploads a big oplog payload and returns a reference to it
     async fn upload_payload(
@@ -251,7 +250,7 @@ pub trait OplogOps: Oplog {
             function_name,
             request: request_payload,
             response: response_payload,
-            wrapped_function_type: function_type,
+            durable_function_type: function_type,
         };
         self.add(entry.clone()).await;
         Ok(entry)
@@ -312,9 +311,6 @@ pub trait OplogOps: Oplog {
 
     async fn get_raw_payload_of_entry(&self, entry: &OplogEntry) -> Result<Option<Bytes>, String> {
         match entry {
-            OplogEntry::ImportedFunctionInvokedV1 { response, .. } => {
-                Ok(Some(self.download_payload(response).await?))
-            }
             OplogEntry::ImportedFunctionInvoked { response, .. } => {
                 Ok(Some(self.download_payload(response).await?))
             }

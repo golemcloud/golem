@@ -15,7 +15,6 @@
 pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
-pub mod error;
 pub mod grpc;
 pub mod metrics;
 pub mod model;
@@ -45,6 +44,7 @@ use crate::services::oplog::{
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
 use crate::services::plugins::{Plugins, PluginsObservations};
+use crate::services::projects::ProjectService;
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
@@ -76,6 +76,7 @@ use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use humansize::{ISizeFormatter, BINARY};
+use log::debug;
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
@@ -139,8 +140,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .accept_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Gzip);
 
-        info!("Starting gRPC server on port {grpc_port}");
-
         join_set.spawn(
             async move {
                 Server::builder()
@@ -154,6 +153,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             }
             .in_current_span(),
         );
+
+        info!("Started worker service on ports: grpc: {grpc_port}");
 
         Ok(grpc_port)
     }
@@ -169,6 +170,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService>;
 
     /// Allows customizing the `All` service.
@@ -200,6 +202,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -228,7 +231,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         runtime: Handle,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> anyhow::Result<RunDetails> {
-        info!("Golem Worker Executor starting up...");
+        debug!("Initializing worker executor");
 
         let total_system_memory = golem_config.memory.total_system_memory();
         let system_memory = golem_config.memory.system_memory();
@@ -270,7 +273,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     }
 }
 
-async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>(
+pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>(
     golem_config: GolemConfig,
     bootstrap: &A,
     runtime: Handle,
@@ -396,10 +399,13 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
     let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
     let (plugins, plugins_observations) = bootstrap.create_plugins(&golem_config);
 
+    let project_service = services::projects::configured(&golem_config.project_service);
+
     let component_service = bootstrap.create_component_service(
         &golem_config,
         blob_storage.clone(),
         plugins_observations,
+        project_service.clone(),
     );
 
     let golem_config = Arc::new(golem_config.clone());
@@ -501,6 +507,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
         shard_service.clone(),
         lazy_worker_activator.clone(),
         plugins.clone(),
+        project_service.clone(),
     ));
 
     let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
@@ -508,6 +515,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
         oplog_processor_plugin.clone(),
         component_service.clone(),
         plugins.clone(),
+        project_service.clone(),
     ));
 
     let worker_service = Arc::new(DefaultWorkerService::new(
@@ -557,6 +565,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
             file_loader,
             plugins,
             oplog_processor_plugin,
+            project_service,
         )
         .await?;
 

@@ -9,6 +9,7 @@ use crate::debug_mode::context::DebugExecutorTestContext;
 use crate::debug_mode::debug_bootstrap::TestDebuggingServerBootStrap;
 use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
 use crate::{get_golem_config, RegularExecutorTestContext, RegularWorkerExecutorTestDependencies};
+use golem_common::model::auth::TokenSecret;
 use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::Bootstrap;
 use prometheus::Registry;
@@ -25,19 +26,31 @@ pub async fn start_debug_worker_executor(
     let redis_monitor = regular_worker_dependencies.redis_monitor();
     redis.assert_valid();
     redis_monitor.assert_valid();
-    println!("Using Redis on port {}", redis.public_port());
     let prometheus = golem_worker_executor::metrics::register_all();
+
+    let admin_account_id = regular_worker_dependencies.cloud_service.admin_account_id();
+    let admin_default_project_id = regular_worker_dependencies
+        .cloud_service
+        .get_default_project(&regular_worker_dependencies.cloud_service.admin_token())
+        .await?;
+    let admin_default_project_name = regular_worker_dependencies
+        .cloud_service
+        .get_project_name(&admin_default_project_id)
+        .await?;
 
     let config = get_golem_config(
         redis.public_port(),
         debug_context.redis_prefix(),
-        debug_context.debug_server_port(),
+        debug_context.grpc_port(),
         debug_context.http_port(),
+        admin_account_id,
+        admin_default_project_id,
+        admin_default_project_name,
     );
 
     let handle = Handle::current();
 
-    let server_port = config.port;
+    let http_port = config.http_port;
 
     let mut join_set = JoinSet::new();
 
@@ -53,7 +66,9 @@ pub async fn start_debug_worker_executor(
     let start = std::time::Instant::now();
 
     loop {
-        let debug_worker_executor_result = DebugWorkerExecutorClient::connect(server_port).await;
+        let debug_worker_executor_result =
+            DebugWorkerExecutorClient::connect(http_port, TokenSecret::new(uuid::Uuid::new_v4()))
+                .await;
 
         match debug_worker_executor_result {
             Ok(client) => {

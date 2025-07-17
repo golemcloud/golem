@@ -35,6 +35,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         let component_id = self
             .dependencies
             .admin()
+            .await
             .component(component_name.as_str())
             .store()
             .await;
@@ -42,6 +43,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         let metadata = self
             .dependencies
             .admin()
+            .await
             .get_latest_component_metadata(&component_id)
             .await;
 
@@ -95,6 +97,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
 
         self.embedded_worker_executor
             .admin()
+            .await
             .invoke_and_await_typed(target_worker_id, function_name, args)
             .await
             .map_err(|e| anyhow!("Failed to invoke function: {:?}", e))

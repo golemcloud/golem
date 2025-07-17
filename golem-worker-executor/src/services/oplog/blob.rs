@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::GolemError;
 use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CompressedOplogChunk, OplogArchiveService};
 use async_lock::RwLockUpgradableReadGuard;
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
+use golem_common::model::{ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
 };
@@ -67,7 +67,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
                 "blob_oplog",
                 "delete",
                 BlobStorageNamespace::CompressedOplog {
-                    account_id: owned_worker_id.account_id(),
+                    project_id: owned_worker_id.project_id(),
                     component_id: owned_worker_id.component_id(),
                     level: self.level,
                 },
@@ -97,7 +97,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
             .with("blob_oplog", "exists")
             .exists(
                 BlobStorageNamespace::CompressedOplog {
-                    account_id: owned_worker_id.account_id(),
+                    project_id: owned_worker_id.project_id(),
                     component_id: owned_worker_id.component_id(),
                     level: self.level,
                 },
@@ -115,34 +115,34 @@ impl OplogArchiveService for BlobOplogArchiveService {
 
     async fn scan_for_component(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         if cursor.cursor == 0 {
             let blob_storage = self.blob_storage.with("blob_oplog", "scan_for_component");
             let owned_worker_ids = if blob_storage.exists(
                 BlobStorageNamespace::CompressedOplog {
-                    account_id: account_id.clone(),
+                    project_id: project_id.clone(),
                     component_id: component_id.clone(),
                     level: self.level,
                 },
                 Path::new(""),
             ).await.map_err(|err| {
-                GolemError::unknown(format!("Failed to check if compressed oplog root for component {component_id} exists in blob storage: {err}"))
+                WorkerExecutorError::unknown(format!("Failed to check if compressed oplog root for component {component_id} exists in blob storage: {err}"))
             })? == ExistsResult::Directory
             {
                 let paths = blob_storage
                     .list_dir(
                     BlobStorageNamespace::CompressedOplog {
-                    account_id: account_id.clone(),
+                    project_id: project_id.clone(),
                     component_id: component_id.clone(),
                     level: self.level,
                 },
                 Path::new(""),
             ).await.map_err(|err| {
-                GolemError::unknown(format!("Failed to list entries of compressed oplog for component {component_id} in blob storage: {err}"))
+                WorkerExecutorError::unknown(format!("Failed to list entries of compressed oplog for component {component_id} in blob storage: {err}"))
             })?;
 
                 paths
@@ -150,7 +150,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
                     .map(|path| {
                         let worker_name = path.file_name().unwrap().to_str().unwrap();
                         OwnedWorkerId {
-                            account_id: account_id.clone(),
+                            project_id: project_id.clone(),
                             worker_id: WorkerId {
                                 component_id: component_id.clone(),
                                 worker_name: worker_name.to_string(),
@@ -170,7 +170,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
                 owned_worker_ids,
             ))
         } else {
-            Err(GolemError::unknown(
+            Err(WorkerExecutorError::unknown(
                 "Cannot use cursor with blob oplog archive",
             ))
         }
@@ -247,7 +247,7 @@ impl BlobOplogArchive {
                 .with("blob_oplog", "new")
                 .create_dir(
                     BlobStorageNamespace::CompressedOplog {
-                        account_id: self.owned_worker_id.account_id(),
+                        project_id: self.owned_worker_id.project_id(),
                         component_id: self.owned_worker_id.component_id(),
                         level: self.level,
                     },
@@ -274,7 +274,7 @@ impl BlobOplogArchive {
             .with("blob_oplog", "exists")
             .exists(
                 BlobStorageNamespace::CompressedOplog {
-                    account_id: owned_worker_id.account_id(),
+                    project_id: owned_worker_id.project_id(),
                     component_id: owned_worker_id.component_id(),
                     level,
                 },
@@ -299,7 +299,7 @@ impl BlobOplogArchive {
             .with("blob_oplog", "new")
             .list_dir(
                 BlobStorageNamespace::CompressedOplog {
-                    account_id: owned_worker_id.account_id(),
+                    project_id: owned_worker_id.project_id(),
                     component_id: owned_worker_id.component_id(),
                     level,
                 },
@@ -346,7 +346,7 @@ impl BlobOplogArchive {
                 .with("blob_oplog", "read")
                 .get(
                     BlobStorageNamespace::CompressedOplog {
-                        account_id: self.owned_worker_id.account_id(),
+                        project_id: self.owned_worker_id.project_id(),
                         component_id: self.owned_worker_id.component_id(),
                         level: self.level,
                     },
@@ -446,7 +446,7 @@ impl OplogArchive for BlobOplogArchive {
                 "blob_oplog",
                 "append").put(
                 BlobStorageNamespace::CompressedOplog {
-                    account_id: self.owned_worker_id.account_id(),
+                    project_id: self.owned_worker_id.project_id(),
                     component_id: self.owned_worker_id.component_id(),
                     level: self.level
                 },
@@ -503,7 +503,7 @@ impl OplogArchive for BlobOplogArchive {
             .collect::<Vec<_>>();
 
         let ns = BlobStorageNamespace::CompressedOplog {
-            account_id: self.owned_worker_id.account_id(),
+            project_id: self.owned_worker_id.project_id(),
             component_id: self.owned_worker_id.component_id(),
             level: self.level,
         };
@@ -529,7 +529,7 @@ impl OplogArchive for BlobOplogArchive {
                 self.blob_storage
                 .with("blob_oplog", "drop_prefix")
                 .delete_dir(BlobStorageNamespace::CompressedOplog {
-                    account_id: self.owned_worker_id.account_id(),
+                    project_id: self.owned_worker_id.project_id(),
                     component_id: self.owned_worker_id.component_id(),
                     level: self.level,
                 },

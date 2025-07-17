@@ -1466,9 +1466,10 @@ fn http_worker_metadata_to_grpc(
 ) -> WorkerMetadata {
     WorkerMetadata {
         worker_id: Some(worker_metadata.worker_id.into()),
-        account_id: Some(AccountId {
+        created_by: Some(AccountId {
             name: "1".to_string(),
         }),
+        project_id: Some(ProjectId(worker_metadata.project_id).into()),
         args: worker_metadata.args,
         env: worker_metadata.env,
         status: worker_metadata.status.into(),
@@ -1538,6 +1539,16 @@ fn http_worker_metadata_to_grpc(
             .map(|id| PluginInstallationId {
                 value: Some(id.into()),
             })
+            .collect(),
+        skipped_regions: worker_metadata
+            .skipped_regions
+            .into_iter()
+            .map(|region| region.into())
+            .collect(),
+        deleted_regions: worker_metadata
+            .deleted_regions
+            .into_iter()
+            .map(|region| region.into())
             .collect(),
     }
 }

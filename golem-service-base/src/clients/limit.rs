@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::authorised_request;
-use super::RemoteCloudServiceConfig;
+use super::RemoteServiceConfig;
 use crate::model::ResourceLimits;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
@@ -71,7 +71,7 @@ pub struct LimitServiceDefault {
 }
 
 impl LimitServiceDefault {
-    pub fn new(config: &RemoteCloudServiceConfig) -> Self {
+    pub fn new(config: &RemoteServiceConfig) -> Self {
         let limit_service_client: GrpcClient<CloudLimitsServiceClient<Channel>> = GrpcClient::new(
             "limit",
             |channel| {
@@ -257,8 +257,7 @@ impl LimitService for LimitServiceDefault {
         &self,
         account_id: &AccountId,
     ) -> Result<ResourceLimits, LimitError> {
-        let desc = format!("Getting resource limits - account: {account_id}");
-        info!("{}", &desc);
+        info!(account_id = %account_id, "Getting resource limits");
         let result: Result<ResourceLimits, LimitClientError> = with_retries(
             "limit",
             "get-resource-limits",

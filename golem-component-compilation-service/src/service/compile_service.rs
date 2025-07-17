@@ -16,7 +16,7 @@ use super::*;
 use crate::config::{CompileWorkerConfig, ComponentServiceConfig, StaticComponentServiceConfig};
 use crate::model::*;
 use async_trait::async_trait;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ProjectId};
 use golem_worker_executor::services::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -28,6 +28,7 @@ pub trait CompilationService {
         &self,
         component_id: ComponentId,
         component_version: u64,
+        project_id: ProjectId,
         sender: Option<StaticComponentServiceConfig>,
     ) -> Result<(), CompilationError>;
 }
@@ -71,18 +72,20 @@ impl CompilationService for ComponentCompilationServiceImpl {
         &self,
         component_id: ComponentId,
         component_version: u64,
+        project_id: ProjectId,
         sender: Option<StaticComponentServiceConfig>,
     ) -> Result<(), CompilationError> {
         tracing::info!(
-            "Enqueueing compilation for component {}@{}",
-            component_id,
-            component_version
+            component_id = component_id.to_string(),
+            component_version = component_version.to_string(),
+            "Enqueueing compilation for component",
         );
         let request = CompilationRequest {
             component: ComponentWithVersion {
                 id: component_id,
                 version: component_version,
             },
+            project_id,
             sender,
         };
         self.queue.send(request).await?;

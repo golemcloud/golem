@@ -14,7 +14,7 @@
 
 use super::dto;
 use super::dto::ApiMapper;
-use crate::api::{ApiTags, ComponentError, Result};
+use crate::api::{ComponentError, Result};
 use crate::authed::component::AuthedComponentService;
 use crate::model::{
     ComponentEnv, DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
@@ -30,6 +30,7 @@ use golem_common::model::{
 };
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_service_base::model::{BatchPluginInstallationUpdates, ComponentName};
 use golem_service_base::poem::TempFileUpload;
@@ -705,9 +706,9 @@ impl ComponentApi {
     #[oai(
         path = "/:component_id/versions/latest/plugins/installs/batch",
         method = "post",
-        operation_id = "bath_update_installed_plugins"
+        operation_id = "batch_update_installed_plugins"
     )]
-    async fn bath_update_installed_plugins(
+    async fn batch_update_installed_plugins(
         &self,
         component_id: Path<ComponentId>,
         updates: Json<BatchPluginInstallationUpdates>,

@@ -19,11 +19,12 @@ use axum::extract::Path;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use bytes::Bytes;
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::{IdempotencyKey, TargetWorkerId};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
-    drain_connection, stdout_event_starting_with, stdout_events, worker_error_message,
-    TestDslUnsafe,
+    drain_connection, stdout_event_starting_with, stdout_events, worker_error_logs,
+    worker_error_message, worker_error_underlying_error, TestDslUnsafe,
 };
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::HashMap;
@@ -137,7 +138,7 @@ async fn jump(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(1).await;
 
@@ -200,7 +201,7 @@ async fn explicit_oplog_commit(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("runtime-service").store().await;
 
@@ -233,7 +234,7 @@ async fn set_retry_policy(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("runtime-service").store().await;
     let worker_id = executor
@@ -264,12 +265,25 @@ async fn set_retry_policy(
 
     drop(executor);
 
-    check!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
-    check!(result1.is_err());
-    check!(result2.is_err());
-    check!(worker_error_message(&result1.clone().err().unwrap())
-        .starts_with("Runtime error: error while executing at wasm backtrace:"));
-    check!(worker_error_message(&result2.err().unwrap()).starts_with("Previous invocation failed"));
+    assert!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
+    assert!(result1.is_err());
+    assert!(result2.is_err());
+
+    let result1_err = result1.err().unwrap();
+    assert_eq!(worker_error_message(&result1_err), "Invocation failed");
+    assert!(
+        matches!(worker_error_underlying_error(&result1_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
+    );
+    assert_eq!(worker_error_logs(&result1_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:68:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    let result2_err = result2.err().unwrap();
+    assert_eq!(
+        worker_error_message(&result2_err),
+        "Previous invocation failed"
+    );
+    assert!(
+        matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
+    );
+    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:68:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
 }
 
 #[test]
@@ -281,7 +295,7 @@ async fn atomic_region(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(2).await;
     let component_id = executor.component("runtime-service").store().await;
@@ -318,7 +332,7 @@ async fn idempotence_on(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(1).await;
 
@@ -360,7 +374,7 @@ async fn idempotence_off(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(1).await;
 
@@ -403,7 +417,7 @@ async fn persist_nothing(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(2).await;
 
@@ -443,7 +457,7 @@ async fn golem_rust_explicit_oplog_commit(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("golem-rust-tests").store().await;
 
@@ -476,7 +490,7 @@ async fn golem_rust_set_retry_policy(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("golem-rust-tests").store().await;
     let worker_id = executor
@@ -507,12 +521,24 @@ async fn golem_rust_set_retry_policy(
 
     drop(executor);
 
-    check!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
-    check!(result1.is_err());
-    check!(result2.is_err());
-    check!(worker_error_message(&result1.clone().err().unwrap())
-        .starts_with("Runtime error: error while executing at wasm backtrace:"));
-    check!(worker_error_message(&result2.err().unwrap()).starts_with("Previous invocation failed"));
+    assert!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
+    assert!(result1.is_err());
+    assert!(result2.is_err());
+    let result1_err = result1.err().unwrap();
+    assert_eq!(worker_error_message(&result1_err), "Invocation failed");
+    assert!(
+        matches!(worker_error_underlying_error(&result1_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
+    );
+    assert_eq!(worker_error_logs(&result1_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    let result2_err = result2.err().unwrap();
+    assert_eq!(
+        worker_error_message(&result2_err),
+        "Previous invocation failed"
+    );
+    assert!(
+        matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
+    );
+    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
 }
 
 #[test]
@@ -524,7 +550,7 @@ async fn golem_rust_atomic_region(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(2).await;
     let component_id = executor.component("golem-rust-tests").store().await;
@@ -561,7 +587,7 @@ async fn golem_rust_idempotence_on(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(1).await;
 
@@ -608,7 +634,7 @@ async fn golem_rust_idempotence_off(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(1).await;
 
@@ -656,7 +682,7 @@ async fn golem_rust_persist_nothing(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(2).await;
 
@@ -700,7 +726,7 @@ async fn golem_rust_fallible_transaction(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start_custom(
         Arc::new(|step| match step {
@@ -764,7 +790,7 @@ async fn golem_rust_infallible_transaction(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start_custom(
         Arc::new(|step| match step {
@@ -829,7 +855,7 @@ async fn idempotency_keys_in_ephemeral_workers(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor
         .component("runtime-service")
