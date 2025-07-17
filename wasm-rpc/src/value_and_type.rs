@@ -414,34 +414,17 @@ impl IntoValue for Uuid {
     }
 }
 
-impl IntoValueAndType for Vec<(String, ValueAndType)> {
+/// Helper for dynamically creating record ValueAndType values with String keys
+pub struct Record<K: AsRef<str>>(pub Vec<(K, ValueAndType)>);
+
+impl<K: AsRef<str>> IntoValueAndType for Record<K> {
     fn into_value_and_type(self) -> ValueAndType {
-        let mut field_types = Vec::<NameTypePair>::with_capacity(self.len());
-        let mut field_values = Vec::<Value>::with_capacity(self.len());
+        let mut field_types = Vec::<NameTypePair>::with_capacity(self.0.len());
+        let mut field_values = Vec::<Value>::with_capacity(self.0.len());
 
-        for (field_name, value_and_type) in self {
+        for (field_name, value_and_type) in self.0 {
             field_types.push(NameTypePair {
-                name: field_name,
-                typ: value_and_type.typ,
-            });
-            field_values.push(value_and_type.value);
-        }
-
-        ValueAndType {
-            value: Value::Record(field_values),
-            typ: analysed_type::record(field_types),
-        }
-    }
-}
-
-impl IntoValueAndType for Vec<(&'static str, ValueAndType)> {
-    fn into_value_and_type(self) -> ValueAndType {
-        let mut field_types = Vec::<NameTypePair>::with_capacity(self.len());
-        let mut field_values = Vec::<Value>::with_capacity(self.len());
-
-        for (field_name, value_and_type) in self {
-            field_types.push(NameTypePair {
-                name: field_name.to_string(),
+                name: field_name.as_ref().to_string(),
                 typ: value_and_type.typ,
             });
             field_values.push(value_and_type.value);
@@ -833,6 +816,46 @@ impl IntoValue for crate::RpcError {
             case("not-found", analysed_type::str()),
             case("remote-internal-error", analysed_type::str()),
         ])
+    }
+}
+
+#[cfg(feature = "host-bindings")]
+impl IntoValue for ValueAndType {
+    fn into_value(self) -> Value {
+        let wit_value: WitValue = self.value.into();
+        let wit_type: WitType = self.typ.into();
+        Value::Record(vec![wit_value.into_value(), wit_type.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("value", WitValue::get_type()),
+            analysed_type::field("type", WitType::get_type()),
+        ])
+    }
+}
+
+#[cfg(feature = "host-bindings")]
+impl IntoValue for Value {
+    fn into_value(self) -> Value {
+        let wit_value: WitValue = self.into();
+        wit_value.into_value()
+    }
+
+    fn get_type() -> AnalysedType {
+        WitValue::get_type()
+    }
+}
+
+#[cfg(feature = "host-bindings")]
+impl IntoValue for AnalysedType {
+    fn into_value(self) -> Value {
+        let wit_type: WitType = self.into();
+        wit_type.into_value()
+    }
+
+    fn get_type() -> AnalysedType {
+        WitType::get_type()
     }
 }
 
