@@ -574,10 +574,10 @@ async fn get_workers_from_worker(
             let (high, low) = worker_id.component_id.0.as_u64_pair();
             Record(vec![(
                 "uuid",
-                vec![
+                Record(vec![
                     ("high-bits", high.into_value_and_type()),
                     ("low-bits", low.into_value_and_type()),
-                ]
+                ])
                 .into_value_and_type(),
             )])
             .into_value_and_type()
