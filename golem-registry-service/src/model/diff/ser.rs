@@ -26,8 +26,8 @@ thread_local! {
     static SERIALIZE_MODE: Cell<SerializeMode> = const { Cell::new(SerializeMode::HashOnly) };
 }
 
-// TODO: maybe switch to serde_json::Value instead of the Box?
 pub trait ToSerializableWithMode {
+    // NOTE: should not be called directly, only via the to_<format> methods exposed in this module
     fn to_serializable(&self, mode: SerializeMode) -> serde_json::Value;
 }
 
@@ -43,35 +43,59 @@ impl<V: ToSerializableWithMode> ToSerializableWithMode for BTreeMap<String, V> {
 pub fn serialize_with_mode<S: Serializer, T: ToSerializableWithMode>(
     value: &T,
     serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
+) -> Result<S::Ok, S::Error> {
     value
         .to_serializable(SERIALIZE_MODE.get())
         .serialize(serializer)
+}
+
+pub trait ToSerializableWithModeExt: ToSerializableWithMode {
+    fn to_json_with_mode(&self, mode: SerializeMode) -> serde_json::Result<String> {
+        with_mode(mode, || serde_json::to_string(&self.to_serializable(mode)))
+    }
+
+    fn to_pretty_json_with_mode(&self, mode: SerializeMode) -> serde_json::Result<String> {
+        with_mode(mode, || {
+            serde_json::to_string_pretty(&self.to_serializable(mode))
+        })
+    }
+
+    fn to_yaml_with_mode(&self, mode: SerializeMode) -> serde_yaml::Result<String> {
+        with_mode(mode, || serde_yaml::to_string(&self.to_serializable(mode)))
+    }
+}
+
+impl<T: ToSerializableWithMode> ToSerializableWithModeExt for T {}
+
+fn with_mode<F, R>(mode: SerializeMode, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    SERIALIZE_MODE.with(|m| {
+        let mode = m.replace(mode);
+        let result = f();
+        m.set(mode);
+        result
+    })
 }
 
 pub fn to_json_with_mode<T: Serialize>(
     value: &T,
     mode: SerializeMode,
 ) -> serde_json::Result<String> {
-    SERIALIZE_MODE.set(mode);
-    serde_json::to_string(value)
+    with_mode(mode, || serde_json::to_string(value))
 }
 
 pub fn to_pretty_json_with_mode<T: Serialize>(
     value: &T,
     mode: SerializeMode,
 ) -> serde_json::Result<String> {
-    SERIALIZE_MODE.set(mode);
-    serde_json::to_string_pretty(value)
+    with_mode(mode, || serde_json::to_string_pretty(value))
 }
 
 pub fn to_yaml_with_mode<T: Serialize>(
     value: &T,
     mode: SerializeMode,
 ) -> serde_yaml::Result<String> {
-    SERIALIZE_MODE.set(mode);
-    serde_yaml::to_string(value)
+    with_mode(mode, || serde_yaml::to_string(value))
 }

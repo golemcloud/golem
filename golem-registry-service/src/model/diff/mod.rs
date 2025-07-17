@@ -14,12 +14,9 @@
 
 // TODO: move to golem-common (or some other common place)
 
-use crate::model::diff::hash::{Hash, HashOf, Hashable};
-use golem_common::model::{ComponentFilePermissions, ComponentType};
-use ser::serialize_with_mode;
+use crate::model::diff::hash::Hashable;
 use serde::{Serialize, Serializer};
 use std::any::Any;
-use std::collections::BTreeMap;
 use std::fmt::Display;
 
 pub mod component;
@@ -34,11 +31,13 @@ mod test {
     use crate::model::diff::hash::Hashable;
     use crate::model::diff::ser::{
         to_json_with_mode, to_pretty_json_with_mode, to_yaml_with_mode, SerializeMode,
+        ToSerializableWithModeExt,
     };
     use golem_common::model::{ComponentFilePermissions, ComponentType};
     use std::collections::BTreeMap;
     use test_r::test;
 
+    // TODO: proper test
     #[test]
     fn test() {
         fn new_component(name: &str) -> Component {
@@ -99,15 +98,39 @@ mod test {
             to_yaml_with_mode(&deployment, SerializeMode::ValueIfAvailable).unwrap()
         );
 
-        /*let mut writer = Vec::with_capacity(128);
-        let mut json_serializer = serde_json::Serializer::new(&mut writer);
-        let serializer = TargetAwareSerializer {
-            inner: &mut json_serializer,
-            target: SerializeMode::Values,
-        };
-        deployment.serialize(serializer).unwrap();
-        let serialized = String::from_utf8(writer).unwrap();
-        println!("{serialized}");
-        println!("{}", deployment.hash())*/
+        for component in deployment.components.values() {
+            println!("----");
+            println!("{}", component.hash());
+            println!(
+                "{}",
+                component
+                    .to_json_with_mode(SerializeMode::HashOnly)
+                    .unwrap()
+            );
+            println!(
+                "{}",
+                component
+                    .to_pretty_json_with_mode(SerializeMode::HashOnly)
+                    .unwrap()
+            );
+            println!(
+                "{}",
+                component
+                    .to_yaml_with_mode(SerializeMode::HashOnly)
+                    .unwrap()
+            );
+            println!(
+                "{}",
+                component
+                    .to_pretty_json_with_mode(SerializeMode::ValueIfAvailable)
+                    .unwrap()
+            );
+            println!(
+                "{}",
+                component
+                    .to_yaml_with_mode(SerializeMode::ValueIfAvailable)
+                    .unwrap()
+            );
+        }
     }
 }
