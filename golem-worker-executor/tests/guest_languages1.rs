@@ -22,7 +22,7 @@ use bytes::Bytes;
 use chrono::Datelike;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{log_event_to_string, TestDslUnsafe};
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm_rpc::{IntoValueAndType, Record, Value};
 use http::HeaderMap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -347,12 +347,12 @@ async fn java_shopping_cart(
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -361,12 +361,12 @@ async fn java_shopping_cart(
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1001".into_value_and_type()),
                 ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                 ("price", 999999.0f32.into_value_and_type()),
                 ("quantity", 1u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -375,12 +375,12 @@ async fn java_shopping_cart(
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;

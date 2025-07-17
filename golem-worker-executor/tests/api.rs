@@ -36,7 +36,7 @@ use golem_test_framework::dsl::{
 };
 use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType, TypeStr};
-use golem_wasm_rpc::IntoValue;
+use golem_wasm_rpc::{IntoValue, Record};
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use redis::Commands;
 use std::collections::HashMap;
@@ -170,12 +170,12 @@ async fn shopping_cart_example(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -184,12 +184,12 @@ async fn shopping_cart_example(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1001".into_value_and_type()),
                 ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                 ("price", 999999.0f32.into_value_and_type()),
                 ("quantity", 1u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -198,12 +198,12 @@ async fn shopping_cart_example(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -572,14 +572,14 @@ async fn get_workers_from_worker(
     ) {
         let component_id_val_and_type = {
             let (high, low) = worker_id.component_id.0.as_u64_pair();
-            vec![(
+            Record(vec![(
                 "uuid",
-                vec![
+                Record(vec![
                     ("high-bits", high.into_value_and_type()),
                     ("low-bits", low.into_value_and_type()),
-                ]
+                ])
                 .into_value_and_type(),
-            )]
+            )])
             .into_value_and_type()
         };
 
@@ -777,12 +777,12 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
             &worker_id,
             &idempotency_key,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -793,12 +793,12 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
             &worker_id,
             &idempotency_key,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -844,12 +844,12 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
             &worker_id,
             &idempotency_key,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -863,12 +863,12 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
             &worker_id,
             &idempotency_key,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -1065,10 +1065,10 @@ async fn optional_parameters(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{todo}",
-            vec![vec![
+            vec![Record(vec![
                 ("name", "todo".into_value_and_type()),
                 ("description", Some("description").into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -1078,10 +1078,10 @@ async fn optional_parameters(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{todo}",
-            vec![vec![
+            vec![Record(vec![
                 ("name", "todo".into_value_and_type()),
                 ("description", Some("description").into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -1120,7 +1120,7 @@ async fn flags_parameters(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-task}",
-            vec![vec![
+            vec![Record(vec![
                 ("name", "t1".into_value_and_type()),
                 (
                     "permissions",
@@ -1129,7 +1129,7 @@ async fn flags_parameters(
                         typ: analysed_type::flags(&["read", "write", "exec", "close"]),
                     },
                 ),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -1518,12 +1518,12 @@ async fn create_invoke_delete_create_invoke(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -1538,12 +1538,12 @@ async fn create_invoke_delete_create_invoke(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -1577,12 +1577,12 @@ async fn recovering_an_old_worker_after_updating_a_component(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -1661,12 +1661,12 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -2519,12 +2519,12 @@ async fn shopping_cart_resource_example(
                     value: cart[0].clone(),
                     typ: analysed_type::u64(),
                 },
-                vec![
+                Record(vec![
                     ("product-id", "G1000".into_value_and_type()),
                     ("name", "Golem T-Shirt M".into_value_and_type()),
                     ("price", 100.0f32.into_value_and_type()),
                     ("quantity", 5u32.into_value_and_type()),
-                ]
+                ])
                 .into_value_and_type(),
             ],
         )
@@ -2539,12 +2539,12 @@ async fn shopping_cart_resource_example(
                     value: cart[0].clone(),
                     typ: analysed_type::u64(),
                 },
-                vec![
+                Record(vec![
                     ("product-id", "G1001".into_value_and_type()),
                     ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                     ("price", 999999.0f32.into_value_and_type()),
                     ("quantity", 1u32.into_value_and_type()),
-                ]
+                ])
                 .into_value_and_type(),
             ],
         )
@@ -2559,12 +2559,12 @@ async fn shopping_cart_resource_example(
                     value: cart[0].clone(),
                     typ: analysed_type::u64(),
                 },
-                vec![
+                Record(vec![
                     ("product-id", "G1002".into_value_and_type()),
                     ("name", "Mud Golem".into_value_and_type()),
                     ("price", 11.0f32.into_value_and_type()),
                     ("quantity", 10u32.into_value_and_type()),
-                ]
+                ])
                 .into_value_and_type(),
             ],
         )

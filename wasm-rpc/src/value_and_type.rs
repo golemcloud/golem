@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};
+use crate::{ResourceMode, RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};
 use golem_wasm_ast::analysis::analysed_type::{
-    list, option, result, result_err, result_ok, tuple, variant,
+    case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case, variant,
 };
 use golem_wasm_ast::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair, TypeEnum,
@@ -77,6 +77,13 @@ impl From<ValueAndType> for AnalysedType {
 impl From<ValueAndType> for WitValue {
     fn from(value_and_type: ValueAndType) -> Self {
         value_and_type.value.into()
+    }
+}
+
+#[cfg(feature = "host-bindings")]
+impl From<ValueAndType> for WitType {
+    fn from(value_and_type: ValueAndType) -> Self {
+        value_and_type.typ.into()
     }
 }
 
@@ -407,34 +414,17 @@ impl IntoValue for Uuid {
     }
 }
 
-impl IntoValueAndType for Vec<(String, ValueAndType)> {
+/// Helper for dynamically creating record ValueAndType values with String keys
+pub struct Record<K: AsRef<str>>(pub Vec<(K, ValueAndType)>);
+
+impl<K: AsRef<str>> IntoValueAndType for Record<K> {
     fn into_value_and_type(self) -> ValueAndType {
-        let mut field_types = Vec::<NameTypePair>::with_capacity(self.len());
-        let mut field_values = Vec::<Value>::with_capacity(self.len());
+        let mut field_types = Vec::<NameTypePair>::with_capacity(self.0.len());
+        let mut field_values = Vec::<Value>::with_capacity(self.0.len());
 
-        for (field_name, value_and_type) in self {
+        for (field_name, value_and_type) in self.0 {
             field_types.push(NameTypePair {
-                name: field_name,
-                typ: value_and_type.typ,
-            });
-            field_values.push(value_and_type.value);
-        }
-
-        ValueAndType {
-            value: Value::Record(field_values),
-            typ: analysed_type::record(field_types),
-        }
-    }
-}
-
-impl IntoValueAndType for Vec<(&'static str, ValueAndType)> {
-    fn into_value_and_type(self) -> ValueAndType {
-        let mut field_types = Vec::<NameTypePair>::with_capacity(self.len());
-        let mut field_values = Vec::<Value>::with_capacity(self.len());
-
-        for (field_name, value_and_type) in self {
-            field_types.push(NameTypePair {
-                name: field_name.to_string(),
+                name: field_name.as_ref().to_string(),
                 typ: value_and_type.typ,
             });
             field_values.push(value_and_type.value);
@@ -620,6 +610,146 @@ impl IntoValue for crate::Uri {
     }
 }
 
+#[cfg(feature = "host-bindings")]
+impl IntoValue for WitType {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.nodes.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![analysed_type::field(
+            "nodes",
+            list(WitTypeNode::get_type()),
+        )])
+    }
+}
+
+#[cfg(feature = "host-bindings")]
+impl IntoValue for WitTypeNode {
+    fn into_value(self) -> Value {
+        match self {
+            WitTypeNode::RecordType(field_types) => Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(field_types.into_value())),
+            },
+            WitTypeNode::VariantType(case_types) => Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(case_types.into_value())),
+            },
+            WitTypeNode::EnumType(names) => Value::Variant {
+                case_idx: 2,
+                case_value: Some(Box::new(names.into_value())),
+            },
+            WitTypeNode::FlagsType(names) => Value::Variant {
+                case_idx: 3,
+                case_value: Some(Box::new(names.into_value())),
+            },
+            WitTypeNode::TupleType(types) => Value::Variant {
+                case_idx: 4,
+                case_value: Some(Box::new(types.into_value())),
+            },
+            WitTypeNode::ListType(elem) => Value::Variant {
+                case_idx: 5,
+                case_value: Some(Box::new(elem.into_value())),
+            },
+            WitTypeNode::OptionType(elem) => Value::Variant {
+                case_idx: 6,
+                case_value: Some(Box::new(elem.into_value())),
+            },
+            WitTypeNode::ResultType((ok, err)) => Value::Variant {
+                case_idx: 7,
+                case_value: Some(Box::new((ok, err).into_value())),
+            },
+            WitTypeNode::PrimU8Type => Value::Variant {
+                case_idx: 8,
+                case_value: None,
+            },
+            WitTypeNode::PrimU16Type => Value::Variant {
+                case_idx: 9,
+                case_value: None,
+            },
+            WitTypeNode::PrimU32Type => Value::Variant {
+                case_idx: 10,
+                case_value: None,
+            },
+            WitTypeNode::PrimU64Type => Value::Variant {
+                case_idx: 11,
+                case_value: None,
+            },
+            WitTypeNode::PrimS8Type => Value::Variant {
+                case_idx: 12,
+                case_value: None,
+            },
+            WitTypeNode::PrimS16Type => Value::Variant {
+                case_idx: 13,
+                case_value: None,
+            },
+            WitTypeNode::PrimS32Type => Value::Variant {
+                case_idx: 14,
+                case_value: None,
+            },
+            WitTypeNode::PrimS64Type => Value::Variant {
+                case_idx: 15,
+                case_value: None,
+            },
+            WitTypeNode::PrimF32Type => Value::Variant {
+                case_idx: 16,
+                case_value: None,
+            },
+            WitTypeNode::PrimF64Type => Value::Variant {
+                case_idx: 17,
+                case_value: None,
+            },
+            WitTypeNode::PrimCharType => Value::Variant {
+                case_idx: 18,
+                case_value: None,
+            },
+            WitTypeNode::PrimBoolType => Value::Variant {
+                case_idx: 19,
+                case_value: None,
+            },
+            WitTypeNode::PrimStringType => Value::Variant {
+                case_idx: 20,
+                case_value: None,
+            },
+            WitTypeNode::HandleType(handle) => Value::Variant {
+                case_idx: 17,
+                case_value: Some(Box::new(handle.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            case("record-type", list(tuple(vec![str(), u32()]))),
+            case("variant-type", list(tuple(vec![str(), option(u32())]))),
+            case("enum-type", list(str())),
+            case("flags-type", list(str())),
+            case("tuple-type", list(u32())),
+            case("list-type", u32()),
+            case("option-type", u32()),
+            case("result-type", tuple(vec![option(u32()), option(u32())])),
+            unit_case("prim-u8-type"),
+            unit_case("prim-u16-type"),
+            unit_case("prim-u32-type"),
+            unit_case("prim-u64-type"),
+            unit_case("prim-s8-type"),
+            unit_case("prim-s16-type"),
+            unit_case("prim-s32-type"),
+            unit_case("prim-s64-type"),
+            unit_case("prim-f32-type"),
+            unit_case("prim-f64-type"),
+            unit_case("prim-char-type"),
+            unit_case("prim-bool-type"),
+            unit_case("prim-string-type"),
+            case(
+                "handle-type",
+                tuple(vec![analysed_type::u64(), ResourceMode::get_type()]),
+            ),
+        ])
+    }
+}
+
 impl IntoValue for Instant {
     fn into_value(self) -> Value {
         Value::U64(self.elapsed().as_nanos() as u64)
@@ -637,6 +767,20 @@ impl IntoValue for Duration {
 
     fn get_type() -> AnalysedType {
         analysed_type::u64()
+    }
+}
+
+#[cfg(feature = "host-bindings")]
+impl IntoValue for crate::ResourceMode {
+    fn into_value(self) -> Value {
+        match self {
+            ResourceMode::Owned => Value::Enum(0),
+            ResourceMode::Borrowed => Value::Enum(1),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::r#enum(&["owned", "borrowed"])
     }
 }
 
@@ -672,6 +816,46 @@ impl IntoValue for crate::RpcError {
             case("not-found", analysed_type::str()),
             case("remote-internal-error", analysed_type::str()),
         ])
+    }
+}
+
+#[cfg(feature = "host-bindings")]
+impl IntoValue for ValueAndType {
+    fn into_value(self) -> Value {
+        let wit_value: WitValue = self.value.into();
+        let wit_type: WitType = self.typ.into();
+        Value::Record(vec![wit_value.into_value(), wit_type.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("value", WitValue::get_type()),
+            analysed_type::field("type", WitType::get_type()),
+        ])
+    }
+}
+
+#[cfg(feature = "host-bindings")]
+impl IntoValue for Value {
+    fn into_value(self) -> Value {
+        let wit_value: WitValue = self.into();
+        wit_value.into_value()
+    }
+
+    fn get_type() -> AnalysedType {
+        WitValue::get_type()
+    }
+}
+
+#[cfg(feature = "host-bindings")]
+impl IntoValue for AnalysedType {
+    fn into_value(self) -> Value {
+        let wit_type: WitType = self.into();
+        wit_type.into_value()
+    }
+
+    fn get_type() -> AnalysedType {
+        WitType::get_type()
     }
 }
 
