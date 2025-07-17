@@ -20,12 +20,16 @@ use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, Copy, std::hash::Hash, PartialEq, Eq, Debug)]
 pub struct Hash {
-    pub hash: blake3::Hash,
+    hash: blake3::Hash,
 }
 
 impl Hash {
     pub fn new(hash: blake3::Hash) -> Self {
         Self { hash }
+    }
+
+    pub fn as_blake3_hash(&self) -> &blake3::Hash {
+        &self.hash
     }
 
     pub fn into_blake3(self) -> blake3::Hash {
@@ -72,11 +76,15 @@ pub enum HashOf<V> {
 }
 
 impl<V> HashOf<V> {
-    fn from_hash(hash: Hash) -> Self {
+    pub fn from_hash(hash: Hash) -> Self {
         Self::Precalculated(hash)
     }
 
-    fn form_value(value: V) -> Self {
+    pub fn from_blake3_hash(hash: blake3::Hash) -> Self {
+        Self::Precalculated(hash.into())
+    }
+
+    pub fn form_value(value: V) -> Self {
         Self::FromValue {
             value,
             lazy_hash: OnceLock::new(),
@@ -108,6 +116,12 @@ impl<V: Hashable> From<V> for HashOf<V> {
 impl<V: Hashable> From<Hash> for HashOf<V> {
     fn from(value: Hash) -> Self {
         Self::from_hash(value)
+    }
+}
+
+impl<V: Hashable> From<blake3::Hash> for HashOf<V> {
+    fn from(value: blake3::Hash) -> Self {
+        Self::from_hash(value.into())
     }
 }
 

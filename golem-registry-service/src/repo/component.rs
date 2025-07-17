@@ -195,6 +195,8 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             return Ok(None);
         };
 
+        // TODO: if env requires check version name uniqueness (but comparing only to deployed ones!)
+
         let result: repo::Result<ComponentRevisionRecord> = self
             .with_tx("update", |tx| {
                 async move {

@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::repo::model::audit::RevisionAuditFields;
+use crate::repo::model::component::ComponentStatus;
 use crate::repo::model::hash::SqlBlake3Hash;
+use sqlx::FromRow;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -47,4 +49,12 @@ pub struct DeploymentRevisionRecord {
     pub hash: SqlBlake3Hash,
     #[sqlx(flatten)]
     pub audit: RevisionAuditFields,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ComponentRevisionForDeploymentRecord {
+    pub component_id: Uuid,
+    pub name: String,
+    pub status: ComponentStatus,
+    pub hash: Option<SqlBlake3Hash>,
 }

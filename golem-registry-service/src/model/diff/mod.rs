@@ -14,15 +14,15 @@
 
 // TODO: move to golem-common (or some other common place)
 
-use crate::model::diff::hash::Hashable;
-use serde::{Serialize, Serializer};
-use std::any::Any;
-use std::fmt::Display;
+mod component;
+mod deployment;
+mod hash;
+mod ser;
 
-pub mod component;
-pub mod deployment;
-pub mod hash;
-pub mod ser;
+pub use component::*;
+pub use deployment::*;
+pub use hash::*;
+pub use ser::*;
 
 #[cfg(test)]
 mod test {

@@ -17,6 +17,7 @@ use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashabl
 use crate::model::diff::ser::serialize_with_mode;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -334,11 +334,14 @@ CREATE TABLE deployment_revisions
     created_at     TIMESTAMP NOT NULL,
     created_by     UUID      NOT NULL,
 
-    CONSTRAINT deployments_revisions_pk
+    CONSTRAINT deployment_revisions_pk
         PRIMARY KEY (environment_id, revision_id),
-    CONSTRAINT deployments_revisions_environments_fk
+    CONSTRAINT deployment_revisions_environments_fk
         FOREIGN KEY (environment_id) REFERENCES environments
 );
+
+CREATE INDEX deployment_revisions_latest_idx
+    ON deployment_revisions (environment_id, revision_id DESC);
 
 CREATE TABLE current_deployment_revisions
 (
