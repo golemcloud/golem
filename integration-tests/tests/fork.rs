@@ -21,7 +21,7 @@ use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{IdempotencyKey, WorkerId, WorkerStatus};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm_rpc::{IntoValueAndType, Record, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -134,12 +134,12 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -307,12 +307,12 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1001".into_value_and_type()),
                 ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                 ("price", 999999.0f32.into_value_and_type()),
                 ("quantity", 1u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -321,12 +321,12 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -364,12 +364,12 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .invoke_and_await(
             &target_worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
