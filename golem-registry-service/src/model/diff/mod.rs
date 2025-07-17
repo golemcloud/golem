@@ -1,0 +1,136 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// TODO: move to golem-common (or some other common place)
+
+mod component;
+mod deployment;
+mod hash;
+mod ser;
+
+pub use component::*;
+pub use deployment::*;
+pub use hash::*;
+pub use ser::*;
+
+#[cfg(test)]
+mod test {
+    use crate::model::diff::component::{Component, ComponentFile};
+    use crate::model::diff::deployment::Deployment;
+    use crate::model::diff::hash::Hashable;
+    use crate::model::diff::ser::{
+        to_json_with_mode, to_pretty_json_with_mode, to_yaml_with_mode, SerializeMode,
+        ToSerializableWithModeExt,
+    };
+    use golem_common::model::{ComponentFilePermissions, ComponentType};
+    use std::collections::BTreeMap;
+    use test_r::test;
+
+    // TODO: proper test
+    #[test]
+    fn test() {
+        fn new_component(name: &str) -> Component {
+            Component {
+                binary_hash: blake3::hash(name.as_bytes()).into(),
+                version: Some("1.0.0".to_string()),
+                component_type: ComponentType::Durable,
+                env: BTreeMap::from([
+                    ("LOL".to_string(), "LOL".to_string()),
+                    ("X".to_string(), "Y".to_string()),
+                ]),
+                dynamic_linking_wasm_rpc: Default::default(),
+                files: BTreeMap::from([
+                    (
+                        "lol".to_string(),
+                        ComponentFile {
+                            hash: blake3::hash("xycyxc".as_bytes()).into(),
+                            permissions: ComponentFilePermissions::ReadOnly,
+                        }
+                        .into(),
+                    ),
+                    (
+                        "lol-2".to_string(),
+                        ComponentFile {
+                            hash: blake3::hash("xycyxc-sdsd".as_bytes()).into(),
+                            permissions: ComponentFilePermissions::ReadOnly,
+                        }
+                        .into(),
+                    ),
+                ]),
+            }
+        }
+
+        let deployment = Deployment {
+            components: BTreeMap::from([
+                ("comp1".to_string(), new_component("comp1").into()),
+                ("comp2".to_string(), new_component("comp2").into()),
+            ]),
+        };
+
+        println!("{}", deployment.hash());
+
+        println!(
+            "{}",
+            to_json_with_mode(&deployment, SerializeMode::HashOnly).unwrap()
+        );
+        println!(
+            "{}",
+            to_yaml_with_mode(&deployment, SerializeMode::HashOnly).unwrap()
+        );
+
+        println!(
+            "{}",
+            to_pretty_json_with_mode(&deployment, SerializeMode::ValueIfAvailable).unwrap()
+        );
+        println!(
+            "{}",
+            to_yaml_with_mode(&deployment, SerializeMode::ValueIfAvailable).unwrap()
+        );
+
+        for component in deployment.components.values() {
+            println!("----");
+            println!("{}", component.hash());
+            println!(
+                "{}",
+                component
+                    .to_json_with_mode(SerializeMode::HashOnly)
+                    .unwrap()
+            );
+            println!(
+                "{}",
+                component
+                    .to_pretty_json_with_mode(SerializeMode::HashOnly)
+                    .unwrap()
+            );
+            println!(
+                "{}",
+                component
+                    .to_yaml_with_mode(SerializeMode::HashOnly)
+                    .unwrap()
+            );
+            println!(
+                "{}",
+                component
+                    .to_pretty_json_with_mode(SerializeMode::ValueIfAvailable)
+                    .unwrap()
+            );
+            println!(
+                "{}",
+                component
+                    .to_yaml_with_mode(SerializeMode::ValueIfAvailable)
+                    .unwrap()
+            );
+        }
+    }
+}
