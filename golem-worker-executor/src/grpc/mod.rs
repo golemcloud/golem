@@ -1422,13 +1422,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 ),
             },
-            ListDirectoryResult::NotADirectory => ListDirectoryResponse {
-                result: Some(
-                    golem::workerexecutor::v1::list_directory_response::Result::NotADirectory(
-                        golem::common::Empty {},
-                    ),
-                ),
-            },
             ListDirectoryResult::File(file_node) => ListDirectoryResponse {
                 result: Some(
                     golem::workerexecutor::v1::list_directory_response::Result::Success(

@@ -2052,10 +2052,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
             return Ok(ListDirectoryResult::File(file_node));
         }
 
-        if !metadata.is_dir() {
-            return Ok(ListDirectoryResult::NotADirectory);
-        }
-
         let mut entries = tokio::fs::read_dir(target).await.map_err(|e| {
             WorkerExecutorError::FileSystemError {
                 path: path.to_string(),

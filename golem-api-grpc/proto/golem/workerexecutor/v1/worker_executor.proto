@@ -400,7 +400,6 @@ message ListDirectoryResponse {
   oneof result {
     ListDirectorySuccessResponse success = 1;
     golem.common.Empty not_found = 2;
-    golem.common.Empty not_a_directory = 3;
     golem.worker.v1.WorkerExecutionError failure = 4;
   }
 }

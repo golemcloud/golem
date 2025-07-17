@@ -1308,9 +1308,6 @@ impl WorkerService for WorkerServiceDefault {
                     result: Some(workerexecutor::v1::list_directory_response::Result::NotFound(_)),
                 } => Err(WorkerServiceError::FileNotFound(path.clone()).into()),
                 workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(workerexecutor::v1::list_directory_response::Result::NotADirectory(_)),
-                } => Err(WorkerServiceError::BadFileType(path.clone()).into()),
-                workerexecutor::v1::ListDirectoryResponse {
                     result: None
                 } => Err("Empty response".into()),
             },
