@@ -868,7 +868,7 @@ async fn create_openapi_json_definition(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn test_export_openapi_spec_simple(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let project = admin.default_project().await;
 
     let component_id = admin.component("counters").unique().store().await;
@@ -976,7 +976,7 @@ async fn test_export_openapi_spec_simple(deps: &EnvBasedTestDependencies) {
 #[tracing::instrument]
 // This is the full round trip test for API definition: API -> OpenAPI -> API
 async fn test_roundtrip_api_definition(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let project = admin.default_project().await;
 
     let component_id = admin.component("counters").unique().store().await;
