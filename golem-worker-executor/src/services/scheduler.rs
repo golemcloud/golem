@@ -82,7 +82,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let worker = self
-            .get_or_create_suspended(created_by, owned_worker_id, None, None, None, None)
+            .get_or_create_suspended(created_by, owned_worker_id, None, None, None, None, None)
             .await?;
         Ok(worker.oplog())
     }
@@ -97,7 +97,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         invocation_context: InvocationContextStack,
     ) -> Result<(), WorkerExecutorError> {
         let worker = self
-            .get_or_create_suspended(created_by, owned_worker_id, None, None, None, None)
+            .get_or_create_suspended(created_by, owned_worker_id, None, None, None, None, None)
             .await?;
 
         worker

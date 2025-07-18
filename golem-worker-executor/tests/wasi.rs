@@ -203,7 +203,13 @@ async fn file_write_read_delete(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "file-write-read-delete-1", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "file-write-read-delete-1",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let result = executor
@@ -259,7 +265,13 @@ async fn initial_file_read_write(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "initial-file-read-write-1", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "initial-file-read-write-1",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let result = executor
@@ -322,7 +334,13 @@ async fn initial_file_listing_through_api(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "initial-file-read-write-2", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "initial-file-read-write-2",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let result = executor.list_directory(&worker_id, "/").await;
@@ -403,7 +421,13 @@ async fn initial_file_reading_through_api(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "initial-file-read-write-3", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "initial-file-read-write-3",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     // run the worker so it can update the files.
@@ -949,7 +973,7 @@ async fn environment_service(
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "environment-service-1", args, env)
+        .start_worker_with(&component_id, "environment-service-1", args, env, vec![])
         .await;
 
     let args_result = executor
@@ -1035,7 +1059,7 @@ async fn http_client_response_persisted_between_invocations(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-2", vec![], env)
+        .start_worker_with(&component_id, "http-client-2", vec![], env, vec![])
         .await;
     let rx = executor.capture_output(&worker_id).await;
 
@@ -1122,7 +1146,7 @@ async fn http_client_interrupting_response_stream(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-2", vec![], env)
+        .start_worker_with(&component_id, "http-client-2", vec![], env, vec![])
         .await;
     let rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -1231,7 +1255,7 @@ async fn http_client_interrupting_response_stream_async(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-2-async", vec![], env)
+        .start_worker_with(&component_id, "http-client-2-async", vec![], env, vec![])
         .await;
     let rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -2578,4 +2602,92 @@ async fn wasi_incoming_request_handler_state(
                 ]))))
             ])
     );
+}
+
+#[test]
+#[tracing::instrument]
+async fn wasi_config_initial_worker_config(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let component_id = executor.component("golem_it_wasi_config").store().await;
+
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "worker-1",
+            Vec::new(),
+            HashMap::new(),
+            vec![
+                ("k1".to_string(), "v1".to_string()),
+                ("k2".to_string(), "v2".to_string()),
+            ],
+        )
+        .await;
+
+    {
+        // get existing key
+
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get}",
+                vec!["k1".into_value_and_type()],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            vec![Value::Option(Some(Box::new(Value::String(
+                "v1".to_string()
+            ))))]
+        )
+    }
+
+    {
+        // get non-existent key
+
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get}",
+                vec!["k3".into_value_and_type()],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, vec![Value::Option(None)])
+    }
+
+    {
+        // get all keys
+
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get-all}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            vec![Value::List(vec![
+                Value::Tuple(vec![
+                    Value::String("k1".to_string()),
+                    Value::String("v1".to_string())
+                ]),
+                Value::Tuple(vec![
+                    Value::String("k2".to_string()),
+                    Value::String("v2".to_string())
+                ])
+            ])]
+        )
+    }
 }

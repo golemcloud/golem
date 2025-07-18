@@ -142,6 +142,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .ok_or("Missing project_id field")?
                     .try_into()?,
                 created_by: create.created_by.ok_or("Missing created_by field")?.into(),
+                wasi_config_vars: create
+                    .wasi_config_vars
+                    .ok_or("Missing wasi_config_vars field")?
+                    .into(),
                 parent: match create.parent {
                     Some(parent) => Some(parent.try_into()?),
                     None => None,
@@ -501,6 +505,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         env: create.env.into_iter().collect(),
                         created_by: Some(create.created_by.into()),
                         project_id: Some(create.project_id.into()),
+                        wasi_config_vars: Some(create.wasi_config_vars.into()),
                         parent: create.parent.map(Into::into),
                         component_size: create.component_size,
                         initial_total_linear_memory_size: create.initial_total_linear_memory_size,

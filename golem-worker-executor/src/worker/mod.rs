@@ -16,7 +16,7 @@ pub mod invocation;
 mod invocation_loop;
 pub mod status;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -122,6 +122,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -135,6 +136,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 account_id,
                 worker_args,
                 worker_env,
+                worker_wasi_config_vars,
                 component_version,
                 parent,
             )
@@ -148,6 +150,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -160,6 +163,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owned_worker_id,
             worker_args,
             worker_env,
+            worker_wasi_config_vars,
             component_version,
             parent,
         )
@@ -197,6 +201,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -207,6 +212,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_version,
             worker_args,
             worker_env,
+            worker_config,
             parent,
         )
         .await?;
@@ -1278,6 +1284,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_version: Option<ComponentVersion>,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         parent: Option<WorkerId>,
     ) -> Result<(WorkerMetadata, Arc<std::sync::RwLock<ExecutionStatus>>), WorkerExecutorError>
     {
@@ -1301,6 +1308,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     worker_id: owned_worker_id.worker_id(),
                     args: worker_args.unwrap_or_default(),
                     env: worker_env,
+                    wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
                     project_id: owned_worker_id.project_id(),
                     created_by: account_id.clone(),
                     created_at: Timestamp::now_utc(),
@@ -1680,6 +1688,7 @@ impl RunningWorker {
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
                 parent.initial_worker_metadata.created_by.clone(),
+                worker_metadata.wasi_config_vars,
             ),
             parent.execution_status.clone(),
             parent.file_loader(),

@@ -7,6 +7,7 @@ import "golem/common/project_id.proto";
 import "golem/common/plugin_installation_id.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";
+import "golem/worker/wasi_config_vars.proto";
 import "google/protobuf/timestamp.proto";
 
 message WorkerMetadata {
@@ -28,6 +29,7 @@ message WorkerMetadata {
   repeated OplogRegion skipped_regions = 16;
   repeated OplogRegion deleted_regions = 17;
   golem.common.ProjectId project_id = 18;
+  WasiConfigVars wasi_config_vars = 19;
 }
 
 message UpdateRecord {
