@@ -55,7 +55,7 @@ impl DockerPostgresRdb {
         .await
         .expect("Failed to start Postgres container");
 
-//        let private_host = get_docker_container_name(unique_network_id, container.id()).await;
+        //        let private_host = get_docker_container_name(unique_network_id, container.id()).await;
 
         let public_port = container
             .get_host_port_ipv4(port)

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::ReplBootstrapError;
-use colored::{Colorize};
+use colored::Colorize;
 use golem_wasm_ast::analysis::analysed_type::{record, str, u64};
 use golem_wasm_ast::analysis::{AnalysedResourceMode, AnalysedType, NameTypePair, TypeHandle};
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -467,50 +467,23 @@ impl Display for Indent {
     }
 }
 
-
 // To intercept any presence of resource handle and therefore inspecting each element
 // instead of value_and_type.to_string()
 fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
     match &value_and_type.value {
-        Value::Bool(_) => {
-            value_and_type.to_string()
-        }
-        Value::U8(_) => {
-            value_and_type.to_string()
-        }
-        Value::U16(_) => {
-            value_and_type.to_string()
-        }
-        Value::U32(_) => {
-            value_and_type.to_string()
-        }
-        Value::U64(_) => {
-            value_and_type.to_string()
-        }
-        Value::S8(_) => {
-            value_and_type.to_string()
-        }
-        Value::S16(_) => {
-            value_and_type.to_string()
-        }
-        Value::S32(_) => {
-            value_and_type.to_string()
-        }
-        Value::S64(_) => {
-            value_and_type.to_string()
-        }
-        Value::F32(_) => {
-            value_and_type.to_string()
-        }
-        Value::F64(_) => {
-            value_and_type.to_string()
-        }
-        Value::Char(_) => {
-            value_and_type.to_string()
-        }
-        Value::String(_) => {
-            value_and_type.to_string()
-        }
+        Value::Bool(_) => value_and_type.to_string(),
+        Value::U8(_) => value_and_type.to_string(),
+        Value::U16(_) => value_and_type.to_string(),
+        Value::U32(_) => value_and_type.to_string(),
+        Value::U64(_) => value_and_type.to_string(),
+        Value::S8(_) => value_and_type.to_string(),
+        Value::S16(_) => value_and_type.to_string(),
+        Value::S32(_) => value_and_type.to_string(),
+        Value::S64(_) => value_and_type.to_string(),
+        Value::F32(_) => value_and_type.to_string(),
+        Value::F64(_) => value_and_type.to_string(),
+        Value::Char(_) => value_and_type.to_string(),
+        Value::String(_) => value_and_type.to_string(),
         Value::List(values) => {
             let inner_type = match &value_and_type.typ {
                 AnalysedType::List(inner_type) => inner_type.inner.as_ref(),
@@ -561,26 +534,38 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
                 if i > 0 {
                     string.push_str(", ");
                 }
-                let inner_value_and_type = ValueAndType::new(value.clone(), inner_types[i].typ.clone());
+                let inner_value_and_type =
+                    ValueAndType::new(value.clone(), inner_types[i].typ.clone());
                 let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
-                string.push_str(&format!("{}: {}", inner_types[i].name, inner_value_and_type));
+                string.push_str(&format!(
+                    "{}: {}",
+                    inner_types[i].name, inner_value_and_type
+                ));
             }
             string.push('}');
 
             string
         }
-        Value::Variant { case_idx, case_value } => {
+        Value::Variant {
+            case_idx,
+            case_value,
+        } => {
             let variant_type = match &value_and_type.typ {
                 AnalysedType::Variant(variant_type) => variant_type,
                 _ => panic!("Expected a variant type"),
             };
 
-            let case_name = variant_type.cases.get(*case_idx as usize)
+            let case_name = variant_type
+                .cases
+                .get(*case_idx as usize)
                 .map_or("unknown", |c| &c.name);
 
             match case_value {
                 Some(value) => {
-                    let inner_value_and_type = ValueAndType::new(value.as_ref().clone(), variant_type.cases[*case_idx as usize].clone().typ.unwrap());
+                    let inner_value_and_type = ValueAndType::new(
+                        value.as_ref().clone(),
+                        variant_type.cases[*case_idx as usize].clone().typ.unwrap(),
+                    );
 
                     let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
                     format!("{}({})", case_name, inner_value_and_type)
@@ -591,8 +576,6 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
                     format!("{}", case_name)
                 }
             }
-
-
         }
         Value::Enum(case_index) => {
             let enum_type = match &value_and_type.typ {
@@ -600,9 +583,12 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
                 _ => panic!("Expected an enum type"),
             };
 
-            let case_name = enum_type.cases.get(*case_index as usize).unwrap_or_else(|| {
-                panic!("Enum case index out of bounds: {}", case_index);
-            });
+            let case_name = enum_type
+                .cases
+                .get(*case_index as usize)
+                .unwrap_or_else(|| {
+                    panic!("Enum case index out of bounds: {}", case_index);
+                });
             format!("{}", case_name)
         }
         Value::Flags(bool_list) => {
@@ -616,7 +602,7 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
                 if i > 0 {
                     string.push_str(", ");
                 }
-                let flag_name =  flags_type.names.get(i).unwrap_or_else(|| {
+                let flag_name = flags_type.names.get(i).unwrap_or_else(|| {
                     panic!("Flags index out of bounds: {}", i);
                 });
 
@@ -636,7 +622,8 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
 
             match option {
                 Some(value) => {
-                    let inner_value_and_type = ValueAndType::new(value.as_ref().clone(), inner_type.clone());
+                    let inner_value_and_type =
+                        ValueAndType::new(value.as_ref().clone(), inner_type.clone());
                     let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
                     format!("some({})", inner_value_and_type)
                 }
@@ -658,23 +645,26 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
 
             match x {
                 Ok(Some(value)) => {
-                    let inner_value_and_type = ValueAndType::new(value.as_ref().clone(), ok_inner_type.unwrap().as_ref().clone());
+                    let inner_value_and_type = ValueAndType::new(
+                        value.as_ref().clone(),
+                        ok_inner_type.unwrap().as_ref().clone(),
+                    );
                     let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
                     format!("ok({})", inner_value_and_type)
                 }
                 Ok(None) => "ok".to_string(),
                 Err(Some(value)) => {
-                    let inner_value_and_type = ValueAndType::new(value.as_ref().clone(), err_inner_type.unwrap().as_ref().clone());
+                    let inner_value_and_type = ValueAndType::new(
+                        value.as_ref().clone(),
+                        err_inner_type.unwrap().as_ref().clone(),
+                    );
                     let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
                     format!("err({})", inner_value_and_type)
                 }
                 Err(None) => "err".to_string(),
             }
         }
-        Value::Handle { uri, resource_id } => {
-            display_for_resource_handle(uri, resource_id)
-
-        }
+        Value::Handle { uri, resource_id } => display_for_resource_handle(uri, resource_id),
     }
 }
 

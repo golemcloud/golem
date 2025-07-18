@@ -66,7 +66,10 @@ async fn test_rib_repl_with_resource_without_param(deps: &EnvBasedTestDependenci
     test_repl_invoking_resource_methods(deps, None).await;
 }
 
-async fn test_repl_invoking_agentic_functions(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
+async fn test_repl_invoking_agentic_functions(
+    deps: &EnvBasedTestDependencies,
+    worker_name: Option<&str>,
+) {
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
         dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
@@ -74,16 +77,17 @@ async fn test_repl_invoking_agentic_functions(deps: &EnvBasedTestDependencies, w
         printer: None,
         component_source: Some(ComponentSource {
             component_name: "multi_agent_rpc_wrapper".to_string(),
-            source_path: deps.component_directory().join("multi_agent_rpc_wrapper.wasm"),
+            source_path: deps
+                .component_directory()
+                .join("multi_agent_rpc_wrapper.wasm"),
         }),
         prompt: None,
         command_registry: None,
     })
-        .await
-        .expect("Failed to bootstrap REPL");
+    .await
+    .expect("Failed to bootstrap REPL");
 
-    let rib1 =
-        r#"let x = instance()"#.to_string();
+    let rib1 = r#"let x = instance()"#.to_string();
 
     let rib2 = r#"
        let r = x.assistant-agent()
@@ -92,7 +96,6 @@ async fn test_repl_invoking_agentic_functions(deps: &EnvBasedTestDependencies, w
     let rib3 = r#"
       r.ask("foo")
      "#;
-
 
     let result = rib_repl
         .execute(&rib1)

@@ -97,6 +97,11 @@ pub trait ComponentService: Send + Sync {
         component_reference: String,
         resolving_component: ComponentOwner,
     ) -> Result<Option<ComponentId>, WorkerExecutorError>;
+
+    async fn get_all(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<ComponentId, WorkerExecutorError>;
 }
 
 pub fn configured(
@@ -486,6 +491,12 @@ mod filesystem {
                 .get(&component_reference)
                 .cloned())
         }
+
+        async fn get_all(&self, _account_id: &AccountId) -> Result<ComponentId, WorkerExecutorError> {
+            Err( WorkerExecutorError::Unknown {
+                details: "get_all is not implemented for local file system component service".to_string(),
+            })
+        }
     }
 
     struct ComponentMetadataIndex {
@@ -516,11 +527,7 @@ mod grpc {
     use async_trait::async_trait;
     use futures_util::TryStreamExt;
     use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-    use golem_api_grpc::proto::golem::component::v1::{
-        download_component_response, get_component_metadata_response, ComponentError,
-        DownloadComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
-        GetVersionedComponentRequest,
-    };
+    use golem_api_grpc::proto::golem::component::v1::{download_component_response, get_component_metadata_response, get_components_response, ComponentError, DownloadComponentRequest, GetComponentsRequest, GetLatestComponentRequest, GetVersionedComponentRequest};
     use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::client::{GrpcClient, GrpcClientConfig};
@@ -829,7 +836,7 @@ mod grpc {
                                     &component_id_clone,
                                     component_version,
                                 )
-                                .await?;
+                                    .await?;
 
                                 let start = Instant::now();
                                 let component_id_clone2 = component_id_clone.clone();
@@ -842,10 +849,10 @@ mod grpc {
                                         }
                                     })
                                 })
-                                .await
-                                .map_err(|join_err| {
-                                    WorkerExecutorError::unknown(join_err.to_string())
-                                })??;
+                                    .await
+                                    .map_err(|join_err| {
+                                        WorkerExecutorError::unknown(join_err.to_string())
+                                    })??;
                                 let end = Instant::now();
 
                                 let compilation_time = end.duration_since(start);
@@ -911,7 +918,7 @@ mod grpc {
                                         &component_id,
                                         forced_version,
                                     )
-                                    .await?;
+                                        .await?;
                                     for installation in &metadata.plugin_installations {
                                         plugin_observations
                                             .observe_plugin_installation(
@@ -936,7 +943,7 @@ mod grpc {
                         component_id,
                         None,
                     )
-                    .await?;
+                        .await?;
 
                     let metadata = self
                         .component_metadata_cache
@@ -988,6 +995,54 @@ mod grpc {
                     Box::pin(self.resolve_component_remotely(&project_id, &component_name))
                 })
                 .await
+        }
+
+        async fn get_all(&self, account_id: &AccountId) -> Result<ComponentId, WorkerExecutorError> {
+            let client = self.component_client.clone();
+            let access_token = self.access_token;
+            let retry_config = self.retry_config.clone();
+            let account_id_clone = account_id.clone();
+
+            with_retries("components", "get_all", Some(account_id.to_string()), &retry_config, &(&client, account_id_clone, access_token), |(client, account_id, access_token)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get_all_components", move |client| {
+                            let request = authorised_grpc_request(
+                                GetComponentsRequest {
+                                    project_id: None,
+                                    component_name: Some("weather_agent".to_string()),
+                                },
+                                access_token,
+                            );
+                            Box::pin(client.get_components(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err(GrpcError::Unexpected(
+                            "Empty response from get_all_components".to_string(),
+                        )),
+                        Some(get_components_response::Result::Success(payload)) => {
+                            let component_id = payload.components[0].versioned_component_id.unwrap().component_id.unwrap();
+
+                            let component_id = ComponentId::try_from(component_id)
+                                .expect("failed to convert component id");
+
+                            Ok(component_id)
+                        }
+
+                        _ => Err(GrpcError::Unexpected(
+                            "Empty response from get_all_components".to_string(),
+                        )),
+                    }
+                })
+            },  is_grpc_retriable::<ComponentError>,)        .await
+                .map_err(|error| {
+                    WorkerExecutorError::unknown(format!(
+                        "Failed to get all components: {error}"
+                    ))
+                })
         }
     }
 

@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
+use crate::preview2::golem::agent::common::{AgentConstructor, AgentType, DataSchema, Structured};
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
     ForkResult, GetWorkers, Host, HostGetWorkers, WorkerAnyFilter,
@@ -43,6 +45,7 @@ use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
+use golem_common::model::component::ComponentOwner;
 
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -101,9 +104,9 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn discover_agent_definitions(
+    async fn discover_agent_types(
         &mut self,
-    ) -> anyhow::Result<Vec<crate::preview2::golem_api_1_x::host::AgentDefinition>> {
+    ) -> anyhow::Result<Vec<crate::preview2::golem_api_1_x::host::AgentType>> {
         Ok(vec![])
     }
     async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
@@ -782,6 +785,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             durability.replay(self).await
         }
+    }
+
+    async fn get_agent_component(&mut self, agent_type: String) ->anyhow::Result<Option<golem_api_1_x::host::ComponentId>> {
+        self.observe_function_call("golem::api", "get_agent_component");
+
+
+        let account_id = self.owned_worker_id.account_id();
+
+        let _ = agent_type;
+
+        // NOTE!!!! THis is just a sample implementation.
+        // Ideally, get_all and filter the component that has an agent_type == "agent_type"
+        // but currently get_all service simply returns the component-id that definitely iunclude the `agent_type` component.
+        // This work is not part of the prototype and hence sample implementation to prove things
+        let component_id = self.component_service().get_all(&account_id)
+            .await?;
+
+        Ok(Some(component_id.into()))
+
     }
 }
 

@@ -1,0 +1,85 @@
+package golem:agent;
+
+interface common {
+    use golem:rpc/types@0.2.1.{wit-type};
+
+    record agent-type {
+        type-name:  string,
+        description: string,
+        agent-constructor: agent-constructor,
+        methods:     list<agent-method>,
+        requires:    list<agent-dependency>,
+    }
+
+    record agent-constructor {
+        name:          option<string>,
+        description:   string,
+        prompt-hint:   option<string>,
+        input-schema:  data-schema,
+    }
+
+    record agent-dependency {
+        agent-name:   string,
+        methods:      list<agent-method>,
+    }
+
+    record agent-method {
+        name:          string,
+        description:   string,
+        prompt-hint:   option<string>,
+        input-schema:  data-schema,
+        output-schema: data-schema,
+    }
+
+    variant data-schema {
+        structured(structured),
+        multimodal(multimodal),
+    }
+
+    record structured {
+        parameters: list<parameter-type>,
+    }
+
+    variant parameter-type {
+        wit(wit-type),
+        text(text-type),
+    }
+
+    record multimodal {
+        text:   option<list<text-type>>,
+    }
+
+    variant data-value {
+        text(string),
+        structured(list<parameter-value>),
+    }
+
+    variant parameter-value {
+        text(string),
+    }
+
+    record text-type {
+        language-code: string,
+    }
+
+
+    record progress-report {
+        description: string,
+        counter:     option<progress-counter>,
+    }
+
+    record progress-counter {
+        steps: u32,
+        total: u32,
+    }
+
+    variant status-update {
+        error(error),
+        progress(option<progress-report>),
+        emit(string),
+    }
+
+    variant error {
+        network-error,
+    }
+}
