@@ -50,6 +50,8 @@ pub mod service {
 
     use bytes::Bytes;
 
+    use crate::model::text::fmt::format_stack;
+    use colored::Colorize;
     use golem_common::model::{PromiseId, WorkerId};
     use itertools::Itertools;
     use reqwest::StatusCode;
@@ -289,10 +291,30 @@ pub mod service {
                     status_code: 409,
                     message: error.error,
                 },
-                golem_client::api::WorkerError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
+                golem_client::api::WorkerError::Error500(error) => {
+                    let message = match error.worker_error {
+                        Some(worker_error) => {
+                            let error_logs = if !worker_error.stderr.is_empty() {
+                                format!("\n\nStderr:\n{}", worker_error.stderr.yellow())
+                            } else {
+                                "".to_string()
+                            };
+
+                            format!(
+                                "{}:\n{}{}",
+                                error.error,
+                                format_stack(&worker_error.cause),
+                                error_logs
+                            )
+                        }
+                        _ => error.error,
+                    };
+
+                    ServiceErrorResponse {
+                        status_code: 500,
+                        message,
+                    }
+                }
             }
         }
     }
