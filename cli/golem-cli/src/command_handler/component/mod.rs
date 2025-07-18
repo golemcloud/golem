@@ -30,6 +30,7 @@ use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::log::{
     log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
 };
+use crate::model::agent::AgentType;
 use crate::model::app::{
     AppComponentName, ApplicationComponentSelectMode, BuildProfileName, DynamicHelpSections,
 };
@@ -743,6 +744,24 @@ impl ComponentCommandHandler {
                         files.archive_path.display()
                     )
                 })?)
+            } else {
+                None
+            }
+        };
+
+        // TODO: to be sent to component service
+        let _agent_types: Option<Vec<AgentType>> = {
+            let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+            let app_ctx = app_ctx.some_or_err_mut()?;
+            if app_ctx.wit.is_agent(component_name) {
+                let agent_types = app_ctx
+                    .wit
+                    .get_extracted_agent_types(component_name, &deploy_properties.linked_wasm_path)
+                    .await?;
+
+                debug!("Deploying agent type information for {component_name}: {agent_types:#?}");
+
+                Some(agent_types)
             } else {
                 None
             }

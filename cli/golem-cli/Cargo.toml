@@ -39,6 +39,7 @@ golem-rib = { workspace = true }
 golem-rib-repl = { workspace = true }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
+golem-wasm-rpc-derive = { workspace = true }
 golem-wit = { workspace = true }
 
 # External deps
@@ -48,6 +49,7 @@ async-trait = { workspace = true }
 async_zip = { workspace = true }
 auditable-serde = { version = "0.8.0" }
 base64 = { workspace = true }
+bincode = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
 camino = { workspace = true }
@@ -114,6 +116,8 @@ wax = { workspace = true }
 wasmparser = { workspace = true }
 wasm-encoder = { workspace = true }
 wasm-rquickjs = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
 wit-bindgen-rust = { workspace = true }
 wit-component = { workspace = true }
 wit-encoder = { workspace = true }

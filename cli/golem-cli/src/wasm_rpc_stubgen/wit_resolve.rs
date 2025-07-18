@@ -1,6 +1,7 @@
 use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
+use crate::model::agent::AgentType;
 use crate::model::app::{AppComponentName, Application, BuildProfileName};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
@@ -97,14 +98,14 @@ impl ResolvedWitDir {
                 .ok_or_else(|| anyhow!("Could not find world {world_name} in resolve"))?;
             for (export_name, export) in world.exports.iter() {
                 match export {
-                    wit_parser::WorldItem::Function(function) => {
+                    WorldItem::Function(function) => {
                         let world_name = self.resolve.worlds[*world_id].name.clone();
                         result.push(ExportedFunction::InlineFunction {
                             world_name,
                             function_name: function.name.clone(),
                         });
                     }
-                    wit_parser::WorldItem::Interface { id, .. } => {
+                    WorldItem::Interface { id, .. } => {
                         let iface = &self.resolve.interfaces[*id];
                         match export_name {
                             // inline interface
@@ -134,6 +135,10 @@ impl ResolvedWitDir {
         }
 
         Ok(result)
+    }
+
+    pub fn is_agent(&self) -> anyhow::Result<bool> {
+        crate::model::agent::extraction::is_agent(&self.resolve, &self.package_id, None)
     }
 }
 
@@ -277,12 +282,21 @@ impl ResolvedWitComponent {
     }
 }
 
+#[derive(Default)]
+enum ExtractedAgentTypes {
+    #[default]
+    NotAnAgent,
+    ToBeExtracted,
+    Extracted(Vec<AgentType>),
+}
+
 pub struct ResolvedWitApplication {
     components: BTreeMap<AppComponentName, ResolvedWitComponent>, // NOTE: BTree for making dep sorting deterministic
     package_to_component: HashMap<PackageName, AppComponentName>,
     stub_package_to_component: HashMap<PackageName, AppComponentName>,
     interface_package_to_component: HashMap<PackageName, AppComponentName>,
     component_order: Vec<AppComponentName>,
+    agent_types: BTreeMap<AppComponentName, ExtractedAgentTypes>,
 }
 
 impl ResolvedWitApplication {
@@ -299,6 +313,7 @@ impl ResolvedWitApplication {
             stub_package_to_component: Default::default(),
             interface_package_to_component: Default::default(),
             component_order: Default::default(),
+            agent_types: BTreeMap::new(),
         };
 
         let mut validation = ValidationBuilder::new();
@@ -308,8 +323,45 @@ impl ResolvedWitApplication {
         resolved_app.validate_package_names(&mut validation);
         resolved_app.collect_component_deps(app, &mut validation);
         resolved_app.sort_components_by_source_deps(&mut validation);
+        resolved_app.extract_agent_types(&mut validation);
 
         validation.build(resolved_app)
+    }
+
+    pub fn is_agent(&self, app_component_name: &AppComponentName) -> bool {
+        !matches!(
+            self.agent_types
+                .get(app_component_name)
+                .unwrap_or(&ExtractedAgentTypes::NotAnAgent),
+            ExtractedAgentTypes::NotAnAgent
+        )
+    }
+
+    pub async fn get_extracted_agent_types(
+        &mut self,
+        app_component_name: &AppComponentName,
+        compiled_wasm_path: &Path,
+    ) -> anyhow::Result<Vec<AgentType>> {
+        match self.agent_types.get(app_component_name) {
+            None => Err(anyhow!(
+                "No agent information available about component: {}",
+                app_component_name
+            )),
+            Some(ExtractedAgentTypes::NotAnAgent) => {
+                Err(anyhow!("Component {} is not an agent", app_component_name))
+            }
+            Some(ExtractedAgentTypes::ToBeExtracted) => {
+                let agent_types =
+                    crate::model::agent::extraction::extract_agent_types(compiled_wasm_path)
+                        .await?;
+                self.agent_types.insert(
+                    app_component_name.clone(),
+                    ExtractedAgentTypes::Extracted(agent_types.clone()),
+                );
+                Ok(agent_types)
+            }
+            Some(ExtractedAgentTypes::Extracted(agent_types)) => Ok(agent_types.clone()),
+        }
     }
 
     fn validate_package_names(&self, validation: &mut ValidationBuilder) {
@@ -663,6 +715,44 @@ impl ResolvedWitApplication {
                         .map(|s| s.as_str().log_color_error_highlight())
                         .join(", ")
                 ));
+            }
+        }
+    }
+
+    fn extract_agent_types(&mut self, validation: &mut ValidationBuilder) {
+        for (name, component) in &self.components {
+            if let Some(resolved_wit_dir) = &component.resolved_generated_wit_dir {
+                match resolved_wit_dir.is_agent() {
+                    Ok(true) => {
+                        log_action(
+                            "Extracting",
+                            format!(
+                                "agent types defined in {}",
+                                name.as_str().log_color_highlight()
+                            ),
+                        );
+                        self.agent_types
+                            .insert(name.clone(), ExtractedAgentTypes::ToBeExtracted);
+                    }
+                    Ok(false) => {
+                        log_action(
+                            "Skipping",
+                            format!(
+                                "extraction of agent types defined in {}, not an agent",
+                                name.as_str().log_color_highlight()
+                            ),
+                        );
+                        self.agent_types
+                            .insert(name.clone(), ExtractedAgentTypes::NotAnAgent);
+                    }
+                    Err(err) => {
+                        validation.add_error(format!(
+                            "Failed to check if component {} is an agent: {}",
+                            name.as_str().log_color_error_highlight(),
+                            err
+                        ));
+                    }
+                }
             }
         }
     }

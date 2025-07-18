@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod agent;
 pub mod api;
 pub mod app;
 pub mod app_raw;
@@ -445,7 +446,10 @@ pub struct WorkerMetadataView {
     pub worker_name: WorkerName,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
-    pub account_id: Option<AccountId>,
+    pub created_by: Option<AccountId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: golem_client::model::WorkerStatus,
@@ -475,7 +479,8 @@ impl From<WorkerMetadata> for WorkerMetadataView {
         WorkerMetadataView {
             component_name: value.component_name,
             worker_name: value.worker_id.worker_name.into(),
-            account_id: value.account_id,
+            created_by: value.created_by,
+            project_id: value.project_id,
             args: value.args,
             env: value.env,
             status: value.status,
@@ -496,7 +501,8 @@ impl From<WorkerMetadata> for WorkerMetadataView {
 pub struct WorkerMetadata {
     pub worker_id: golem_client::model::WorkerId,
     pub component_name: ComponentName,
-    pub account_id: Option<AccountId>,
+    pub project_id: Option<ProjectId>,
+    pub created_by: Option<AccountId>,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: golem_client::model::WorkerStatus,
@@ -519,7 +525,8 @@ impl WorkerMetadata {
         WorkerMetadata {
             worker_id: value.worker_id,
             component_name,
-            account_id: None,
+            created_by: None,
+            project_id: None,
             args: value.args,
             env: value.env,
             status: value.status,
@@ -542,7 +549,8 @@ impl WorkerMetadata {
         WorkerMetadata {
             worker_id: value.worker_id,
             component_name,
-            account_id: Some(AccountId(value.account_id)),
+            created_by: Some(AccountId(value.created_by)),
+            project_id: Some(ProjectId(value.project_id)),
             args: value.args,
             env: value.env,
             status: value.status,
