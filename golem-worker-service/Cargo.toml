@@ -80,6 +80,7 @@ rusoto_credential = { workspace = true }
 rusoto_elbv2 = { workspace = true }
 rusoto_route53 = { workspace = true }
 rusoto_sts = { workspace = true }
+indexmap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

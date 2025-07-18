@@ -18,6 +18,7 @@ use super::http_handler_binding_handler::{HttpHandlerBindingHandler, HttpHandler
 use super::request::{
     authority_from_request, split_resolved_route_entry, RichRequest, SplitResolvedRouteEntryResult,
 };
+use super::swagger_binding_handler::SwaggerBindingHandler;
 use super::to_response::GatewayHttpResult;
 use super::WorkerDetails;
 use crate::gateway_api_deployment::ApiSiteString;
@@ -70,6 +71,7 @@ pub struct DefaultGatewayInputExecutor {
     pub file_server_binding_handler: Arc<dyn FileServerBindingHandler>,
     pub auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler>,
     pub http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler>,
+    pub swagger_binding_handler: Arc<dyn SwaggerBindingHandler + Sync + Send>,
     pub api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup>,
     pub gateway_session_store: GatewaySessionStore,
     pub identity_provider: Arc<dyn IdentityProvider>,
@@ -81,6 +83,7 @@ impl DefaultGatewayInputExecutor {
         file_server_binding_handler: Arc<dyn FileServerBindingHandler>,
         auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler>,
         http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler>,
+        swagger_binding_handler: Arc<dyn SwaggerBindingHandler + Sync + Send>,
         api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup>,
         gateway_session_store: GatewaySessionStore,
         identity_provider: Arc<dyn IdentityProvider>,
@@ -90,6 +93,7 @@ impl DefaultGatewayInputExecutor {
             file_server_binding_handler,
             auth_call_back_binding_handler,
             http_handler_binding_handler,
+            swagger_binding_handler,
             api_definition_lookup_service,
             gateway_session_store,
             identity_provider,
@@ -643,6 +647,19 @@ impl GatewayHttpInputExecutor for DefaultGatewayInputExecutor {
                         &mut rich_request,
                         *resolved_file_server_binding,
                     )
+                    .await;
+
+                let response = result
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await;
+
+                maybe_apply_middlewares_out(response, &middlewares).await
+            }
+
+            GatewayBindingCompiled::SwaggerUi(swagger_binding) => {
+                let result = self
+                    .swagger_binding_handler
+                    .handle_swagger_binding_request(&authority, &swagger_binding)
                     .await;
 
                 let response = result

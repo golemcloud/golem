@@ -154,7 +154,8 @@ CREATE TABLE project_policies
     view_api_definition   boolean NOT NULL,
     create_api_definition boolean NOT NULL,
     update_api_definition boolean NOT NULL,
-    delete_api_definition boolean NOT NULL
+    delete_api_definition boolean NOT NULL,
+    export_api_definition boolean NOT NULL
 );
 
 
