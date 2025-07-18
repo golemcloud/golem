@@ -74,8 +74,7 @@ CREATE TABLE IF NOT EXISTS project_policies (
   delete_instance BOOLEAN NOT NULL,
   view_project_grants BOOLEAN NOT NULL,
   create_project_grants BOOLEAN NOT NULL,
-  delete_project_grants BOOLEAN NOT NULL,
-  export_api_definition BOOLEAN NOT NULL
+  delete_project_grants BOOLEAN NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tokens (
