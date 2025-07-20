@@ -32,10 +32,9 @@ use golem_api_grpc::proto::golem::worker::v1::{
     InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
     InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ListFileSystemNodeResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError,
+    ListFileSystemNodeResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
+    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey, InvocationContext, InvokeResult, InvokeResultTyped, LogEvent, TargetWorkerId,
@@ -907,11 +906,9 @@ impl WorkerService for ForwardingWorkerService {
             )),
             Some(workerexecutor::v1::get_file_system_node_response::Result::DirSuccess(data)) => {
                 Ok(GetFileSystemNodeResponse {
-                    result: Some(
-                        worker::v1::get_file_system_node_response::Result::Success(
-                            ListFileSystemNodeResponse { nodes: data.nodes },
-                        ),
-                    ),
+                    result: Some(worker::v1::get_file_system_node_response::Result::Success(
+                        ListFileSystemNodeResponse { nodes: data.nodes },
+                    )),
                 })
             }
             Some(workerexecutor::v1::get_file_system_node_response::Result::Failure(error)) => {
@@ -925,11 +922,11 @@ impl WorkerService for ForwardingWorkerService {
             }
             Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(data)) => {
                 Ok(GetFileSystemNodeResponse {
-                    result: Some(
-                        worker::v1::get_file_system_node_response::Result::Success(
-                            ListFileSystemNodeResponse { nodes: vec![data.file.expect("File data should be present")] },
-                        ),
-                    ),
+                    result: Some(worker::v1::get_file_system_node_response::Result::Success(
+                        ListFileSystemNodeResponse {
+                            nodes: vec![data.file.expect("File data should be present")],
+                        },
+                    )),
                 })
             }
             Some(_) => Err(anyhow!(
