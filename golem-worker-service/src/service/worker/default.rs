@@ -1275,11 +1275,11 @@ impl WorkerService for WorkerServiceDefault {
         let path_clone = path.clone();
         self.call_worker_executor(
             worker_id.clone(),
-            "list_directory",
+            "get_file_system_node",
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
                 Box::pin(
-                    worker_executor_client.list_directory(workerexecutor::v1::ListDirectoryRequest {
+                    worker_executor_client.get_file_system_node(workerexecutor::v1::GetFileSystemNodeRequest {
                         worker_id: Some(worker_id.into()),
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
@@ -1289,8 +1289,8 @@ impl WorkerService for WorkerServiceDefault {
                 )
             },
             |response| match response.into_inner() {
-                workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(golem_api_grpc::proto::golem::workerexecutor::v1::list_directory_response::Result::Success(success)),
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(golem_api_grpc::proto::golem::workerexecutor::v1::get_file_system_node_response::Result::DirSuccess(success)),
                 } => {
                     success.nodes
                         .into_iter()
@@ -1301,13 +1301,20 @@ impl WorkerService for WorkerServiceDefault {
                         )
                         .collect::<Result<Vec<_>, _>>()
                 }
-                workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(workerexecutor::v1::list_directory_response::Result::Failure(err)),
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(workerexecutor::v1::get_file_system_node_response::Result::Failure(err)),
                 } => Err(err.into()),
-                workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(workerexecutor::v1::list_directory_response::Result::NotFound(_)),
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(workerexecutor::v1::get_file_system_node_response::Result::NotFound(_)),
                 } => Err(WorkerServiceError::FileNotFound(path.clone()).into()),
-                workerexecutor::v1::ListDirectoryResponse {
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(_file_node)),
+                } => {
+                    // Ajay: The worker service only handles directories, so this case shouldn't occur
+                    // in the current implementation. If it does, it's an error.
+                    Err(WorkerServiceError::Internal("Unexpected file response from worker executor".to_string()).into())
+                },
+                workerexecutor::v1::GetFileSystemNodeResponse {
                     result: None
                 } => Err("Empty response".into()),
             },

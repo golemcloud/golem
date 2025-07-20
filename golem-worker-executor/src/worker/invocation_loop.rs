@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ListDirectoryResult, ReadFileResult, TrapType};
+use crate::model::{GetFileSystemNodeResult, ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
@@ -813,7 +813,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn list_directory(
         &self,
         path: ComponentFilePath,
-        sender: Sender<Result<ListDirectoryResult, WorkerExecutorError>>,
+        sender: Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
     ) {
         let result = self.store.data().list_directory(&path).await;
         let _ = sender.send(result);

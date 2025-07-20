@@ -22,7 +22,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InvocationContext, LastError, ListDirectoryResult,
+    CurrentResourceLimits, ExecutionStatus, GetFileSystemNodeResult, InvocationContext, LastError,
     ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::blob_store::BlobStoreService;
@@ -2001,7 +2001,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
     async fn list_directory(
         &self,
         path: &ComponentFilePath,
-    ) -> Result<ListDirectoryResult, WorkerExecutorError> {
+    ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         let root = self.temp_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
@@ -2013,7 +2013,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
                 }
             })?;
             if !exists {
-                return Ok(ListDirectoryResult::NotFound);
+                return Ok(GetFileSystemNodeResult::NotFound);
             };
         }
 
@@ -2049,7 +2049,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
                 },
             };
 
-            return Ok(ListDirectoryResult::File(file_node));
+            return Ok(GetFileSystemNodeResult::File(file_node));
         }
 
         let mut entries = tokio::fs::read_dir(target).await.map_err(|e| {
@@ -2106,7 +2106,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
                 });
             };
         }
-        Ok(ListDirectoryResult::Ok(result))
+        Ok(GetFileSystemNodeResult::Ok(result))
     }
 
     async fn read_file(

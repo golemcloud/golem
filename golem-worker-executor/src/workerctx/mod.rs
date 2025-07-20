@@ -15,7 +15,7 @@
 pub mod cloud;
 
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ListDirectoryResult, ReadFileResult,
+    CurrentResourceLimits, ExecutionStatus, GetFileSystemNodeResult, LastError, ReadFileResult,
     TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
@@ -446,7 +446,7 @@ pub trait FileSystemReading {
     async fn list_directory(
         &self,
         path: &ComponentFilePath,
-    ) -> Result<ListDirectoryResult, WorkerExecutorError>;
+    ) -> Result<GetFileSystemNodeResult, WorkerExecutorError>;
     async fn read_file(
         &self,
         path: &ComponentFilePath,

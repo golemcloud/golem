@@ -25,17 +25,18 @@ use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
-    cancel_invocation_response, fork_worker_response, get_oplog_response,
-    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response,
-    revert_worker_response, search_oplog_response, update_worker_response, worker_execution_error,
-    CancelInvocationRequest, ConnectWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
-    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest,
-    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, LaunchNewWorkerRequest,
-    ListDirectoryRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+    cancel_invocation_response, fork_worker_response, get_file_system_node_response,
+    get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
+    interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
+    invoke_and_await_typed_response, invoke_response, launch_new_worker_response,
+    resume_worker_response, revert_worker_response, search_oplog_response, update_worker_response,
+    worker_execution_error, CancelInvocationRequest, ConnectWorkerRequest, DeleteWorkerRequest,
+    ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetFileSystemNodeRequest,
+    GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitJsonRequest, LaunchNewWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest,
+    SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
 use golem_client::model::Account;
@@ -1571,7 +1572,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .worker_service()
             .list_directory(
                 &self.token,
-                ListDirectoryRequest {
+                GetFileSystemNodeRequest {
                     worker_id: Some(target_worker_id.into()),
                     path: path.to_string(),
                 },
@@ -1579,7 +1580,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .await?;
 
         match response.result {
-            Some(list_directory_response::Result::Success(response)) => {
+            Some(get_file_system_node_response::Result::DirSuccess(response)) => {
                 let converted = response
                     .nodes
                     .into_iter()

@@ -341,10 +341,10 @@ pub enum LookupResult {
 }
 
 #[derive(Clone, Debug)]
-pub enum ListDirectoryResult {
+pub enum GetFileSystemNodeResult {
     Ok(Vec<ComponentFileSystemNode>),
-    NotFound,
     File(ComponentFileSystemNode),
+    NotFound,
 }
 
 pub enum ReadFileResult {

@@ -19,7 +19,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::model::{LastError, ListDirectoryResult, ReadFileResult};
+use crate::model::{GetFileSystemNodeResult, LastError, ReadFileResult};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
@@ -41,13 +41,13 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
     CancelInvocationResponse, ConnectWorkerRequest, DeactivatePluginRequest,
     DeactivatePluginResponse, DeleteWorkerRequest, ForkWorkerRequest, ForkWorkerResponse,
-    GetFileContentsRequest, GetFileContentsResponse, GetOplogRequest, GetOplogResponse,
-    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
-    GetWorkersMetadataResponse, InvokeAndAwaitWorkerJsonRequest, InvokeAndAwaitWorkerRequest,
+    GetFileContentsRequest, GetFileContentsResponse, GetFileSystemNodeRequest,
+    GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
+    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    InvokeAndAwaitWorkerJsonRequest, InvokeAndAwaitWorkerRequest,
     InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, InvokeJsonWorkerRequest,
-    InvokeWorkerResponse, ListDirectoryRequest, ListDirectoryResponse, RevertWorkerRequest,
-    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse,
+    InvokeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
@@ -1394,10 +1394,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         })
     }
 
-    async fn list_directory_internal(
+    async fn get_file_system_node_internal(
         &self,
-        request: ListDirectoryRequest,
-    ) -> Result<ListDirectoryResponse, WorkerExecutorError> {
+        request: GetFileSystemNodeRequest,
+    ) -> Result<GetFileSystemNodeResponse, WorkerExecutorError> {
         let path = ComponentFilePath::from_abs_str(&request.path)
             .map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid path: {e}")))?;
 
@@ -1406,27 +1406,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let result = worker.list_directory(path).await?;
 
         let response = match result {
-            ListDirectoryResult::Ok(entries) => ListDirectoryResponse {
+            GetFileSystemNodeResult::Ok(entries) => GetFileSystemNodeResponse {
                 result: Some(
-                    golem::workerexecutor::v1::list_directory_response::Result::Success(
+                    golem::workerexecutor::v1::get_file_system_node_response::Result::DirSuccess(
                         golem::workerexecutor::v1::ListDirectorySuccessResponse {
                             nodes: entries.into_iter().map(|entry| entry.into()).collect(),
                         },
                     ),
                 ),
             },
-            ListDirectoryResult::NotFound => ListDirectoryResponse {
+            GetFileSystemNodeResult::NotFound => GetFileSystemNodeResponse {
                 result: Some(
-                    golem::workerexecutor::v1::list_directory_response::Result::NotFound(
+                    golem::workerexecutor::v1::get_file_system_node_response::Result::NotFound(
                         golem::common::Empty {},
                     ),
                 ),
             },
-            ListDirectoryResult::File(file_node) => ListDirectoryResponse {
+            GetFileSystemNodeResult::File(file_node) => GetFileSystemNodeResponse {
                 result: Some(
-                    golem::workerexecutor::v1::list_directory_response::Result::Success(
-                        golem::workerexecutor::v1::ListDirectorySuccessResponse {
-                            nodes: vec![file_node.into()],
+                    golem::workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(
+                        golem::workerexecutor::v1::ListFileDataSuccessResponse {
+                            file: Some(file_node.into()),
                         },
                     ),
                 ),
@@ -2607,10 +2607,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
-        request: Request<ListDirectoryRequest>,
-    ) -> ResponseResult<ListDirectoryResponse> {
+        request: Request<GetFileSystemNodeRequest>,
+    ) -> ResponseResult<GetFileSystemNodeResponse> {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "list_directory",
@@ -2619,15 +2619,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         );
 
         let result = self
-            .list_directory_internal(request)
+            .get_file_system_node_internal(request)
             .instrument(record.span.clone())
             .await;
         match result {
             Ok(response) => record.succeed(Ok(Response::new(response))),
             Err(err) => record.fail(
-                Ok(Response::new(ListDirectoryResponse {
+                Ok(Response::new(GetFileSystemNodeResponse {
                     result: Some(
-                        golem::workerexecutor::v1::list_directory_response::Result::Failure(
+                        golem::workerexecutor::v1::get_file_system_node_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),

@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use crate::durable_host::recover_stderr_logs;
 use crate::model::{
-    ExecutionStatus, ListDirectoryResult, LookupResult, ReadFileResult, TrapType, WorkerConfig,
+    ExecutionStatus, GetFileSystemNodeResult, LookupResult, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
@@ -888,7 +888,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn list_directory(
         &self,
         path: ComponentFilePath,
-    ) -> Result<ListDirectoryResult, WorkerExecutorError> {
+    ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         let (sender, receiver) = oneshot::channel();
 
         let mutex = self.instance.lock().await;
@@ -1863,7 +1863,7 @@ pub enum QueuedWorkerInvocation {
     },
     ListDirectory {
         path: ComponentFilePath,
-        sender: oneshot::Sender<Result<ListDirectoryResult, WorkerExecutorError>>,
+        sender: oneshot::Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
     },
     // The worker will suspend execution until the stream is dropped, so consume in a timely manner.
     ReadFile {

@@ -21,7 +21,7 @@ use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ListDirectoryResult, ReadFileResult,
+    CurrentResourceLimits, ExecutionStatus, GetFileSystemNodeResult, LastError, ReadFileResult,
     TrapType, WorkerConfig,
 };
 use golem_worker_executor::services::active_workers::ActiveWorkers;
@@ -225,7 +225,7 @@ impl FileSystemReading for TestWorkerCtx {
     async fn list_directory(
         &self,
         path: &ComponentFilePath,
-    ) -> Result<ListDirectoryResult, WorkerExecutorError> {
+    ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.list_directory(path).await
     }
 

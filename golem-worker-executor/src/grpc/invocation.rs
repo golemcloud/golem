@@ -110,7 +110,7 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 }
 
 impl ProtobufInvocationDetails
-    for golem_api_grpc::proto::golem::workerexecutor::v1::ListDirectoryRequest
+    for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileSystemNodeRequest
 {
     fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
         &self.account_id
