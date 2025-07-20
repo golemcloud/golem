@@ -62,7 +62,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
     InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest,
     InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
+    LaunchNewWorkerSuccessResponse, ListFileSystemNodeResponse, ResumeWorkerRequest,
     ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
     SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
@@ -833,8 +833,8 @@ pub trait WorkerService: Send + Sync {
                     .await?;
 
                 Ok(GetFileSystemNodeResponse {
-                    result: Some(get_file_system_node_response::Result::DirSuccess(
-                        ListDirectorySuccessResponse {
+                    result: Some(get_file_system_node_response::Result::Success(
+                        ListFileSystemNodeResponse {
                             nodes: result.nodes.into_iter().map(|node|
                                 FileSystemNode {
                                     value: Some(

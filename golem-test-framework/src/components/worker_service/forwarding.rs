@@ -32,7 +32,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
     InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ListDirectorySuccessResponse, ListFileDataSuccessResponse, ResumeWorkerRequest,
+    ListFileSystemNodeResponse, ResumeWorkerRequest,
     ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
     SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
     WorkerError,
@@ -908,8 +908,8 @@ impl WorkerService for ForwardingWorkerService {
             Some(workerexecutor::v1::get_file_system_node_response::Result::DirSuccess(data)) => {
                 Ok(GetFileSystemNodeResponse {
                     result: Some(
-                        worker::v1::get_file_system_node_response::Result::DirSuccess(
-                            ListDirectorySuccessResponse { nodes: data.nodes },
+                        worker::v1::get_file_system_node_response::Result::Success(
+                            ListFileSystemNodeResponse { nodes: data.nodes },
                         ),
                     ),
                 })
@@ -926,8 +926,8 @@ impl WorkerService for ForwardingWorkerService {
             Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(data)) => {
                 Ok(GetFileSystemNodeResponse {
                     result: Some(
-                        worker::v1::get_file_system_node_response::Result::FileSuccess(
-                            ListFileDataSuccessResponse { file: data.file },
+                        worker::v1::get_file_system_node_response::Result::Success(
+                            ListFileSystemNodeResponse { nodes: vec![data.file.expect("File data should be present")] },
                         ),
                     ),
                 })

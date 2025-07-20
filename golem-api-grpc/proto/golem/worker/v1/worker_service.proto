@@ -301,19 +301,15 @@ message GetFileSystemNodeRequest {
 
 message GetFileSystemNodeResponse {
   oneof result {
-    ListDirectorySuccessResponse dir_success = 1;
-    ListFileDataSuccessResponse file_success = 2;
+    ListFileSystemNodeResponse success = 1;
     WorkerError error = 3;
   }
 }
 
-message ListDirectorySuccessResponse {
+message ListFileSystemNodeResponse {
   repeated golem.worker.FileSystemNode nodes = 1;
 }
-
-message ListFileDataSuccessResponse {
-  golem.worker.FileSystemNode file = 1;
-}  
+ 
 
 message GetFileContentsRequest {
   golem.worker.TargetWorkerId worker_id = 1;

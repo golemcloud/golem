@@ -1580,7 +1580,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .await?;
 
         match response.result {
-            Some(get_file_system_node_response::Result::DirSuccess(response)) => {
+            Some(get_file_system_node_response::Result::Success(response)) => {
                 let converted = response
                     .nodes
                     .into_iter()

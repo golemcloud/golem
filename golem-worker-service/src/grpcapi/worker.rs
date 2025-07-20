@@ -1301,8 +1301,8 @@ impl WorkerGrpcApi {
         Ok(
             golem_api_grpc::proto::golem::worker::v1::GetFileSystemNodeResponse {
                 result: Some(
-                    golem_api_grpc::proto::golem::worker::v1::get_file_system_node_response::Result::DirSuccess(
-                        golem_api_grpc::proto::golem::worker::v1::ListDirectorySuccessResponse {
+                    golem_api_grpc::proto::golem::worker::v1::get_file_system_node_response::Result::Success(
+                        golem_api_grpc::proto::golem::worker::v1::ListFileSystemNodeResponse {
                             nodes: result.into_iter().map(|e| e.into()).collect(),
                         },
                     ),
