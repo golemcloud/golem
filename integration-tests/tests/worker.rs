@@ -1632,7 +1632,7 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
             ),
             (
                 "initial-file-read-write/files/baz.txt",
-                "/baz/baz.txt",
+                "/bar/baz.txt",
                 ComponentFilePermissions::ReadWrite,
             ),
             (
@@ -1670,7 +1670,7 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         result
             == vec![
                 ComponentFileSystemNode {
-                    name: "baz".to_string(),
+                    name: "bar".to_string(),
                     last_modified: SystemTime::UNIX_EPOCH,
                     details: ComponentFileSystemNodeDetails::Directory
                 },
@@ -1693,7 +1693,7 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
             ]
     );
 
-    let result = admin.get_file_system_node(&worker_id, "/baz").await;
+    let result = admin.get_file_system_node(&worker_id, "/bar").await;
 
     let mut result = result
         .into_iter()

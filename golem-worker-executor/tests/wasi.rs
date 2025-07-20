@@ -319,10 +319,9 @@ async fn initial_file_listing_through_api(
         .with_files(&component_files)
         .store()
         .await;
-    let mut env = HashMap::new();
-    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+
     let worker_id = executor
-        .start_worker_with(&component_id, "initial-file-read-write-2", vec![], env)
+        .start_worker(&component_id, "initial-file-read-write-1")
         .await;
 
     let result = executor.get_file_system_node(&worker_id, "/").await;
@@ -336,10 +335,6 @@ async fn initial_file_listing_through_api(
         .collect::<Vec<_>>();
 
     result.sort_by_key(|e| e.name.clone());
-
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
 
     check!(
         result
@@ -367,6 +362,58 @@ async fn initial_file_listing_through_api(
                 },
             ]
     );
+
+    let result = executor.get_file_system_node(&worker_id, "/bar").await;
+
+    let mut result = result
+        .into_iter()
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by_key(|e| e.name.clone());
+
+    check!(
+        result
+            == vec![ComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: ComponentFilePermissions::ReadWrite,
+                    size: 4,
+                }
+            },]
+    );
+
+    let result = executor.get_file_system_node(&worker_id, "/baz.txt").await;
+
+    let mut result = result
+        .into_iter()
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by_key(|e| e.name.clone());
+
+    check!(
+        result
+            == vec![ComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: ComponentFilePermissions::ReadWrite,
+                    size: 4,
+                }
+            },]
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    drop(executor);
 }
 
 #[test]
