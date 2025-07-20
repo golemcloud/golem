@@ -19,7 +19,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::model::{GetFileSystemNodeResult, LastError, ReadFileResult};
+use crate::model::{LastError, ReadFileResult};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
@@ -59,7 +59,7 @@ use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentType, IdempotencyKey, OwnedWorkerId,
     PluginInstallationId, ProjectId, ScanCursor, ShardId, TimestampedWorkerInvocation, WorkerEvent,
-    WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
+    WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus, GetFileSystemNodeResult,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;

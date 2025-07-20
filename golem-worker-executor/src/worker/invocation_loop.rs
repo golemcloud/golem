@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{GetFileSystemNodeResult, ReadFileResult, TrapType};
+use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
@@ -29,7 +29,9 @@ use async_mutex::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::invocation_context::{AttributeValue, InvocationContextStack};
+use golem_common::model::{
+    GetFileSystemNodeResult, invocation_context::{AttributeValue, InvocationContextStack},
+};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     exports, ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,

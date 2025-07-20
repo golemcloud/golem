@@ -21,7 +21,7 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AccountId, ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp,
+    AccountId, ComponentType, ShardAssignment, ShardId, Timestamp,
     WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
@@ -338,13 +338,6 @@ pub enum LookupResult {
     Pending,
     Interrupted,
     Complete(Result<Option<ValueAndType>, WorkerExecutorError>),
-}
-
-#[derive(Clone, Debug)]
-pub enum GetFileSystemNodeResult {
-    Ok(Vec<ComponentFileSystemNode>),
-    File(ComponentFileSystemNode),
-    NotFound,
 }
 
 pub enum ReadFileResult {

@@ -15,7 +15,7 @@ use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     PluginInstallationId, ProjectId, RetryConfig, TargetWorkerId, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord, GetFileSystemNodeResult,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -39,7 +39,7 @@ use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor::model::{
-    CurrentResourceLimits, ExecutionStatus, GetFileSystemNodeResult, LastError, ReadFileResult,
+    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult,
     TrapType, WorkerConfig,
 };
 use golem_worker_executor::preview2::golem::durability;

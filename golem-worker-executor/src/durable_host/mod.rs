@@ -22,7 +22,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, GetFileSystemNodeResult, InvocationContext, LastError,
+    CurrentResourceLimits, ExecutionStatus, InvocationContext, LastError,
     ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::blob_store::BlobStoreService;
@@ -78,7 +78,7 @@ use golem_common::model::{
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
     FailedUpdateRecord, IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor,
     ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    WorkerResourceDescription, WorkerStatus, WorkerStatusRecord, GetFileSystemNodeResult,
 };
 use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;

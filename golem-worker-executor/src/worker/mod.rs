@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use crate::durable_host::recover_stderr_logs;
 use crate::model::{
-    ExecutionStatus, GetFileSystemNodeResult, LookupResult, ReadFileResult, TrapType, WorkerConfig,
+    ExecutionStatus, LookupResult, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
@@ -50,7 +50,7 @@ use golem_common::model::{AccountId, RetryConfig};
 use golem_common::model::{ComponentFilePath, ComponentType, PluginInstallationId};
 use golem_common::model::{
     ComponentVersion, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
-    WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
+    WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord, GetFileSystemNodeResult,
 };
 use golem_service_base::error::worker_executor::{
     InterruptKind, WorkerExecutorError, WorkerOutOfMemory,

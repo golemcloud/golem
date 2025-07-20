@@ -15,7 +15,7 @@
 pub mod cloud;
 
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, GetFileSystemNodeResult, LastError, ReadFileResult,
+    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult,
     TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
@@ -49,7 +49,7 @@ use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     PluginInstallationId, ProjectId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    WorkerStatusRecord, GetFileSystemNodeResult,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::ResourceStore;
