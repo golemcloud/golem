@@ -325,7 +325,7 @@ async fn initial_file_listing_through_api(
         .start_worker_with(&component_id, "initial-file-read-write-2", vec![], env)
         .await;
 
-    let result = executor.list_directory(&worker_id, "/").await;
+    let result = executor.get_file_system_node(&worker_id, "/").await;
 
     let mut result = result
         .into_iter()

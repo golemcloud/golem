@@ -57,9 +57,10 @@ use golem_common::grpc::{
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentId, ComponentType, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, ProjectId, ScanCursor, ShardId, TimestampedWorkerInvocation, WorkerEvent,
-    WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus, GetFileSystemNodeResult,
+    AccountId, ComponentFilePath, ComponentId, ComponentType, GetFileSystemNodeResult,
+    IdempotencyKey, OwnedWorkerId, PluginInstallationId, ProjectId, ScanCursor, ShardId,
+    TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
+    WorkerMetadata, WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -1403,7 +1404,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker = self.get_or_create(&request).await?;
 
-        let result = worker.list_directory(path).await?;
+        let result = worker.get_file_system_node(path).await?;
 
         let response = match result {
             GetFileSystemNodeResult::Ok(entries) => GetFileSystemNodeResponse {
@@ -2613,7 +2614,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> ResponseResult<GetFileSystemNodeResponse> {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
-            "list_directory",
+            "get_file_system_node",
             worker_id = proto_target_worker_id_string(&request.worker_id),
             path = request.path,
         );

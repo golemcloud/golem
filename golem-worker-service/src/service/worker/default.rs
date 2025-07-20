@@ -251,7 +251,7 @@ pub trait WorkerService: Send + Sync {
         namespace: Namespace,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
@@ -1264,7 +1264,7 @@ impl WorkerService for WorkerServiceDefault {
             .await
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
@@ -1308,11 +1308,13 @@ impl WorkerService for WorkerServiceDefault {
                     result: Some(workerexecutor::v1::get_file_system_node_response::Result::NotFound(_)),
                 } => Err(WorkerServiceError::FileNotFound(path.clone()).into()),
                 workerexecutor::v1::GetFileSystemNodeResponse {
-                    result: Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(_file_node)),
+                    result: Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(file_response)),
                 } => {
-                    // Ajay: The worker service only handles directories, so this case shouldn't occur
-                    // in the current implementation. If it does, it's an error.
-                    Err(WorkerServiceError::Internal("Unexpected file response from worker executor".to_string()).into())
+                    let file_node = file_response.file
+                        .ok_or(WorkerServiceError::Internal("Missing file data in response".to_string()))?
+                        .try_into()
+                        .map_err(|_| WorkerServiceError::Internal("Failed to convert file node".to_string()))?;
+                    Ok(vec![file_node])
                 },
                 workerexecutor::v1::GetFileSystemNodeResponse {
                     result: None

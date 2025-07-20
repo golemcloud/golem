@@ -15,8 +15,7 @@
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult,
-    TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
@@ -52,9 +51,9 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord, GetFileSystemNodeResult,
+    AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
+    OwnedWorkerId, PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
@@ -465,11 +464,11 @@ impl IndexedResourceStore for Context {
 
 #[async_trait]
 impl FileSystemReading for Context {
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         path: &ComponentFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
-        self.durable_ctx.list_directory(path).await
+        self.durable_ctx.get_file_system_node(path).await
     }
 
     async fn read_file(

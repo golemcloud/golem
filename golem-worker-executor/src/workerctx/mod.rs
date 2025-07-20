@@ -15,8 +15,7 @@
 pub mod cloud;
 
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult,
-    TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
@@ -47,9 +46,9 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, ProjectId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord, GetFileSystemNodeResult,
+    AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
+    OwnedWorkerId, PluginInstallationId, ProjectId, TargetWorkerId, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -443,7 +442,7 @@ pub trait PublicWorkerIo {
 #[async_trait]
 pub trait FileSystemReading {
     // List the contents of a directory. Will return an error if the path is not a directory.
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         path: &ComponentFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError>;

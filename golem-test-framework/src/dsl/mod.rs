@@ -434,7 +434,7 @@ pub trait TestDsl {
 
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()>;
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
@@ -1560,7 +1560,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         Ok(())
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
@@ -1570,7 +1570,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         let response = self
             .deps
             .worker_service()
-            .list_directory(
+            .get_file_system_node(
                 &self.token,
                 GetFileSystemNodeRequest {
                     worker_id: Some(target_worker_id.into()),
@@ -2328,7 +2328,7 @@ pub trait TestDslUnsafe {
 
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId);
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
@@ -2699,14 +2699,14 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Oplog check failed")
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
     ) -> Vec<ComponentFileSystemNode> {
-        <T as TestDsl>::list_directory(self, worker_id, path)
+        <T as TestDsl>::get_file_system_node(self, worker_id, path)
             .await
-            .expect("Failed to list directory")
+            .expect("Failed to get file system node")
     }
     async fn get_file_contents(
         &self,

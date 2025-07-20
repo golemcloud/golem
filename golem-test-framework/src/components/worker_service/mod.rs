@@ -802,7 +802,7 @@ pub trait WorkerService: Send + Sync {
         }
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         token: &Uuid,
         request: GetFileSystemNodeRequest,

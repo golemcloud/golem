@@ -1654,7 +1654,7 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         .start_worker(&component_id, "initial-file-read-write-1")
         .await;
 
-    let result = admin.list_directory(&worker_id, "/").await;
+    let result = admin.get_file_system_node(&worker_id, "/").await;
 
     let mut result = result
         .into_iter()
@@ -1693,7 +1693,7 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
             ]
     );
 
-    let result = admin.list_directory(&worker_id, "/baz").await;
+    let result = admin.get_file_system_node(&worker_id, "/baz").await;
 
     let mut result = result
         .into_iter()
@@ -1717,7 +1717,7 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
             },]
     );
 
-    let result = admin.list_directory(&worker_id, "/baz.txt").await;
+    let result = admin.get_file_system_node(&worker_id, "/baz.txt").await;
 
     let mut result = result
         .into_iter()

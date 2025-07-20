@@ -1295,7 +1295,7 @@ impl WorkerGrpcApi {
             .await?;
         let result = self
             .worker_service
-            .list_directory(&worker_id, file_path, namespace)
+            .get_file_system_node(&worker_id, file_path, namespace)
             .await?;
 
         Ok(
