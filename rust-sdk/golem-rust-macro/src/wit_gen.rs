@@ -52,20 +52,19 @@ pub fn generate_witfile(ast: &mut syn::ItemMod, file_name: String) -> syn::Resul
                             .to_lowercase()
                             .replace('_', "-");
 
-                        resolve_type(f.ty).map(|tpe| format!("{}: {}", field_name, tpe))
+                        resolve_type(f.ty).map(|tpe| format!("{field_name}: {tpe}"))
                     })
                     .collect();
                     let joined = fields?.join(", \n\t\t");
 
                     if joined.is_empty() {
-                        Ok(format!("    record {} {{}}", record_title))
+                        Ok(format!("    record {record_title} {{}}"))
                     } else {
                         Ok(format!(
                         "
-    record {} {{
-        {},
-    }}",
-                        record_title, joined
+    record {record_title} {{
+        {joined},
+    }}"
                         ))
                     }
                 }
@@ -112,14 +111,12 @@ pub fn generate_witfile(ast: &mut syn::ItemMod, file_name: String) -> syn::Resul
                                 if ret_tpe.is_empty() {
                                     format!(
                                         "
-    {}: func({})",
-                                        fun_title, params
+    {fun_title}: func({params})"
                                     )
                                 } else {
                                     format!(
                                         "
-    {}: func({}) -> {}",
-                                        fun_title, params, ret_tpe
+    {fun_title}: func({params}) -> {ret_tpe}"
                                     )
                                 }
                             })
@@ -168,17 +165,17 @@ pub fn generate_witfile(ast: &mut syn::ItemMod, file_name: String) -> syn::Resul
 
                     Ok(format!(
                         "
-    {} {} {{
-        {}
+    {keyword} {variant_title} {{
+        {var_body}
     }}
-                ", keyword, variant_title, var_body
+                "
                     ))
                 },
                 Item::Type(type_item) => {
                     let ident = pascal_case_to_kebab_case(type_item.ident.to_string());
                     let tpe = resolve_type(*type_item.ty)?;
 
-                    Ok(format!("    type {} = {}", ident, tpe))
+                    Ok(format!("    type {ident} = {tpe}"))
                 },
                 a => Err(syn::Error::new(
                     a.span(),
@@ -331,7 +328,7 @@ fn resolve_type(ty: Type) -> syn::Result<String> {
                     GenericArgument::Type(tpe) => {
                         let tpe_name = resolve_type(tpe.clone());
 
-                        tpe_name.map(|t| format!("list<{}>", t))
+                        tpe_name.map(|t| format!("list<{t}>"))
                     }
                     _ => Err(syn::Error::new(ty.span(), "Unexpected error. If you think this should work, please open an issue and describe your use case. https://github.com/golemcloud/golem-rust/issues")),
                 }
@@ -357,7 +354,7 @@ fn resolve_type(ty: Type) -> syn::Result<String> {
                     GenericArgument::Type(tpe) => {
                         let tpe_name = resolve_type(tpe.clone());
 
-                        tpe_name.map(|t| format!("option<{}>", t))
+                        tpe_name.map(|t| format!("option<{t}>"))
                     }
                     _ => Err(syn::Error::new(ty.span(), "Unexpected error. If you think this should work, please open an issue and describe your use case. https://github.com/golemcloud/golem-rust/issues")),
                 }
@@ -375,11 +372,11 @@ fn resolve_type(ty: Type) -> syn::Result<String> {
                 if t.is_empty() {
                     "".to_string()
                 } else {
-                    format!("tuple<{}>", t)
+                    format!("tuple<{t}>")
                 }
             })
         }
-        Type::Slice(type_slice) => resolve_type(*type_slice.elem).map(|t| format!("list<{}>", t)),
+        Type::Slice(type_slice) => resolve_type(*type_slice.elem).map(|t| format!("list<{t}>")),
         _ => Ok("".to_owned()),
     }
 }
@@ -411,7 +408,7 @@ world golem-service {{
             let mut old_content = String::new();
 
             file.read_to_string(&mut old_content)
-                .map_err(|e| syn::Error::new(ast_span, format!("Error while reading from file {}", e)))?;
+                .map_err(|e| syn::Error::new(ast_span, format!("Error while reading from file {e}")))?;
 
             if old_content == new_content {
                 // do nothing
@@ -429,10 +426,10 @@ world golem-service {{
 
 fn create_and_write_to_file(file_name: String, new_content: String, ast_span: Span) -> Result<()> {
     let mut file = File::create(file_name.clone())
-        .map_err(|e| syn::Error::new(ast_span, format!("Error while creating file {}", e)))?;
+        .map_err(|e| syn::Error::new(ast_span, format!("Error while creating file {e}")))?;
 
     file.write_all(new_content.trim().as_bytes())
-        .map_err(|e| syn::Error::new(ast_span, format!("Error while writing to file {}", e)))?;
+        .map_err(|e| syn::Error::new(ast_span, format!("Error while writing to file {e}")))?;
 
     Ok(())
 }
