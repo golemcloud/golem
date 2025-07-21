@@ -247,6 +247,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                             Ok(AnalysedType::Handle(TypeHandle {
                                 resource_id: id,
                                 mode: resource_mode,
+                                name: None
                             }))
                         }
                         None => Err(AnalysisFailure::failed("Reached a sub-resource type bound without a surrounding borrowed/owned resource type")),
@@ -286,7 +287,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                         typ: self.analyse_component_val_type(typ)?,
                     });
                 }
-                Ok(AnalysedType::Record(TypeRecord { fields: result }))
+                Ok(AnalysedType::Record(TypeRecord { fields: result, name: None }))
             }
             ComponentDefinedType::Variant { cases } => {
                 let mut result = Vec::new();
@@ -300,26 +301,30 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                             .transpose()?,
                     });
                 }
-                Ok(AnalysedType::Variant(TypeVariant { cases: result }))
+                Ok(AnalysedType::Variant(TypeVariant { cases: result, name: None }))
             }
             ComponentDefinedType::List { elem } => Ok(AnalysedType::List(TypeList {
                 inner: Box::new(self.analyse_component_val_type(elem)?),
+                name: None
             })),
             ComponentDefinedType::Tuple { elems } => {
                 let mut result = Vec::new();
                 for elem in elems {
                     result.push(self.analyse_component_val_type(elem)?);
                 }
-                Ok(AnalysedType::Tuple(TypeTuple { items: result }))
+                Ok(AnalysedType::Tuple(TypeTuple { items: result, name: None }))
             }
             ComponentDefinedType::Flags { names } => Ok(AnalysedType::Flags(TypeFlags {
                 names: names.clone(),
+                name: None
             })),
             ComponentDefinedType::Enum { names } => Ok(AnalysedType::Enum(TypeEnum {
                 cases: names.clone(),
+                name: None
             })),
             ComponentDefinedType::Option { typ } => Ok(AnalysedType::Option(TypeOption {
                 inner: Box::new(self.analyse_component_val_type(typ)?),
+                name: None
             })),
             ComponentDefinedType::Result { ok, err } => Ok(AnalysedType::Result(TypeResult {
                 ok: ok
@@ -330,6 +335,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                     .as_ref()
                     .map(|t| self.analyse_component_val_type(t).map(Box::new))
                     .transpose()?,
+                name: None
             })),
             ComponentDefinedType::Owned { type_idx } => {
                 self.analyse_component_type_idx(type_idx, Some(AnalysedResourceMode::Owned))

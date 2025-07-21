@@ -80,7 +80,7 @@ pub use bindings::wasi;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc0_2_1 as golem_rpc_0_2_x;
+pub use bindings::golem::rpc0_2_2 as golem_rpc_0_2_x;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
@@ -119,7 +119,7 @@ mod generated {
 pub use generated::wasi;
 
 #[cfg(feature = "host-bindings")]
-pub use generated::golem::rpc0_2_1 as golem_rpc_0_2_x;
+pub use generated::golem::rpc0_2_2 as golem_rpc_0_2_x;
 
 #[cfg(feature = "host-bindings")]
 pub use golem_rpc_0_2_x::types::{

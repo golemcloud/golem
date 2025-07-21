@@ -87,6 +87,7 @@ pub struct AnalysedInstance {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeResult {
+    pub name: Option<String>,
     pub ok: Option<Box<AnalysedType>>,
     pub err: Option<Box<AnalysedType>>,
 }
@@ -114,6 +115,7 @@ pub struct NameOptionTypePair {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeVariant {
+    pub name: Option<String>,
     pub cases: Vec<NameOptionTypePair>,
 }
 
@@ -122,6 +124,7 @@ pub struct TypeVariant {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeOption {
+    pub name: Option<String>,
     pub inner: Box<AnalysedType>,
 }
 
@@ -130,6 +133,7 @@ pub struct TypeOption {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeEnum {
+    pub name: Option<String>,
     pub cases: Vec<String>,
 }
 
@@ -138,6 +142,7 @@ pub struct TypeEnum {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeFlags {
+    pub name: Option<String>,
     pub names: Vec<String>,
 }
 
@@ -146,6 +151,7 @@ pub struct TypeFlags {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeRecord {
+    pub name: Option<String>,
     pub fields: Vec<NameTypePair>,
 }
 
@@ -154,6 +160,7 @@ pub struct TypeRecord {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeTuple {
+    pub name: Option<String>,
     pub items: Vec<AnalysedType>,
 }
 
@@ -162,6 +169,7 @@ pub struct TypeTuple {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeList {
+    pub name: Option<String>,
     pub inner: Box<AnalysedType>,
 }
 
@@ -248,6 +256,7 @@ pub struct TypeBool;
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeHandle {
+    pub name: Option<String>,
     pub resource_id: AnalysedResourceId,
     pub mode: AnalysedResourceMode,
 }
@@ -284,6 +293,81 @@ pub enum AnalysedType {
     S8(TypeS8),
     Bool(TypeBool),
     Handle(TypeHandle),
+}
+
+impl AnalysedType {
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            AnalysedType::Variant(typ) => typ.name.as_deref(),
+            AnalysedType::Result(typ) => typ.name.as_deref(),
+            AnalysedType::Option(typ) => typ.name.as_deref(),
+            AnalysedType::Enum(typ) => typ.name.as_deref(),
+            AnalysedType::Flags(typ) => typ.name.as_deref(),
+            AnalysedType::Record(typ) => typ.name.as_deref(),
+            AnalysedType::Tuple(typ) => typ.name.as_deref(),
+            AnalysedType::List(typ) => typ.name.as_deref(),
+            AnalysedType::Handle(typ) => typ.name.as_deref(),
+            AnalysedType::Str(_) => None,
+            AnalysedType::Chr(_) => None,
+            AnalysedType::F64(_) => None,
+            AnalysedType::F32(_) => None,
+            AnalysedType::U64(_) => None,
+            AnalysedType::S64(_) => None,
+            AnalysedType::U32(_) => None,
+            AnalysedType::S32(_) => None,
+            AnalysedType::U16(_) => None,
+            AnalysedType::S16(_) => None,
+            AnalysedType::U8(_) => None,
+            AnalysedType::S8(_) => None,
+            AnalysedType::Bool(_) => None,
+        }
+    }
+
+    pub fn with_optional_name(self, name: Option<String>) -> Self {
+        match self {
+            AnalysedType::Variant(mut typ) => {
+                typ.name = name;
+                AnalysedType::Variant(typ)
+            }
+            AnalysedType::Result(mut typ) => {
+                typ.name = name;
+                AnalysedType::Result(typ)
+            }
+            AnalysedType::Option(mut typ) => {
+                typ.name = name;
+                AnalysedType::Option(typ)
+            }
+            AnalysedType::Enum(mut typ) => {
+                typ.name = name;
+                AnalysedType::Enum(typ)
+            }
+            AnalysedType::Flags(mut typ) => {
+                typ.name = name;
+                AnalysedType::Flags(typ)
+            }
+            AnalysedType::Record(mut typ) => {
+                typ.name = name;
+                AnalysedType::Record(typ)
+            }
+            AnalysedType::Tuple(mut typ) => {
+                typ.name = name;
+                AnalysedType::Tuple(typ)
+            }
+            AnalysedType::List(mut typ) => {
+                typ.name = name;
+                AnalysedType::List(typ)
+            }
+            AnalysedType::Handle(mut typ) => {
+                typ.name = name;
+                AnalysedType::Handle(typ)
+            }
+            _ => self,
+        }
+    }
+
+    pub fn named(self, name: impl AsRef<str>) -> Self {
+        self.with_optional_name(Some(name.as_ref().to_string()))
+    }
 }
 
 pub mod analysed_type {
@@ -371,34 +455,39 @@ pub mod analysed_type {
 
     pub fn list(inner: AnalysedType) -> AnalysedType {
         AnalysedType::List(TypeList {
+            name: None,
             inner: Box::new(inner),
         })
     }
 
     pub fn option(inner: AnalysedType) -> AnalysedType {
         AnalysedType::Option(TypeOption {
+            name: None,
             inner: Box::new(inner),
         })
     }
 
     pub fn flags(names: &[&str]) -> AnalysedType {
         AnalysedType::Flags(TypeFlags {
+            name: None,
             names: names.iter().map(|n| n.to_string()).collect(),
         })
     }
 
     pub fn r#enum(cases: &[&str]) -> AnalysedType {
         AnalysedType::Enum(TypeEnum {
+            name: None,
             cases: cases.iter().map(|n| n.to_string()).collect(),
         })
     }
 
     pub fn tuple(items: Vec<AnalysedType>) -> AnalysedType {
-        AnalysedType::Tuple(TypeTuple { items })
+        AnalysedType::Tuple(TypeTuple { name: None, items })
     }
 
     pub fn result(ok: AnalysedType, err: AnalysedType) -> AnalysedType {
         AnalysedType::Result(TypeResult {
+            name: None,
             ok: Some(Box::new(ok)),
             err: Some(Box::new(err)),
         })
@@ -406,6 +495,7 @@ pub mod analysed_type {
 
     pub fn result_ok(ok: AnalysedType) -> AnalysedType {
         AnalysedType::Result(TypeResult {
+            name: None,
             ok: Some(Box::new(ok)),
             err: None,
         })
@@ -413,21 +503,26 @@ pub mod analysed_type {
 
     pub fn result_err(err: AnalysedType) -> AnalysedType {
         AnalysedType::Result(TypeResult {
+            name: None,
             ok: None,
             err: Some(Box::new(err)),
         })
     }
 
     pub fn record(fields: Vec<NameTypePair>) -> AnalysedType {
-        AnalysedType::Record(TypeRecord { fields })
+        AnalysedType::Record(TypeRecord { name: None, fields })
     }
 
     pub fn variant(cases: Vec<NameOptionTypePair>) -> AnalysedType {
-        AnalysedType::Variant(TypeVariant { cases })
+        AnalysedType::Variant(TypeVariant { name: None, cases })
     }
 
     pub fn handle(resource_id: AnalysedResourceId, mode: AnalysedResourceMode) -> AnalysedType {
-        AnalysedType::Handle(TypeHandle { resource_id, mode })
+        AnalysedType::Handle(TypeHandle {
+            name: None,
+            resource_id,
+            mode,
+        })
     }
 }
 

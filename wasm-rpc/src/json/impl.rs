@@ -45,15 +45,15 @@ impl TypeAnnotatedValueJsonExtensions for TypeAnnotatedValue {
             AnalysedType::F32(_) => get_f32(json_val),
             AnalysedType::Chr(_) => get_char(json_val),
             AnalysedType::Str(_) => get_string(json_val),
-            AnalysedType::Enum(TypeEnum { cases }) => get_enum(json_val, cases),
-            AnalysedType::Flags(TypeFlags { names }) => get_flag(json_val, names),
-            AnalysedType::List(TypeList { inner }) => get_list(json_val, inner),
-            AnalysedType::Option(TypeOption { inner }) => get_option(json_val, inner),
-            AnalysedType::Result(TypeResult { ok, err }) => get_result(json_val, ok, err),
-            AnalysedType::Record(TypeRecord { fields }) => get_record(json_val, fields),
-            AnalysedType::Variant(TypeVariant { cases }) => get_variant(json_val, cases),
-            AnalysedType::Tuple(TypeTuple { items }) => get_tuple(json_val, items),
-            AnalysedType::Handle(TypeHandle { resource_id, mode }) => {
+            AnalysedType::Enum(TypeEnum { cases, .. }) => get_enum(json_val, cases),
+            AnalysedType::Flags(TypeFlags { names, .. }) => get_flag(json_val, names),
+            AnalysedType::List(TypeList { inner, .. }) => get_list(json_val, inner),
+            AnalysedType::Option(TypeOption { inner, .. }) => get_option(json_val, inner),
+            AnalysedType::Result(TypeResult { ok, err, .. }) => get_result(json_val, ok, err),
+            AnalysedType::Record(TypeRecord { fields , ..}) => get_record(json_val, fields),
+            AnalysedType::Variant(TypeVariant { cases, .. }) => get_variant(json_val, cases),
+            AnalysedType::Tuple(TypeTuple { items, .. }) => get_tuple(json_val, items),
+            AnalysedType::Handle(TypeHandle { resource_id, mode, .. }) => {
                 get_handle(json_val, resource_id.clone(), mode.clone())
             }
         }
@@ -621,6 +621,7 @@ fn get_variant(
                             typ: pair.typ.as_ref().map(|t| t.into()),
                         })
                         .collect(),
+                    name: None,
                 }),
                 case_name: key.clone(),
                 case_value: Some(Box::new(protobuf::TypeAnnotatedValue {
@@ -640,6 +641,7 @@ fn get_variant(
                             typ: pair.typ.as_ref().map(|t| t.into()),
                         })
                         .collect(),
+                    name: None,
                 }),
                 case_name: key.clone(),
                 case_value: None,
@@ -673,6 +675,7 @@ fn get_handle(
                                     AnalysedResourceMode::Owned => 1,
                                     AnalysedResourceMode::Borrowed => 2,
                                 },
+                                name: None
                             }),
                             uri,
                             resource_id,

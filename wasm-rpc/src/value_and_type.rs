@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Bound;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "bincode", derive(::bincode::Encode, ::bincode::Decode))]
@@ -621,6 +622,23 @@ impl IntoValue for WitType {
             "nodes",
             list(WitTypeNode::get_type()),
         )])
+    }
+}
+
+#[cfg(feature = "host-bindings")]
+impl IntoValue for NamedWitTypeNode {
+    fn into_value(self) -> Value {
+        Value::Record(vec![
+            self.name.into_value(),
+            self.type_.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("type", WitTypeNode::get_type()),
+        ])
     }
 }
 
