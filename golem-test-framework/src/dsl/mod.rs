@@ -1100,15 +1100,12 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             Some(invoke_and_await_typed_response::Result::Success(response)) => {
                 match response.result {
                     None => Ok(Ok(None)),
-                    Some(response) => match response.type_annotated_value {
-                        Some(response) => {
-                            let response: ValueAndType = response.try_into().map_err(|err| {
-                                anyhow!("Invocation result had unexpected format: {err}")
-                            })?;
-                            Ok(Ok(Some(response)))
-                        }
-                        None => Err(anyhow!("Missing type_annotated_value field")),
-                    },
+                    Some(response) => {
+                        let response: ValueAndType = response.try_into().map_err(|err| {
+                            anyhow!("Invocation result had unexpected format: {err}")
+                        })?;
+                        Ok(Ok(Some(response)))
+                    }
                 }
             }
             Some(invoke_and_await_typed_response::Result::Error(WorkerError {

@@ -518,16 +518,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::ImportedFunctionInvokedParameters {
                             timestamp: Some(imported_function_invoked.timestamp.into()),
                             function_name: imported_function_invoked.function_name.clone(),
-                            request: Some(imported_function_invoked.request.try_into().map_err(
-                                |errors: Vec<String>| {
-                                    format!("Failed to convert request for imported function {}: {}", imported_function_invoked.function_name, errors.join(", "))
-                                },
-                            )?),
-                            response: Some(imported_function_invoked.response.try_into().map_err(
-                                |errors: Vec<String>| {
-                                    format!("Failed to convert response for imported function {}: {}", imported_function_invoked.function_name, errors.join(", "))
-                                },
-                            )?),
+                            request: Some(imported_function_invoked.request.into()),
+                            response: Some(imported_function_invoked.response.into()),
                             wrapped_function_type: Some(
                                 imported_function_invoked.durable_function_type.into(),
                             ),
@@ -544,16 +536,15 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             request: exported_function_invoked
                                 .request
                                 .into_iter()
-                                .map(|value| {
-                                    value.try_into().map_err(|errors: Vec<String>| {
-                                        format!("Failed to convert request for exported function {}: {}", exported_function_invoked.function_name, errors.join(", "))
-                                    })
-                                })
-                                .collect::<Result<Vec<_>, _>>()?,
+                                .map(|value| value.into())
+                                .collect(),
                             idempotency_key: Some(exported_function_invoked.idempotency_key.into()),
                             trace_id: exported_function_invoked.trace_id.to_string(),
                             trace_states: exported_function_invoked.trace_states,
-                            invocation_context: decode_public_span_data(&exported_function_invoked.invocation_context, 0),
+                            invocation_context: decode_public_span_data(
+                                &exported_function_invoked.invocation_context,
+                                0,
+                            ),
                         },
                     )),
                 }
@@ -563,12 +554,9 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::ExportedFunctionCompleted(
                         golem_api_grpc::proto::golem::worker::ExportedFunctionCompletedParameters {
                             timestamp: Some(exported_function_completed.timestamp.into()),
-                            response:
-                            exported_function_completed.response.map(|value| value.try_into()).transpose().map_err(
-                                |errors: Vec<String>| {
-                                    format!("Failed to convert response for completed exported function: {}", errors.join(", "))
-                                },
-                            )?,
+                            response: exported_function_completed
+                                .response
+                                .map(|value| value.into()),
                             consumed_fuel: exported_function_completed.consumed_fuel,
                         },
                     )),
@@ -759,12 +747,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             resource_params: describe_resource
                                 .resource_params
                                 .into_iter()
-                                .map(|value| {
-                                    value.try_into().map_err(|errors: Vec<String>| {
-                                        format!("Failed to convert request: {}", errors.join(", "))
-                                    })
-                                })
-                                .collect::<Result<Vec<_>, _>>()?,
+                                .map(|value| value.into())
+                                .collect(),
                         },
                     )),
                 }
@@ -810,17 +794,15 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
-            PublicOplogEntry::Revert(revert) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::Revert(
-                        golem_api_grpc::proto::golem::worker::RevertParameters {
-                            timestamp: Some(revert.timestamp.into()),
-                            start: revert.dropped_region.start.0,
-                            end: revert.dropped_region.end.0,
-                        },
-                    )),
-                }
-            }
+            PublicOplogEntry::Revert(revert) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                entry: Some(oplog_entry::Entry::Revert(
+                    golem_api_grpc::proto::golem::worker::RevertParameters {
+                        timestamp: Some(revert.timestamp.into()),
+                        start: revert.dropped_region.start.0,
+                        end: revert.dropped_region.end.0,
+                    },
+                )),
+            },
             PublicOplogEntry::CancelInvocation(cancel) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::CancelInvocation(
@@ -844,8 +826,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                                 .into_iter()
                                 .map(|attr| (attr.key, attr.value.into()))
                                 .collect(),
-                        }
-                    ))
+                        },
+                    )),
                 }
             }
             PublicOplogEntry::FinishSpan(finish) => {
@@ -854,8 +836,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::FinishSpanParameters {
                             timestamp: Some(finish.timestamp.into()),
                             span_id: finish.span_id.0.get(),
-                        }
-                    ))
+                        },
+                    )),
                 }
             }
             PublicOplogEntry::SetSpanAttribute(set) => {
@@ -866,8 +848,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             span_id: set.span_id.0.get(),
                             key: set.key,
                             value: Some(set.value.into()),
-                        }
-                    ))
+                        },
+                    )),
                 }
             }
             PublicOplogEntry::ChangePersistenceLevel(change) => {
@@ -875,11 +857,13 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::ChangePersistenceLevel(
                         golem_api_grpc::proto::golem::worker::ChangePersistenceLevelParameters {
                             timestamp: Some(change.timestamp.into()),
-                            persistence_level: Into::<golem_api_grpc::proto::golem::worker::PersistenceLevel>::into(
-                                change.persistence_level,
+                            persistence_level: Into::<
+                                golem_api_grpc::proto::golem::worker::PersistenceLevel,
+                            >::into(
+                                change.persistence_level
                             ) as i32,
-                        }
-                    ))
+                        },
+                    )),
                 }
             }
         })
@@ -1072,11 +1056,7 @@ impl TryFrom<PublicWorkerInvocation> for golem_api_grpc::proto::golem::worker::W
                                 .function_input
                                 .unwrap_or_default()
                                 .into_iter()
-                                .map(|input| input.try_into().map_err(
-                                    |errors: Vec<String>| {
-                                        format!("Failed to convert request: {}", errors.join(", "))
-                                    },
-                                )).collect::<Result<Vec<_>, _>>()?,
+                                .map(|input| input.into()).collect(),
                             trace_id: exported_function.trace_id.to_string(),
                             trace_states: exported_function.trace_states,
                             invocation_context: decode_public_span_data(&exported_function.invocation_context, 0),

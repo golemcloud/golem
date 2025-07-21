@@ -27,7 +27,7 @@ import public "golem/worker/v1/worker_execution_error.proto";
 import public "golem/worker/filesystem.proto";
 
 import public "wasm/rpc/val.proto";
-import public "wasm/rpc/type_annotated_value.proto";
+import public "wasm/rpc/value_and_type.proto";
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
@@ -177,7 +177,7 @@ message InvokeAndAwaitWorkerSuccess {
 }
 
 message InvokeAndAwaitWorkerSuccessTyped {
-  optional wasm.rpc.TypeAnnotatedValue output = 1;
+  optional wasm.rpc.ValueAndType output = 1;
 }
 
 

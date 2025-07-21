@@ -16,7 +16,7 @@ use crate::gateway_execution::GatewayResolvedWorkerRequest;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
 use golem_common::model::{TargetWorkerId, WorkerId};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::ValueAndType;
 use std::fmt::Display;
 use std::sync::Arc;
 use tracing::debug;
@@ -32,11 +32,11 @@ pub trait GatewayWorkerRequestExecutor: Send + Sync {
 // The result of a worker execution from worker-bridge,
 // which is a combination of function metadata and the type-annotated-value representing the actual result
 pub struct WorkerResponse {
-    pub result: Option<TypeAnnotatedValue>,
+    pub result: Option<ValueAndType>,
 }
 
 impl WorkerResponse {
-    pub fn new(result: Option<TypeAnnotatedValue>) -> Self {
+    pub fn new(result: Option<ValueAndType>) -> Self {
         WorkerResponse { result }
     }
 }

@@ -87,6 +87,7 @@ pub struct AnalysedInstance {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub ok: Option<Box<AnalysedType>>,
     pub err: Option<Box<AnalysedType>>,
@@ -115,6 +116,7 @@ pub struct NameOptionTypePair {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeVariant {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub cases: Vec<NameOptionTypePair>,
 }
@@ -124,6 +126,7 @@ pub struct TypeVariant {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeOption {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub inner: Box<AnalysedType>,
 }
@@ -133,6 +136,7 @@ pub struct TypeOption {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeEnum {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub cases: Vec<String>,
 }
@@ -142,6 +146,7 @@ pub struct TypeEnum {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeFlags {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub names: Vec<String>,
 }
@@ -151,6 +156,7 @@ pub struct TypeFlags {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeRecord {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub fields: Vec<NameTypePair>,
 }
@@ -160,6 +166,7 @@ pub struct TypeRecord {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeTuple {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub items: Vec<AnalysedType>,
 }
@@ -169,6 +176,7 @@ pub struct TypeTuple {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeList {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub inner: Box<AnalysedType>,
 }
@@ -256,6 +264,7 @@ pub struct TypeBool;
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeHandle {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub resource_id: AnalysedResourceId,
     pub mode: AnalysedResourceMode,

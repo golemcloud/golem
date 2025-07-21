@@ -1118,9 +1118,7 @@ impl WorkerGrpcApi {
             .await?;
 
         Ok(InvokeResultTyped {
-            result: result.map(|tav| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                type_annotated_value: Some(tav),
-            }),
+            result: result.map(|tav| tav.into()),
         })
     }
 

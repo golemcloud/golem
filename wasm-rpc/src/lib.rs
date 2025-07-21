@@ -54,10 +54,6 @@ pub mod serde;
 #[cfg(feature = "text")]
 mod text;
 
-/// A version of values annotated with golem-wasm-ast generated type information
-#[cfg(all(feature = "typeinfo", feature = "protobuf"))]
-mod type_annotated_value;
-
 #[cfg(feature = "typeinfo")]
 mod value_and_type;
 
@@ -184,12 +180,6 @@ impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
 pub struct CancellationTokenEntry {
     pub schedule_id: Vec<u8>, // ScheduleId is defined locally in the worker-executor, so store a serialized version here
 }
-
-#[cfg(all(feature = "typeinfo", feature = "protobuf"))]
-pub use type_annotated_value::*;
-
-#[cfg(all(feature = "text", feature = "protobuf"))]
-pub use text::{parse_type_annotated_value, print_type_annotated_value};
 
 #[cfg(feature = "text")]
 pub use text::{parse_value_and_type, print_value_and_type};
