@@ -15,9 +15,9 @@
 use crate::model::diff::component::Component;
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
 use crate::model::diff::ser::serialize_with_mode;
+use crate::model::diff::{BTreeDiff, Diffable};
 use serde::Serialize;
 use std::collections::BTreeMap;
-use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +25,29 @@ pub struct Deployment {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
     pub components: BTreeMap<String, HashOf<Component>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentDiff {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    components: BTreeDiff<String, HashOf<Component>>,
+}
+
+impl Diffable for Deployment {
+    type DiffResult = DeploymentDiff;
+
+    fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
+        let components_diff = local.components.diff_with_remote(&remote.components);
+
+        if components_diff.is_some() {
+            Some(DeploymentDiff {
+                components: components_diff.unwrap_or_default(),
+            })
+        } else {
+            None
+        }
+    }
 }
 
 impl Hashable for Deployment {

@@ -14,6 +14,7 @@
 
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
 use crate::model::diff::ser::serialize_with_mode;
+use crate::model::diff::{BTreeDiff, Diffable};
 use golem_common::model::{ComponentFilePermissions, ComponentType};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -31,20 +32,86 @@ impl Hashable for ComponentFile {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentFileDiff {
+    pub content_changed: bool,
+    pub permissions_changed: bool,
+}
+
+impl Diffable for ComponentFile {
+    type DiffResult = ComponentFileDiff;
+
+    fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
+        let content_changed = local.hash != remote.hash;
+        let permissions_changed = local.permissions != remote.permissions;
+
+        if content_changed || permissions_changed {
+            Some(ComponentFileDiff {
+                content_changed,
+                permissions_changed,
+            })
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Component {
-    pub binary_hash: Hash,
-    #[serde(skip_serializing_if = "Option::is_none")]
+pub struct ComponentMetadata {
     pub version: Option<String>,
     pub component_type: ComponentType,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub dynamic_linking_wasm_rpc: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl Hashable for ComponentMetadata {
+    fn hash(&self) -> Hash {
+        hash_from_serialized_value(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Component {
+    #[serde(serialize_with = "serialize_with_mode")]
+    pub metadata: HashOf<ComponentMetadata>,
+    pub binary_hash: Hash,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
     pub files: BTreeMap<String, HashOf<ComponentFile>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentDiff {
+    binary_changed: bool,
+    metadata_changed: bool,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    file_changes: BTreeDiff<String, HashOf<ComponentFile>>,
+}
+
+impl Diffable for Component {
+    type DiffResult = ComponentDiff;
+
+    fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
+        let update_metadata = local.metadata != remote.metadata;
+        let update_binary = local.binary_hash != remote.binary_hash;
+        let files_diff = local.files.diff_with_remote(&remote.files);
+
+        if update_metadata || update_binary || files_diff.is_some() {
+            Some(ComponentDiff {
+                metadata_changed: update_metadata,
+                binary_changed: update_binary,
+                file_changes: files_diff.unwrap_or_default(),
+            })
+        } else {
+            None
+        }
+    }
 }
 
 impl Hashable for Component {

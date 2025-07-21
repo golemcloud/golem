@@ -86,7 +86,7 @@ pub fn to_json_with_mode<T: Serialize>(
     with_mode(mode, || serde_json::to_string(value))
 }
 
-pub fn to_pretty_json_with_mode<T: Serialize>(
+pub fn to_json_pretty_with_mode<T: Serialize>(
     value: &T,
     mode: SerializeMode,
 ) -> serde_json::Result<String> {

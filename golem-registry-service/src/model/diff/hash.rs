@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use crate::model::diff::ser::{to_json_with_mode, SerializeMode, ToSerializableWithMode};
-use serde::ser::Error as SerError;
+use crate::model::diff::Diffable;
+use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use std::fmt::{Display, Formatter};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, std::hash::Hash, PartialEq, Eq, Debug)]
 pub struct Hash {
@@ -68,35 +69,44 @@ pub trait Hashable {
     fn hash(&self) -> Hash;
 }
 
-// TODO: make HashOf a struct and make the enum private?
 #[derive(Debug, Clone)]
-pub enum HashOf<V> {
+pub enum HashOfKind<V> {
     Precalculated(Hash),
     FromValue { value: V, lazy_hash: OnceLock<Hash> },
 }
 
+#[derive(Debug, Clone)]
+pub struct HashOf<V>(HashOfKind<V>);
+
 impl<V> HashOf<V> {
     pub fn from_hash(hash: Hash) -> Self {
-        Self::Precalculated(hash)
+        Self(HashOfKind::Precalculated(hash))
     }
 
     pub fn from_blake3_hash(hash: blake3::Hash) -> Self {
-        Self::Precalculated(hash.into())
+        Self(HashOfKind::Precalculated(hash.into()))
     }
 
     pub fn form_value(value: V) -> Self {
-        Self::FromValue {
+        Self(HashOfKind::FromValue {
             value,
             lazy_hash: OnceLock::new(),
+        })
+    }
+
+    pub fn as_value(&self) -> Option<&V> {
+        match &self.0 {
+            HashOfKind::Precalculated(_) => None,
+            HashOfKind::FromValue { value, .. } => Some(value),
         }
     }
 }
 
 impl<V: Hashable> Hashable for HashOf<V> {
     fn hash(&self) -> Hash {
-        match self {
-            HashOf::Precalculated(hash) => *hash,
-            HashOf::FromValue { value, lazy_hash } => *lazy_hash.get_or_init(|| value.hash()),
+        match &self.0 {
+            HashOfKind::Precalculated(hash) => *hash,
+            HashOfKind::FromValue { value, lazy_hash } => *lazy_hash.get_or_init(|| value.hash()),
         }
     }
 }
@@ -104,6 +114,58 @@ impl<V: Hashable> Hashable for HashOf<V> {
 impl<V: Hashable> PartialEq for HashOf<V> {
     fn eq(&self, other: &Self) -> bool {
         self.hash() == other.hash()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DiffForHashOf<V: Diffable> {
+    HashDiff { local_hash: Hash, remote_hash: Hash },
+    ValueDiff { diff: V::DiffResult },
+}
+
+impl<V: Hashable + Diffable> Diffable for HashOf<V> {
+    type DiffResult = DiffForHashOf<V>;
+
+    fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
+        if local == remote {
+            return None;
+        }
+
+        let local_hash = local.hash();
+        let remote_hash = remote.hash();
+
+        let diff = match (local.as_value(), remote.as_value()) {
+            (Some(local), Some(remote)) => local.diff_with_remote(remote),
+            _ => None,
+        };
+
+        match diff {
+            Some(diff) => Some(DiffForHashOf::ValueDiff { diff }),
+            None => Some(DiffForHashOf::HashDiff {
+                local_hash,
+                remote_hash,
+            }),
+        }
+    }
+}
+
+impl<V: Diffable> Serialize for DiffForHashOf<V> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            DiffForHashOf::HashDiff {
+                local_hash,
+                remote_hash,
+            } => {
+                let mut s = serializer.serialize_struct("DiffForHashOfByHashes", 2)?;
+                s.serialize_field("localHash", local_hash)?;
+                s.serialize_field("remoteHash", remote_hash)?;
+                s.end()
+            }
+            DiffForHashOf::ValueDiff { diff } => diff.serialize(serializer),
+        }
     }
 }
 
@@ -131,11 +193,11 @@ impl<V: Hashable + Serialize> ToSerializableWithMode for HashOf<V> {
             SerializeMode::HashOnly => {
                 serde_json::Value::String(self.hash().hash.to_hex().to_string())
             }
-            SerializeMode::ValueIfAvailable => match self {
-                HashOf::Precalculated(hash) => {
+            SerializeMode::ValueIfAvailable => match &self.0 {
+                HashOfKind::Precalculated(hash) => {
                     serde_json::Value::String(hash.hash.to_hex().to_string())
                 }
-                HashOf::FromValue {
+                HashOfKind::FromValue {
                     value,
                     lazy_hash: _,
                 } => serde_json::to_value(value)

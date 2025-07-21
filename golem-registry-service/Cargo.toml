@@ -66,6 +66,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 serde_with = "3.5.0"
+similar = "2.7.0"
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "sqlite",
