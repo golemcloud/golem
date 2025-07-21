@@ -3,8 +3,8 @@
 import type * as World from 'rpc:caller/caller';
 
 import { Counter } from "rpc:counters-client/counters-client";
-import { getEnvironment } from "wasi:cli/environment@0.2.0";
-import { parseUuid } from "golem:rpc/types@0.2.0";
+import { getEnvironment } from "wasi:cli/environment@0.2.3";
+import { parseUuid } from "golem:rpc/types@0.2.2";
 
 let globalCounter: Counter | undefined = undefined;
 
