@@ -15,7 +15,7 @@ swift_test_components=("swift-1")
 c_test_components=("c-1" "large-initial-memory" "large-dynamic-memory")
 python_test_components=("python-1" "py-echo")
 
-rust_test_apps=("auction-example" "rpc" "rust-service/rpc")
+rust_test_apps=("auction-example" "rpc" "rust-service/rpc" "custom-durability")
 ts_test_apps=("ts-rpc")
 
 # Optional arguments:
