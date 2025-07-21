@@ -135,7 +135,7 @@ impl<V: Hashable + Diffable> Diffable for HashOf<V> {
         let remote_hash = remote.hash();
 
         let diff = match (local.as_value(), remote.as_value()) {
-            (Some(local), Some(remote)) => local.diff_with_remote(remote),
+            (Some(local), Some(remote)) => local.diff_with_server(remote),
             _ => None,
         };
 

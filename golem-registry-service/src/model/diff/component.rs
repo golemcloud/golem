@@ -14,7 +14,7 @@
 
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
 use crate::model::diff::ser::serialize_with_mode;
-use crate::model::diff::{BTreeDiff, Diffable};
+use crate::model::diff::{BTreeMapDiff, Diffable};
 use golem_common::model::{ComponentFilePermissions, ComponentType};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -91,7 +91,7 @@ pub struct ComponentDiff {
     binary_changed: bool,
     metadata_changed: bool,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    file_changes: BTreeDiff<String, HashOf<ComponentFile>>,
+    file_changes: BTreeMapDiff<String, HashOf<ComponentFile>>,
 }
 
 impl Diffable for Component {
@@ -100,7 +100,7 @@ impl Diffable for Component {
     fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
         let update_metadata = local.metadata != remote.metadata;
         let update_binary = local.binary_hash != remote.binary_hash;
-        let files_diff = local.files.diff_with_remote(&remote.files);
+        let files_diff = local.files.diff_with_server(&remote.files);
 
         if update_metadata || update_binary || files_diff.is_some() {
             Some(ComponentDiff {

@@ -174,6 +174,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                             )
                         })
                         .collect(),
+                    http_api_definitions: todo!(),
+                    http_api_deployments: todo!(),
                 };
 
                 let hash = diff_deployment.hash();

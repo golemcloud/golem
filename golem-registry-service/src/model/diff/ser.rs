@@ -31,11 +31,15 @@ pub trait ToSerializableWithMode {
     fn to_serializable(&self, mode: SerializeMode) -> serde_json::Value;
 }
 
-impl<V: ToSerializableWithMode> ToSerializableWithMode for BTreeMap<String, V> {
+impl<K, V> ToSerializableWithMode for BTreeMap<K, V>
+where
+    for<'a> &'a K: Into<String>,
+    V: ToSerializableWithMode,
+{
     fn to_serializable(&self, mode: SerializeMode) -> serde_json::Value {
         serde_json::Value::Object(serde_json::Map::from_iter(
             self.iter()
-                .map(|(k, v)| (k.clone(), v.to_serializable(mode))),
+                .map(|(k, v)| (k.into(), v.to_serializable(mode))),
         ))
     }
 }
