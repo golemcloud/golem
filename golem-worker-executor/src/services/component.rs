@@ -50,6 +50,8 @@ pub struct ComponentMetadata {
     pub component_owner: ComponentOwner,
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     pub env: HashMap<String, String>,
+    pub root_package_name: Option<String>,
+    pub root_package_version: Option<String>,
 }
 
 impl From<LocalFileSystemComponentMetadata> for ComponentMetadata {
@@ -68,6 +70,8 @@ impl From<LocalFileSystemComponentMetadata> for ComponentMetadata {
             },
             dynamic_linking: value.dynamic_linking,
             env: value.env,
+            root_package_name: None, // NOTE: we could extract this information from the WASM component metadata sections
+            root_package_version: None,
         }
     }
 }
@@ -1021,6 +1025,15 @@ mod grpc {
                         }
                     }?;
 
+                    let root_package_name = component
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.root_package_name.clone());
+                    let root_package_version = component
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.root_package_version.clone());
+
                     let result = ComponentMetadata {
                         version: component
                             .versioned_component_id
@@ -1105,6 +1118,8 @@ mod grpc {
                             ),
                         },
                         env: component.env,
+                        root_package_name,
+                        root_package_version,
                     };
 
                     record_external_call_response_size_bytes("components", "get_metadata", len);
