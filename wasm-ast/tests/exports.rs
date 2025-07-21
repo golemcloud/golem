@@ -743,10 +743,10 @@ fn exports_caller_component() {
             name: "bug-wasm-rpc-i32".to_string(),
             parameters: vec![AnalysedFunctionParameter {
                 name: "in".to_string(),
-                typ: variant(vec![unit_case("leaf")]),
+                typ: variant(vec![unit_case("leaf")]).named("timeline-node"),
             }],
             result: Some(AnalysedFunctionResult {
-                typ: variant(vec![unit_case("leaf")]),
+                typ: variant(vec![unit_case("leaf")]).named("timeline-node"),
             }),
         }),
         AnalysedExport::Function(AnalysedFunction {
