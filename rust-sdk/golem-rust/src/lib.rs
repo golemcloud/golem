@@ -26,7 +26,7 @@ pub mod bindings {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
-            "golem:rpc/types@0.2.1": golem_wasm_rpc::golem_rpc_0_2_x::types,
+            "golem:rpc/types@0.2.2": golem_wasm_rpc::golem_rpc_0_2_x::types,
             "wasi:io/poll@0.2.3": golem_wasm_rpc::wasi::io::poll,
             "wasi:clocks/wall-clock@0.2.3": golem_wasm_rpc::wasi::clocks::wall_clock
         }

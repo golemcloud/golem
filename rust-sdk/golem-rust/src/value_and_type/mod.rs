@@ -310,7 +310,7 @@ impl<S: IntoValue, E: IntoValue> IntoValue for Result<S, E> {
     }
 
     fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
-        let mut builder = builder.result();
+        let mut builder = builder.result(None);
         builder = S::add_to_type_builder(builder.ok());
         builder = E::add_to_type_builder(builder.err());
         builder.finish()
@@ -340,7 +340,7 @@ impl<E: IntoValue> IntoValue for Result<(), E> {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let mut builder = builder.result();
+        let mut builder = builder.result(None);
         builder = builder.ok_unit();
         builder = E::add_to_type_builder(builder.err());
         builder.finish()
@@ -370,7 +370,7 @@ impl<S: IntoValue> IntoValue for Result<S, ()> {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let mut builder = builder.result();
+        let mut builder = builder.result(None);
         builder = S::add_to_type_builder(builder.ok());
         builder = builder.err_unit();
         builder.finish()
@@ -400,7 +400,7 @@ impl<T: IntoValue> IntoValue for Option<T> {
     }
 
     fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
-        T::add_to_type_builder(builder.option()).finish()
+        T::add_to_type_builder(builder.option(None)).finish()
     }
 }
 
@@ -437,7 +437,7 @@ impl<T: IntoValue> IntoValue for Bound<T> {
     }
 
     fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
-        let mut builder = builder.variant();
+        let mut builder = builder.variant(Some("Bound".to_string()));
         builder = T::add_to_type_builder(builder.case("included"));
         builder = T::add_to_type_builder(builder.case("excluded"));
         builder = builder.unit_case("unbounded");
@@ -480,7 +480,7 @@ impl<T: IntoValue> IntoValue for Vec<T> {
     }
 
     fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
-        T::add_to_type_builder(builder.list()).finish()
+        T::add_to_type_builder(builder.list(None)).finish()
     }
 }
 
@@ -504,7 +504,7 @@ impl<A: IntoValue, B: IntoValue> IntoValue for (A, B) {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let mut builder = builder.tuple();
+        let mut builder = builder.tuple(None);
         builder = A::add_to_type_builder(builder.item());
         builder = B::add_to_type_builder(builder.item());
         builder.finish()
@@ -539,7 +539,7 @@ impl<A: IntoValue, B: IntoValue, C: IntoValue> IntoValue for (A, B, C) {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let mut builder = builder.tuple();
+        let mut builder = builder.tuple(None);
         builder = A::add_to_type_builder(builder.item());
         builder = B::add_to_type_builder(builder.item());
         builder = C::add_to_type_builder(builder.item());
@@ -581,7 +581,7 @@ impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let mut builder = builder.list().tuple();
+        let mut builder = builder.list(None).tuple(None);
         builder = K::add_to_type_builder(builder.item());
         builder = V::add_to_type_builder(builder.item());
         builder.finish().finish()
