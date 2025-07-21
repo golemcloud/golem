@@ -133,20 +133,6 @@ CREATE TABLE oauth2_web_flow_state
 CREATE INDEX oauth2_web_flow_state_token_idx
     ON oauth2_web_flow_state (token_id);
 
-CREATE TABLE account_creation_attempts
-(
-    oauth2_provider TEXT      NOT NULL,
-    external_id     TEXT      NOT NULL,
-    name            TEXT      NOT NULL,
-    email           TEXT      NOT NULL,
-    all_emails      JSONB     NOT NULL,
-    first_attempt   TIMESTAMP NOT NULL,
-    latest_attempt  TIMESTAMP NOT NULL,
-    attempts_count  INTEGER   NOT NULL,
-    PRIMARY KEY (oauth2_provider, external_id)
-);
-
-
 CREATE TABLE account_usage_stats
 (
     account_id UUID   NOT NULL,
@@ -273,13 +259,15 @@ CREATE UNIQUE INDEX components_name_uk
     ON components (environment_id, name)
     WHERE deleted_at IS NULL;
 
+-- TODO: index for environment id, deleted_at
+
 CREATE TABLE component_revisions
 (
     component_id                 UUID      NOT NULL,
     revision_id                  BIGINT    NOT NULL,
     version                      TEXT      NOT NULL,
 
-    hash                         BYTEA     NOT NULL,
+    hash                         BYTEA,
 
     created_at                   TIMESTAMP NOT NULL,
     created_by                   UUID      NOT NULL,
