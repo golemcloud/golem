@@ -31,7 +31,6 @@ use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
 use sqlx::{Database, Row};
-use std::collections::BTreeMap;
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 

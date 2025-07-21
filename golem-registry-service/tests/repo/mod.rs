@@ -22,7 +22,8 @@ use golem_registry_service::repo::model::audit::{AuditFields, DeletableRevisionA
 use golem_registry_service::repo::model::environment::{
     EnvironmentCurrentRevisionRecord, EnvironmentRevisionRecord,
 };
-use golem_registry_service::repo::plan::{PlanRecord, PlanRepository};
+use golem_registry_service::repo::model::plan::PlanRecord;
+use golem_registry_service::repo::plan::PlanRepository;
 use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};

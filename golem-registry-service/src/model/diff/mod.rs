@@ -98,7 +98,7 @@ impl<ValueDiff: Serialize> Serialize for BTreeDiffValue<ValueDiff> {
     }
 }
 
-pub type BTreeDiff<K, V: Diffable> = BTreeMap<K, BTreeDiffValue<V::DiffResult>>;
+pub type BTreeDiff<K, V> = BTreeMap<K, BTreeDiffValue<<V as Diffable>::DiffResult>>;
 
 impl<K, V> Diffable for BTreeMap<K, V>
 where
