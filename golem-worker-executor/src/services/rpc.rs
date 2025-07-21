@@ -43,6 +43,7 @@ use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, TargetWorker
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
+use rib::ParsedFunctionName;
 use tokio::runtime::Handle;
 use tracing::debug;
 
@@ -572,6 +573,80 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             extra_deps,
         }
     }
+
+    /// As we know the target component's metadata, and it includes the root package name, we can
+    /// accept function names which are not fully qualified by falling back to use this root package
+    /// when the package part is missing.
+    async fn enrich_function_name(
+        &self,
+        target_worker_id: &OwnedWorkerId,
+        function_name: String,
+    ) -> String {
+        let parsed_function_name: Option<ParsedFunctionName> =
+            ParsedFunctionName::parse(&function_name).ok();
+        if parsed_function_name.is_some() {
+            // already valid function name, doing nothing
+            function_name
+        } else if let Ok(target_component_metadata) = self
+            .component_service
+            .get_metadata(
+                &target_worker_id.project_id,
+                &target_worker_id.worker_id.component_id,
+                None,
+            )
+            .await
+        {
+            enrich_function_name_by_target_information(
+                function_name,
+                target_component_metadata.root_package_name,
+                target_component_metadata.root_package_version,
+            )
+        } else {
+            // If we cannot get the target metadata, we just go with the original function name
+            // and let it fail on that.
+            function_name
+        }
+    }
+}
+
+fn enrich_function_name_by_target_information(
+    function_name: String,
+    root_package_name: Option<String>,
+    root_package_version: Option<String>,
+) -> String {
+    if let Some(root_package_name) = root_package_name {
+        if let Some(root_package_version) = root_package_version {
+            // The target root package is versioned, and the version has to be put _after_ the interface
+            // name which we assume to be the first section (before a dot) of the provided string:
+
+            if let Some((interface_name, rest)) = function_name.split_once('.') {
+                let enriched_function_name =
+                    format!("{root_package_name}/{interface_name}@{root_package_version}.{rest}");
+                if ParsedFunctionName::parse(&enriched_function_name).is_ok() {
+                    enriched_function_name
+                } else {
+                    // If the enriched function name is still not valid, we just return the original function name
+                    function_name
+                }
+            } else {
+                // Unexpected format, we just return the original function name
+                function_name
+            }
+        } else {
+            // The target root package is not versioned, so we can just simply prefix the root package name
+            // to the provided function name and see if it is valid:
+            let enriched_function_name = format!("{root_package_name}/{function_name}");
+            if ParsedFunctionName::parse(&enriched_function_name).is_ok() {
+                enriched_function_name
+            } else {
+                // If the enriched function name is still not valid, we just return the original function name
+                function_name
+            }
+        }
+    } else {
+        // No root package information in the target, we can't do anything
+        function_name
+    }
 }
 
 #[async_trait]
@@ -594,6 +669,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_stack: InvocationContextStack,
     ) -> Result<Option<ValueAndType>, RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
+        let function_name = self
+            .enrich_function_name(owned_worker_id, function_name)
+            .await;
 
         if self
             .shard_service()
@@ -653,6 +731,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
+        let function_name = self
+            .enrich_function_name(owned_worker_id, function_name)
+            .await;
 
         if self
             .shard_service()
@@ -709,3 +790,41 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 }
 
 impl RpcDemand for () {}
+
+#[cfg(test)]
+mod tests {
+    use crate::services::rpc::enrich_function_name_by_target_information;
+    use test_r::test;
+
+    #[test]
+    fn test_enrich_function_name_by_target_information() {
+        assert_eq!(
+            enrich_function_name_by_target_information("api.{x}".to_string(), None, None),
+            "api.{x}".to_string()
+        );
+        assert_eq!(
+            enrich_function_name_by_target_information(
+                "api.{x}".to_string(),
+                Some("test:pkg".to_string()),
+                None
+            ),
+            "test:pkg/api.{x}".to_string()
+        );
+        assert_eq!(
+            enrich_function_name_by_target_information(
+                "api.{x}".to_string(),
+                Some("test:pkg".to_string()),
+                Some("1.0.0".to_string())
+            ),
+            "test:pkg/api@1.0.0.{x}".to_string()
+        );
+        assert_eq!(
+            enrich_function_name_by_target_information(
+                "run".to_string(),
+                Some("test:pkg".to_string()),
+                Some("1.0.0".to_string())
+            ),
+            "run".to_string()
+        );
+    }
+}
