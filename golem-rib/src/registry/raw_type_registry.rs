@@ -347,6 +347,7 @@ mod internal {
             AnalysedType::Result(TypeResult {
                 ok: Some(ok_type),
                 err: Some(err_type),
+                ..
             }) => {
                 update_registry(ok_type.as_ref(), registry);
                 update_registry(err_type.as_ref(), registry);
@@ -354,12 +355,14 @@ mod internal {
             AnalysedType::Result(TypeResult {
                 ok: None,
                 err: Some(err_type),
+                ..
             }) => {
                 update_registry(err_type.as_ref(), registry);
             }
             AnalysedType::Result(TypeResult {
                 ok: Some(ok_type),
                 err: None,
+                ..
             }) => {
                 update_registry(ok_type.as_ref(), registry);
             }
@@ -369,6 +372,7 @@ mod internal {
             AnalysedType::Result(TypeResult {
                 ok: None,
                 err: None,
+                ..
             }) => {}
             AnalysedType::Flags(_) => {}
             AnalysedType::Str(_) => {}

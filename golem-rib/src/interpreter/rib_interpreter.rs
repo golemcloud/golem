@@ -1553,7 +1553,7 @@ mod internal {
         let value = interpreter_stack.try_pop_val()?;
 
         match analysed_type {
-            AnalysedType::Result(TypeResult { ok, err }) => {
+            AnalysedType::Result(TypeResult { ok, err, .. }) => {
                 interpreter_stack.push_ok(value.value, ok.as_deref(), err.as_deref());
                 Ok(())
             }
@@ -1574,7 +1574,7 @@ mod internal {
         let value = interpreter_stack.try_pop_val()?;
 
         match analysed_type {
-            AnalysedType::Result(TypeResult { ok, err }) => {
+            AnalysedType::Result(TypeResult { ok, err, .. }) => {
                 interpreter_stack.push_err(value.value, ok.as_deref(), err.as_deref());
                 Ok(())
             }

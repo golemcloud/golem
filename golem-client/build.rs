@@ -79,13 +79,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::public_oplog::PublicOplogEntry",
             ),
             ("ShardId", "golem_common::model::ShardId"),
-            (
-                "TypeAnnotatedValue",
-                "golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue",
-            ),
+            ("ValueAndType", "golem_wasm_rpc::ValueAndType"),
             (
                 "ValueAndOptionalType",
-                "golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson",
+                "golem_wasm_rpc::json::OptionallyValueAndTypeJson",
             ),
             (
                 "WasmRpcTarget",

@@ -12,25 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
+use golem_wasm_rpc::ValueAndType;
 
 pub enum InvocationParameters {
-    TypedProtoVals(Vec<TypeAnnotatedValue>),
+    TypedProtoVals(Vec<ValueAndType>),
     RawJsonStrings(Vec<String>),
 }
 
 impl InvocationParameters {
     pub fn from_optionally_type_annotated_value_jsons(
-        values: Vec<OptionallyTypeAnnotatedValueJson>,
+        values: Vec<OptionallyValueAndTypeJson>,
     ) -> Result<Self, Vec<String>> {
         let all_have_types = values.iter().all(|v| v.has_type());
         let some_has_types = values.iter().any(|v| v.has_type());
 
         if all_have_types {
-            let vals: Vec<TypeAnnotatedValue> = values
+            let vals: Vec<ValueAndType> = values
                 .into_iter()
-                .map(|param| param.try_into_type_annotated_value())
+                .map(|param| param.try_into_value_and_type())
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .map(|param| param.unwrap()) // This is expected to always succeed because of the `all_have_types` condition

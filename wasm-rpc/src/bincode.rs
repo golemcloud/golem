@@ -1,4 +1,4 @@
-use crate::golem_rpc_0_2_x::types::ResourceId;
+use crate::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId};
 use crate::{NodeIndex, ResourceMode, Uri, WitNode, WitType, WitTypeNode, WitValue};
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
@@ -362,7 +362,7 @@ impl Encode for WitType {
 
 impl<Context> Decode<Context> for WitType {
     fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let nodes = Vec::<WitTypeNode>::decode(decoder)?;
+        let nodes = Vec::<NamedWitTypeNode>::decode(decoder)?;
         Ok(WitType { nodes })
     }
 }
@@ -371,7 +371,7 @@ impl<'de, Context> BorrowDecode<'de, Context> for WitType {
     fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
         decoder: &mut D,
     ) -> Result<Self, DecodeError> {
-        let nodes = Vec::<WitTypeNode>::borrow_decode(decoder)?;
+        let nodes = Vec::<NamedWitTypeNode>::borrow_decode(decoder)?;
         Ok(WitType { nodes })
     }
 }
@@ -414,6 +414,31 @@ impl<'de, Context> BorrowDecode<'de, Context> for ResourceMode {
                 allowed: &AllowedEnumVariants::Range { min: 0, max: 1 },
             }),
         }
+    }
+}
+
+impl Encode for NamedWitTypeNode {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        self.name.encode(encoder)?;
+        self.type_.encode(encoder)
+    }
+}
+
+impl<Context> Decode<Context> for NamedWitTypeNode {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let name = Option::<String>::decode(decoder)?;
+        let type_ = WitTypeNode::decode(decoder)?;
+        Ok(NamedWitTypeNode { name, type_ })
+    }
+}
+
+impl<'de, Context> BorrowDecode<'de, Context> for NamedWitTypeNode {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
+        let name = Option::<String>::borrow_decode(decoder)?;
+        let type_ = WitTypeNode::borrow_decode(decoder)?;
+        Ok(NamedWitTypeNode { name, type_ })
     }
 }
 

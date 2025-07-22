@@ -1,6 +1,6 @@
 import type * as World from 'rpc:counters/counters'
 
-import { getArguments, getEnvironment } from 'wasi:cli/environment@0.2.0'
+import { getArguments, getEnvironment } from 'wasi:cli/environment@0.2.3'
 
 class CounterResource implements World.api.Counter {
     value: bigint

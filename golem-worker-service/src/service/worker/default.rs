@@ -49,8 +49,8 @@ use golem_service_base::model::RevertWorkerTarget;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
+use golem_wasm_rpc::ValueAndType;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 use tonic::transport::Channel;
@@ -77,10 +77,7 @@ pub trait WorkerService: Send + Sync {
 
     async fn delete(&self, worker_id: &WorkerId, namespace: Namespace) -> WorkerResult<()>;
 
-    fn validate_typed_parameters(
-        &self,
-        params: Vec<TypeAnnotatedValue>,
-    ) -> WorkerResult<Vec<ProtoVal>>;
+    fn validate_typed_parameters(&self, params: Vec<ValueAndType>) -> WorkerResult<Vec<ProtoVal>>;
 
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then
     /// invokes the worker and waits its results, returning it as a `TypeAnnotatedValue`.
@@ -89,10 +86,10 @@ pub trait WorkerService: Send + Sync {
         worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<TypeAnnotatedValue>,
+        params: Vec<ValueAndType>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
-    ) -> WorkerResult<Option<TypeAnnotatedValue>> {
+    ) -> WorkerResult<Option<ValueAndType>> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke_and_await_typed(
             worker_id,
@@ -115,7 +112,7 @@ pub trait WorkerService: Send + Sync {
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
-    ) -> WorkerResult<Option<TypeAnnotatedValue>>;
+    ) -> WorkerResult<Option<ValueAndType>>;
 
     /// Invokes a worker using raw `Val` parameter values and awaits its results returning
     /// a `Val` values (without type information)
@@ -140,7 +137,7 @@ pub trait WorkerService: Send + Sync {
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
-    ) -> WorkerResult<Option<TypeAnnotatedValue>>;
+    ) -> WorkerResult<Option<ValueAndType>>;
 
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
     /// an invocation for the worker without awaiting its results.
@@ -149,7 +146,7 @@ pub trait WorkerService: Send + Sync {
         worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<TypeAnnotatedValue>,
+        params: Vec<ValueAndType>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
     ) -> WorkerResult<()> {
@@ -306,7 +303,7 @@ pub trait WorkerService: Send + Sync {
 }
 
 pub struct TypedResult {
-    pub result: TypeAnnotatedValue,
+    pub result: ValueAndType,
     pub function_result_types: Vec<AnalysedFunctionResult>,
 }
 
@@ -626,14 +623,10 @@ impl WorkerService for WorkerServiceDefault {
         Ok(())
     }
 
-    fn validate_typed_parameters(
-        &self,
-        params: Vec<TypeAnnotatedValue>,
-    ) -> WorkerResult<Vec<ProtoVal>> {
+    fn validate_typed_parameters(&self, params: Vec<ValueAndType>) -> WorkerResult<Vec<ProtoVal>> {
         let mut result = Vec::new();
         for param in params {
-            let val =
-                golem_wasm_rpc::Value::try_from(param).map_err(WorkerServiceError::TypeChecker)?;
+            let val = param.value;
             result.push(golem_wasm_rpc::protobuf::Val::from(val));
         }
         Ok(result)
@@ -647,7 +640,7 @@ impl WorkerService for WorkerServiceDefault {
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
-    ) -> WorkerResult<Option<TypeAnnotatedValue>> {
+    ) -> WorkerResult<Option<ValueAndType>> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
@@ -680,7 +673,10 @@ impl WorkerService for WorkerServiceDefault {
                                  },
                              )),
                     } => {
-                        Ok(output.and_then(|tav| tav.type_annotated_value))
+                        match output {
+                            Some(vnt) => ValueAndType::try_from(vnt).map(Some).map_err(|err| WorkerExecutorError::unknown(err).into()),
+                            None => Ok(None),
+                        }
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
@@ -767,7 +763,7 @@ impl WorkerService for WorkerServiceDefault {
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
-    ) -> WorkerResult<Option<TypeAnnotatedValue>> {
+    ) -> WorkerResult<Option<ValueAndType>> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
@@ -800,7 +796,12 @@ impl WorkerService for WorkerServiceDefault {
                                  },
                              )),
                     } => {
-                        Ok(output.and_then(|tav| tav.type_annotated_value))
+                        match output {
+                            Some(vnt) => {
+                                ValueAndType::try_from(vnt).map(Some).map_err(|err| WorkerExecutorError::unknown(err).into())
+                            }
+                            None => Ok(None),
+                        }
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:

@@ -266,21 +266,12 @@ impl WorkerProxy for RemoteWorkerProxy {
             Some(invoke_and_await_typed_response::Result::Success(result)) => {
                 let result = result
                     .result
-                    .map(|tav| {
-                        tav.type_annotated_value
-                            .ok_or(WorkerProxyError::InternalError(
-                                WorkerExecutorError::unknown(
-                                    "Missing type_annotated_value in the worker API response"
-                                        .to_string(),
-                                ),
-                            ))
-                            .and_then(|tav| {
-                                ValueAndType::try_from(tav).map_err(|e| {
-                                    WorkerProxyError::InternalError(WorkerExecutorError::unknown(
-                                        format!("Failed to parse invocation result value: {e}"),
-                                    ))
-                                })
-                            })
+                    .map(|proto_vnt| {
+                        ValueAndType::try_from(proto_vnt).map_err(|e| {
+                            WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
+                                "Failed to parse invocation result value: {e}"
+                            )))
+                        })
                     })
                     .transpose()?;
                 Ok(result)

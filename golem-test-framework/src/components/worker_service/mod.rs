@@ -90,7 +90,6 @@ use golem_client::{Context, Security};
 use golem_common::model::ProjectId;
 use golem_common::model::WorkerEvent;
 use golem_service_base::clients::authorised_request;
-use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::HashMap;
 use std::future::Future;
@@ -448,7 +447,7 @@ pub trait WorkerService: Send + Sync {
                 Ok(InvokeAndAwaitResponse {
                     result: Some(invoke_and_await_response::Result::Success(InvokeResult {
                         result: result.result.map(|result| {
-                            let value: Value = result.try_into().unwrap();
+                            let value: Value = result.into();
                             value.into()
                         }),
                     })),
@@ -497,9 +496,7 @@ pub trait WorkerService: Send + Sync {
                 Ok(InvokeAndAwaitTypedResponse {
                     result: Some(invoke_and_await_typed_response::Result::Success(
                         InvokeResultTyped {
-                            result: Some(TypeAnnotatedValue {
-                                type_annotated_value: result.result,
-                            }),
+                            result: result.result.map(|vnt| vnt.into()),
                         },
                     )),
                 })

@@ -199,7 +199,7 @@ impl TryFrom<AnalysedType> for TypeName {
             AnalysedType::Option(type_option) => Ok(TypeName::Option(Box::new(
                 type_option.inner.deref().clone().try_into()?,
             ))),
-            AnalysedType::Result(TypeResult { ok, err }) => match (ok, err) {
+            AnalysedType::Result(TypeResult { ok, err, .. }) => match (ok, err) {
                 (Some(ok), Some(err)) => Ok(TypeName::Result {
                     ok: Some(Box::new(ok.deref().clone().try_into()?)),
                     error: Some(Box::new(err.deref().clone().try_into()?)),

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
 use crate::{ResourceMode, RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};
 use golem_wasm_ast::analysis::analysed_type::{
     case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case, variant,
@@ -625,6 +626,20 @@ impl IntoValue for WitType {
 }
 
 #[cfg(feature = "host-bindings")]
+impl IntoValue for NamedWitTypeNode {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.name.into_value(), self.type_.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("type", WitTypeNode::get_type()),
+        ])
+    }
+}
+
+#[cfg(feature = "host-bindings")]
 impl IntoValue for WitTypeNode {
     fn into_value(self) -> Value {
         match self {
@@ -866,8 +881,8 @@ impl From<WitType> for AnalysedType {
     }
 }
 
-fn build_tree(node: &WitTypeNode, nodes: &[WitTypeNode]) -> AnalysedType {
-    match node {
+fn build_tree(node: &NamedWitTypeNode, nodes: &[NamedWitTypeNode]) -> AnalysedType {
+    match &node.type_ {
         WitTypeNode::RecordType(fields) => {
             let fields = fields
                 .iter()
@@ -876,7 +891,7 @@ fn build_tree(node: &WitTypeNode, nodes: &[WitTypeNode]) -> AnalysedType {
                     analysed_type::field(name, field_type)
                 })
                 .collect();
-            analysed_type::record(fields)
+            analysed_type::record(fields).with_optional_name(node.name.clone())
         }
         WitTypeNode::VariantType(cases) => {
             let cases = cases
@@ -889,42 +904,44 @@ fn build_tree(node: &WitTypeNode, nodes: &[WitTypeNode]) -> AnalysedType {
                     None => analysed_type::unit_case(name),
                 })
                 .collect();
-            variant(cases)
+            variant(cases).with_optional_name(node.name.clone())
         }
         WitTypeNode::EnumType(names) => AnalysedType::Enum(TypeEnum {
             cases: names.clone(),
+            name: node.name.clone(),
         }),
         WitTypeNode::FlagsType(names) => AnalysedType::Flags(TypeFlags {
             names: names.clone(),
+            name: node.name.clone(),
         }),
         WitTypeNode::TupleType(types) => {
             let types = types
                 .iter()
                 .map(|idx| build_tree(&nodes[*idx as usize], nodes))
                 .collect();
-            tuple(types)
+            tuple(types).with_optional_name(node.name.clone())
         }
         WitTypeNode::ListType(elem_type) => {
             let elem_type = build_tree(&nodes[*elem_type as usize], nodes);
-            list(elem_type)
+            list(elem_type).with_optional_name(node.name.clone())
         }
         WitTypeNode::OptionType(inner_type) => {
             let inner_type = build_tree(&nodes[*inner_type as usize], nodes);
-            option(inner_type)
+            option(inner_type).with_optional_name(node.name.clone())
         }
         WitTypeNode::ResultType((ok_type, err_type)) => match (ok_type, err_type) {
             (Some(ok_type), Some(err_type)) => {
                 let ok_type = build_tree(&nodes[*ok_type as usize], nodes);
                 let err_type = build_tree(&nodes[*err_type as usize], nodes);
-                result(ok_type, err_type)
+                result(ok_type, err_type).with_optional_name(node.name.clone())
             }
             (None, Some(err_type)) => {
                 let err_type = build_tree(&nodes[*err_type as usize], nodes);
-                result_err(err_type)
+                result_err(err_type).with_optional_name(node.name.clone())
             }
             (Some(ok_type), None) => {
                 let ok_type = build_tree(&nodes[*ok_type as usize], nodes);
-                result_ok(ok_type)
+                result_ok(ok_type).with_optional_name(node.name.clone())
             }
             (None, None) => panic!("ResultType with no ok_type or err_type"),
         },
@@ -947,7 +964,8 @@ fn build_tree(node: &WitTypeNode, nodes: &[WitTypeNode]) -> AnalysedType {
                 crate::ResourceMode::Owned => AnalysedResourceMode::Owned,
                 crate::ResourceMode::Borrowed => AnalysedResourceMode::Borrowed,
             },
-        ),
+        )
+        .with_optional_name(node.name.clone()),
     }
 }
 
@@ -960,7 +978,7 @@ impl From<AnalysedType> for WitType {
 }
 
 struct WitTypeBuilder {
-    nodes: Vec<WitTypeNode>,
+    nodes: Vec<NamedWitTypeNode>,
     mapping: HashMap<AnalysedType, usize>,
 }
 
@@ -977,7 +995,11 @@ impl WitTypeBuilder {
             *idx
         } else {
             let idx = self.nodes.len();
-            self.nodes.push(WitTypeNode::PrimBoolType); // placeholder, to be replaced
+            self.nodes.push(NamedWitTypeNode {
+                name: None,
+                type_: WitTypeNode::PrimBoolType,
+            }); // placeholder, to be replaced
+            let name = typ.name().map(|n| n.to_string());
             let node: WitTypeNode = match typ {
                 AnalysedType::Variant(variant) => {
                     let mut cases = Vec::new();
@@ -1037,7 +1059,7 @@ impl WitTypeBuilder {
                     },
                 )),
             };
-            self.nodes[idx] = node;
+            self.nodes[idx] = NamedWitTypeNode { name, type_: node };
             idx
         }
     }
