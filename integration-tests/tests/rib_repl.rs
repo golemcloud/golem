@@ -122,12 +122,15 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
         result,
         Some(RibResult::Val(ValueAndType::new(
             Value::List(vec![]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+            ),
         )))
     );
 
@@ -154,12 +157,15 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
                 Value::F32(10.0),
                 Value::U32(2),
             ])]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],)),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+            ),
         )))
     );
 }
@@ -235,12 +241,15 @@ async fn test_repl_invoking_resource_methods(
         result,
         Some(RibResult::Val(ValueAndType::new(
             Value::List(vec![]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+            ),
         )))
     );
 
@@ -267,12 +276,15 @@ async fn test_repl_invoking_resource_methods(
                 Value::F32(10.0),
                 Value::U32(2),
             ])]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],)),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+            ),
         )))
     )
 }
