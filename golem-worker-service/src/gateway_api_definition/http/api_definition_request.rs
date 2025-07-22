@@ -29,40 +29,6 @@ pub struct HttpApiDefinitionRequest {
     pub draft: bool,
 }
 
-impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest> for HttpApiDefinitionRequest {
-    type Error = String;
-
-    fn try_from(value: grpc_apidefinition::v1::ApiDefinitionRequest) -> Result<Self, Self::Error> {
-        let mut global_securities = vec![];
-        let mut route_requests = vec![];
-
-        match value.definition.ok_or("definition is missing")? {
-            grpc_apidefinition::v1::api_definition_request::Definition::Http(http) => {
-                for route in http.routes {
-                    let route_request =
-                        crate::gateway_api_definition::http::RouteRequest::try_from(route)?;
-                    if let Some(security) = &route_request.security {
-                        global_securities.push(security.clone());
-                    }
-
-                    route_requests.push(route_request);
-                }
-            }
-        };
-
-        let id = value.id.ok_or("Api Definition ID is missing")?;
-
-        let result = Self {
-            id: ApiDefinitionId(id.value),
-            version: ApiVersion(value.version),
-            routes: route_requests,
-            draft: value.draft,
-        };
-
-        Ok(result)
-    }
-}
-
 // In a RouteRequest, security is defined at the outer level
 // Also this security has minimal information (and avoid details such as client-id, secret etc).
 // When `RouteRequest` is converted to `Route`, this security is pushed as middleware in the binding

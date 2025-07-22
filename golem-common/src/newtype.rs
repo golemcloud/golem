@@ -14,7 +14,7 @@
 
 #[macro_export]
 macro_rules! newtype_uuid {
-    ($name:ident, $proto_type:path) => {
+    ($name:ident $(, $proto_type:path)?) => {
         #[derive(Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
         #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
         #[cfg_attr(feature = "model", serde(transparent))]
@@ -68,29 +68,6 @@ macro_rules! newtype_uuid {
                 let uuid =
                     Uuid::parse_str(value).map_err(|err| format!("Invalid plan ID: {err}"))?;
                 Ok(Self(uuid))
-            }
-        }
-
-        #[cfg(feature = "protobuf")]
-        impl TryFrom<$proto_type> for $name {
-            type Error = String;
-
-            fn try_from(value: $proto_type) -> Result<Self, Self::Error> {
-                Ok(Self(
-                    value
-                        .value
-                        .ok_or(format!("Missing value in {}", stringify!($name)))?
-                        .into(),
-                ))
-            }
-        }
-
-        #[cfg(feature = "protobuf")]
-        impl From<$name> for $proto_type {
-            fn from(value: $name) -> Self {
-                $proto_type {
-                    value: Some(value.0.into()),
-                }
             }
         }
 
@@ -184,5 +161,30 @@ macro_rules! newtype_uuid {
                 ])
             }
         }
+
+        $(
+            #[cfg(feature = "protobuf")]
+            impl TryFrom<$proto_type> for $name {
+                type Error = String;
+
+                fn try_from(value: $proto_type) -> Result<Self, Self::Error> {
+                    Ok(Self(
+                        value
+                            .value
+                            .ok_or(format!("Missing value in {}", stringify!($name)))?
+                            .into(),
+                    ))
+                }
+            }
+
+            #[cfg(feature = "protobuf")]
+            impl From<$name> for $proto_type {
+                fn from(value: $name) -> Self {
+                    $proto_type {
+                        value: Some(value.0.into()),
+                    }
+                }
+            }
+        )?
     };
 }

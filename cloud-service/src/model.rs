@@ -355,8 +355,8 @@ impl Default for PlanData {
     }
 }
 
-impl From<golem_api_grpc::proto::golem::plan::PlanData> for PlanData {
-    fn from(value: golem_api_grpc::proto::golem::plan::PlanData) -> Self {
+impl From<golem_api_grpc::proto::golem::account::PlanData> for PlanData {
+    fn from(value: golem_api_grpc::proto::golem::account::PlanData) -> Self {
         Self {
             project_limit: value.project_limit,
             component_limit: value.component_limit,
@@ -368,7 +368,7 @@ impl From<golem_api_grpc::proto::golem::plan::PlanData> for PlanData {
     }
 }
 
-impl From<PlanData> for golem_api_grpc::proto::golem::plan::PlanData {
+impl From<PlanData> for golem_api_grpc::proto::golem::account::PlanData {
     fn from(value: PlanData) -> Self {
         Self {
             project_limit: value.project_limit,
@@ -400,10 +400,10 @@ impl Default for Plan {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::plan::Plan> for Plan {
+impl TryFrom<golem_api_grpc::proto::golem::account::Plan> for Plan {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::plan::Plan) -> Result<Self, Self::Error> {
+    fn try_from(value: golem_api_grpc::proto::golem::account::Plan) -> Result<Self, Self::Error> {
         Ok(Self {
             plan_id: value.plan_id.ok_or("Missing field: plan_id")?.try_into()?,
             plan_data: value.plan_data.ok_or("Missing field: plan_data")?.into(),
@@ -411,7 +411,7 @@ impl TryFrom<golem_api_grpc::proto::golem::plan::Plan> for Plan {
     }
 }
 
-impl From<Plan> for golem_api_grpc::proto::golem::plan::Plan {
+impl From<Plan> for golem_api_grpc::proto::golem::account::Plan {
     fn from(value: Plan) -> Self {
         Self {
             plan_id: Some(value.plan_id.into()),
@@ -483,37 +483,6 @@ pub struct AccountSummary {
     pub created_at: chrono::DateTime<Utc>,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::accountsummary::v1::AccountSummary> for AccountSummary {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::accountsummary::v1::AccountSummary,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: value.id.ok_or("Missing field: id")?.into(),
-            name: value.name,
-            email: value.email,
-            component_count: value.component_count,
-            worker_count: value.worker_count,
-            created_at: chrono::DateTime::<Utc>::from_str(&value.created_at)
-                .map_err(|err| format!("Invalid created_at value: {err}"))?,
-        })
-    }
-}
-
-impl From<AccountSummary> for golem_api_grpc::proto::golem::accountsummary::v1::AccountSummary {
-    fn from(value: AccountSummary) -> Self {
-        Self {
-            id: Some(value.id.into()),
-            name: value.name,
-            email: value.email,
-            component_count: value.component_count,
-            worker_count: value.worker_count,
-            created_at: value.created_at.to_rfc3339(),
-        }
-    }
-}
-
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
 )]
@@ -550,31 +519,6 @@ pub struct OAuth2Data {
     pub user_code: String,
     pub expires: chrono::DateTime<Utc>,
     pub encoded_session: String,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::login::OAuth2Data> for OAuth2Data {
-    type Error = String;
-
-    fn try_from(value: golem_api_grpc::proto::golem::login::OAuth2Data) -> Result<Self, String> {
-        Ok(Self {
-            url: value.url,
-            user_code: value.user_code,
-            expires: chrono::DateTime::<Utc>::from_str(&value.expires)
-                .map_err(|err| format!("Invalid expires value: {err}"))?,
-            encoded_session: value.encoded_session,
-        })
-    }
-}
-
-impl From<OAuth2Data> for golem_api_grpc::proto::golem::login::OAuth2Data {
-    fn from(value: OAuth2Data) -> Self {
-        Self {
-            url: value.url,
-            user_code: value.user_code,
-            expires: value.expires.to_rfc3339(),
-            encoded_session: value.encoded_session,
-        }
-    }
 }
 
 #[derive(

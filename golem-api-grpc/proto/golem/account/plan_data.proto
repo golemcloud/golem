@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package golem.plan;
+package golem.account;
 
 message PlanData {
   int32 project_limit = 1;

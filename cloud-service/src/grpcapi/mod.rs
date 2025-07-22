@@ -14,18 +14,14 @@
 
 use crate::bootstrap::Services;
 use crate::grpcapi::account::AccountGrpcApi;
-use crate::grpcapi::account_summary::AccountSummaryGrpcApi;
 use crate::grpcapi::limits::LimitsGrpcApi;
-use crate::grpcapi::login::LoginGrpcApi;
 use crate::grpcapi::project::ProjectGrpcApi;
 use crate::grpcapi::token::TokenGrpcApi;
 use auth::AuthGrpcApi;
 use futures::TryFutureExt;
 use golem_api_grpc::proto::golem::account::v1::cloud_account_service_server::CloudAccountServiceServer;
-use golem_api_grpc::proto::golem::accountsummary::v1::cloud_account_summary_service_server::CloudAccountSummaryServiceServer;
 use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_server::CloudAuthServiceServer;
 use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_server::CloudLimitsServiceServer;
-use golem_api_grpc::proto::golem::login::v1::cloud_login_service_server::CloudLoginServiceServer;
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_server::CloudProjectServiceServer;
 use golem_api_grpc::proto::golem::token::v1::cloud_token_service_server::CloudTokenServiceServer;
 use golem_common::model::auth::TokenSecret as ModelTokenSecret;
@@ -40,10 +36,8 @@ use tonic::transport::Server;
 use tracing::Instrument;
 
 mod account;
-mod account_summary;
 mod auth;
 mod limits;
-mod login;
 mod project;
 mod token;
 
@@ -76,16 +70,10 @@ pub async fn start_grpc_server(
         .set_serving::<CloudAccountServiceServer<AccountGrpcApi>>()
         .await;
     health_reporter
-        .set_serving::<CloudAccountSummaryServiceServer<AccountSummaryGrpcApi>>()
-        .await;
-    health_reporter
         .set_serving::<CloudAuthServiceServer<AuthGrpcApi>>()
         .await;
     health_reporter
         .set_serving::<CloudLimitsServiceServer<LimitsGrpcApi>>()
-        .await;
-    health_reporter
-        .set_serving::<CloudLoginServiceServer<LoginGrpcApi>>()
         .await;
     health_reporter
         .set_serving::<CloudProjectServiceServer<ProjectGrpcApi>>()
@@ -112,14 +100,6 @@ pub async fn start_grpc_server(
                 .accept_compressed(CompressionEncoding::Gzip),
             )
             .add_service(
-                CloudAccountSummaryServiceServer::new(AccountSummaryGrpcApi {
-                    auth_service: services.auth_service.clone(),
-                    account_summary_service: services.account_summary_service.clone(),
-                })
-                .send_compressed(CompressionEncoding::Gzip)
-                .accept_compressed(CompressionEncoding::Gzip),
-            )
-            .add_service(
                 CloudAuthServiceServer::new(AuthGrpcApi {
                     auth_service: services.auth_service.clone(),
                 })
@@ -130,14 +110,6 @@ pub async fn start_grpc_server(
                 CloudLimitsServiceServer::new(LimitsGrpcApi {
                     auth_service: services.auth_service.clone(),
                     plan_limit_service: services.plan_limit_service.clone(),
-                })
-                .send_compressed(CompressionEncoding::Gzip)
-                .accept_compressed(CompressionEncoding::Gzip),
-            )
-            .add_service(
-                CloudLoginServiceServer::new(LoginGrpcApi {
-                    auth_service: services.auth_service.clone(),
-                    login_system: services.login_system.clone(),
                 })
                 .send_compressed(CompressionEncoding::Gzip)
                 .accept_compressed(CompressionEncoding::Gzip),
