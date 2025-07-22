@@ -75,7 +75,7 @@ pub trait Diffable {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BTreeMapDiffValue<ValueDiff> {
     Add,
-    Remove,
+    Delete,
     Update(Option<ValueDiff>),
 }
 
@@ -86,7 +86,7 @@ impl<ValueDiff: Serialize> Serialize for BTreeMapDiffValue<ValueDiff> {
     {
         match self {
             BTreeMapDiffValue::Add => serializer.serialize_str("add"),
-            BTreeMapDiffValue::Remove => serializer.serialize_str("remove"),
+            BTreeMapDiffValue::Delete => serializer.serialize_str("delete"),
             BTreeMapDiffValue::Update(diff) => match diff {
                 Some(diff) => diff.serialize(serializer),
                 None => serializer.serialize_str("update"),
@@ -121,7 +121,7 @@ where
                     diff.insert(key.clone(), BTreeMapDiffValue::Add);
                 }
                 (None, Some(_)) => {
-                    diff.insert(key.clone(), BTreeMapDiffValue::Remove);
+                    diff.insert(key.clone(), BTreeMapDiffValue::Delete);
                 }
                 (None, None) => {
                     panic!("unreachable");
@@ -137,22 +137,11 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum BTreeSetDiffValue {
     Add,
-    Remove,
-}
-
-impl Serialize for BTreeSetDiffValue {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            BTreeSetDiffValue::Add => serializer.serialize_str("add"),
-            BTreeSetDiffValue::Remove => serializer.serialize_str("remove"),
-        }
-    }
+    Delete,
 }
 
 pub type BTreeSetDiff<K> = BTreeMap<K, BTreeSetDiffValue>;
@@ -177,7 +166,7 @@ where
                     diff.insert(key.clone(), BTreeSetDiffValue::Add);
                 }
                 (false, true) => {
-                    diff.insert(key.clone(), BTreeSetDiffValue::Remove);
+                    diff.insert(key.clone(), BTreeSetDiffValue::Delete);
                 }
                 (false, false) => {
                     panic!("unreachable");

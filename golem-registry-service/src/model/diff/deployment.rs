@@ -51,7 +51,7 @@ impl Diffable for Deployment {
 
     fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
         let components = local.components.diff_with_server(&remote.components);
-        let http_api_definitions = local 
+        let http_api_definitions = local
             .http_api_definitions
             .diff_with_server(&remote.http_api_definitions);
         let http_api_deployments = local
