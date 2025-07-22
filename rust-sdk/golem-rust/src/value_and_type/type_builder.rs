@@ -14,7 +14,7 @@
 
 // Builder for WitType, to be eventually upstreamed to `golem_wasm_rpc`
 
-use golem_wasm_rpc::golem_rpc_0_2_x::types::ResourceId;
+use golem_wasm_rpc::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId};
 use golem_wasm_rpc::{NodeIndex, ResourceMode, WitType, WitTypeNode};
 
 pub trait WitTypeBuilderExtensions {
@@ -45,21 +45,26 @@ pub trait TypeNodeBuilder: Sized {
     fn string(self) -> Self::Result;
     fn bool(self) -> Self::Result;
     fn char(self) -> Self::Result;
-    fn option(self) -> WitTypeContainerBuilder<Self>;
-    fn list(self) -> WitTypeContainerBuilder<Self>;
-    fn r#enum(self, values: &[&str]) -> Self::Result;
-    fn flags(self, values: &[&str]) -> Self::Result;
-    fn record(self) -> WitTypeRecordBuilder<Self>;
-    fn tuple(self) -> WitTypeTupleBuilder<Self>;
-    fn variant(self) -> WitTypeVariantBuilder<Self>;
-    fn result(self) -> WitTypeResultBuilder<Self>;
-    fn handle(self, resource_id: ResourceId, resource_mode: ResourceMode) -> Self::Result;
+    fn option(self, name: Option<String>) -> WitTypeContainerBuilder<Self>;
+    fn list(self, name: Option<String>) -> WitTypeContainerBuilder<Self>;
+    fn r#enum(self, name: Option<String>, values: &[&str]) -> Self::Result;
+    fn flags(self, name: Option<String>, values: &[&str]) -> Self::Result;
+    fn record(self, name: Option<String>) -> WitTypeRecordBuilder<Self>;
+    fn tuple(self, name: Option<String>) -> WitTypeTupleBuilder<Self>;
+    fn variant(self, name: Option<String>) -> WitTypeVariantBuilder<Self>;
+    fn result(self, name: Option<String>) -> WitTypeResultBuilder<Self>;
+    fn handle(
+        self,
+        name: Option<String>,
+        resource_id: ResourceId,
+        resource_mode: ResourceMode,
+    ) -> Self::Result;
 
     fn finish(self) -> Self::Result;
 }
 
 pub struct WitTypeBuilder {
-    nodes: Vec<WitTypeNode>,
+    nodes: Vec<NamedWitTypeNode>,
 }
 
 impl WitTypeBuilder {
@@ -67,109 +72,182 @@ impl WitTypeBuilder {
         WitTypeBuilder { nodes: Vec::new() }
     }
 
-    fn add(&mut self, node: WitTypeNode) -> NodeIndex {
+    fn add(&mut self, node: NamedWitTypeNode) -> NodeIndex {
         self.nodes.push(node);
         self.nodes.len() as NodeIndex - 1
     }
 
     pub(crate) fn add_u8(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimU8Type)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimU8Type,
+        })
     }
 
     pub(crate) fn add_u16(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimU16Type)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimU16Type,
+        })
     }
 
     pub(crate) fn add_u32(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimU32Type)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimU32Type,
+        })
     }
 
     pub(crate) fn add_u64(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimU64Type)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimU64Type,
+        })
     }
 
     pub(crate) fn add_s8(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimS8Type)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimS8Type,
+        })
     }
 
     pub(crate) fn add_s16(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimS16Type)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimS16Type,
+        })
     }
 
     pub(crate) fn add_s32(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimS32Type)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimS32Type,
+        })
     }
 
     pub(crate) fn add_s64(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimS64Type)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimS64Type,
+        })
     }
 
     pub(crate) fn add_f32(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimF32Type)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimF32Type,
+        })
     }
 
     pub(crate) fn add_f64(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimF64Type)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimF64Type,
+        })
     }
 
     pub(crate) fn add_string(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimStringType)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimStringType,
+        })
     }
 
     pub(crate) fn add_bool(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimBoolType)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimBoolType,
+        })
     }
 
     pub(crate) fn add_char(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::PrimCharType)
+        self.add(NamedWitTypeNode {
+            name: None,
+            type_: WitTypeNode::PrimCharType,
+        })
     }
 
-    pub(crate) fn add_record(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::RecordType(Vec::new()))
+    pub(crate) fn add_record(&mut self, name: Option<String>) -> NodeIndex {
+        self.add(NamedWitTypeNode {
+            name,
+            type_: WitTypeNode::RecordType(Vec::new()),
+        })
     }
 
-    pub(crate) fn add_variant(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::VariantType(Vec::new()))
+    pub(crate) fn add_variant(&mut self, name: Option<String>) -> NodeIndex {
+        self.add(NamedWitTypeNode {
+            name,
+            type_: WitTypeNode::VariantType(Vec::new()),
+        })
     }
 
-    pub(crate) fn add_enum(&mut self, values: Vec<String>) -> NodeIndex {
-        self.add(WitTypeNode::EnumType(values))
+    pub(crate) fn add_enum(&mut self, name: Option<String>, values: Vec<String>) -> NodeIndex {
+        self.add(NamedWitTypeNode {
+            name,
+            type_: WitTypeNode::EnumType(values),
+        })
     }
 
-    pub(crate) fn add_flags(&mut self, values: Vec<String>) -> NodeIndex {
-        self.add(WitTypeNode::FlagsType(values))
+    pub(crate) fn add_flags(&mut self, name: Option<String>, values: Vec<String>) -> NodeIndex {
+        self.add(NamedWitTypeNode {
+            name,
+            type_: WitTypeNode::FlagsType(values),
+        })
     }
 
-    pub(crate) fn add_tuple(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::TupleType(Vec::new()))
+    pub(crate) fn add_tuple(&mut self, name: Option<String>) -> NodeIndex {
+        self.add(NamedWitTypeNode {
+            name,
+            type_: WitTypeNode::TupleType(Vec::new()),
+        })
     }
 
-    pub(crate) fn add_list(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::ListType(-1 as NodeIndex))
+    pub(crate) fn add_list(&mut self, name: Option<String>) -> NodeIndex {
+        self.add(NamedWitTypeNode {
+            name,
+            type_: WitTypeNode::ListType(-1 as NodeIndex),
+        })
     }
 
-    pub(crate) fn add_option(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::OptionType(-1 as NodeIndex))
+    pub(crate) fn add_option(&mut self, name: Option<String>) -> NodeIndex {
+        self.add(NamedWitTypeNode {
+            name,
+            type_: WitTypeNode::OptionType(-1 as NodeIndex),
+        })
     }
 
-    pub(crate) fn add_result(&mut self) -> NodeIndex {
-        self.add(WitTypeNode::ResultType((None, None)))
+    pub(crate) fn add_result(&mut self, name: Option<String>) -> NodeIndex {
+        self.add(NamedWitTypeNode {
+            name,
+            type_: WitTypeNode::ResultType((None, None)),
+        })
     }
 
     pub(crate) fn add_handle(
         &mut self,
+        name: Option<String>,
         resource_id: ResourceId,
         resource_mode: ResourceMode,
     ) -> NodeIndex {
-        self.add(WitTypeNode::HandleType((resource_id, resource_mode)))
+        self.add(NamedWitTypeNode {
+            name,
+            type_: WitTypeNode::HandleType((resource_id, resource_mode)),
+        })
     }
 
     pub(crate) fn finish_container(&mut self, container_idx: NodeIndex, item_idx: NodeIndex) {
         match &mut self.nodes[container_idx as usize] {
-            WitTypeNode::ListType(ref mut idx) => {
+            NamedWitTypeNode {
+                type_: WitTypeNode::ListType(ref mut idx),
+                ..
+            } => {
                 *idx = item_idx;
             }
-            WitTypeNode::OptionType(ref mut idx) => {
+            NamedWitTypeNode {
+                type_: WitTypeNode::OptionType(ref mut idx),
+                ..
+            } => {
                 *idx = item_idx;
             }
             _ => {
@@ -184,7 +262,10 @@ impl WitTypeBuilder {
         fields: Vec<(String, NodeIndex)>,
     ) {
         match &mut self.nodes[record_idx as usize] {
-            WitTypeNode::RecordType(ref mut field_list) => {
+            NamedWitTypeNode {
+                type_: WitTypeNode::RecordType(ref mut field_list),
+                ..
+            } => {
                 *field_list = fields;
             }
             _ => {
@@ -195,7 +276,10 @@ impl WitTypeBuilder {
 
     pub(crate) fn finish_tuple(&mut self, tuple_idx: NodeIndex, fields: Vec<NodeIndex>) {
         match &mut self.nodes[tuple_idx as usize] {
-            WitTypeNode::TupleType(ref mut field_list) => {
+            NamedWitTypeNode {
+                type_: WitTypeNode::TupleType(ref mut field_list),
+                ..
+            } => {
                 *field_list = fields;
             }
             _ => {
@@ -210,7 +294,10 @@ impl WitTypeBuilder {
         cases: Vec<(String, Option<NodeIndex>)>,
     ) {
         match &mut self.nodes[variant_idx as usize] {
-            WitTypeNode::VariantType(ref mut case_list) => {
+            NamedWitTypeNode {
+                type_: WitTypeNode::VariantType(ref mut case_list),
+                ..
+            } => {
                 *case_list = cases;
             }
             _ => {
@@ -226,7 +313,10 @@ impl WitTypeBuilder {
         err: Option<NodeIndex>,
     ) {
         match &mut self.nodes[result_idx as usize] {
-            WitTypeNode::ResultType(ref mut result) => {
+            NamedWitTypeNode {
+                type_: WitTypeNode::ResultType(ref mut result),
+                ..
+            } => {
                 *result = (ok, err);
             }
             _ => {
@@ -312,34 +402,34 @@ impl TypeNodeBuilder for WitTypeBuilder {
         self.build()
     }
 
-    fn option(mut self) -> WitTypeContainerBuilder<WitTypeBuilder> {
-        let option_idx = self.add_option();
+    fn option(mut self, name: Option<String>) -> WitTypeContainerBuilder<WitTypeBuilder> {
+        let option_idx = self.add_option(name);
         WitTypeContainerBuilder {
             builder: self,
             target_idx: option_idx,
         }
     }
 
-    fn list(mut self) -> WitTypeContainerBuilder<WitTypeBuilder> {
-        let list_idx = self.add_list();
+    fn list(mut self, name: Option<String>) -> WitTypeContainerBuilder<WitTypeBuilder> {
+        let list_idx = self.add_list(name);
         WitTypeContainerBuilder {
             builder: self,
             target_idx: list_idx,
         }
     }
 
-    fn r#enum(mut self, values: &[&str]) -> Self::Result {
-        let _ = self.add_enum(values.iter().map(|s| s.to_string()).collect());
+    fn r#enum(mut self, name: Option<String>, values: &[&str]) -> Self::Result {
+        let _ = self.add_enum(name, values.iter().map(|s| s.to_string()).collect());
         self.build()
     }
 
-    fn flags(mut self, values: &[&str]) -> Self::Result {
-        let _ = self.add_enum(values.iter().map(|s| s.to_string()).collect());
+    fn flags(mut self, name: Option<String>, values: &[&str]) -> Self::Result {
+        let _ = self.add_enum(name, values.iter().map(|s| s.to_string()).collect());
         self.build()
     }
 
-    fn record(mut self) -> WitTypeRecordBuilder<Self> {
-        let record_idx = self.add_record();
+    fn record(mut self, name: Option<String>) -> WitTypeRecordBuilder<Self> {
+        let record_idx = self.add_record(name);
         WitTypeRecordBuilder {
             builder: self,
             target_idx: record_idx,
@@ -347,8 +437,8 @@ impl TypeNodeBuilder for WitTypeBuilder {
         }
     }
 
-    fn tuple(mut self) -> WitTypeTupleBuilder<Self> {
-        let tuple_idx = self.add_tuple();
+    fn tuple(mut self, name: Option<String>) -> WitTypeTupleBuilder<Self> {
+        let tuple_idx = self.add_tuple(name);
         WitTypeTupleBuilder {
             builder: self,
             target_idx: tuple_idx,
@@ -356,8 +446,8 @@ impl TypeNodeBuilder for WitTypeBuilder {
         }
     }
 
-    fn variant(mut self) -> WitTypeVariantBuilder<Self> {
-        let variant_idx = self.add_variant();
+    fn variant(mut self, name: Option<String>) -> WitTypeVariantBuilder<Self> {
+        let variant_idx = self.add_variant(name);
         WitTypeVariantBuilder {
             builder: self,
             target_idx: variant_idx,
@@ -365,8 +455,8 @@ impl TypeNodeBuilder for WitTypeBuilder {
         }
     }
 
-    fn result(mut self) -> WitTypeResultBuilder<Self> {
-        let result_idx = self.add_result();
+    fn result(mut self, name: Option<String>) -> WitTypeResultBuilder<Self> {
+        let result_idx = self.add_result(name);
         WitTypeResultBuilder {
             builder: self,
             target_idx: result_idx,
@@ -375,8 +465,13 @@ impl TypeNodeBuilder for WitTypeBuilder {
         }
     }
 
-    fn handle(mut self, resource_id: ResourceId, resource_mode: ResourceMode) -> Self::Result {
-        let _ = self.add_handle(resource_id, resource_mode);
+    fn handle(
+        mut self,
+        name: Option<String>,
+        resource_id: ResourceId,
+        resource_mode: ResourceMode,
+    ) -> Self::Result {
+        let _ = self.add_handle(name, resource_id, resource_mode);
         self.build()
     }
 
@@ -501,8 +596,8 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
         self.builder
     }
 
-    fn option(mut self) -> WitTypeContainerBuilder<Self> {
-        let option_idx = self.parent_builder().add_option();
+    fn option(mut self, name: Option<String>) -> WitTypeContainerBuilder<Self> {
+        let option_idx = self.parent_builder().add_option(name);
         self.builder
             .parent_builder()
             .finish_container(self.target_idx, option_idx);
@@ -512,8 +607,8 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
         }
     }
 
-    fn list(mut self) -> WitTypeContainerBuilder<Self> {
-        let list_idx = self.parent_builder().add_list();
+    fn list(mut self, name: Option<String>) -> WitTypeContainerBuilder<Self> {
+        let list_idx = self.parent_builder().add_list(name);
         self.builder
             .parent_builder()
             .finish_container(self.target_idx, list_idx);
@@ -523,28 +618,28 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
         }
     }
 
-    fn r#enum(mut self, values: &[&str]) -> Self::Result {
+    fn r#enum(mut self, name: Option<String>, values: &[&str]) -> Self::Result {
         let child_index = self
             .parent_builder()
-            .add_enum(values.iter().map(|s| s.to_string()).collect());
+            .add_enum(name, values.iter().map(|s| s.to_string()).collect());
         self.builder
             .parent_builder()
             .finish_container(self.target_idx, child_index);
         self.builder
     }
 
-    fn flags(mut self, values: &[&str]) -> Self::Result {
+    fn flags(mut self, name: Option<String>, values: &[&str]) -> Self::Result {
         let child_index = self
             .parent_builder()
-            .add_flags(values.iter().map(|s| s.to_string()).collect());
+            .add_flags(name, values.iter().map(|s| s.to_string()).collect());
         self.builder
             .parent_builder()
             .finish_container(self.target_idx, child_index);
         self.builder
     }
 
-    fn record(mut self) -> WitTypeRecordBuilder<Self> {
-        let record_idx = self.parent_builder().add_record();
+    fn record(mut self, name: Option<String>) -> WitTypeRecordBuilder<Self> {
+        let record_idx = self.parent_builder().add_record(name);
         self.builder
             .parent_builder()
             .finish_container(self.target_idx, record_idx);
@@ -555,8 +650,8 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
         }
     }
 
-    fn tuple(mut self) -> WitTypeTupleBuilder<Self> {
-        let tuple_idx = self.parent_builder().add_tuple();
+    fn tuple(mut self, name: Option<String>) -> WitTypeTupleBuilder<Self> {
+        let tuple_idx = self.parent_builder().add_tuple(name);
         self.builder
             .parent_builder()
             .finish_container(self.target_idx, tuple_idx);
@@ -567,8 +662,8 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
         }
     }
 
-    fn variant(mut self) -> WitTypeVariantBuilder<Self> {
-        let variant_idx = self.parent_builder().add_variant();
+    fn variant(mut self, name: Option<String>) -> WitTypeVariantBuilder<Self> {
+        let variant_idx = self.parent_builder().add_variant(name);
         self.builder
             .parent_builder()
             .finish_container(self.target_idx, variant_idx);
@@ -579,8 +674,8 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
         }
     }
 
-    fn result(mut self) -> WitTypeResultBuilder<Self> {
-        let result_idx = self.parent_builder().add_result();
+    fn result(mut self, name: Option<String>) -> WitTypeResultBuilder<Self> {
+        let result_idx = self.parent_builder().add_result(name);
         self.builder
             .parent_builder()
             .finish_container(self.target_idx, result_idx);
@@ -592,8 +687,15 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
         }
     }
 
-    fn handle(mut self, resource_id: ResourceId, resource_mode: ResourceMode) -> Self::Result {
-        let child_index = self.parent_builder().add_handle(resource_id, resource_mode);
+    fn handle(
+        mut self,
+        name: Option<String>,
+        resource_id: ResourceId,
+        resource_mode: ResourceMode,
+    ) -> Self::Result {
+        let child_index = self
+            .parent_builder()
+            .add_handle(name, resource_id, resource_mode);
         self.builder
             .parent_builder()
             .finish_container(self.target_idx, child_index);
@@ -964,8 +1066,8 @@ impl<B: InnerTypeNodeBuilder> TypeNodeBuilder for B {
         self.finish(child_index)
     }
 
-    fn option(mut self) -> WitTypeContainerBuilder<Self> {
-        let option_idx = self.parent_builder().add_option();
+    fn option(mut self, name: Option<String>) -> WitTypeContainerBuilder<Self> {
+        let option_idx = self.parent_builder().add_option(name);
         self.apply(option_idx);
         WitTypeContainerBuilder {
             builder: self,
@@ -973,8 +1075,8 @@ impl<B: InnerTypeNodeBuilder> TypeNodeBuilder for B {
         }
     }
 
-    fn list(mut self) -> WitTypeContainerBuilder<Self> {
-        let list_idx = self.parent_builder().add_list();
+    fn list(mut self, name: Option<String>) -> WitTypeContainerBuilder<Self> {
+        let list_idx = self.parent_builder().add_list(name);
         self.apply(list_idx);
         WitTypeContainerBuilder {
             builder: self,
@@ -982,22 +1084,22 @@ impl<B: InnerTypeNodeBuilder> TypeNodeBuilder for B {
         }
     }
 
-    fn r#enum(mut self, values: &[&str]) -> Self::Result {
+    fn r#enum(mut self, name: Option<String>, values: &[&str]) -> Self::Result {
         let child_index = self
             .parent_builder()
-            .add_enum(values.iter().map(|s| s.to_string()).collect());
+            .add_enum(name, values.iter().map(|s| s.to_string()).collect());
         self.finish(child_index)
     }
 
-    fn flags(mut self, values: &[&str]) -> Self::Result {
+    fn flags(mut self, name: Option<String>, values: &[&str]) -> Self::Result {
         let child_index = self
             .parent_builder()
-            .add_flags(values.iter().map(|s| s.to_string()).collect());
+            .add_flags(name, values.iter().map(|s| s.to_string()).collect());
         self.finish(child_index)
     }
 
-    fn record(mut self) -> WitTypeRecordBuilder<Self> {
-        let record_idx = self.parent_builder().add_record();
+    fn record(mut self, name: Option<String>) -> WitTypeRecordBuilder<Self> {
+        let record_idx = self.parent_builder().add_record(name);
         self.apply(record_idx);
         WitTypeRecordBuilder {
             builder: self,
@@ -1006,8 +1108,8 @@ impl<B: InnerTypeNodeBuilder> TypeNodeBuilder for B {
         }
     }
 
-    fn tuple(mut self) -> WitTypeTupleBuilder<Self> {
-        let tuple_idx = self.parent_builder().add_tuple();
+    fn tuple(mut self, name: Option<String>) -> WitTypeTupleBuilder<Self> {
+        let tuple_idx = self.parent_builder().add_tuple(name);
         self.apply(tuple_idx);
         WitTypeTupleBuilder {
             builder: self,
@@ -1016,8 +1118,8 @@ impl<B: InnerTypeNodeBuilder> TypeNodeBuilder for B {
         }
     }
 
-    fn variant(mut self) -> WitTypeVariantBuilder<Self> {
-        let variant_idx = self.parent_builder().add_variant();
+    fn variant(mut self, name: Option<String>) -> WitTypeVariantBuilder<Self> {
+        let variant_idx = self.parent_builder().add_variant(name);
         self.apply(variant_idx);
         WitTypeVariantBuilder {
             builder: self,
@@ -1026,8 +1128,8 @@ impl<B: InnerTypeNodeBuilder> TypeNodeBuilder for B {
         }
     }
 
-    fn result(mut self) -> WitTypeResultBuilder<Self> {
-        let result_idx = self.parent_builder().add_result();
+    fn result(mut self, name: Option<String>) -> WitTypeResultBuilder<Self> {
+        let result_idx = self.parent_builder().add_result(name);
         self.apply(result_idx);
         WitTypeResultBuilder {
             builder: self,
@@ -1037,8 +1139,15 @@ impl<B: InnerTypeNodeBuilder> TypeNodeBuilder for B {
         }
     }
 
-    fn handle(mut self, resource_id: ResourceId, resource_mode: ResourceMode) -> Self::Result {
-        let child_index = self.parent_builder().add_handle(resource_id, resource_mode);
+    fn handle(
+        mut self,
+        name: Option<String>,
+        resource_id: ResourceId,
+        resource_mode: ResourceMode,
+    ) -> Self::Result {
+        let child_index = self
+            .parent_builder()
+            .add_handle(name, resource_id, resource_mode);
         self.finish(child_index)
     }
 

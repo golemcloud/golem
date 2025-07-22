@@ -25,6 +25,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
         .attrs
         .iter()
         .any(|attr| attr.path().is_ident("flatten_value"));
+    let ident_lit = LitStr::new(&ident.to_string(), Span::call_site());
 
     let (add_to_builder, add_to_type_builder) = match ast.data {
         Data::Struct(data) => {
@@ -56,7 +57,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
 
             match newtype_result {
                 Some(newtype_result) => newtype_result,
-                None => record_or_tuple(&data.fields),
+                None => record_or_tuple(&ident_lit, &data.fields),
             }
         }
         Data::Enum(data) => {
@@ -92,6 +93,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
 
                 let add_to_type_builder = quote! {
                     builder.r#enum(
+                        Some(#ident_lit.to_string()),
                         &[#(#case_labels),*]
                     )
                 };
@@ -214,7 +216,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                                 let builder = <#typ as golem_rust::value_and_type::IntoValue>::add_to_type_builder(builder.case(#case_name));
                             }
                         } else {
-                            let (_, inner_add_to_type_builder) = record_or_tuple(&variant.fields);
+                            let (_, inner_add_to_type_builder) = record_or_tuple(&ident_lit, &variant.fields);
 
                             quote! {
                                 let builder = builder.case(#case_name);
@@ -230,7 +232,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                     }
                 };
                 let get_type = quote! {
-                    let builder = builder.variant();
+                    let builder = builder.variant(Some(#ident_lit.to_string()));
                     #(#case_defs)*
                     builder.finish()
                 };
@@ -258,7 +260,10 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
     result.into()
 }
 
-fn record_or_tuple(fields: &Fields) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
+fn record_or_tuple(
+    ident_lit: &LitStr,
+    fields: &Fields,
+) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     let all_fields_has_names = fields.iter().all(|field| field.ident.is_some());
 
     if all_fields_has_names {
@@ -289,7 +294,7 @@ fn record_or_tuple(fields: &Fields) -> (proc_macro2::TokenStream, proc_macro2::T
             builder.finish()
         };
         let add_to_type_builder = quote! {
-            let builder = builder.record();
+            let builder = builder.record(Some(#ident_lit.to_string()));
             #(#field_defs)*
             builder.finish()
         };
@@ -322,7 +327,7 @@ fn record_or_tuple(fields: &Fields) -> (proc_macro2::TokenStream, proc_macro2::T
             builder.finish()
         };
         let add_to_type_builder = quote! {
-            let builder = builder.tuple()
+            let builder = builder.tuple(Some(#ident_lit.to_string()))
             #(#tuple_field_types)*
             builder.finish()
         };

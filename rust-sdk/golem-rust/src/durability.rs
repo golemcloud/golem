@@ -232,7 +232,7 @@ mod tests {
             }
 
             fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-                builder.r#enum(&["Error1", "Error2"])
+                builder.r#enum(Some("CustomError".to_string()), &["Error1", "Error2"])
             }
         }
 
