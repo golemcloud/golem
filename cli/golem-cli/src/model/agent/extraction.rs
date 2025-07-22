@@ -197,8 +197,6 @@ fn dynamic_import(
         // These does not have to be mocked, we allow them through wasmtime-wasi
         Ok(())
     } else {
-        println!("dynamic_import: {name}");
-
         let mut instance = root.instance(name)?;
         let mut resources: HashMap<(String, String), Vec<MethodInfo>> = HashMap::new();
         let mut functions = Vec::new();
@@ -245,8 +243,7 @@ fn dynamic_import(
             }
         }
 
-        for ((interface_name, resource_name), _methods) in resources {
-            println!("Defining resource: {interface_name}.{resource_name}");
+        for ((_interface_name, resource_name), _methods) in resources {
             instance.resource(
                 &resource_name,
                 ResourceType::host::<ResourceEntry>(),
@@ -255,7 +252,6 @@ fn dynamic_import(
         }
 
         for function in functions {
-            println!("Defining function: {}", function.name);
             instance.func_new_async(
                 &function.name.function.function_name(),
                 move |_store, _params, _results| {

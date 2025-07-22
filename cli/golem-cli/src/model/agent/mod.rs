@@ -13,9 +13,11 @@
 // limitations under the License.
 
 mod conversions;
-///^ Golem Agent types
-///^ NOTE: this is going to be moved to golem-common
 pub mod extraction;
+pub mod wit;
+
+// Golem Agent types
+// NOTE: this is going to be moved to golem-common
 
 mod bindings {
     wasmtime::component::bindgen!({
