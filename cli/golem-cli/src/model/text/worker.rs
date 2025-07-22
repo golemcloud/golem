@@ -29,8 +29,7 @@ use golem_common::model::public_oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
 };
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{print_type_annotated_value, ValueAndType};
+use golem_wasm_rpc::{print_value_and_type, ValueAndType};
 use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -822,6 +821,5 @@ fn log_plugin_description(pad: &str, value: &PluginInstallationDescription) {
 }
 
 fn value_to_string(value: &ValueAndType) -> String {
-    let tav: TypeAnnotatedValue = value.try_into().expect("Failed to convert value to string");
-    print_type_annotated_value(&tav).expect("Failed to convert value to string")
+    print_value_and_type(value).expect("Failed to convert value to string")
 }

@@ -216,7 +216,7 @@ impl TrimDateTime for ComponentView {
 
 pub fn render_type(typ: &AnalysedType) -> String {
     match typ {
-        AnalysedType::Variant(TypeVariant { cases }) => {
+        AnalysedType::Variant(TypeVariant { cases, .. }) => {
             let cases_str = cases
                 .iter()
                 .map(|NameOptionTypePair { name, typ }| match typ {
@@ -244,9 +244,9 @@ pub fn render_type(typ: &AnalysedType) -> String {
             }
         }
         AnalysedType::Option(boxed) => format!("option<{}>", render_type(&boxed.inner)),
-        AnalysedType::Enum(TypeEnum { cases }) => format!("enum {{ {} }}", cases.join(", ")),
-        AnalysedType::Flags(TypeFlags { names }) => format!("flags {{ {} }}", names.join(", ")),
-        AnalysedType::Record(TypeRecord { fields }) => {
+        AnalysedType::Enum(TypeEnum { cases, .. }) => format!("enum {{ {} }}", cases.join(", ")),
+        AnalysedType::Flags(TypeFlags { names, .. }) => format!("flags {{ {} }}", names.join(", ")),
+        AnalysedType::Record(TypeRecord { fields, .. }) => {
             let pairs: Vec<String> = fields
                 .iter()
                 .map(|NameTypePair { name, typ }| format!("{name}: {}", render_type(typ)))
@@ -254,7 +254,7 @@ pub fn render_type(typ: &AnalysedType) -> String {
 
             format!("record {{ {} }}", pairs.join(", "))
         }
-        AnalysedType::Tuple(TypeTuple { items }) => {
+        AnalysedType::Tuple(TypeTuple { items, .. }) => {
             let typs: Vec<String> = items.iter().map(render_type).collect();
             format!("tuple<{}>", typs.join(", "))
         }

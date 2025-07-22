@@ -21,12 +21,11 @@ use golem_cli::model::app::AppComponentName;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_cli::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_wasm_ast::analysis::analysed_type::*;
+use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId,
-    AnalysedResourceMode, AnalysedType, AnalysisContext, TypeHandle, TypeOption,
+    AnalysedResourceMode, AnalysedType, TypeHandle,
 };
-use golem_wasm_ast::component::Component;
-use golem_wasm_ast::IgnoreAllButMetadata;
 use tempfile::tempdir;
 use test_r::test;
 
@@ -61,9 +60,7 @@ async fn all_wit_types() {
     let wasm_path = generate_and_build_client(&def, false).await.unwrap();
 
     let stub_bytes = std::fs::read(wasm_path).unwrap();
-    let stub_component = Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes).unwrap();
-
-    let state = AnalysisContext::new(stub_component);
+    let state = WitAnalysisContext::new(&stub_bytes).unwrap();
     let stub_exports = state.get_top_level_exports().unwrap();
 
     assert_eq!(stub_exports.len(), 1);
@@ -185,13 +182,15 @@ async fn all_wit_types() {
         field("name", str()),
         field("price", f32()),
         field("quantity", u32()),
-    ]);
+    ])
+    .named("product-item");
     let order = record(vec![
         field("order-id", str()),
         field("items", list(product_item.clone())),
         field("total", f32()),
         field("timestamp", u64()),
-    ]);
+    ])
+    .named("order");
 
     assert_has_stub(
         exported_interface,
@@ -208,12 +207,13 @@ async fn all_wit_types() {
         None,
     );
 
-    let permissions = flags(&["read", "write", "exec", "close"]);
+    let permissions = flags(&["read", "write", "exec", "close"]).named("permissions");
     let metadata = record(vec![
         field("name", str()),
         field("origin", str()),
         field("perms", permissions.clone()),
-    ]);
+    ])
+    .named("metadata");
 
     assert_has_stub(
         exported_interface,
@@ -271,7 +271,8 @@ async fn all_wit_types() {
         field("x", s32()),
         field("y", s32()),
         field("metadata", metadata.clone()),
-    ]);
+    ])
+    .named("point");
     assert_has_stub(
         exported_interface,
         "iface1",
@@ -294,12 +295,13 @@ async fn all_wit_types() {
         Some(result_err(str())),
     );
 
-    let order_confirmation = record(vec![field("order-id", str())]);
+    let order_confirmation = record(vec![field("order-id", str())]).named("order-confirmation");
     let checkout_result = variant(vec![
         case("error", str()),
         case("success", order_confirmation.clone()),
         unit_case("unknown"),
-    ]);
+    ])
+    .named("checkout-result");
 
     assert_has_stub(
         exported_interface,
@@ -316,7 +318,7 @@ async fn all_wit_types() {
         Some(checkout_result.clone()),
     );
 
-    let color = r#enum(&["red", "green", "blue"]);
+    let color = r#enum(&["red", "green", "blue"]).named("color");
     assert_has_stub(
         exported_interface,
         "iface1",
@@ -372,9 +374,8 @@ async fn resource() {
     let wasm_path = generate_and_build_client(&def, false).await.unwrap();
 
     let stub_bytes = std::fs::read(wasm_path).unwrap();
-    let stub_component = Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes).unwrap();
 
-    let state = AnalysisContext::new(stub_component);
+    let state = WitAnalysisContext::new(&stub_bytes).unwrap();
     let stub_exports = state.get_top_level_exports().unwrap();
 
     assert_eq!(stub_exports.len(), 1);
@@ -426,9 +427,7 @@ async fn circular_resources() {
     let wasm_path = generate_and_build_client(&def, false).await.unwrap();
 
     let stub_bytes = std::fs::read(wasm_path).unwrap();
-    let stub_component = Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes).unwrap();
-
-    let state = AnalysisContext::new(stub_component);
+    let state = WitAnalysisContext::new(&stub_bytes).unwrap();
     let stub_exports = state.get_top_level_exports().unwrap();
 
     assert_eq!(stub_exports.len(), 1);
@@ -489,9 +488,7 @@ async fn inline_resources() {
     let wasm_path = generate_and_build_client(&def, false).await.unwrap();
 
     let stub_bytes = std::fs::read(wasm_path).unwrap();
-    let stub_component = Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes).unwrap();
-
-    let state = AnalysisContext::new(stub_component);
+    let state = WitAnalysisContext::new(&stub_bytes).unwrap();
     let stub_exports = state.get_top_level_exports().unwrap();
 
     assert_eq!(stub_exports.len(), 1);
@@ -557,10 +554,13 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
                     record(vec![field(
                         "uuid",
                         record(vec![field("high-bits", u64()), field("low-bits", u64()),])
-                    ),])
+                            .named("uuid")
+                    )])
+                    .named("component-id")
                 ),
                 field("worker-name", str()),
             ])
+            .named("worker-id")
         }]
     );
 }
@@ -621,10 +621,13 @@ fn assert_has_resource(
                         record(vec![field(
                             "uuid",
                             record(vec![field("high-bits", u64()), field("low-bits", u64()),])
+                                .named("uuid")
                         ),])
+                        .named("component-id")
                     ),
                     field("worker-name", str()),
                 ])
+                .named("worker-id")
             }],
             constructor_parameters.to_vec()
         ]
@@ -649,6 +652,7 @@ fn assert_has_stub(
         AnalysedType::Handle(TypeHandle {
             mode: AnalysedResourceMode::Owned,
             resource_id,
+            ..
         }) => resource_id.clone(),
         _ => panic!("unexpected constructor return type"),
     };
@@ -696,6 +700,7 @@ fn assert_has_stub(
         vec![AnalysedType::Handle(TypeHandle {
             resource_id,
             mode: AnalysedResourceMode::Borrowed,
+            name: None,
         })],
         parameters,
     ]
@@ -704,10 +709,7 @@ fn assert_has_stub(
     let scheduled_function_parameters = [
         parameters_with_self.clone(),
         // schedule_for parameter
-        vec![record(vec![
-            field("seconds", u64()),
-            field("nanoseconds", u32()),
-        ])],
+        vec![record(vec![field("seconds", u64()), field("nanoseconds", u32())]).named("datetime")],
     ]
     .concat();
 
@@ -724,6 +726,7 @@ fn assert_has_stub(
             AnalysedType::Handle(TypeHandle {
                 mode: AnalysedResourceMode::Owned,
                 resource_id,
+                name: None,
             }) => resource_id.clone(),
             _ => panic!("unexpected async result return type"),
         };
@@ -758,6 +761,7 @@ fn assert_valid_polling_resource(
                 == AnalysedType::Handle(TypeHandle {
                     resource_id: resource_id.clone(),
                     mode: AnalysedResourceMode::Borrowed,
+                    name: None,
                 })
         })
         .collect::<Vec<_>>();
@@ -783,8 +787,6 @@ fn assert_valid_polling_resource(
     assert!(get_function.result.is_some());
     assert_eq!(
         get_function.result.as_ref().unwrap().typ,
-        AnalysedType::Option(TypeOption {
-            inner: Box::new(return_type)
-        })
+        option(return_type)
     );
 }

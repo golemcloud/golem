@@ -17,15 +17,15 @@ use crate::model::text::fmt::log_error;
 use crate::model::wave::type_wave_compatible;
 use crate::model::IdempotencyKey;
 use anyhow::{anyhow, bail};
-use golem_client::model::{InvokeResult, TypeAnnotatedValue};
-use golem_wasm_rpc::{print_type_annotated_value, protobuf};
+use golem_client::model::InvokeResult;
+use golem_wasm_rpc::{print_value_and_type, ValueAndType};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InvokeResultView {
     pub idempotency_key: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub result_json: Option<TypeAnnotatedValue>,
+    pub result_json: Option<ValueAndType>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub result_wave: Option<Vec<String>>,
 }
@@ -61,7 +61,7 @@ impl InvokeResultView {
     }
 
     fn try_parse_wave(
-        result: &Option<TypeAnnotatedValue>,
+        result: &Option<ValueAndType>,
         component: &Component,
         function: &str,
     ) -> anyhow::Result<Vec<String>> {
@@ -84,10 +84,8 @@ impl InvokeResultView {
         Ok(wave)
     }
 
-    fn try_wave_format(
-        parsed: protobuf::type_annotated_value::TypeAnnotatedValue,
-    ) -> anyhow::Result<String> {
-        match print_type_annotated_value(&parsed) {
+    fn try_wave_format(parsed: ValueAndType) -> anyhow::Result<String> {
+        match print_value_and_type(&parsed) {
             Ok(res) => Ok(res),
             Err(err) => Err(anyhow!("Failed to format parsed value as wave: {err}")),
         }

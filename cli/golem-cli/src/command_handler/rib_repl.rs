@@ -20,13 +20,13 @@ use crate::model::component::ComponentView;
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::text::fmt::log_error;
 use crate::model::{ComponentName, ComponentNameMatchKind, IdempotencyKey, WorkerName};
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use async_trait::async_trait;
 use golem_rib_repl::{
     ReplComponentDependencies, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
+use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::Path;
@@ -163,7 +163,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
             bail!(NonSuccessfulExit);
         };
 
-        let arguments: Vec<OptionallyTypeAnnotatedValueJson> = args
+        let arguments: Vec<OptionallyValueAndTypeJson> = args
             .into_iter()
             .map(|vat| vat.try_into().unwrap())
             .collect();
@@ -183,10 +183,6 @@ impl WorkerFunctionInvoke for RibReplHandler {
             .await?
             .unwrap();
 
-        result
-            .result
-            .map(|tav| tav.try_into())
-            .transpose()
-            .map_err(|err| anyhow!("Failed to convert result: {}", err))
+        Ok(result.result)
     }
 }

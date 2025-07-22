@@ -58,9 +58,8 @@ use golem_client::model::{
 };
 use golem_common::model::public_oplog::OplogCursor;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
-use golem_wasm_rpc::parse_type_annotated_value;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
+use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use itertools::{EitherOrBoth, Itertools};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -874,7 +873,7 @@ impl WorkerCommandHandler {
         component: &Component,
         worker_name: Option<&WorkerName>,
         function_name: &str,
-        arguments: Vec<OptionallyTypeAnnotatedValueJson>,
+        arguments: Vec<OptionallyValueAndTypeJson>,
         idempotency_key: IdempotencyKey,
         enqueue: bool,
         stream_args: Option<StreamArgs>,
@@ -1722,7 +1721,7 @@ fn wave_args_to_invoke_args(
     component: &Component,
     function_name: &str,
     wave_args: Vec<String>,
-) -> anyhow::Result<Vec<OptionallyTypeAnnotatedValueJson>> {
+) -> anyhow::Result<Vec<OptionallyValueAndTypeJson>> {
     let types = function_params_types(component, function_name)?;
 
     if types.len() != wave_args.len() {
@@ -1805,7 +1804,7 @@ fn wave_args_to_invoke_args(
 pub fn lenient_parse_type_annotated_value(
     analysed_type: &AnalysedType,
     input: &str,
-) -> Result<TypeAnnotatedValue, String> {
+) -> Result<ValueAndType, String> {
     let patched_input = match analysed_type {
         AnalysedType::Chr(_) => (!input.starts_with('\'')).then(|| format!("'{input}'")),
         AnalysedType::Str(_) => (!input.starts_with('"')).then(|| format!("\"{input}\"")),
@@ -1813,7 +1812,7 @@ pub fn lenient_parse_type_annotated_value(
     };
 
     let input = patched_input.as_deref().unwrap_or(input);
-    parse_type_annotated_value(analysed_type, input)
+    parse_value_and_type(analysed_type, input)
 }
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {

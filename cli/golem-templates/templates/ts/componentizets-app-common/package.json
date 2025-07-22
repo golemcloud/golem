@@ -5,7 +5,7 @@
     "components-ts/*/*"
   ],
   "dependencies": {
-    "@golemcloud/golem-ts": "1.4.0"
+    "@golemcloud/golem-ts": "1.5.0"
   },
   "devDependencies": {
     "@bytecodealliance/jco": "1.10.2",

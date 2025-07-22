@@ -105,9 +105,15 @@ pub struct BinaryType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+pub struct NamedElementSchema {
+    pub name: String,
+    pub schema: ElementSchema,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
 pub enum DataSchema {
-    Tuple(Vec<ElementSchema>),
-    Multimodal(Vec<ElementSchema>),
+    Tuple(Vec<NamedElementSchema>),
+    Multimodal(Vec<NamedElementSchema>),
 }
 
 #[derive(Debug, Clone, Encode, Decode, IntoValue)]

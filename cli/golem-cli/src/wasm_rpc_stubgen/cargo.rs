@@ -204,7 +204,7 @@ pub fn generate_client_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
             if let Some(version) = def.config.golem_rust_override.version_override.as_ref() {
                 Some(version.to_string())
             } else {
-                Some("1.3.0".to_string()) // TODO: constant
+                Some("1.7.0".to_string()) // TODO: constant
             }
         } else {
             None
