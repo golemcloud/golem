@@ -142,13 +142,13 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
                 Value::String("item1".to_string()),
                 Value::F32(10.0),
                 Value::U32(2),
-            ]),]),
+            ])]),
             list(record(vec![
                 field("product-id", str()),
                 field("name", str()),
                 field("price", f32()),
                 field("quantity", u32()),
-            ],),),
+            ])),
         ))
     );
 }
