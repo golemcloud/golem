@@ -8888,6 +8888,8 @@ components:
       title: TypeEnum
       type: object
       properties:
+        name:
+          type: string
         cases:
           type: array
           items:
@@ -8904,6 +8906,8 @@ components:
       title: TypeFlags
       type: object
       properties:
+        name:
+          type: string
         names:
           type: array
           items:
@@ -8914,6 +8918,8 @@ components:
       title: TypeHandle
       type: object
       properties:
+        name:
+          type: string
         resource_id:
           type: integer
           format: uint64
@@ -8926,6 +8932,8 @@ components:
       title: TypeList
       type: object
       properties:
+        name:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -8934,6 +8942,8 @@ components:
       title: TypeOption
       type: object
       properties:
+        name:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -8942,6 +8952,8 @@ components:
       title: TypeRecord
       type: object
       properties:
+        name:
+          type: string
         fields:
           type: array
           items:
@@ -8952,6 +8964,8 @@ components:
       title: TypeResult
       type: object
       properties:
+        name:
+          type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
         err:
@@ -8975,6 +8989,8 @@ components:
       title: TypeTuple
       type: object
       properties:
+        name:
+          type: string
         items:
           type: array
           items:
@@ -8997,6 +9013,8 @@ components:
       title: TypeVariant
       type: object
       properties:
+        name:
+          type: string
         cases:
           type: array
           items:
@@ -9760,7 +9778,7 @@ components:
       type: object
       properties:
         result:
-          $ref: '#/components/schemas/TypeAnnotatedValue'
+          $ref: '#/components/schemas/ValueAndType'
     JumpParameters:
       title: JumpParameters
       type: object
@@ -11157,15 +11175,6 @@ components:
           format: date-time
       required:
       - timestamp
-    TypeAnnotatedValue:
-      type: object
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-        value: {}
-      required:
-      - typ
-      - value
     UpdateRecord:
       discriminator:
         propertyName: type

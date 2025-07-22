@@ -63,8 +63,8 @@ use golem_common::model::{
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val;
+use golem_wasm_rpc::ValueAndType;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -764,7 +764,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn invoke_and_await_worker_internal_typed<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<Option<TypeAnnotatedValue>, WorkerExecutorError> {
+    ) -> Result<Option<ValueAndType>, WorkerExecutorError> {
         let full_function_name = request.name();
 
         let worker = self.get_or_create(request).await?;
@@ -790,18 +790,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
-        let tav =
-            value
-                .map(|value| value.try_into())
-                .transpose()
-                .map_err(|msgs: Vec<String>| {
-                    WorkerExecutorError::runtime(format!(
-                        "Failed to encode result: {}",
-                        msgs.join(", ")
-                    ))
-                })?;
-
-        Ok(tav)
+        Ok(value)
     }
 
     async fn get_or_create<Req: CanStartWorker>(
@@ -1880,11 +1869,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         );
 
         match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
-            Ok(type_annotated_value) => {
+            Ok(value_and_type) => {
                 let result = golem::workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
-                    output: type_annotated_value.map(|tav| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(tav),
-                    })
+                    output: value_and_type.map(|vnt| vnt.into())
                 };
 
                 record.succeed(Ok(Response::new(
@@ -1965,15 +1952,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         );
 
         match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
-            Ok(type_annotated_value) => {
+            Ok(value_and_type) => {
                 let result = golem::workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
-                    output: type_annotated_value.map(|tav| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(tav),
-                    })
+                    output: value_and_type.map(|vnt| vnt.into())
                 };
 
                 record.succeed(Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
+                    InvokeAndAwaitWorkerResponseTyped {
                         result: Some(
                             golem::workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(result),
                         ),

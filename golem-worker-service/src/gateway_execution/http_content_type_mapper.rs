@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::ValueAndType;
 use mime::Mime;
 use poem::web::headers::ContentType;
 use poem::web::WithContentType;
@@ -114,7 +114,7 @@ impl ContentTypeHeaders {
     }
 }
 
-impl HttpContentTypeResponseMapper for TypeAnnotatedValue {
+impl HttpContentTypeResponseMapper for ValueAndType {
     fn to_http_resp_with_content_type(
         &self,
         content_type_headers: ContentTypeHeaders,
@@ -179,154 +179,151 @@ mod internal {
     use crate::gateway_execution::http_content_type_mapper::{
         AcceptHeaders, ContentTypeHeaderExt, ContentTypeMapError,
     };
-    use golem_wasm_ast::analysis::analysed_type::{
-        bool, chr, f32, f64, s16, s32, s64, s8, u16, u32, u64, u8,
-    };
-    use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::{PrimitiveType, TypedEnum, TypedList};
+    use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeList, TypeOption, TypeRecord};
+    use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
+    use golem_wasm_rpc::{Value, ValueAndType};
     use poem::web::headers::ContentType;
     use poem::web::WithContentType;
     use poem::{Body, IntoResponse};
     use std::fmt::Display;
 
     pub(crate) fn get_response_body_based_on_content_type<A: ContentTypeHeaderExt + Display>(
-        type_annotated_value: &TypeAnnotatedValue,
+        value_and_type: &ValueAndType,
         content_header: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        match type_annotated_value {
-            TypeAnnotatedValue::Record { .. } => {
-                handle_record(type_annotated_value, content_header)
+        match (&value_and_type.typ, &value_and_type.value) {
+            (AnalysedType::Record(_record), Value::Record(_values)) => {
+                handle_record(value_and_type, content_header)
             }
-            TypeAnnotatedValue::List(ref typed_list) => {
-                let typ = typed_list
-                    .typ
-                    .clone()
-                    .ok_or(ContentTypeMapError::internal("Failed to fetch list type"))?;
-                let analysed_type = AnalysedType::try_from(&typ).map_err(|_| {
-                    ContentTypeMapError::internal("Failed to convert type to analysed type")
-                })?;
-                let vec = typed_list
-                    .values
-                    .iter()
-                    .filter_map(|v| v.type_annotated_value.clone())
-                    .collect::<Vec<_>>();
-                handle_list(type_annotated_value, &vec, &analysed_type, content_header)
+            (AnalysedType::Variant(_variant), Value::Variant { .. }) => {
+                handle_record(value_and_type, content_header)
             }
-            TypeAnnotatedValue::Bool(value) => handle_primitive(value, &bool(), content_header),
-            TypeAnnotatedValue::S8(value) => handle_primitive(value, &s8(), content_header),
-            TypeAnnotatedValue::U8(value) => handle_primitive(value, &u8(), content_header),
-            TypeAnnotatedValue::S16(value) => handle_primitive(value, &s16(), content_header),
-            TypeAnnotatedValue::U16(value) => handle_primitive(value, &u16(), content_header),
-            TypeAnnotatedValue::S32(value) => handle_primitive(value, &s32(), content_header),
-            TypeAnnotatedValue::U32(value) => handle_primitive(value, &u32(), content_header),
-            TypeAnnotatedValue::S64(value) => handle_primitive(value, &s64(), content_header),
-            TypeAnnotatedValue::U64(value) => handle_primitive(value, &u64(), content_header),
-            TypeAnnotatedValue::F32(value) => handle_primitive(value, &f32(), content_header),
-            TypeAnnotatedValue::F64(value) => handle_primitive(value, &f64(), content_header),
-            TypeAnnotatedValue::Char(value) => handle_primitive(value, &chr(), content_header),
-            TypeAnnotatedValue::Str(string) => handle_string(string, content_header),
-
-            TypeAnnotatedValue::Tuple { .. } => {
-                handle_complex(type_annotated_value, content_header)
+            (AnalysedType::List(TypeList { inner, .. }), Value::List(values)) => {
+                handle_list(value_and_type, values, inner, content_header)
             }
-            TypeAnnotatedValue::Flags { .. } => {
-                handle_complex(type_annotated_value, content_header)
+            (AnalysedType::Bool(_), Value::Bool(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
             }
-            TypeAnnotatedValue::Variant { .. } => {
-                handle_record(type_annotated_value, content_header)
+            (AnalysedType::S8(_), Value::S8(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
             }
-            TypeAnnotatedValue::Enum(TypedEnum { value, .. }) => {
-                handle_string(value, content_header)
+            (AnalysedType::U8(_), Value::U8(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
             }
-
-            TypeAnnotatedValue::Option(typed_option) => match &typed_option.value {
+            (AnalysedType::S16(_), Value::S16(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
+            }
+            (AnalysedType::U16(_), Value::U16(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
+            }
+            (AnalysedType::S32(_), Value::S32(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
+            }
+            (AnalysedType::U32(_), Value::U32(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
+            }
+            (AnalysedType::S64(_), Value::S64(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
+            }
+            (AnalysedType::U64(_), Value::U64(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
+            }
+            (AnalysedType::F32(_), Value::F32(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
+            }
+            (AnalysedType::F64(_), Value::F64(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
+            }
+            (AnalysedType::Chr(_), Value::Char(value)) => {
+                handle_primitive(value, &value_and_type.typ, content_header)
+            }
+            (AnalysedType::Str(_), Value::String(string)) => handle_string(string, content_header),
+            (AnalysedType::Tuple(_), Value::Tuple(_)) => {
+                handle_complex(value_and_type, content_header)
+            }
+            (AnalysedType::Flags(_), Value::Flags(_)) => {
+                handle_complex(value_and_type, content_header)
+            }
+            // Can be considered as a record
+            (AnalysedType::Result(_), Value::Result(_)) => {
+                handle_complex(value_and_type, content_header)
+            }
+            (AnalysedType::Handle(_), Value::Handle { .. }) => {
+                handle_complex(value_and_type, content_header)
+            }
+            (AnalysedType::Enum(TypeEnum { cases, .. }), Value::Enum(name_idx)) => {
+                let name = cases
+                    .get(*name_idx as usize)
+                    .ok_or(ContentTypeMapError::internal("Invalid enum index"))?;
+                handle_string(name, content_header)
+            }
+            (AnalysedType::Option(TypeOption { inner, .. }), Value::Option(value)) => match value {
                 Some(value) => {
-                    let value = value.type_annotated_value.as_ref().ok_or(
-                        ContentTypeMapError::internal("Failed to fetch option value"),
-                    )?;
-                    get_response_body_based_on_content_type(value, content_header)
+                    let value_and_type = ValueAndType::new((**value).clone(), (**inner).clone());
+                    get_response_body_based_on_content_type(&value_and_type, content_header)
                 }
                 None => {
                     if content_header.has_application_json() {
                         get_json_null()
                     } else {
-                        let typ = AnalysedType::try_from(type_annotated_value).map_err(|_| {
-                            ContentTypeMapError::internal("Failed to resolve type of data")
-                        })?;
+                        let typ = value_and_type.typ.clone();
                         Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
                     }
                 }
             },
-            // Can be considered as a record
-            TypeAnnotatedValue::Result { .. } => {
-                handle_complex(type_annotated_value, content_header)
-            }
-            TypeAnnotatedValue::Handle { .. } => {
-                handle_complex(type_annotated_value, content_header)
-            }
+            _ => Err(ContentTypeMapError::InternalError(
+                "Value and type mismatch".to_string(),
+            )),
         }
     }
 
     pub(crate) fn get_response_body(
-        type_annotated_value: &TypeAnnotatedValue,
+        value_and_type: &ValueAndType,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        match type_annotated_value {
-            TypeAnnotatedValue::Record { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::List(TypedList { values, typ }) => {
-                match typ.clone().and_then(|v| v.r#type) {
-                    Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(primitive)) => {
-                        match PrimitiveType::try_from(primitive.primitive) {
-                            Ok(PrimitiveType::U8) => {
-                                let values = values
-                                    .iter()
-                                    .filter_map(|v| v.type_annotated_value.clone())
-                                    .collect::<Vec<_>>();
-                                get_byte_stream_body(&values)
-                            }
-                            _ => get_json(type_annotated_value),
-                        }
-                    }
-                    _ => get_json(type_annotated_value),
-                }
+        match (&value_and_type.typ, &value_and_type.value) {
+            (AnalysedType::Record(TypeRecord { .. }), Value::Record { .. }) => {
+                get_json(value_and_type)
             }
-
-            TypeAnnotatedValue::Str(string) => Ok(Body::from_string(string.to_string())
-                .with_content_type(ContentType::json().to_string())),
-
-            TypeAnnotatedValue::Enum(TypedEnum { value, .. }) => {
-                Ok(Body::from_string(value.to_string())
+            (AnalysedType::List(TypeList { inner, .. }), Value::List(values)) => match &**inner {
+                AnalysedType::U8(_) => get_byte_stream_body(values),
+                _ => get_json(value_and_type),
+            },
+            (AnalysedType::Str(_), Value::String(string)) => {
+                Ok(Body::from_string(string.to_string())
                     .with_content_type(ContentType::json().to_string()))
             }
-
-            TypeAnnotatedValue::Bool(bool) => get_json_of(bool),
-            TypeAnnotatedValue::S8(s8) => get_json_of(s8),
-            TypeAnnotatedValue::U8(u8) => get_json_of(u8),
-            TypeAnnotatedValue::S16(s16) => get_json_of(s16),
-            TypeAnnotatedValue::U16(u16) => get_json_of(u16),
-            TypeAnnotatedValue::S32(s32) => get_json_of(s32),
-            TypeAnnotatedValue::U32(u32) => get_json_of(u32),
-            TypeAnnotatedValue::S64(s64) => get_json_of(s64),
-            TypeAnnotatedValue::U64(u64) => get_json_of(u64),
-            TypeAnnotatedValue::F32(f32) => get_json_of(f32),
-            TypeAnnotatedValue::F64(f64) => get_json_of(f64),
-            TypeAnnotatedValue::Char(char) => get_json_of(char),
-            TypeAnnotatedValue::Tuple { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::Flags { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::Variant { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::Option(typed_option) => match &typed_option.value {
+            (AnalysedType::Enum(TypeEnum { cases, .. }), Value::Enum(case_idx)) => {
+                let case_name = cases
+                    .get(*case_idx as usize)
+                    .ok_or(ContentTypeMapError::internal("Invalid enum index"))?;
+                Ok(Body::from_string(case_name.to_string())
+                    .with_content_type(ContentType::json().to_string()))
+            }
+            (AnalysedType::Bool(_), Value::Bool(bool)) => get_json_of(bool),
+            (AnalysedType::S8(_), Value::S8(s8)) => get_json_of(s8),
+            (AnalysedType::U8(_), Value::U8(u8)) => get_json_of(u8),
+            (AnalysedType::S16(_), Value::S16(s16)) => get_json_of(s16),
+            (AnalysedType::U16(_), Value::U16(u16)) => get_json_of(u16),
+            (AnalysedType::S32(_), Value::S32(s32)) => get_json_of(s32),
+            (AnalysedType::U32(_), Value::U32(u32)) => get_json_of(u32),
+            (AnalysedType::S64(_), Value::S64(s64)) => get_json_of(s64),
+            (AnalysedType::U64(_), Value::U64(u64)) => get_json_of(u64),
+            (AnalysedType::F32(_), Value::F32(f32)) => get_json_of(f32),
+            (AnalysedType::F64(_), Value::F64(f64)) => get_json_of(f64),
+            (AnalysedType::Chr(_), Value::Char(char)) => get_json_of(char),
+            (AnalysedType::Tuple(_), Value::Tuple(_)) => get_json(value_and_type),
+            (AnalysedType::Flags(_), Value::Flags(_)) => get_json(value_and_type),
+            (AnalysedType::Variant(_), Value::Variant { .. }) => get_json(value_and_type),
+            (AnalysedType::Result(_), Value::Result { .. }) => get_json(value_and_type),
+            (AnalysedType::Handle(_), Value::Handle { .. }) => get_json(value_and_type),
+            (AnalysedType::Option(TypeOption { inner, .. }), Value::Option(value)) => match value {
                 Some(value) => {
-                    let value = value.type_annotated_value.as_ref().ok_or(
-                        ContentTypeMapError::internal("Failed to fetch option value"),
-                    )?;
-                    get_response_body(value)
+                    let value = ValueAndType::new((**value).clone(), (**inner).clone());
+                    get_response_body(&value)
                 }
                 None => get_json_null(),
             },
-            // Can be considered as a record
-            TypeAnnotatedValue::Result { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::Handle { .. } => get_json(type_annotated_value),
+            _ => Err(ContentTypeMapError::internal("Value and type mismatch")),
         }
     }
 
@@ -362,11 +359,11 @@ mod internal {
         }
     }
 
-    fn get_byte_stream(values: &[TypeAnnotatedValue]) -> Result<Vec<u8>, ContentTypeMapError> {
+    fn get_byte_stream(values: &[Value]) -> Result<Vec<u8>, ContentTypeMapError> {
         let bytes = values
             .iter()
             .map(|v| match v {
-                TypeAnnotatedValue::U8(u8) => Ok(*u8 as u8),
+                Value::U8(u8) => Ok(*u8),
                 _ => Err(ContentTypeMapError::internal(
                     "The analysed type is a binary stream however unable to fetch vec<u8>",
                 )),
@@ -377,7 +374,7 @@ mod internal {
     }
 
     fn get_byte_stream_body(
-        values: &[TypeAnnotatedValue],
+        values: &[Value],
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         let bytes = get_byte_stream(values)?;
         Ok(Body::from_bytes(bytes::Bytes::from(bytes))
@@ -385,9 +382,11 @@ mod internal {
     }
 
     fn get_json(
-        type_annotated_value: &TypeAnnotatedValue,
+        value_and_type: &ValueAndType,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        let json = type_annotated_value.to_json_value();
+        let json = value_and_type.to_json_value().map_err(|err| {
+            ContentTypeMapError::internal(format!("Failed to encode value as JSON: {err}"))
+        })?;
         Body::from_json(json)
             .map(|body| body.with_content_type(ContentType::json().to_string()))
             .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))
@@ -412,26 +411,24 @@ mod internal {
     }
 
     fn handle_complex<A: ContentTypeHeaderExt + Display>(
-        complex: &TypeAnnotatedValue,
+        complex: &ValueAndType,
         content_header: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         if content_header.has_application_json() {
             get_json(complex)
         } else {
-            let typ = AnalysedType::try_from(complex)
-                .map_err(|_| ContentTypeMapError::internal("Failed to resolve type of data"))?;
-
+            let typ = complex.typ.clone();
             Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
         }
     }
 
     fn handle_list<A: ContentTypeHeaderExt + Display>(
-        original: &TypeAnnotatedValue,
-        inner_values: &[TypeAnnotatedValue],
-        list_type: &AnalysedType,
+        original: &ValueAndType,
+        inner_values: &[Value],
+        elem_type: &AnalysedType,
         content_header: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        match list_type {
+        match elem_type {
             AnalysedType::U8(_) => {
                 let byte_stream = get_byte_stream(inner_values)?;
                 let body = Body::from_bytes(bytes::Bytes::from(byte_stream));
@@ -443,7 +440,7 @@ mod internal {
                     get_json(original)
                 } else {
                     Err(ContentTypeMapError::illegal_mapping(
-                        list_type,
+                        elem_type,
                         content_header,
                     ))
                 }
@@ -474,15 +471,14 @@ mod internal {
     }
 
     fn handle_record<A: ContentTypeHeaderExt + Display>(
-        record: &TypeAnnotatedValue,
+        value_and_type: &ValueAndType,
         content_header: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         // if record, we prioritise JSON
         if content_header.has_application_json() {
-            get_json(record)
+            get_json(value_and_type)
         } else {
-            let typ = AnalysedType::try_from(record)
-                .map_err(|_| ContentTypeMapError::internal("Failed to resolve type of data"))?;
+            let typ = value_and_type.typ.clone();
             // There is no way a Record can be properly serialised into any other formats to satisfy any other headers, therefore fail
             Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
         }
@@ -507,66 +503,32 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_wasm_ast::analysis::analysed_type::str;
-    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedList, TypedRecord};
+    use golem_wasm_ast::analysis::analysed_type::{field, list, record, str};
+    use golem_wasm_rpc::{IntoValue, Value};
     use poem::web::headers::ContentType;
     use poem::IntoResponse;
-    use serde_json::Value;
 
-    fn sample_record() -> TypeAnnotatedValue {
-        TypeAnnotatedValue::Record(TypedRecord {
-            typ: vec![NameTypePair {
-                name: "name".to_string(),
-                typ: Some((&str()).into()),
-            }],
-            value: vec![NameValuePair {
-                name: "name".to_string(),
-                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(TypeAnnotatedValue::Str("Hello".to_string())),
-                }),
-            }],
-        })
+    fn sample_record() -> ValueAndType {
+        ValueAndType::new(
+            Value::Record(vec!["Hello".into_value()]),
+            record(vec![field("name", str())]),
+        )
     }
 
-    fn create_list(
-        vec: Vec<TypeAnnotatedValue>,
-        analysed_type: &AnalysedType,
-    ) -> TypeAnnotatedValue {
-        TypeAnnotatedValue::List(TypedList {
-            values: vec
-                .into_iter()
-                .map(|v| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(v),
-                })
-                .collect(),
-            typ: Some(analysed_type.into()),
-        })
+    fn create_list(vec: Vec<Value>, analysed_type: AnalysedType) -> ValueAndType {
+        ValueAndType::new(Value::List(vec), list(analysed_type))
     }
 
-    fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
-        let mut name_type_pairs = vec![];
-        let mut name_value_pairs = vec![];
-
-        for (key, value) in values.iter() {
-            let typ = golem_wasm_rpc::protobuf::Type::try_from(value).unwrap();
-
-            name_type_pairs.push(NameTypePair {
-                name: key.to_string(),
-                typ: Some(typ),
-            });
-
-            name_value_pairs.push(NameValuePair {
-                name: key.to_string(),
-                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(value.clone()),
-                }),
-            });
-        }
-
-        TypeAnnotatedValue::Record(TypedRecord {
-            typ: name_type_pairs,
-            value: name_value_pairs,
-        })
+    fn create_record(values: Vec<(&str, ValueAndType)>) -> ValueAndType {
+        ValueAndType::new(
+            Value::Record(values.iter().map(|(_, v)| v.value.clone()).collect()),
+            record(
+                values
+                    .iter()
+                    .map(|(name, value)| field(name, value.typ.clone()))
+                    .collect(),
+            ),
+        )
     }
 
     #[cfg(test)]
@@ -575,8 +537,9 @@ mod tests {
 
         use super::*;
         use golem_wasm_ast::analysis::analysed_type::{u16, u8};
+        use golem_wasm_rpc::IntoValueAndType;
 
-        fn get_content_type_and_body(input: &TypeAnnotatedValue) -> (Option<String>, Body) {
+        fn get_content_type_and_body(input: &ValueAndType) -> (Option<String>, Body) {
             let response_body = internal::get_response_body(input).unwrap();
             let response = response_body.into_response();
             let (parts, body) = response.into_parts();
@@ -589,7 +552,7 @@ mod tests {
 
         #[test]
         async fn test_string_type() {
-            let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+            let type_annotated_value = "Hello".into_value_and_type();
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             // Had it serialized as json, it would have been "\"Hello\""
@@ -601,7 +564,7 @@ mod tests {
 
         #[test]
         async fn test_singleton_u8_type() {
-            let type_annotated_value = TypeAnnotatedValue::U8(10);
+            let type_annotated_value = 10u8.into_value_and_type();
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
@@ -612,7 +575,7 @@ mod tests {
 
         #[test]
         async fn test_list_u8_type() {
-            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)], &u8());
+            let type_annotated_value = create_list(vec![10u8.into_value()], u8());
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
             let result = body.into_bytes().await.unwrap();
 
@@ -627,12 +590,13 @@ mod tests {
 
         #[test]
         async fn test_list_non_u8_type() {
-            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
+            let type_annotated_value = create_list(vec![10u16.into_value()], u16());
 
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
             let data_as_str =
                 String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-            let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
+            let result_json: serde_json::Value =
+                serde_json::from_str(data_as_str.as_str()).unwrap();
             let expected_json = serde_json::Value::Array(vec![serde_json::Value::Number(
                 serde_json::Number::from(10),
             )]);
@@ -644,15 +608,13 @@ mod tests {
 
         #[test]
         async fn test_record_type() {
-            let type_annotated_value = create_record(vec![(
-                "name".to_string(),
-                TypeAnnotatedValue::Str("Hello".to_string()),
-            )]);
+            let type_annotated_value = create_record(vec![("name", "Hello".into_value_and_type())]);
 
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
             let data_as_str =
                 String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-            let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
+            let result_json: serde_json::Value =
+                serde_json::from_str(data_as_str.as_str()).unwrap();
             let expected_json = serde_json::json!({"name": "Hello"});
             assert_eq!(
                 (result_json, content_type),
@@ -667,9 +629,10 @@ mod tests {
 
         use super::*;
         use golem_wasm_ast::analysis::analysed_type::{u16, u8};
+        use golem_wasm_rpc::IntoValueAndType;
 
         fn get_content_type_and_body(
-            input: &TypeAnnotatedValue,
+            input: &ValueAndType,
             header: &ContentType,
         ) -> (Option<String>, Body) {
             let response_body =
@@ -685,7 +648,7 @@ mod tests {
 
         #[test]
         async fn test_string_type_as_text() {
-            let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+            let type_annotated_value = "Hello".into_value_and_type();
             let (content_type, body) =
                 get_content_type_and_body(&type_annotated_value, &ContentType::text());
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
@@ -698,7 +661,7 @@ mod tests {
 
         #[test]
         async fn test_string_type_as_json() {
-            let type_annotated_value = TypeAnnotatedValue::Str("\"Hello\"".to_string());
+            let type_annotated_value = "\"Hello\"".into_value_and_type();
             let (content_type, body) =
                 get_content_type_and_body(&type_annotated_value, &ContentType::json());
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
@@ -715,7 +678,7 @@ mod tests {
 
         #[test]
         async fn test_singleton_u8_type() {
-            let type_annotated_value = TypeAnnotatedValue::U8(10);
+            let type_annotated_value = 10u8.into_value_and_type();
             let (content_type, body) =
                 get_content_type_and_body(&type_annotated_value, &ContentType::json());
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
@@ -727,13 +690,14 @@ mod tests {
 
         #[test]
         async fn test_list_u8_type() {
-            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)], &u8());
+            let type_annotated_value = create_list(vec![10u8.into_value()], u8());
 
             let (content_type, body) =
                 get_content_type_and_body(&type_annotated_value, &ContentType::json());
             let result = &body.into_bytes().await.unwrap();
             let data_as_str = String::from_utf8_lossy(result).to_string();
-            let result_json: Result<Value, _> = serde_json::from_str(data_as_str.as_str());
+            let result_json: Result<serde_json::Value, _> =
+                serde_json::from_str(data_as_str.as_str());
 
             assert_eq!(
                 (result, content_type),
@@ -747,14 +711,15 @@ mod tests {
 
         #[test]
         async fn test_list_non_u8_type() {
-            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
+            let type_annotated_value = create_list(vec![10u16.into_value()], u16());
 
             let (content_type, body) =
                 get_content_type_and_body(&type_annotated_value, &ContentType::json());
             let data_as_str =
                 String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-            let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
-            let expected_json = Value::Array(vec![serde_json::Value::Number(
+            let result_json: serde_json::Value =
+                serde_json::from_str(data_as_str.as_str()).unwrap();
+            let expected_json = serde_json::Value::Array(vec![serde_json::Value::Number(
                 serde_json::Number::from(10),
             )]);
             // That we jsonify any list other than u8, and can be retrieveed as a valid JSON
@@ -773,7 +738,8 @@ mod tests {
                 get_content_type_and_body(&type_annotated_value, &ContentType::json());
             let data_as_str =
                 String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-            let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
+            let result_json: serde_json::Value =
+                serde_json::from_str(data_as_str.as_str()).unwrap();
             let expected_json = serde_json::json!({"name": "Hello"});
             assert_eq!(
                 (result_json, content_type),
@@ -788,9 +754,10 @@ mod tests {
 
         use super::*;
         use golem_wasm_ast::analysis::analysed_type::{u16, u8};
+        use golem_wasm_rpc::IntoValueAndType;
 
         fn get_content_type_and_body(
-            input: &TypeAnnotatedValue,
+            input: &ValueAndType,
             headers: &AcceptHeaders,
         ) -> (Option<String>, Body) {
             let response_body =
@@ -806,7 +773,7 @@ mod tests {
 
         #[test]
         async fn test_string_type_with_json() {
-            let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+            let type_annotated_value = "Hello".into_value_and_type();
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
                 &AcceptHeaders::from_str("text/html;q=0.8, application/json;q=0.5"),
@@ -823,7 +790,7 @@ mod tests {
 
         #[test]
         async fn test_string_type_without_json() {
-            let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+            let type_annotated_value = "Hello".into_value_and_type();
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
                 &AcceptHeaders::from_str("text/html;q=0.8, application/json;q=0.5"),
@@ -840,7 +807,7 @@ mod tests {
 
         #[test]
         async fn test_string_type_with_html() {
-            let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+            let type_annotated_value = "Hello".into_value_and_type();
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
                 &AcceptHeaders::from_str("text/html"),
@@ -854,7 +821,7 @@ mod tests {
 
         #[test]
         async fn test_singleton_u8_type_text() {
-            let type_annotated_value = TypeAnnotatedValue::U8(10);
+            let type_annotated_value = 10u8.into_value_and_type();
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
                 &AcceptHeaders::from_str("application/json"),
@@ -868,7 +835,7 @@ mod tests {
 
         #[test]
         async fn test_singleton_u8_type_json() {
-            let type_annotated_value = TypeAnnotatedValue::U8(10);
+            let type_annotated_value = 10u8.into_value_and_type();
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
                 &AcceptHeaders::from_str("application/json"),
@@ -882,7 +849,7 @@ mod tests {
 
         #[test]
         async fn test_singleton_u8_failed_content_mapping() {
-            let type_annotated_value = TypeAnnotatedValue::U8(10);
+            let type_annotated_value = 10u8.into_value_and_type();
             let result = internal::get_response_body_based_on_content_type(
                 &type_annotated_value,
                 &AcceptHeaders::from_str("text/html"),
@@ -896,7 +863,7 @@ mod tests {
 
         #[test]
         async fn test_list_u8_type_with_json() {
-            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)], &u8());
+            let type_annotated_value = create_list(vec![10u8.into_value()], u8());
 
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
@@ -904,7 +871,8 @@ mod tests {
             );
             let result = &body.into_bytes().await.unwrap();
             let data_as_str = String::from_utf8_lossy(result).to_string();
-            let result_json: Result<Value, _> = serde_json::from_str(data_as_str.as_str());
+            let result_json: Result<serde_json::Value, _> =
+                serde_json::from_str(data_as_str.as_str());
 
             assert_eq!(
                 (result, content_type),
@@ -918,7 +886,7 @@ mod tests {
 
         #[test]
         async fn test_list_non_u8_type_with_json() {
-            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
+            let type_annotated_value = create_list(vec![10u16.into_value()], u16());
 
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
@@ -926,8 +894,9 @@ mod tests {
             );
             let data_as_str =
                 String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-            let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
-            let expected_json = Value::Array(vec![serde_json::Value::Number(
+            let result_json: serde_json::Value =
+                serde_json::from_str(data_as_str.as_str()).unwrap();
+            let expected_json = serde_json::Value::Array(vec![serde_json::Value::Number(
                 serde_json::Number::from(10),
             )]);
             assert_eq!(
@@ -938,7 +907,7 @@ mod tests {
 
         #[test]
         async fn test_list_non_u8_type_with_html_fail() {
-            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
+            let type_annotated_value = create_list(vec![10u16.into_value()], u16());
 
             let result = internal::get_response_body_based_on_content_type(
                 &type_annotated_value,
@@ -960,7 +929,8 @@ mod tests {
             );
             let data_as_str =
                 String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-            let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
+            let result_json: serde_json::Value =
+                serde_json::from_str(data_as_str.as_str()).unwrap();
             let expected_json = serde_json::json!({"name": "Hello"});
             assert_eq!(
                 (result_json, content_type),

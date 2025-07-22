@@ -4398,7 +4398,7 @@ components:
       title: InvokeResult
       properties:
         result:
-          $ref: '#/components/schemas/TypeAnnotatedValue'
+          $ref: '#/components/schemas/ValueAndType'
     JumpParameters:
       type: object
       title: JumpParameters
@@ -5816,15 +5816,6 @@ components:
         timestamp:
           type: string
           format: date-time
-    TypeAnnotatedValue:
-      type: object
-      required:
-      - typ
-      - value
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-        value: {}
     TypeBool:
       type: object
       title: TypeBool
@@ -5837,6 +5828,8 @@ components:
       required:
       - cases
       properties:
+        name:
+          type: string
         cases:
           type: array
           items:
@@ -5853,6 +5846,8 @@ components:
       required:
       - names
       properties:
+        name:
+          type: string
         names:
           type: array
           items:
@@ -5864,6 +5859,8 @@ components:
       - resource_id
       - mode
       properties:
+        name:
+          type: string
         resource_id:
           type: integer
           format: uint64
@@ -5875,6 +5872,8 @@ components:
       required:
       - inner
       properties:
+        name:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
     TypeOption:
@@ -5883,6 +5882,8 @@ components:
       required:
       - inner
       properties:
+        name:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
     TypeRecord:
@@ -5891,6 +5892,8 @@ components:
       required:
       - fields
       properties:
+        name:
+          type: string
         fields:
           type: array
           items:
@@ -5899,6 +5902,8 @@ components:
       type: object
       title: TypeResult
       properties:
+        name:
+          type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
         err:
@@ -5924,6 +5929,8 @@ components:
       required:
       - items
       properties:
+        name:
+          type: string
         items:
           type: array
           items:
@@ -5946,6 +5953,8 @@ components:
       required:
       - cases
       properties:
+        name:
+          type: string
         cases:
           type: array
           items:

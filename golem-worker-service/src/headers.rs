@@ -75,49 +75,29 @@ impl ResolvedResponseHeaders {
 #[cfg(test)]
 mod test {
     use crate::headers::ResolvedResponseHeaders;
-    use golem_wasm_rpc::protobuf::{
-        type_annotated_value::TypeAnnotatedValue, NameTypePair, NameValuePair, Type, TypedRecord,
-    };
-    use golem_wasm_rpc::ValueAndType;
+    use golem_wasm_ast::analysis::analysed_type::{field, record};
+    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use http::{HeaderMap, HeaderValue};
     use test_r::test;
 
-    fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
-        let mut name_type_pairs = vec![];
-        let mut name_value_pairs = vec![];
-
-        for (key, value) in values.iter() {
-            let typ = Type::try_from(value).unwrap();
-            name_type_pairs.push(NameTypePair {
-                name: key.to_string(),
-                typ: Some(typ),
-            });
-
-            name_value_pairs.push(NameValuePair {
-                name: key.to_string(),
-                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(value.clone()),
-                }),
-            });
-        }
-
-        TypeAnnotatedValue::Record(TypedRecord {
-            typ: name_type_pairs,
-            value: name_value_pairs,
-        })
+    fn create_record(values: Vec<(&str, ValueAndType)>) -> ValueAndType {
+        ValueAndType::new(
+            Value::Record(values.iter().map(|(_, vnt)| vnt.value.clone()).collect()),
+            record(
+                values
+                    .iter()
+                    .map(|(name, vnt)| field(name, vnt.typ.clone()))
+                    .collect(),
+            ),
+        )
     }
 
     #[test]
     fn test_get_response_headers_from_typed_value() {
         let header_map: ValueAndType = create_record(vec![
-            (
-                "header1".to_string(),
-                TypeAnnotatedValue::Str("value1".to_string()),
-            ),
-            ("header2".to_string(), TypeAnnotatedValue::F32(1.0)),
-        ])
-        .try_into()
-        .unwrap();
+            ("header1", "value1".into_value_and_type()),
+            ("header2", 1.0f32.into_value_and_type()),
+        ]);
 
         let resolved_headers = ResolvedResponseHeaders::from_typed_value(header_map).unwrap();
 

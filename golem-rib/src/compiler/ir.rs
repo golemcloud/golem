@@ -173,7 +173,6 @@ mod protobuf {
         PushTupleInstruction, RibIr as ProtoRibIR, WitResource,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
-    use golem_wasm_rpc::ValueAndType;
 
     impl TryFrom<golem_api_grpc::proto::golem::rib::FunctionReferenceType> for FunctionReferenceType {
         type Error = String;
@@ -306,10 +305,11 @@ mod protobuf {
 
                     Ok(RibIR::GenerateWorkerName(variable_id))
                 }
-                Instruction::PushLit(value) => {
-                    let value: ValueAndType = value.try_into()?;
-                    Ok(RibIR::PushLit(value))
-                }
+                Instruction::PushLit(value) => Ok(RibIR::PushLit(
+                    value
+                        .try_into()
+                        .map_err(|_| "Failed to convert PushLit".to_string())?,
+                )),
                 Instruction::AssignVar(value) => Ok(RibIR::AssignVar(
                     value
                         .try_into()
@@ -482,10 +482,10 @@ mod protobuf {
                     ))
                 }
                 Instruction::Throw(value) => Ok(RibIR::Throw(value)),
-                Instruction::PushFlag(flag) => {
-                    let flag: ValueAndType = flag.try_into()?;
-                    Ok(RibIR::PushFlag(flag))
-                }
+                Instruction::PushFlag(flag) => Ok(RibIR::PushFlag(
+                    flag.try_into()
+                        .map_err(|_| "Failed to convert PushFlag".to_string())?,
+                )),
                 Instruction::GetTag(_) => Ok(RibIR::GetTag),
                 Instruction::PushTuple(tuple_instruction) => {
                     let tuple_type = tuple_instruction
@@ -552,15 +552,7 @@ mod protobuf {
                         },
                     )
                 }
-                RibIR::PushLit(value) => {
-                    Instruction::PushLit(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(
-                            value
-                                .try_into()
-                                .map_err(|errs: Vec<String>| errs.join(", "))?,
-                        ),
-                    })
-                }
+                RibIR::PushLit(value) => Instruction::PushLit(value.into()),
                 RibIR::And => Instruction::And(And {}),
                 RibIR::IsEmpty => Instruction::IsEmpty(IsEmpty {}),
                 RibIR::Or => Instruction::Or(Or {}),
@@ -685,14 +677,7 @@ mod protobuf {
                     )
                 }
                 RibIR::Throw(msg) => Instruction::Throw(msg),
-                RibIR::PushFlag(flag) => {
-                    Instruction::PushFlag(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(
-                            flag.try_into()
-                                .map_err(|errs: Vec<String>| errs.join(", "))?,
-                        ),
-                    })
-                }
+                RibIR::PushFlag(flag) => Instruction::PushFlag(flag.into()),
                 RibIR::GetTag => Instruction::GetTag(GetTag {}),
                 RibIR::PushTuple(analysed_type, size) => {
                     let typ = golem_wasm_ast::analysis::protobuf::Type::from(&analysed_type);
