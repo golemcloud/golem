@@ -441,7 +441,6 @@ pub trait PublicWorkerIo {
 /// so not locking is needed in the implementation.
 #[async_trait]
 pub trait FileSystemReading {
-    // List the contents of a directory. Will return an error if the path is not a directory.
     async fn get_file_system_node(
         &self,
         path: &ComponentFilePath,
