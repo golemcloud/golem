@@ -16,7 +16,6 @@ use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route}
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_binding::GatewayBinding;
 use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
-use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 
 // HttpApiDefinitionRequest corresponds to the user facing http api definition.
 // It has security at the global level, which is following OpenAPI style of defining security at the root level.
@@ -55,33 +54,5 @@ impl From<Route> for RouteRequest {
             security: security_middleware
                 .map(|x| SecuritySchemeReference::from(x.security_scheme_with_metadata)),
         }
-    }
-}
-
-impl TryFrom<grpc_apidefinition::HttpRoute> for RouteRequest {
-    type Error = String;
-
-    fn try_from(value: grpc_apidefinition::HttpRoute) -> Result<Self, Self::Error> {
-        let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
-        let binding = value.binding.ok_or("binding is missing")?;
-        let method: MethodPattern = value.method.try_into()?;
-
-        let gateway_binding = GatewayBinding::try_from(binding)?;
-        let security = value.middleware.clone().and_then(|x| x.http_authentication);
-
-        let security = security.and_then(|x| {
-            x.security_scheme.map(|x| SecuritySchemeReference {
-                security_scheme_identifier: SecuritySchemeIdentifier::new(x.scheme_identifier),
-            })
-        });
-
-        let result = Self {
-            method,
-            path,
-            binding: gateway_binding,
-            security,
-        };
-
-        Ok(result)
     }
 }

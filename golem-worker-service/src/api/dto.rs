@@ -753,7 +753,6 @@ mod tests {
     };
     use assert2::check;
     use async_trait::async_trait;
-    use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
     use golem_common::model::ComponentId;
     use golem_service_base::model::ComponentName;
     use test_r::test;
@@ -779,15 +778,6 @@ mod tests {
             _component_id: &ComponentId,
         ) -> Result<ComponentView, String> {
             unimplemented!()
-        }
-    }
-
-    #[test]
-    fn test_method_pattern() {
-        for method in 0..8 {
-            let method_pattern: MethodPattern = method.try_into().unwrap();
-            let method_grpc: grpc_apidefinition::HttpMethod = method_pattern.into();
-            assert_eq!(method, method_grpc as i32);
         }
     }
 

@@ -17,7 +17,6 @@ use assert2::check;
 use axum::http::HeaderMap;
 use axum::routing::post;
 use axum::{Json, Router};
-use golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId;
 use golem_client::model::{
     ApiDefinitionInfo, ApiDeploymentRequest, ApiSite, GatewayBindingComponent, GatewayBindingData,
     GatewayBindingType, HttpApiDefinitionRequest, MethodPattern, RouteRequestData,
@@ -114,12 +113,10 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
         .start_worker_with(&component_id, "w1", vec![], env.clone())
         .await;
 
-    let api_definition_id = ApiDefinitionId {
-        value: Uuid::new_v4().to_string(),
-    };
+    let api_definition_id = Uuid::new_v4().to_string();
 
     let request = HttpApiDefinitionRequest {
-        id: api_definition_id.value.clone(),
+        id: api_definition_id.clone(),
         version: "1".to_string(),
         draft: true,
         security: None,
@@ -171,7 +168,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
     let request = ApiDeploymentRequest {
         project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
-            id: api_definition_id.value,
+            id: api_definition_id,
             version: "1".to_string(),
         }],
         site: ApiSite {
