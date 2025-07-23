@@ -15,12 +15,11 @@
 use crate::model::oplog::OplogIndex;
 use crate::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentType, FilterComparator, GatewayBindingType,
-    IdempotencyKey, InitialComponentFile, InitialComponentFileKey, LogLevel, NumberOfShards, Pod,
-    PromiseId, RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator,
-    TargetWorkerId, Timestamp, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter,
-    WorkerId, WorkerNameFilter, WorkerNotFilter, WorkerStatus, WorkerStatusFilter,
-    WorkerVersionFilter,
+    ComponentFileSystemNodeDetails, ComponentType, FilterComparator, IdempotencyKey,
+    InitialComponentFile, InitialComponentFileKey, LogLevel, NumberOfShards, Pod, PromiseId,
+    RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, TargetWorkerId,
+    Timestamp, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId,
+    WorkerNameFilter, WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
 };
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{

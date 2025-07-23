@@ -43,7 +43,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::SystemTime;
 use Iterator;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1001,18 +1000,7 @@ impl From<CompiledRoute> for Route {
 mod tests {
     use super::*;
 
-    use crate::service::gateway::{ComponentView, ConversionContext};
-    use async_trait::async_trait;
-    use golem_common::model::{AccountId, ComponentId, ProjectId};
-    use golem_service_base::model::ComponentName;
-
-    use crate::gateway_security::{
-        SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata,
-    };
-    use crate::service::gateway::security_scheme::SecuritySchemeServiceError;
-    use chrono::{DateTime, Utc};
     use test_r::test;
-    use uuid::uuid;
 
     #[test]
     fn split_path_works_with_single_value() {
@@ -1189,81 +1177,5 @@ mod tests {
     #[test]
     fn expr_worker_response() {
         test_string_expr_parse_and_encode("worker.response");
-    }
-
-    fn get_api_spec(
-        path_pattern: &str,
-        worker_id: &str,
-        response_mapping: &str,
-    ) -> serde_yaml::Value {
-        let yaml_string = format!(
-            r#"
-          id: users-api
-          version: 0.0.1
-          projectId: '15d70aa5-2e23-4ee3-b65c-4e1d702836a3'
-          createdAt: 2024-08-21T07:42:15.696Z
-          routes:
-          - method: Get
-            path: {path_pattern}
-            binding:
-              component:
-                version: 0
-                name: 'foobar'
-              workerName: '{worker_id}'
-              response: '{response_mapping}'
-
-        "#
-        );
-
-        let de = serde_yaml::Deserializer::from_str(yaml_string.as_str());
-        serde_yaml::Value::deserialize(de).unwrap()
-    }
-
-    struct TestConversionContext;
-
-    #[async_trait]
-    impl ConversionContext for TestConversionContext {
-        async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
-            if name.0 == "foobar" {
-                Ok(ComponentView {
-                    name: ComponentName("foobar".to_string()),
-                    id: ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3")),
-                    latest_version: 0,
-                })
-            } else {
-                Err("unknown component name".to_string())
-            }
-        }
-        async fn component_by_id(
-            &self,
-            _component_id: &ComponentId,
-        ) -> Result<ComponentView, String> {
-            unimplemented!()
-        }
-    }
-
-    struct TestSecuritySchemeService;
-
-    #[async_trait]
-    impl SecuritySchemeService for TestSecuritySchemeService {
-        async fn get(
-            &self,
-            _security_scheme_name: &SecuritySchemeIdentifier,
-            _namespace: &Namespace,
-        ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
-            Err(SecuritySchemeServiceError::InternalError(
-                "Not implemented".to_string(),
-            ))
-        }
-
-        async fn create(
-            &self,
-            _namespace: &Namespace,
-            _security_scheme: &SecurityScheme,
-        ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
-            Err(SecuritySchemeServiceError::InternalError(
-                "Not implemented".to_string(),
-            ))
-        }
     }
 }

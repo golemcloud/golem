@@ -15,7 +15,7 @@
 use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_binding::GatewayBinding;
-use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
+use crate::gateway_security::SecuritySchemeReference;
 
 // HttpApiDefinitionRequest corresponds to the user facing http api definition.
 // It has security at the global level, which is following OpenAPI style of defining security at the root level.
