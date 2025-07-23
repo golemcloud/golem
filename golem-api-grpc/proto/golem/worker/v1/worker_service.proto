@@ -302,7 +302,7 @@ message GetFileSystemNodeRequest {
 message GetFileSystemNodeResponse {
   oneof result {
     ListFileSystemNodeResponse success = 1;
-    WorkerError error = 3;
+    WorkerError error = 2;
   }
 }
 
