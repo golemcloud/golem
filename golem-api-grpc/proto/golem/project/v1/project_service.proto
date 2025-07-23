@@ -7,7 +7,7 @@ import public "golem/project/project.proto";
 import public "golem/project/v1/project_error.proto";
 import public "golem/common/project_id.proto";
 import public "golem/common/account_id.proto";
-import public "golem/projectpolicy/project_action.proto";
+import public "golem/auth/project_action.proto";
 
 service CloudProjectService {
   rpc GetDefaultProject (GetDefaultProjectRequest) returns (GetDefaultProjectResponse);
