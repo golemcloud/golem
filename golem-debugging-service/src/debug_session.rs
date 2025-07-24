@@ -157,8 +157,7 @@ pub struct DebugSessionData {
     pub playback_overrides: PlaybackOverridesInternal,
     // The current status of the oplog index being replayed and possibly
     // index of newly added oplog entries as part of going live in between host functions
-    pub current_oplog_index: OplogIndex,
-    pub worker_event_receiver: Arc<WorkerEventReceiver>
+    pub current_oplog_index: OplogIndex
 }
 
 #[derive(Debug, Clone)]
