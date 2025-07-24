@@ -19,8 +19,8 @@ use golem_api_grpc::proto::golem::apidefinition::v1::{
     CreateApiDefinitionRequest,
 };
 use golem_api_grpc::proto::golem::apidefinition::{
-    ApiDefinition, ApiDefinitionId, GatewayBinding, GatewayBindingType, HttpApiDefinition,
-    HttpMethod, HttpRoute,
+    api_definition, ApiDefinition, ApiDefinitionId, GatewayBinding, GatewayBindingType,
+    HttpApiDefinition, HttpMethod, HttpRoute,
 };
 use golem_api_grpc::proto::golem::component::VersionedComponentId;
 use golem_client::model::{
@@ -1012,4 +1012,262 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
         .await;
 
     check!(update_component.is_ok());
+}
+
+async fn create_shopping_cart_api_definition_with_two_routes(
+    deps: &EnvBasedTestDependencies,
+    token: &Uuid,
+    project: &ProjectId,
+    component_id: &ComponentId,
+    api_definition_id: String,
+    version: String,
+) -> ApiDefinition {
+    deps.worker_service()
+        .create_api_definition(
+            token,
+            project,
+            CreateApiDefinitionRequest {
+                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                    ApiDefinitionRequest {
+                        id: Some(ApiDefinitionId {
+                            value: api_definition_id,
+                        }),
+                        version,
+                        draft: false,
+                        definition: Some(api_definition_request::Definition::Http(
+                            HttpApiDefinition {
+                                routes: vec![
+                                    // Route for adding content to cart
+                                    HttpRoute {
+                                        method: HttpMethod::Post as i32,
+                                        path: "/v1/static-worker/add-to-cart".to_string(),
+                                        binding: Some(GatewayBinding {
+                                            component: Some(VersionedComponentId {
+                                                component_id: Some(component_id.clone().into()),
+                                                version: 0,
+                                            }),
+                                            worker_name: None,
+                                            response: Some(to_grpc_rib_expr(
+                                                r#"
+                                                    let worker = instance("static-worker");
+                                                    worker.add-item(request.body);
+                                                    {
+                                                        headers: { ContentType: "json" },
+                                                        body: "successfully added item to the cart",
+                                                        status: 201
+                                                    }
+                                                "#,
+                                            )),
+                                            idempotency_key: None,
+                                            binding_type: Some(GatewayBindingType::Default as i32),
+                                            static_binding: None,
+                                            invocation_context: None,
+                                        }),
+                                        middleware: None,
+                                    },
+                                    // Route for getting cart contents
+                                    HttpRoute {
+                                        method: HttpMethod::Get as i32,
+                                        path: "/v1/static-worker/get-cart-contents".to_string(),
+                                        binding: Some(GatewayBinding {
+                                            component: Some(VersionedComponentId {
+                                                component_id: Some(component_id.clone().into()),
+                                                version: 0,
+                                            }),
+                                            worker_name: None,
+                                            response: Some(to_grpc_rib_expr(
+                                                r#"
+                                                    let worker = instance("static-worker");
+                                                    let result = worker.get-cart-contents();
+                                                    {
+                                                        headers: { ContentType: "json" },
+                                                        body: result,
+                                                        status: 200
+                                                    }
+                                                "#,
+                                            )),
+                                            idempotency_key: None,
+                                            binding_type: Some(GatewayBindingType::Default as i32),
+                                            static_binding: None,
+                                            invocation_context: None,
+                                        }),
+                                        middleware: None,
+                                    },
+                                ],
+                            },
+                        )),
+                    },
+                )),
+            },
+        )
+        .await
+        .unwrap()
+}
+
+#[test]
+#[tracing::instrument]
+async fn deploy_api_and_make_worker_calls(deps: &EnvBasedTestDependencies) {
+    let admin = deps.admin().await;
+    let project_id = admin.default_project().await;
+    let component_id = admin.component("shopping-cart").unique().store().await;
+
+    fn new_api_definition_id(prefix: &str) -> String {
+        format!("{}-{}", prefix, Uuid::new_v4())
+    }
+
+    // Create API definition with two routes: add-content and cart-contents
+    let api_definition = create_shopping_cart_api_definition_with_two_routes(
+        deps,
+        &admin.token,
+        &project_id,
+        &component_id,
+        new_api_definition_id("shopping-cart-api"),
+        "1".to_string(),
+    )
+    .await;
+
+    // Deploy the API to localhost:9093
+    // http service gateway runs on port 9093 in test-framework
+    let request = ApiDeploymentRequest {
+        project_id: project_id.0,
+        api_definitions: vec![ApiDefinitionInfo {
+            id: api_definition.id.as_ref().unwrap().value.clone(),
+            version: api_definition.version.clone(),
+        }],
+        site: ApiSite {
+            host: "localhost:9093".to_string(),
+            subdomain: None,
+        },
+    };
+
+    let response = deps
+        .worker_service()
+        .create_or_update_api_deployment(&admin.token, request.clone())
+        .await
+        .unwrap();
+
+    // Verify the deployment was successful
+    check!(request.api_definitions == response.api_definitions);
+    check!(request.site == response.site);
+
+    // Verify we can retrieve the deployment
+    let retrieved_deployment = deps
+        .worker_service()
+        .get_api_deployment(&admin.token, &project_id, "localhost:9093")
+        .await
+        .unwrap();
+    check!(request.api_definitions == retrieved_deployment.api_definitions);
+    check!(request.site == retrieved_deployment.site);
+
+    // Verify the API definition has both main routes
+    let definition = api_definition.definition.unwrap();
+    match definition {
+        api_definition::Definition::Http(http_def) => {
+            check!(http_def.routes.len() == 2);
+
+            // Check that we have both expected main routes
+            let has_add_to_cart = http_def.routes.iter().any(|route| {
+                route.method == HttpMethod::Post as i32
+                    && route.path == "/v1/static-worker/add-to-cart"
+            });
+            let has_get_cart_contents = http_def.routes.iter().any(|route| {
+                route.method == HttpMethod::Get as i32
+                    && route.path == "/v1/static-worker/get-cart-contents"
+            });
+
+            check!(has_add_to_cart);
+            check!(has_get_cart_contents);
+        }
+    }
+
+    // Wait a moment for the deployment to be ready
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    // Create HTTP client to test the deployed API
+    let http_client = reqwest::Client::new();
+
+    // Test data for the products
+    let product1 = serde_json::json!({
+        "product-id": "foo",
+        "name": "foo",
+        "price": 42,
+        "quantity": 42
+    });
+
+    let product2 = serde_json::json!({
+        "product-id": "bar",
+        "name": "bar",
+        "price": 100,
+        "quantity": 1
+    });
+
+    // Add first product to cart
+    let add_product1 = http_client
+        .post("http://localhost:9093/v1/static-worker/add-to-cart")
+        .json(&product1)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .unwrap();
+
+    check!(add_product1.status().is_success());
+    let add_product1_text = add_product1.text().await.unwrap();
+    check!(add_product1_text.contains("successfully added item to the cart"));
+
+    // Add second product to cart
+    let add_product2 = http_client
+        .post("http://localhost:9093/v1/static-worker/add-to-cart")
+        .json(&product2)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .unwrap();
+
+    check!(add_product2.status().is_success());
+    let add_product2_text = add_product2.text().await.unwrap();
+    check!(add_product2_text.contains("successfully added item to the cart"));
+
+    // Get cart contents and verify both products are there
+    let get_cart_contents = http_client
+        .get("http://localhost:9093/v1/static-worker/get-cart-contents")
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .unwrap();
+
+    check!(get_cart_contents.status().is_success());
+    let cart_contents: Vec<serde_json::Value> = get_cart_contents.json().await.unwrap();
+    check!(cart_contents.len() == 2);
+
+    // Verify the exact contents of the cart
+    let expected_product1 = serde_json::json!({
+        "name": "foo",
+        "price": 42.0,
+        "product-id": "foo",
+        "quantity": 42
+    });
+    let expected_product2 = serde_json::json!({
+        "name": "bar",
+        "price": 100.0,
+        "product-id": "bar",
+        "quantity": 1
+    });
+
+    // Check that both products are in the cart with exact values
+    check!(cart_contents.contains(&expected_product1));
+    check!(cart_contents.contains(&expected_product2));
+
+    // Clean up - delete the deployment
+    deps.worker_service()
+        .delete_api_deployment(&admin.token, &project_id, "localhost:9093")
+        .await
+        .unwrap();
+
+    // Verify the deployment was deleted
+    let response = deps
+        .worker_service()
+        .get_api_deployment(&admin.token, &project_id, "localhost:9093")
+        .await;
+    assert!(response.is_err());
+    check!(response.err().unwrap().to_string().contains("not found"));
 }
