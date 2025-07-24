@@ -43,21 +43,6 @@ pub trait WorkerEventService: Send + Sync {
     /// guaranteed to contain information only emitted during the _last_ invocation.
     fn get_last_invocation_errors(&self) -> String;
 
-    fn emit_stdout(&self, bytes: Vec<u8>, is_live: bool) {
-        self.emit_event(InternalWorkerEvent::stdout(bytes), is_live)
-    }
-
-    fn emit_stderr(&self, bytes: Vec<u8>, is_live: bool) {
-        self.emit_event(InternalWorkerEvent::stderr(bytes), is_live)
-    }
-
-    fn emit_log(&self, log_level: LogLevel, context: &str, message: &str, is_live: bool) {
-        self.emit_event(
-            InternalWorkerEvent::log(log_level, context, message),
-            is_live,
-        )
-    }
-
     fn emit_invocation_start(
         &self,
         function: &str,

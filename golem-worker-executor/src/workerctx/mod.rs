@@ -86,6 +86,9 @@ pub trait WorkerCtx:
     /// executing worker from things like a request handler.
     type PublicState: PublicWorkerIo + HasWorker<Self> + HasOplog + Clone + Send + Sync;
 
+    /// Static log event behaviour configuration for workers
+    const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour;
+
     /// Creates a new worker context
     ///
     /// Arguments:
@@ -487,4 +490,11 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         component: &Component,
         component_metadata: &ComponentMetadata,
     ) -> anyhow::Result<()>;
+}
+
+pub enum LogEventEmitBehaviour {
+    /// Always emit all log event
+    Always,
+    /// Emit log events only during live mode
+    LiveOnly
 }
