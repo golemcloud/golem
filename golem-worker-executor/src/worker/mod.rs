@@ -23,9 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::durable_host::recover_stderr_logs;
-use crate::model::{
-    ExecutionStatus, ListDirectoryResult, LookupResult, ReadFileResult, TrapType, WorkerConfig,
-};
+use crate::model::{ExecutionStatus, LookupResult, ReadFileResult, TrapType, WorkerConfig};
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
@@ -49,8 +47,8 @@ use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogR
 use golem_common::model::{AccountId, RetryConfig};
 use golem_common::model::{ComponentFilePath, ComponentType, PluginInstallationId};
 use golem_common::model::{
-    ComponentVersion, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
-    WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
+    ComponentVersion, GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp,
+    TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
     InterruptKind, WorkerExecutorError, WorkerOutOfMemory,
@@ -885,10 +883,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .expect("update_metadata failed");
     }
 
-    pub async fn list_directory(
+    pub async fn get_file_system_node(
         &self,
         path: ComponentFilePath,
-    ) -> Result<ListDirectoryResult, WorkerExecutorError> {
+    ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         let (sender, receiver) = oneshot::channel();
 
         let mutex = self.instance.lock().await;
@@ -896,7 +894,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.queue
             .write()
             .await
-            .push_back(QueuedWorkerInvocation::ListDirectory { path, sender });
+            .push_back(QueuedWorkerInvocation::GetFileSystemNode { path, sender });
 
         // Two cases here:
         // - Worker is running, we can send the invocation command and the worker will look at the queue immediately
@@ -1232,7 +1230,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 }
                             }
                         }
-                        QueuedWorkerInvocation::ListDirectory { sender, .. } => {
+                        QueuedWorkerInvocation::GetFileSystemNode { sender, .. } => {
                             let _ = sender.send(Err(fail_pending_invocations.clone()));
                         }
                         QueuedWorkerInvocation::ReadFile { sender, .. } => {
@@ -1861,9 +1859,9 @@ pub enum QueuedWorkerInvocation {
         invocation: TimestampedWorkerInvocation,
         canceled: bool,
     },
-    ListDirectory {
+    GetFileSystemNode {
         path: ComponentFilePath,
-        sender: oneshot::Sender<Result<ListDirectoryResult, WorkerExecutorError>>,
+        sender: oneshot::Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
     },
     // The worker will suspend execution until the stream is dropped, so consume in a timely manner.
     ReadFile {

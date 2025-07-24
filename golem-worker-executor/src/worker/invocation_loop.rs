@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ListDirectoryResult, ReadFileResult, TrapType};
+use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
@@ -29,11 +29,14 @@ use async_mutex::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::invocation_context::{AttributeValue, InvocationContextStack};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     exports, ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+};
+use golem_common::model::{
+    invocation_context::{AttributeValue, InvocationContextStack},
+    GetFileSystemNodeResult,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -376,8 +379,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     CommandOutcome::Continue
                 }
             }
-            QueuedWorkerInvocation::ListDirectory { path, sender } => {
-                self.list_directory(path, sender).await;
+            QueuedWorkerInvocation::GetFileSystemNode { path, sender } => {
+                self.get_file_system_node(path, sender).await;
                 CommandOutcome::Continue
             }
             QueuedWorkerInvocation::ReadFile { path, sender } => {
@@ -810,12 +813,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ///
     /// These are threaded through the invocation loop to make sure they are not accessing the file system concurrently with invocations
     /// that may modify them.
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         path: ComponentFilePath,
-        sender: Sender<Result<ListDirectoryResult, WorkerExecutorError>>,
+        sender: Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
     ) {
-        let result = self.store.data().list_directory(&path).await;
+        let result = self.store.data().get_file_system_node(&path).await;
         let _ = sender.send(result);
     }
 

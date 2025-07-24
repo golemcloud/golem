@@ -28,22 +28,23 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     activate_plugin_response, cancel_invocation_response, complete_promise_response,
-    deactivate_plugin_response, delete_worker_response, fork_worker_response, get_oplog_response,
-    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response,
-    revert_worker_response, search_oplog_response, update_worker_response, worker_error,
-    worker_execution_error, ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
+    deactivate_plugin_response, delete_worker_response, fork_worker_response,
+    get_file_system_node_response, get_oplog_response, get_worker_metadata_response,
+    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
+    invoke_and_await_response, invoke_and_await_typed_response, invoke_response,
+    launch_new_worker_response, resume_worker_response, revert_worker_response,
+    search_oplog_response, update_worker_response, worker_error, worker_execution_error,
+    ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
     CancelInvocationResponse, CompletePromiseRequest, CompletePromiseResponse,
     ConnectWorkerRequest, DeactivatePluginRequest, DeactivatePluginResponse, DeleteWorkerRequest,
     DeleteWorkerResponse, ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest,
-    GetFileContentsResponse, GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse,
-    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
-    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest,
-    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
+    GetFileContentsResponse, GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest,
+    GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
+    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
     ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
     SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse, UnknownError,
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
@@ -523,30 +524,31 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
-        request: Request<ListDirectoryRequest>,
-    ) -> Result<Response<ListDirectoryResponse>, Status> {
-        let (metadata, _, request) = request.into_parts();
+        request: Request<GetFileSystemNodeRequest>,
+    ) -> Result<Response<GetFileSystemNodeResponse>, Status> {
+        let (metadata, _, req) = request.into_parts();
         let record = recorded_grpc_api_request!(
-            "get_file_contents",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            "get_file_system_node",
+            worker_id = proto_target_worker_id_string(&req.worker_id),
+            path = req.path
         );
 
         let response = match self
-            .list_directory(request, metadata)
+            .get_file_system_node(req, metadata)
             .instrument(record.span.clone())
             .await
         {
-            Ok(response) => record.succeed(list_directory_response::Result::Success(response)),
+            Ok(response) => record.succeed(response.result.unwrap()),
             Err(error) => record.fail(
-                list_directory_response::Result::Error(error.clone()),
+                get_file_system_node_response::Result::Error(error.clone()),
                 &WorkerTraceErrorKind(&error),
             ),
         };
 
         Ok(Response::new(
-            golem_api_grpc::proto::golem::worker::v1::ListDirectoryResponse {
+            golem_api_grpc::proto::golem::worker::v1::GetFileSystemNodeResponse {
                 result: Some(response),
             },
         ))
@@ -1277,14 +1279,12 @@ impl WorkerGrpcApi {
         })
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
-        request: ListDirectoryRequest,
+        request: GetFileSystemNodeRequest,
         metadata: MetadataMap,
-    ) -> Result<
-        golem_api_grpc::proto::golem::worker::v1::ListDirectorySuccessResponse,
-        GrpcWorkerError,
-    > {
+    ) -> Result<golem_api_grpc::proto::golem::worker::v1::GetFileSystemNodeResponse, GrpcWorkerError>
+    {
         let auth = self.auth(metadata)?;
         let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
         let file_path = validate_component_file_path(request.path)?;
@@ -1295,12 +1295,18 @@ impl WorkerGrpcApi {
             .await?;
         let result = self
             .worker_service
-            .list_directory(&worker_id, file_path, namespace)
+            .get_file_system_node(&worker_id, file_path, namespace)
             .await?;
 
         Ok(
-            golem_api_grpc::proto::golem::worker::v1::ListDirectorySuccessResponse {
-                nodes: result.into_iter().map(|e| e.into()).collect(),
+            golem_api_grpc::proto::golem::worker::v1::GetFileSystemNodeResponse {
+                result: Some(
+                    golem_api_grpc::proto::golem::worker::v1::get_file_system_node_response::Result::Success(
+                        golem_api_grpc::proto::golem::worker::v1::ListFileSystemNodeResponse {
+                            nodes: result.into_iter().map(|e| e.into()).collect(),
+                        },
+                    ),
+                ),
             },
         )
     }
