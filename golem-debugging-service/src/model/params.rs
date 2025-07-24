@@ -14,8 +14,9 @@
 
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::PublicOplogEntry;
-use golem_common::model::WorkerId;
+use golem_common::model::{LogLevel, Timestamp, WorkerId};
 use serde::{Deserialize, Serialize};
+use golem_worker_executor::model::event::InternalWorkerEvent;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ConnectParams {
@@ -78,4 +79,39 @@ pub struct ForkResult {
     pub target_worker_id: WorkerId,
     pub success: bool,
     pub message: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum LogNotification {
+    StdOut {
+        timestamp: Timestamp,
+        bytes: Vec<u8>,
+    },
+    StdErr {
+        timestamp: Timestamp,
+        bytes: Vec<u8>,
+    },
+    Log {
+        timestamp: Timestamp,
+        level: LogLevel,
+        context: String,
+        message: String,
+    },
+}
+
+impl LogNotification {
+    pub fn from_internal_worker_event(event: InternalWorkerEvent) -> Option<Self> {
+        match event {
+            InternalWorkerEvent::InvocationStart { .. } => None,
+            InternalWorkerEvent::InvocationFinished { .. } => None,
+            InternalWorkerEvent::StdOut { timestamp, bytes } => Some(Self::StdOut { timestamp, bytes }),
+            InternalWorkerEvent::StdErr { timestamp, bytes } => Some(Self::StdErr { timestamp, bytes }),
+            InternalWorkerEvent::Log { timestamp, level, context, message } => Some(Self::Log { timestamp, level, context, message })
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LogsLaggedNotification {
+    pub number_of_missed_messages: u64
 }

@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use gethostname::gethostname;
 use golem_common::base_model::ProjectId;
-use golem_common::model::auth::AuthCtx;
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::auth::ProjectAction;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
@@ -37,15 +37,15 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
+use golem_worker_executor::services::worker_event::WorkerEventReceiver;
 
 #[async_trait]
 pub trait DebugService: Send + Sync {
     async fn connect(
         &self,
         authentication_context: &AuthCtx,
-        source_worker_id: &WorkerId,
-        active_session: Arc<ActiveSession>,
-    ) -> Result<ConnectResult, DebugServiceError>;
+        source_worker_id: &WorkerId
+    ) -> Result<(ConnectResult, OwnedWorkerId, Namespace, WorkerEventReceiver), DebugServiceError>;
 
     async fn playback(
         &self,
@@ -193,7 +193,7 @@ impl DebugServiceDefault {
         worker_id: WorkerId,
         account_id: &AccountId,
         project_id: &ProjectId,
-    ) -> Result<WorkerMetadata, DebugServiceError> {
+    ) -> Result<(WorkerMetadata, WorkerEventReceiver), DebugServiceError> {
         let owned_worker_id = OwnedWorkerId::new(project_id, &worker_id);
 
         // This get will only look at the oplogs to see if a worker presumably exists in the real executor.
@@ -244,7 +244,9 @@ impl DebugServiceDefault {
                 .get_metadata()
                 .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
 
-            Ok(metadata)
+            let receiver = worker.event_service().receiver();
+
+            Ok((metadata, receiver))
         } else {
             Err(DebugServiceError::internal(
                 "Worker doesn't exist in live/real worker executor for it to connect to"
@@ -535,9 +537,8 @@ impl DebugService for DebugServiceDefault {
     async fn connect(
         &self,
         auth_ctx: &AuthCtx,
-        worker_id: &WorkerId,
-        active_session: Arc<ActiveSession>,
-    ) -> Result<ConnectResult, DebugServiceError> {
+        worker_id: &WorkerId
+    ) -> Result<(ConnectResult, OwnedWorkerId, Namespace, WorkerEventReceiver), DebugServiceError> {
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(
@@ -559,13 +560,8 @@ impl DebugService for DebugServiceDefault {
             ));
         }
 
-        // Ensuring active session is set with the fundamental details of worker_id that is going to be debugged
-        active_session
-            .set_active_session(owned_worker_id.worker_id.clone(), namespace.clone())
-            .await;
-
         // This simply migrates the worker to the debug mode, but it doesn't start the worker
-        let worker_metadata = self
+        let (worker_metadata, worker_event_receiver) = self
             .connect_worker(
                 worker_id.clone(),
                 &namespace.account_id,
@@ -575,7 +571,7 @@ impl DebugService for DebugServiceDefault {
 
         self.debug_session
             .insert(
-                DebugSessionId::new(owned_worker_id),
+                debug_session_id,
                 DebugSessionData {
                     worker_metadata,
                     target_oplog_index: None,
@@ -585,11 +581,13 @@ impl DebugService for DebugServiceDefault {
             )
             .await;
 
-        Ok(ConnectResult {
+        let connect_result = ConnectResult {
             worker_id: worker_id.clone(),
             success: true,
             message: format!("Worker {worker_id} connected to namespace {namespace}"),
-        })
+        };
+
+        Ok((connect_result, owned_worker_id, namespace, worker_event_receiver))
     }
 
     async fn playback(

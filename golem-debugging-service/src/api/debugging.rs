@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::debug_session::ActiveSession;
-use crate::jrpc::jrpc_handler;
+use crate::jrpc::{jrpc_handler, JrpcSession};
 use crate::services::debug_service::DebugService;
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use axum_jrpc::{Id, JsonRpcRequest, JsonRpcResponse};
@@ -32,6 +32,7 @@ use poem_openapi::*;
 use std::sync::Arc;
 use tracing::error;
 use tracing::warn;
+use tokio::sync::mpsc;
 
 #[derive(ApiResponse, Debug, Clone)]
 pub enum DebuggingApiError {
@@ -75,6 +76,10 @@ impl DebuggingApi {
         let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(|socket_stream| {
             Box::pin(async move {
                 let active_session = Arc::new(ActiveSession::default());
+
+                let (notifications_sender, notifications_receiver) = mpsc::channel(16);
+                let session = JrpcSession::new(debug_service.clone(), auth_ctx, notifications_sender);
+
                 let (mut sink, mut stream) = socket_stream.split();
 
                 while let Some(Ok(msg)) = stream.next().await {
