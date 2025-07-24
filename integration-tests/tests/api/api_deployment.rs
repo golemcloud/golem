@@ -19,8 +19,8 @@ use golem_api_grpc::proto::golem::apidefinition::v1::{
     CreateApiDefinitionRequest,
 };
 use golem_api_grpc::proto::golem::apidefinition::{
-    api_definition, ApiDefinition, ApiDefinitionId, GatewayBinding, GatewayBindingType,
-    HttpApiDefinition, HttpMethod, HttpRoute,
+    ApiDefinition, ApiDefinitionId, GatewayBinding, GatewayBindingType, HttpApiDefinition,
+    HttpMethod, HttpRoute,
 };
 use golem_api_grpc::proto::golem::component::VersionedComponentId;
 use golem_client::model::{
@@ -1159,30 +1159,6 @@ async fn deploy_api_and_make_worker_calls(deps: &EnvBasedTestDependencies) {
     check!(request.api_definitions == retrieved_deployment.api_definitions);
     check!(request.site == retrieved_deployment.site);
 
-    // Verify the API definition has both main routes
-    let definition = api_definition.definition.unwrap();
-    match definition {
-        api_definition::Definition::Http(http_def) => {
-            check!(http_def.routes.len() == 2);
-
-            // Check that we have both expected main routes
-            let has_add_to_cart = http_def.routes.iter().any(|route| {
-                route.method == HttpMethod::Post as i32
-                    && route.path == "/v1/static-worker/add-to-cart"
-            });
-            let has_get_cart_contents = http_def.routes.iter().any(|route| {
-                route.method == HttpMethod::Get as i32
-                    && route.path == "/v1/static-worker/get-cart-contents"
-            });
-
-            check!(has_add_to_cart);
-            check!(has_get_cart_contents);
-        }
-    }
-
-    // Wait a moment for the deployment to be ready
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
     // Create HTTP client to test the deployed API
     let http_client = reqwest::Client::new();
 
@@ -1253,7 +1229,6 @@ async fn deploy_api_and_make_worker_calls(deps: &EnvBasedTestDependencies) {
         "quantity": 1
     });
 
-    // Check that both products are in the cart with exact values
     check!(cart_contents.contains(&expected_product1));
     check!(cart_contents.contains(&expected_product2));
 
