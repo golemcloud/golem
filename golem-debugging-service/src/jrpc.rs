@@ -123,7 +123,7 @@ pub async fn run_jrpc_debug_websocket_session(
                             ),
                         );
 
-                        sender.send(OutgoingJsonRpcMessage::Response(response));
+                        let _ = sender.send(OutgoingJsonRpcMessage::Response(response)).await;
                         continue;
                     }
                 };
@@ -132,16 +132,16 @@ pub async fn run_jrpc_debug_websocket_session(
 
                 match response {
                     Ok(json_rpc_success) => {
-                        sender.send(OutgoingJsonRpcMessage::Response(json_rpc_success));
+                        let _ = sender.send(OutgoingJsonRpcMessage::Response(json_rpc_success)).await;
                     }
                     Err(handler_error) => {
-                        sender.send(OutgoingJsonRpcMessage::Error(handler_error));
+                        let _ = sender.send(OutgoingJsonRpcMessage::Error(handler_error)).await;
                     }
                 }
             }
             Message::Close(_) => {
                 // ack the close
-                sender.send(OutgoingJsonRpcMessage::Close);
+                let _ = sender.send(OutgoingJsonRpcMessage::Close).await;
                 break;
             }
             _ => { }
