@@ -251,7 +251,7 @@ pub trait WorkerService: Send + Sync {
         namespace: Namespace,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
@@ -1264,7 +1264,7 @@ impl WorkerService for WorkerServiceDefault {
             .await
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
@@ -1275,11 +1275,11 @@ impl WorkerService for WorkerServiceDefault {
         let path_clone = path.clone();
         self.call_worker_executor(
             worker_id.clone(),
-            "list_directory",
+            "get_file_system_node",
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
                 Box::pin(
-                    worker_executor_client.list_directory(workerexecutor::v1::ListDirectoryRequest {
+                    worker_executor_client.get_file_system_node(workerexecutor::v1::GetFileSystemNodeRequest {
                         worker_id: Some(worker_id.into()),
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
@@ -1289,8 +1289,8 @@ impl WorkerService for WorkerServiceDefault {
                 )
             },
             |response| match response.into_inner() {
-                workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(golem_api_grpc::proto::golem::workerexecutor::v1::list_directory_response::Result::Success(success)),
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(golem_api_grpc::proto::golem::workerexecutor::v1::get_file_system_node_response::Result::DirSuccess(success)),
                 } => {
                     success.nodes
                         .into_iter()
@@ -1301,16 +1301,22 @@ impl WorkerService for WorkerServiceDefault {
                         )
                         .collect::<Result<Vec<_>, _>>()
                 }
-                workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(workerexecutor::v1::list_directory_response::Result::Failure(err)),
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(workerexecutor::v1::get_file_system_node_response::Result::Failure(err)),
                 } => Err(err.into()),
-                workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(workerexecutor::v1::list_directory_response::Result::NotFound(_)),
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(workerexecutor::v1::get_file_system_node_response::Result::NotFound(_)),
                 } => Err(WorkerServiceError::FileNotFound(path.clone()).into()),
-                workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(workerexecutor::v1::list_directory_response::Result::NotADirectory(_)),
-                } => Err(WorkerServiceError::BadFileType(path.clone()).into()),
-                workerexecutor::v1::ListDirectoryResponse {
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(file_response)),
+                } => {
+                    let file_node = file_response.file
+                        .ok_or(WorkerServiceError::Internal("Missing file data in response".to_string()))?
+                        .try_into()
+                        .map_err(|_| WorkerServiceError::Internal("Failed to convert file node".to_string()))?;
+                    Ok(vec![file_node])
+                },
+                workerexecutor::v1::GetFileSystemNodeResponse {
                     result: None
                 } => Err("Empty response".into()),
             },

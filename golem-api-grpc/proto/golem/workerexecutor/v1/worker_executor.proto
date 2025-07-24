@@ -55,7 +55,7 @@ service WorkerExecutor {
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
 
-  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
+  rpc GetFileSystemNode(GetFileSystemNodeRequest) returns (GetFileSystemNodeResponse);
   rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
 
   rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
@@ -385,7 +385,7 @@ message SearchOplogSuccessResponse {
   uint64 last_index = 5;
 }
 
-message ListDirectoryRequest {
+message GetFileSystemNodeRequest {
   golem.worker.TargetWorkerId worker_id = 1;
   // Account the request belongs to
   golem.common.AccountId account_id = 2;
@@ -396,11 +396,11 @@ message ListDirectoryRequest {
   string path = 5;
 }
 
-message ListDirectoryResponse {
+message GetFileSystemNodeResponse {
   oneof result {
-    ListDirectorySuccessResponse success = 1;
-    golem.common.Empty not_found = 2;
-    golem.common.Empty not_a_directory = 3;
+    ListDirectorySuccessResponse dir_success = 1;
+    ListFileDataSuccessResponse file_success = 2;
+    golem.common.Empty not_found = 3;
     golem.worker.v1.WorkerExecutionError failure = 4;
   }
 }
@@ -408,6 +408,10 @@ message ListDirectoryResponse {
 message ListDirectorySuccessResponse {
   repeated golem.worker.FileSystemNode nodes = 1;
 }
+
+message ListFileDataSuccessResponse {
+  golem.worker.FileSystemNode file = 1;
+}  
 
 message GetFileContentsRequest {
   golem.worker.TargetWorkerId worker_id = 1;
