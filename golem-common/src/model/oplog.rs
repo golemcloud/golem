@@ -29,7 +29,7 @@ use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -400,6 +400,7 @@ pub enum OplogEntry {
         component_size: u64,
         initial_total_linear_memory_size: u64,
         initial_active_plugins: HashSet<PluginInstallationId>,
+        wasi_config_vars: BTreeMap<String, String>,
     },
     /// Activates a plugin for the worker
     ActivatePlugin {
@@ -471,6 +472,7 @@ impl OplogEntry {
         component_version: ComponentVersion,
         args: Vec<String>,
         env: Vec<(String, String)>,
+        wasi_config_vars: BTreeMap<String, String>,
         project_id: ProjectId,
         created_by: AccountId,
         parent: Option<WorkerId>,
@@ -490,6 +492,7 @@ impl OplogEntry {
             component_size,
             initial_total_linear_memory_size,
             initial_active_plugins,
+            wasi_config_vars,
         }
     }
 
@@ -830,6 +833,7 @@ impl OplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
+                wasi_config_vars,
                 worker_id: _,
             } => Some(OplogEntry::Create {
                 timestamp: *timestamp,
@@ -843,6 +847,7 @@ impl OplogEntry {
                 component_size: *component_size,
                 initial_total_linear_memory_size: *initial_total_linear_memory_size,
                 initial_active_plugins: initial_active_plugins.clone(),
+                wasi_config_vars: wasi_config_vars.clone(),
             }),
             _ => None,
         }

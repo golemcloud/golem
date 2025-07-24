@@ -17,6 +17,7 @@ use crate::service::worker::WorkerService;
 use async_trait::async_trait;
 use golem_common::model::{TargetWorkerId, WorkerId};
 use golem_wasm_rpc::ValueAndType;
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::sync::Arc;
 use tracing::debug;
@@ -102,6 +103,7 @@ impl GatewayWorkerRequestExecutor for GatewayWorkerRequestExecutorDefault {
                     parent: None,
                     args: vec![],
                     env: Default::default(),
+                    wasi_config_vars: Some(BTreeMap::new().into()),
                     tracing: Some(resolved_worker_request.invocation_context.into()),
                 }),
                 resolved_worker_request.namespace,

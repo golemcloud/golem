@@ -63,7 +63,7 @@ use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex, Revert
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tempfile::Builder;
@@ -288,6 +288,7 @@ pub trait TestDsl {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> crate::Result<WorkerId>;
 
     async fn try_start_worker_with(
@@ -296,6 +297,7 @@ pub trait TestDsl {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> crate::Result<Result<WorkerId, Error>>;
 
     async fn get_worker_metadata(
@@ -737,7 +739,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         component_id: &ComponentId,
         name: &str,
     ) -> crate::Result<WorkerId> {
-        TestDsl::start_worker_with(self, component_id, name, vec![], HashMap::new()).await
+        TestDsl::start_worker_with(self, component_id, name, vec![], HashMap::new(), vec![]).await
     }
 
     async fn try_start_worker(
@@ -745,7 +747,8 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         component_id: &ComponentId,
         name: &str,
     ) -> crate::Result<Result<WorkerId, Error>> {
-        TestDsl::try_start_worker_with(self, component_id, name, vec![], HashMap::new()).await
+        TestDsl::try_start_worker_with(self, component_id, name, vec![], HashMap::new(), vec![])
+            .await
     }
 
     async fn start_worker_with(
@@ -754,8 +757,11 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> crate::Result<WorkerId> {
-        let result = TestDsl::try_start_worker_with(self, component_id, name, args, env).await?;
+        let result =
+            TestDsl::try_start_worker_with(self, component_id, name, args, env, wasi_config_vars)
+                .await?;
         Ok(result.map_err(|err| anyhow!("Failed to start worker: {err:?}"))?)
     }
 
@@ -765,6 +771,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> crate::Result<Result<WorkerId, Error>> {
         let response = self
             .deps
@@ -776,6 +783,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                     name: name.to_string(),
                     args,
                     env,
+                    wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
                 },
             )
             .await?;
@@ -2051,6 +2059,11 @@ pub fn to_worker_metadata(
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect::<Vec<_>>(),
+            wasi_config_vars: metadata
+                .wasi_config_vars
+                .clone()
+                .expect("no wasi_config_vars_field")
+                .into(),
             project_id: metadata
                 .project_id
                 .expect("no project_id")
@@ -2215,6 +2228,7 @@ pub trait TestDslUnsafe {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> WorkerId;
     async fn try_start_worker_with(
         &self,
@@ -2222,6 +2236,7 @@ pub trait TestDslUnsafe {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> Result<WorkerId, Error>;
     async fn get_worker_metadata(
         &self,
@@ -2486,8 +2501,9 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> WorkerId {
-        <T as TestDsl>::start_worker_with(self, component_id, name, args, env)
+        <T as TestDsl>::start_worker_with(self, component_id, name, args, env, wasi_config_vars)
             .await
             .expect("Failed to start worker")
     }
@@ -2498,8 +2514,9 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> Result<WorkerId, Error> {
-        <T as TestDsl>::try_start_worker_with(self, component_id, name, args, env)
+        <T as TestDsl>::try_start_worker_with(self, component_id, name, args, env, wasi_config_vars)
             .await
             .expect("Failed to start worker")
     }

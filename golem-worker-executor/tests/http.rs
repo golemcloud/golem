@@ -69,7 +69,7 @@ async fn http_client(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-1", vec![], env)
+        .start_worker_with(&component_id, "http-client-1", vec![], env, vec![])
         .await;
     let rx = executor.capture_output(&worker_id).await;
 
@@ -136,7 +136,7 @@ async fn http_client_using_reqwest(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-reqwest-1", vec![], env)
+        .start_worker_with(&component_id, "http-client-reqwest-1", vec![], env, vec![])
         .await;
 
     let result = executor
@@ -203,7 +203,13 @@ async fn http_client_using_reqwest_async(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-reqwest-async-1", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "http-client-reqwest-async-1",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let result = executor
@@ -270,7 +276,13 @@ async fn http_client_using_reqwest_async_parallel(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-reqwest-async-2", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "http-client-reqwest-async-2",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let result = executor
@@ -375,6 +387,7 @@ async fn outgoing_http_contains_idempotency_key(
             "outgoing-http-contains-idempotency-key",
             vec![],
             env,
+            vec![],
         )
         .await;
 
@@ -416,7 +429,7 @@ async fn http_response_request_chaining(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "fetch-test-4", vec![], env)
+        .start_worker_with(&component_id, "fetch-test-4", vec![], env, vec![])
         .await;
     let rx = executor.capture_output(&worker_id).await;
 

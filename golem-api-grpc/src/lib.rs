@@ -17,6 +17,7 @@ test_r::enable!();
 
 #[allow(clippy::large_enum_variant)]
 pub mod proto {
+    use self::golem::worker::{WasiConfigVars, WasiConfigVarsEntry};
     use crate::proto::golem::worker::UpdateMode;
     use bincode::de::Decoder;
     use bincode::enc::Encoder;
@@ -26,6 +27,7 @@ pub mod proto {
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
         AnalysedInstance,
     };
+    use std::collections::BTreeMap;
     use uuid::Uuid;
 
     tonic::include_proto!("mod");
@@ -203,6 +205,27 @@ pub mod proto {
                 1u8 => Ok(UpdateMode::Manual),
                 _ => Err(DecodeError::Other("Invalid UpdateMode")),
             }
+        }
+    }
+
+    impl From<BTreeMap<String, String>> for WasiConfigVars {
+        fn from(value: BTreeMap<String, String>) -> Self {
+            Self {
+                entries: value
+                    .into_iter()
+                    .map(|(key, value)| WasiConfigVarsEntry { key, value })
+                    .collect(),
+            }
+        }
+    }
+
+    impl From<WasiConfigVars> for BTreeMap<String, String> {
+        fn from(value: WasiConfigVars) -> Self {
+            value
+                .entries
+                .into_iter()
+                .map(|e| (e.key, e.value))
+                .collect()
         }
     }
 
