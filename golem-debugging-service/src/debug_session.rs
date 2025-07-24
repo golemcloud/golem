@@ -149,9 +149,9 @@ impl DebugSessions for DebugSessionsDefault {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DebugSessionData {
-    pub worker_metadata: Option<WorkerMetadata>,
+    pub worker_metadata: WorkerMetadata,
     pub target_oplog_index: Option<OplogIndex>,
     pub playback_overrides: PlaybackOverridesInternal,
     // The current status of the oplog index being replayed and possibly

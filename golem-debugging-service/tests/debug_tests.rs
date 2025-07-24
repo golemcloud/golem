@@ -1,4 +1,4 @@
-use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
+use crate::debug_mode::debug_worker_executor::{DebugWorkerExecutorClient, UntypedJrpcMessage};
 use crate::regular_mode::regular_worker_executor::TestRegularWorkerExecutor;
 use crate::*;
 use golem_common::model::oplog::OplogIndex;
@@ -167,6 +167,160 @@ async fn test_connect_and_playback(
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result.worker_id, worker_id);
     assert_eq!(playback_result.current_index, first_invocation_boundary);
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_connect_and_playback_raw(
+    last_unique_id: &LastUniqueId,
+    deps: &RegularWorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
+
+    let debug_context = DebugExecutorTestContext::from(&context);
+    let mut debug_executor = start_debug_executor(deps, &debug_context).await;
+
+    let component = regular_worker_executor
+        .component("shopping-cart")
+        .store()
+        .await;
+
+    let worker_id = regular_worker_executor
+        .start_worker(&component, "shopping-cart")
+        .await
+        .unwrap();
+
+    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await;
+
+    regular_worker_executor
+        .invoke_and_await(
+            worker_id.clone(),
+            "golem:it/api.{add-item}",
+            vec![Record(vec![
+                ("product-id", "G1001".into_value_and_type()),
+                ("name", "Golem T-Shirt L".into_value_and_type()),
+                ("price", 120.0f32.into_value_and_type()),
+                ("quantity", 5u32.into_value_and_type()),
+            ])
+            .into_value_and_type()],
+        )
+        .await
+        .unwrap()
+        .expect("Failed to invoke and await");
+
+    regular_worker_executor
+        .invoke_and_await(worker_id.clone(), "golem:it/api.{checkout}", vec![])
+        .await
+        .unwrap()
+        .expect("Failed to invoke and await");
+
+    let oplogs = regular_worker_executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await
+        .unwrap();
+
+    debug_executor
+        .connect(&worker_id)
+        .await
+        .expect("Failed to connect to the worker in debug mode");
+
+    let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
+    let fourth_invocation_boundary = nth_invocation_boundary(&oplogs, 4);
+
+    debug_executor
+        .playback(fourth_invocation_boundary, None, 3)
+        .await
+        .expect("Failed to playback the worker in debug mode");
+
+    debug_executor
+        .rewind(first_invocation_boundary, 3)
+        .await
+        .expect("Failed to rewind the worker in debug mode");
+
+    debug_executor
+        .playback(fourth_invocation_boundary, None, 3)
+        .await
+        .expect("Failed to playback the worker in debug mode");
+
+    let all_messages = debug_executor.all_read_messages();
+
+    assert!(matches!(
+        &all_messages[..],
+        [
+            UntypedJrpcMessage {
+                result: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                result: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                result: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                result: Some(_),
+                ..
+            },
+        ]
+    ));
+
+    for id in [1, 2, 3, 4, 6, 8, 9, 10, 11] {
+        assert_eq!(all_messages[id].method, Some("emit-logs".to_string()))
+    }
+
+    assert_eq!(
+        all_messages[1].params.clone().unwrap().as_array().unwrap()[0]
+            .as_object()
+            .unwrap()
+            .get("message")
+            .unwrap(),
+        &serde_json::json!("Initializing cart for user test-user-1\n")
+    )
 }
 
 #[test]
