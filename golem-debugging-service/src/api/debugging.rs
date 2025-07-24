@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::debug_session::ActiveSession;
-use crate::jrpc::{jrpc_handler, JrpcSession};
+use crate::jrpc::{run_jrpc_debug_websocket_session};
 use crate::services::debug_service::DebugService;
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use axum_jrpc::{Id, JsonRpcRequest, JsonRpcResponse};
@@ -74,154 +74,9 @@ impl DebuggingApi {
         let debug_service = self.debug_service.clone();
         let auth_ctx = AuthCtx::new(token.0.secret());
         let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(|socket_stream| {
-            Box::pin(async move {
-                let active_session = Arc::new(ActiveSession::default());
-
-                let (notifications_sender, notifications_receiver) = mpsc::channel(16);
-                let session = JrpcSession::new(debug_service.clone(), auth_ctx, notifications_sender);
-
-                let (mut sink, mut stream) = socket_stream.split();
-
-                while let Some(Ok(msg)) = stream.next().await {
-                    match msg {
-                        Message::Text(text) => {
-                            let rpc_request: JsonRpcRequest = match serde_json::from_str(&text) {
-                                Ok(request) => request,
-                                Err(_) => {
-                                    let response = JsonRpcResponse::error(
-                                        Id::None(()),
-                                        JsonRpcError::new(
-                                            JsonRpcErrorReason::ParseError,
-                                            "Invalid JSON-RPC".to_string(),
-                                            axum_jrpc::Value::Null,
-                                        ),
-                                    );
-
-                                    send_error_response(&mut sink, response).await;
-                                    continue;
-                                }
-                            };
-
-                            let response = jrpc_handler(
-                                debug_service.clone(),
-                                rpc_request,
-                                Arc::clone(&active_session),
-                                auth_ctx.clone(),
-                            )
-                            .await;
-
-                            match response {
-                                Ok(json_rpc_success) => {
-                                    send_success_response(&mut sink, json_rpc_success).await
-                                }
-
-                                Err(handler_error) => {
-                                    error!("Received error from jrpc handler: {}", handler_error);
-                                    if handler_error.should_terminate_session() {
-                                        close_on_error(
-                                            active_session.clone(),
-                                            handler_error.to_string(),
-                                            &mut sink,
-                                            debug_service.clone(),
-                                        )
-                                        .await;
-                                        break;
-                                    } else {
-                                        send_error_response(
-                                            &mut sink,
-                                            handler_error.to_jrpc_response(),
-                                        )
-                                        .await;
-                                    }
-                                }
-                            }
-                        }
-                        Message::Close(_) => {
-                            close(active_session.clone(), &mut sink, debug_service.clone()).await;
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-            })
+            Box::pin(run_jrpc_debug_websocket_session(socket_stream, debug_service, auth_ctx))
         }));
 
         Ok(upgraded)
-    }
-}
-
-async fn close_on_error(
-    active_session: Arc<ActiveSession>,
-    error_message: String,
-    sink: &mut SplitSink<WebSocketStream, Message>,
-    debug_service: Arc<dyn DebugService>,
-) {
-    if let Some(active_session_data) = active_session.get_active_session().await {
-        let worker_id = active_session_data.worker_id;
-        let namespace = active_session_data.cloud_namespace;
-        let owned_worker_id = OwnedWorkerId::new(&namespace.project_id, &worker_id);
-        debug_service.terminate_session(&owned_worker_id).await.ok();
-    }
-
-    let result = sink
-        .send(Message::Close(Some((CloseCode::Error, error_message))))
-        .await;
-
-    if let Err(e) = result {
-        debug!("Error sending response: {e}");
-    }
-}
-
-async fn close(
-    active_session: Arc<ActiveSession>,
-    sink: &mut SplitSink<WebSocketStream, Message>,
-    debug_service: Arc<dyn DebugService>,
-) {
-    debug!("Closing connection");
-
-    let active_session_data = active_session.get_active_session().await;
-
-    if let Some(active_session_data) = active_session_data {
-        let worker_id = active_session_data.worker_id;
-        let namespace = active_session_data.cloud_namespace;
-        let owned_worker_id = OwnedWorkerId::new(&namespace.project_id, &worker_id);
-
-        debug_service.terminate_session(&owned_worker_id).await.ok();
-    }
-
-    sink.send(Message::Close(Some((
-        CloseCode::Normal,
-        "Connection closed".to_string(),
-    ))))
-    .await
-    .ok();
-}
-
-async fn send_error_response(
-    sink: &mut SplitSink<WebSocketStream, Message>,
-    rpc_error: JsonRpcResponse,
-) {
-    let result = sink
-        .send(Message::Close(Some((
-            CloseCode::Error,
-            serde_json::to_string(&rpc_error).unwrap(),
-        ))))
-        .await;
-
-    if let Err(e) = result {
-        debug!("Error sending response: {e}");
-    }
-}
-
-async fn send_success_response(
-    sink: &mut SplitSink<WebSocketStream, Message>,
-    rpc_success: JsonRpcResponse,
-) {
-    let result = sink
-        .send(Message::Text(serde_json::to_string(&rpc_success).unwrap()))
-        .await;
-
-    if let Err(e) = result {
-        warn!("Error sending response: {}", e);
     }
 }
