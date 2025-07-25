@@ -33,10 +33,10 @@ use golem_worker_executor::services::{
     HasWorkerForkService, HasWorkerService,
 };
 use golem_worker_executor::worker::Worker;
+use log::debug;
 use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::{error, info};
 
 #[async_trait]
@@ -54,7 +54,6 @@ pub trait DebugService: Send + Sync {
         target_index: OplogIndex,
         overrides: Option<Vec<PlaybackOverride>>,
         ensure_invocation_boundary: bool,
-        wait_time: Duration,
     ) -> Result<PlaybackResult, DebugServiceError>;
 
     async fn rewind(
@@ -63,7 +62,6 @@ pub trait DebugService: Send + Sync {
         account_id: &AccountId,
         target_index: OplogIndex,
         ensure_invocation_boundary: bool,
-        timeout: Duration,
     ) -> Result<RewindResult, DebugServiceError>;
 
     async fn fork(
@@ -256,223 +254,12 @@ impl DebugServiceDefault {
         }
     }
 
-    async fn rewind(
-        &self,
-        owned_worker_id: &OwnedWorkerId,
-        account_id: &AccountId,
-        target_index: &OplogIndex,
-        ensure_invocation_boundary: bool,
-        wait_time: Duration,
-    ) -> Result<RewindResult, DebugServiceError> {
-        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
-
-        let debug_session_data =
-            self.debug_session
-                .get(&debug_session_id)
-                .await
-                .ok_or(DebugServiceError::internal(
-                    "No debug session found. Rewind can be called ".to_string(),
-                    Some(owned_worker_id.worker_id.clone()),
-                ))?;
-
-        if let Some(current_oplog_index) = debug_session_data.target_oplog_index {
-            let worker = Worker::get_or_create_suspended(
-                &self.all,
-                account_id,
-                owned_worker_id,
-                Some(debug_session_data.worker_metadata.args.clone()),
-                Some(debug_session_data.worker_metadata.env.clone()),
-                Some(
-                    debug_session_data
-                        .worker_metadata
-                        .last_known_status
-                        .component_version,
-                ),
-                debug_session_data.worker_metadata.parent.clone(),
-            )
-            .await
-            .map_err(|e| {
-                DebugServiceError::internal(e.to_string(), Some(owned_worker_id.worker_id.clone()))
-            })?;
-
-            let new_target_index = if ensure_invocation_boundary {
-                Self::get_target_oplog_index_at_invocation_boundary(
-                    worker.oplog(),
-                    *target_index,
-                    current_oplog_index,
-                )
-                .await
-                .map_err(|e| {
-                    DebugServiceError::internal(e, Some(owned_worker_id.worker_id.clone()))
-                })?
-            } else {
-                *target_index
-            };
-
-            if new_target_index > current_oplog_index {
-                return Err(DebugServiceError::validation_failed(
-                    vec![
-                        format!(
-                            "Target oplog index {} (corresponding to an invocation boundary) for rewind is greater than the existing target oplog index {}",
-                            target_index,
-                            current_oplog_index
-                        )],
-                        Some(owned_worker_id.worker_id.clone()))
-                 );
-            };
-
-            self.debug_session
-                .update(debug_session_id.clone(), new_target_index, None)
-                .await;
-
-            self.debug_session
-                .update_oplog_index(debug_session_id.clone(), OplogIndex::NONE)
-                .await;
-
-            // we restart regardless of the current status of the worker such that it restarts
-            worker.set_interrupting(InterruptKind::Restart).await;
-
-            tokio::time::sleep(wait_time).await;
-
-            let last_index = self
-                .debug_session
-                .get(&debug_session_id)
-                .await
-                .map(|d| d.current_oplog_index)
-                .unwrap_or(OplogIndex::NONE);
-
-            Ok(RewindResult {
-                worker_id: owned_worker_id.worker_id.clone(),
-                current_index: last_index,
-                success: true,
-                message: format!("Rewinding the worker to index {target_index}"),
-            })
-        } else {
-            // If this is the first step in a debugging session, then rewind is more or less
-            // playback to that index
-            self.playback(
-                owned_worker_id,
-                account_id,
-                *target_index,
-                None,
-                ensure_invocation_boundary,
-                wait_time,
-            )
-            .await
-            .map(|result| RewindResult {
-                worker_id: owned_worker_id.worker_id.clone(),
-                current_index: result.current_index,
-                success: true,
-                message: format!("Rewinding the worker to index {target_index}"),
-            })
-        }
-    }
-
-    async fn resume_replay_with_target_index(
-        &self,
-        worker_id: &WorkerId,
-        account_id: &AccountId,
-        project_id: &ProjectId,
-        existing_target_oplog_index: Option<OplogIndex>,
-        target_index: OplogIndex,
-        playback_overrides: Option<Vec<PlaybackOverride>>,
-        ensure_invocation_boundary: bool,
-        timeout: Duration,
-    ) -> Result<OplogIndex, DebugServiceError> {
-        let owned_worker_id = OwnedWorkerId::new(project_id, worker_id);
-
-        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
-
-        let session_data =
-            self.debug_session
-                .get(&debug_session_id)
-                .await
-                .ok_or(DebugServiceError::internal(
-                    "No debug session found".to_string(),
-                    Some(worker_id.clone()),
-                ))?;
-
-        if let Some(existing_target_index) = existing_target_oplog_index {
-            if target_index < existing_target_index {
-                return Err(DebugServiceError::internal(
-                    format!(
-                        "Target oplog index {target_index} for playback is less than the existing target oplog index {existing_target_index}. Use rewind instead"
-                    ),
-                    Some(debug_session_id.worker_id()),
-                ));
-            }
-        }
-
-        // At this point, the worker do exist after the connect
-        // however, the debug session is updated with a different target index
-        // allowing replaying to (potentially) stop at this index
-        let worker = Worker::get_or_create_suspended(
-            &self.all,
-            account_id,
-            &owned_worker_id,
-            Some(session_data.worker_metadata.args.clone()),
-            Some(session_data.worker_metadata.env.clone()),
-            Some(
-                session_data
-                    .worker_metadata
-                    .last_known_status
-                    .component_version,
-            ),
-            session_data.worker_metadata.parent.clone(),
-        )
-        .await
-        .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
-
-        // We select a new target index based on the given target index
-        // such that it is always in an invocation boundary
-        let new_target_index = if ensure_invocation_boundary {
-            Self::target_index_at_invocation_boundary(worker_id, &worker, target_index).await?
-        } else {
-            target_index
-        };
-
-        let mut playback_overrides_validated = None;
-
-        if let Some(overrides) = playback_overrides {
-            playback_overrides_validated =
-                Some(Self::validate_playback_overrides(worker_id.clone(), overrides).await?);
-        }
-
-        // We update the session with the new target index
-        // before starting the worker
-        self.debug_session
-            .update(
-                debug_session_id.clone(),
-                new_target_index,
-                playback_overrides_validated,
-            )
-            .await;
-
-        if existing_target_oplog_index.is_some() {
-            worker.stop().await;
-        }
-
-        Worker::start_if_needed(worker.clone())
-            .await
-            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
-
-        tokio::time::sleep(timeout).await;
-
-        let last_index = self
-            .debug_session
-            .get(&debug_session_id)
-            .await
-            .map(|d| d.current_oplog_index)
-            .unwrap_or(OplogIndex::INITIAL);
-
-        Ok(last_index)
-    }
-
     pub async fn validate_playback_overrides(
         worker_id: WorkerId,
+        current_index: OplogIndex,
         overrides: Vec<PlaybackOverride>,
     ) -> Result<PlaybackOverridesInternal, DebugServiceError> {
-        PlaybackOverridesInternal::from_playback_override(overrides).map_err(|err| {
+        PlaybackOverridesInternal::from_playback_override(overrides, current_index).map_err(|err| {
             DebugServiceError::ValidationFailed {
                 worker_id: Some(worker_id.clone()),
                 errors: vec![err],
@@ -486,7 +273,7 @@ impl DebugServiceDefault {
         target_oplog_index: OplogIndex,
     ) -> Result<OplogIndex, DebugServiceError> {
         // New target index to be calculated here
-        let oplog: Arc<dyn Oplog + Send + Sync> = worker.oplog();
+        let oplog: Arc<dyn Oplog> = worker.oplog();
 
         let original_current_oplog_index = oplog.current_oplog_index().await;
 
@@ -500,7 +287,7 @@ impl DebugServiceDefault {
     }
 
     pub async fn get_target_oplog_index_at_invocation_boundary(
-        oplog: Arc<dyn Oplog + Send + Sync>,
+        oplog: Arc<dyn Oplog>,
         target_oplog_index: OplogIndex,
         original_last_oplog_index: OplogIndex,
     ) -> Result<OplogIndex, String> {
@@ -582,7 +369,6 @@ impl DebugService for DebugServiceDefault {
 
         let connect_result = ConnectResult {
             worker_id: worker_id.clone(),
-            success: true,
             message: format!("Worker {worker_id} connected to namespace {namespace}"),
         };
 
@@ -599,43 +385,125 @@ impl DebugService for DebugServiceDefault {
         owned_worker_id: &OwnedWorkerId,
         account_id: &AccountId,
         target_index: OplogIndex,
-        overrides: Option<Vec<PlaybackOverride>>,
+        playback_overrides: Option<Vec<PlaybackOverride>>,
         ensure_invocation_boundary: bool,
-        timeout: Duration,
     ) -> Result<PlaybackResult, DebugServiceError> {
-        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
+        if !target_index.is_defined() {
+            return Err(DebugServiceError::ValidationFailed {
+                worker_id: Some(owned_worker_id.worker_id.clone()),
+                errors: vec![format!(
+                    "Trying to rewind to an invalid oplog index {target_index}"
+                )],
+            });
+        }
 
-        let existing_session_data =
+        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
+        let worker_id = owned_worker_id.worker_id.clone();
+
+        let session_data =
             self.debug_session
                 .get(&debug_session_id)
                 .await
                 .ok_or(DebugServiceError::internal(
                     "No debug session found".to_string(),
-                    Some(owned_worker_id.worker_id.clone()),
+                    Some(worker_id.clone()),
                 ))?;
 
-        let existing_target_index = existing_session_data.target_oplog_index;
+        let current_oplog_index = session_data.current_oplog_index;
+
+        debug!("Playback from current oplog index {current_oplog_index}");
+
+        // At this point, the worker do exist after the connect
+        // however, the debug session is updated with a different target index
+        // allowing replaying to (potentially) stop at this index
+        let worker = Worker::get_or_create_suspended(
+            &self.all,
+            account_id,
+            owned_worker_id,
+            Some(session_data.worker_metadata.args.clone()),
+            Some(session_data.worker_metadata.env.clone()),
+            Some(
+                session_data
+                    .worker_metadata
+                    .last_known_status
+                    .component_version,
+            ),
+            session_data.worker_metadata.parent.clone(),
+        )
+        .await
+        .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+
+        // We select a new target index based on the given target index
+        // such that it is always in an invocation boundary
+        let new_target_index = if ensure_invocation_boundary {
+            Self::target_index_at_invocation_boundary(&worker_id, &worker, target_index).await?
+        } else {
+            target_index
+        };
+
+        if new_target_index < current_oplog_index {
+            return Err(DebugServiceError::internal(
+                format!(
+                    "Target oplog index {target_index} for playback is less than the existing target oplog index {current_oplog_index}. Use rewind instead"
+                ),
+                Some(debug_session_id.worker_id()),
+            ));
+        }
+
+        let playback_overrides_validated = if let Some(overrides) = playback_overrides {
+            Some(
+                Self::validate_playback_overrides(
+                    worker_id.clone(),
+                    current_oplog_index,
+                    overrides,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+
+        // We update the session with the new target index
+        // before starting the worker
+        self.debug_session
+            .update(
+                debug_session_id.clone(),
+                new_target_index,
+                playback_overrides_validated,
+            )
+            .await;
+
+        // this will fail if the worker is not currently running and do nothing.
+        // If this succeeded it means we continued from the previous oplog and only some of the log events are reemitted.
+        let incremental_playback = worker.resume_replay().await.is_ok();
+
+        // the worker was not running, we need to start it so it starts replaying
+        if !incremental_playback {
+            Worker::start_if_needed(worker.clone()).await.map_err(|e| {
+                DebugServiceError::internal(
+                    format!("Failed to start worker for resumption: {e}"),
+                    Some(worker_id.clone()),
+                )
+            })?;
+        }
+
+        // This might fail if we are replaying beyond the oplog index and trapping due to entering live mode, ignore.
+        let _ = worker.await_ready_to_process_commands().await;
 
         let stopped_at_index = self
-            .resume_replay_with_target_index(
-                &owned_worker_id.worker_id,
-                account_id,
-                &owned_worker_id.project_id,
-                existing_target_index,
-                target_index,
-                overrides,
-                ensure_invocation_boundary,
-                timeout,
-            )
-            .await?;
+            .debug_session
+            .get(&debug_session_id)
+            .await
+            .map(|d| d.current_oplog_index)
+            .unwrap_or(OplogIndex::INITIAL);
 
         Ok(PlaybackResult {
             worker_id: owned_worker_id.worker_id.clone(),
             current_index: stopped_at_index,
-            success: true,
+            incremental_playback,
             message: format!(
                 "Playback worker {} stopped at index {}",
-                owned_worker_id.worker_id, target_index
+                owned_worker_id.worker_id, current_oplog_index
             ),
         })
     }
@@ -644,23 +512,106 @@ impl DebugService for DebugServiceDefault {
         &self,
         owned_worker_id: &OwnedWorkerId,
         account_id: &AccountId,
-        target_oplog_index: OplogIndex,
+        target_index: OplogIndex,
         ensure_invocation_boundary: bool,
-        timeout: Duration,
     ) -> Result<RewindResult, DebugServiceError> {
+        if !target_index.is_defined() {
+            return Err(DebugServiceError::ValidationFailed {
+                worker_id: Some(owned_worker_id.worker_id.clone()),
+                errors: vec![format!(
+                    "Trying to rewind to an invalid oplog index {target_index}"
+                )],
+            });
+        }
+
         info!(
             "Rewinding worker {} to index {}",
-            owned_worker_id.worker_id, target_oplog_index
+            owned_worker_id.worker_id, target_index
         );
 
-        self.rewind(
-            owned_worker_id,
+        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
+
+        let debug_session_data =
+            self.debug_session
+                .get(&debug_session_id)
+                .await
+                .ok_or(DebugServiceError::internal(
+                    "No debug session found. Rewind cannot be called ".to_string(),
+                    Some(owned_worker_id.worker_id.clone()),
+                ))?;
+
+        let current_oplog_index = debug_session_data.current_oplog_index;
+
+        let worker = Worker::get_or_create_suspended(
+            &self.all,
             account_id,
-            &target_oplog_index,
-            ensure_invocation_boundary,
-            timeout,
+            owned_worker_id,
+            Some(debug_session_data.worker_metadata.args.clone()),
+            Some(debug_session_data.worker_metadata.env.clone()),
+            Some(
+                debug_session_data
+                    .worker_metadata
+                    .last_known_status
+                    .component_version,
+            ),
+            debug_session_data.worker_metadata.parent.clone(),
         )
         .await
+        .map_err(|e| {
+            DebugServiceError::internal(e.to_string(), Some(owned_worker_id.worker_id.clone()))
+        })?;
+
+        let new_target_index = if ensure_invocation_boundary {
+            Self::get_target_oplog_index_at_invocation_boundary(
+                worker.oplog(),
+                target_index,
+                current_oplog_index,
+            )
+            .await
+            .map_err(|e| DebugServiceError::internal(e, Some(owned_worker_id.worker_id.clone())))?
+        } else {
+            target_index
+        };
+
+        if new_target_index >= current_oplog_index {
+            return Err(DebugServiceError::validation_failed(
+                vec![
+                    format!(
+                        "Target oplog index {} (corresponding to an invocation boundary) for rewind is greater than the existing target oplog index {}",
+                        target_index,
+                        current_oplog_index
+                    )],
+                    Some(owned_worker_id.worker_id.clone()))
+                );
+        };
+
+        self.debug_session
+            .update(debug_session_id.clone(), new_target_index, None)
+            .await;
+
+        self.debug_session
+            .update_oplog_index(debug_session_id.clone(), OplogIndex::NONE)
+            .await;
+
+        // we restart regardless of the current status of the worker such that it restarts
+        if let Some(mut receiver) = worker.set_interrupting(InterruptKind::Restart).await {
+            let _ = receiver.recv().await;
+        };
+
+        let _ = worker.await_ready_to_process_commands().await;
+
+        let last_index = self
+            .debug_session
+            .get(&debug_session_id)
+            .await
+            .map(|d| d.current_oplog_index)
+            .unwrap_or(OplogIndex::NONE);
+
+        Ok(RewindResult {
+            worker_id: owned_worker_id.worker_id.clone(),
+            current_index: last_index,
+            message: format!("Rewinding the worker to index {target_index}"),
+        })
     }
 
     async fn fork(
@@ -694,7 +645,6 @@ impl DebugService for DebugServiceDefault {
         Ok(ForkResult {
             source_worker_id: source_worker_id.worker_id.clone(),
             target_worker_id: target_worker_id.clone(),
-            success: true,
             message: format!("Forked worker {source_worker_id} to new worker {target_worker_id}"),
         })
     }

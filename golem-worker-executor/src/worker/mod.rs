@@ -1236,6 +1236,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         QueuedWorkerInvocation::ReadFile { sender, .. } => {
                             let _ = sender.send(Err(fail_pending_invocations.clone()));
                         }
+                        QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
+                            let _ = sender.send(Err(fail_pending_invocations.clone()));
+                        }
                     }
                 }
             } else {
@@ -1345,6 +1348,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok((worker_metadata, execution_status))
             }
         }
+    }
+
+    pub async fn await_ready_to_process_commands(&self) -> Result<(), WorkerExecutorError> {
+        let (sender, receiver) = oneshot::channel();
+
+        let mutex = self.instance.lock().await;
+
+        self.queue
+            .write()
+            .await
+            .push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
+
+        if let WorkerInstance::Running(running) = &*mutex {
+            running.sender.send(WorkerCommand::Invocation).unwrap();
+        };
+
+        drop(mutex);
+
+        receiver.await.unwrap()
     }
 }
 
@@ -1867,6 +1889,12 @@ pub enum QueuedWorkerInvocation {
     ReadFile {
         path: ComponentFilePath,
         sender: oneshot::Sender<Result<ReadFileResult, WorkerExecutorError>>,
+    },
+    // Waits for the invocation loop to pick up this message, ensuring that the worker is ready to process followup commands.
+    // The sender will be called with Ok if the worker is in a running state.
+    // If the worker initializaiton fails and will not recover without manual intervention it will be called with Err.
+    AwaitReadyToProcessCommands {
+        sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
 }
 
