@@ -635,6 +635,7 @@ pub async fn test_gateway_session_with_sqlite() {
     let db_config = DbSqliteConfig {
         database: db.db_path.clone(),
         max_connections: 10,
+        foreign_keys: false,
     };
 
     let db_pool = SqlitePool::configured(&db_config).await.unwrap();
@@ -661,6 +662,7 @@ pub async fn test_gateway_session_with_sqlite_expired() {
     let db_config = DbSqliteConfig {
         database: db.db_path.clone(),
         max_connections: 10,
+        foreign_keys: false,
     };
 
     let pool = SqlitePool::configured(&db_config).await.unwrap();
@@ -782,6 +784,7 @@ pub async fn test_with_sqlite_db() {
     let db_config = DbSqliteConfig {
         database: db.db_path.clone(),
         max_connections: 10,
+        foreign_keys: false,
     };
 
     db::sqlite::migrate(

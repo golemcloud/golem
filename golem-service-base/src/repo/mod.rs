@@ -18,10 +18,16 @@ use std::fmt::Display;
 
 pub mod plugin_installation;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, PartialEq)]
 pub enum RepoError {
     Internal(String),
     UniqueViolation(String),
+}
+
+impl RepoError {
+    pub fn is_unique_violation(&self) -> bool {
+        matches!(self, RepoError::UniqueViolation(_))
+    }
 }
 
 impl From<sqlx::Error> for RepoError {
@@ -57,3 +63,5 @@ impl SafeDisplay for RepoError {
         }
     }
 }
+
+pub type Result<T> = std::result::Result<T, RepoError>;
