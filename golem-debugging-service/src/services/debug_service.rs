@@ -14,19 +14,20 @@
 
 use crate::auth::AuthService;
 use crate::debug_context::DebugContext;
-use crate::debug_session::{ActiveSession, PlaybackOverridesInternal};
+use crate::debug_session::PlaybackOverridesInternal;
 use crate::debug_session::{DebugSessionData, DebugSessionId, DebugSessions};
 use crate::model::params::*;
 use async_trait::async_trait;
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use gethostname::gethostname;
 use golem_common::base_model::ProjectId;
-use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::oplog::Oplog;
+use golem_worker_executor::services::worker_event::WorkerEventReceiver;
 use golem_worker_executor::services::{
     All, HasConfig, HasExtraDeps, HasOplog, HasShardManagerService, HasShardService,
     HasWorkerForkService, HasWorkerService,
@@ -37,14 +38,13 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
-use golem_worker_executor::services::worker_event::WorkerEventReceiver;
 
 #[async_trait]
 pub trait DebugService: Send + Sync {
     async fn connect(
         &self,
         authentication_context: &AuthCtx,
-        source_worker_id: &WorkerId
+        source_worker_id: &WorkerId,
     ) -> Result<(ConnectResult, OwnedWorkerId, Namespace, WorkerEventReceiver), DebugServiceError>;
 
     async fn playback(
@@ -280,22 +280,15 @@ impl DebugServiceDefault {
                 &self.all,
                 account_id,
                 owned_worker_id,
-                Some(debug_session_data
-                    .worker_metadata
-                    .args
-                    .clone()),
-                Some(debug_session_data
-                    .worker_metadata
-                    .env
-                    .clone()),
-                Some(debug_session_data
-                    .worker_metadata
-                    .last_known_status
-                    .component_version),
-                debug_session_data
-                    .worker_metadata
-                    .parent
-                    .clone(),
+                Some(debug_session_data.worker_metadata.args.clone()),
+                Some(debug_session_data.worker_metadata.env.clone()),
+                Some(
+                    debug_session_data
+                        .worker_metadata
+                        .last_known_status
+                        .component_version,
+                ),
+                debug_session_data.worker_metadata.parent.clone(),
             )
             .await
             .map_err(|e| {
@@ -419,7 +412,12 @@ impl DebugServiceDefault {
             &owned_worker_id,
             Some(session_data.worker_metadata.args.clone()),
             Some(session_data.worker_metadata.env.clone()),
-            Some(session_data.worker_metadata.last_known_status.component_version),
+            Some(
+                session_data
+                    .worker_metadata
+                    .last_known_status
+                    .component_version,
+            ),
             session_data.worker_metadata.parent.clone(),
         )
         .await
@@ -537,8 +535,9 @@ impl DebugService for DebugServiceDefault {
     async fn connect(
         &self,
         auth_ctx: &AuthCtx,
-        worker_id: &WorkerId
-    ) -> Result<(ConnectResult, OwnedWorkerId, Namespace, WorkerEventReceiver), DebugServiceError> {
+        worker_id: &WorkerId,
+    ) -> Result<(ConnectResult, OwnedWorkerId, Namespace, WorkerEventReceiver), DebugServiceError>
+    {
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(
@@ -587,7 +586,12 @@ impl DebugService for DebugServiceDefault {
             message: format!("Worker {worker_id} connected to namespace {namespace}"),
         };
 
-        Ok((connect_result, owned_worker_id, namespace, worker_event_receiver))
+        Ok((
+            connect_result,
+            owned_worker_id,
+            namespace,
+            worker_event_receiver,
+        ))
     }
 
     async fn playback(

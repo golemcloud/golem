@@ -12,27 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::debug_session::ActiveSession;
-use crate::jrpc::{run_jrpc_debug_websocket_session};
+use crate::jrpc::run_jrpc_debug_websocket_session;
 use crate::services::debug_service::DebugService;
-use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
-use axum_jrpc::{Id, JsonRpcRequest, JsonRpcResponse};
-use futures_util::stream::SplitSink;
-use futures_util::SinkExt;
 use futures_util::StreamExt;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
-use golem_common::model::OwnedWorkerId;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::WrappedGolemSecuritySchema;
-use log::debug;
-use poem::web::websocket::{BoxWebSocketUpgraded, CloseCode, Message, WebSocket, WebSocketStream};
+use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
-use tracing::error;
-use tracing::warn;
-use tokio::sync::mpsc;
 
 #[derive(ApiResponse, Debug, Clone)]
 pub enum DebuggingApiError {
@@ -74,7 +64,11 @@ impl DebuggingApi {
         let debug_service = self.debug_service.clone();
         let auth_ctx = AuthCtx::new(token.0.secret());
         let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(|socket_stream| {
-            Box::pin(run_jrpc_debug_websocket_session(socket_stream, debug_service, auth_ctx))
+            Box::pin(run_jrpc_debug_websocket_session(
+                socket_stream,
+                debug_service,
+                auth_ctx,
+            ))
         }));
 
         Ok(upgraded)

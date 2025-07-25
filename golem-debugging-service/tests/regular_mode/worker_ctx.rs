@@ -45,7 +45,9 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{HasAll, HasConfig, HasOplogService};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};

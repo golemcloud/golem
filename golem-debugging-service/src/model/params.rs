@@ -15,8 +15,8 @@
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{LogLevel, Timestamp, WorkerId};
-use serde::{Deserialize, Serialize};
 use golem_worker_executor::model::event::InternalWorkerEvent;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ConnectParams {
@@ -82,14 +82,15 @@ pub struct ForkResult {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum LogNotification {
     StdOut {
         timestamp: Timestamp,
-        bytes: Vec<u8>,
+        message: String,
     },
     StdErr {
         timestamp: Timestamp,
-        bytes: Vec<u8>,
+        message: String,
     },
     Log {
         timestamp: Timestamp,
@@ -104,14 +105,30 @@ impl LogNotification {
         match event {
             InternalWorkerEvent::InvocationStart { .. } => None,
             InternalWorkerEvent::InvocationFinished { .. } => None,
-            InternalWorkerEvent::StdOut { timestamp, bytes } => Some(Self::StdOut { timestamp, bytes }),
-            InternalWorkerEvent::StdErr { timestamp, bytes } => Some(Self::StdErr { timestamp, bytes }),
-            InternalWorkerEvent::Log { timestamp, level, context, message } => Some(Self::Log { timestamp, level, context, message })
+            InternalWorkerEvent::StdOut { timestamp, bytes } => Some(Self::StdOut {
+                timestamp,
+                message: String::from_utf8_lossy(&bytes).to_string(),
+            }),
+            InternalWorkerEvent::StdErr { timestamp, bytes } => Some(Self::StdErr {
+                timestamp,
+                message: String::from_utf8_lossy(&bytes).to_string(),
+            }),
+            InternalWorkerEvent::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            } => Some(Self::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            }),
         }
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LogsLaggedNotification {
-    pub number_of_missed_messages: u64
+    pub number_of_missed_messages: u64,
 }

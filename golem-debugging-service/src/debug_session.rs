@@ -53,7 +53,6 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
-use golem_worker_executor::services::worker_event::WorkerEventReceiver;
 
 // A shared debug session which will be internally used by the custom oplog service
 // dedicated to running debug executor
@@ -157,7 +156,7 @@ pub struct DebugSessionData {
     pub playback_overrides: PlaybackOverridesInternal,
     // The current status of the oplog index being replayed and possibly
     // index of newly added oplog entries as part of going live in between host functions
-    pub current_oplog_index: OplogIndex
+    pub current_oplog_index: OplogIndex,
 }
 
 #[derive(Debug, Clone)]

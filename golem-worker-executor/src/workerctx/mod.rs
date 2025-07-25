@@ -496,5 +496,5 @@ pub enum LogEventEmitBehaviour {
     /// Always emit all log event
     Always,
     /// Emit log events only during live mode
-    LiveOnly
+    LiveOnly,
 }

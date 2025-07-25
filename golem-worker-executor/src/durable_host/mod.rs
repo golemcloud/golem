@@ -52,7 +52,9 @@ use crate::worker::invocation::{
 use crate::worker::status::calculate_last_known_status;
 use crate::worker::{interpret_function_result, is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx
+    ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -510,7 +512,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .event_service
                             .emit_event(event.clone(), true);
 
-                        if self.state.is_live() && !self.state.replay_state.seen_log(*level, context, message).await {
+                        if self.state.is_live()
+                            && !self
+                                .state
+                                .replay_state
+                                .seen_log(*level, context, message)
+                                .await
+                        {
                             self.state.oplog.add(entry).await;
                         }
                     }

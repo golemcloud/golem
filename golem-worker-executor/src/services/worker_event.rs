@@ -16,7 +16,7 @@ use crate::metrics::events::{record_broadcast_event, record_event};
 use crate::model::event::InternalWorkerEvent;
 use applying::Apply;
 use futures_util::{stream, StreamExt};
-use golem_common::model::{IdempotencyKey, LogLevel};
+use golem_common::model::IdempotencyKey;
 use ringbuf::storage::Heap;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;

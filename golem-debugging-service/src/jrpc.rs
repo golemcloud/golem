@@ -12,25 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::debug_session::ActiveSession;
 use crate::model::params::*;
 use crate::services::debug_service::{DebugService, DebugServiceError};
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
-use axum_jrpc::{Id, JsonRpcAnswer, JsonRpcRequest, JsonRpcResponse};
+use axum_jrpc::{Id, JsonRpcRequest, JsonRpcResponse};
+use futures_util::{SinkExt, StreamExt};
 use golem_common::model::auth::{AuthCtx, Namespace};
-use golem_common::model::{LogLevel, OwnedWorkerId, Timestamp, WorkerId};
+use golem_common::model::OwnedWorkerId;
+use golem_worker_executor::services::worker_event::WorkerEventReceiver;
+use poem::web::websocket::{CloseCode, Message, WebSocketStream};
+use serde::Serialize;
 use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
-use futures_util::{Sink, SinkExt, StreamExt};
-use tokio::sync::mpsc::{self, Sender, Receiver};
-use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio::select;
+use tokio::sync::mpsc::{self, Sender};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use serde::{Deserialize, Serialize};
-use golem_worker_executor::services::worker_event::WorkerEventReceiver;
-use poem::web::websocket::{CloseCode, Message, WebSocketStream};
+use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{debug, warn};
 
 pub async fn run_jrpc_debug_websocket_session(
@@ -43,7 +42,7 @@ pub async fn run_jrpc_debug_websocket_session(
 
     // dedicated spawned future for sending outgoing messages to the client.
     // The sink cannot be shared between threads and we need to emit notifications via side channels while driving the session.
-    tokio::spawn(async move {
+    let sender_handle = tokio::spawn(async move {
         let mut closed = false;
         while !closed {
             let event = receiver.recv().await;
@@ -51,11 +50,12 @@ pub async fn run_jrpc_debug_websocket_session(
                 Some(OutgoingJsonRpcMessage::Close) => {
                     debug!("Closing connection");
 
-                    let _ = sink.send(Message::Close(Some((
-                        CloseCode::Normal,
-                        "Connection closed".to_string(),
-                    ))))
-                    .await;
+                    let _ = sink
+                        .send(Message::Close(Some((
+                            CloseCode::Normal,
+                            "Connection closed".to_string(),
+                        ))))
+                        .await;
 
                     closed = true;
                 }
@@ -90,7 +90,9 @@ pub async fn run_jrpc_debug_websocket_session(
                         closed = true;
                     } else {
                         let result = sink
-                            .send(Message::Text(serde_json::to_string(&error.to_jrpc_response()).unwrap()))
+                            .send(Message::Text(
+                                serde_json::to_string(&error.to_jrpc_response()).unwrap(),
+                            ))
                             .await;
 
                         if let Err(e) = result {
@@ -123,30 +125,41 @@ pub async fn run_jrpc_debug_websocket_session(
                             ),
                         );
 
-                        let _ = sender.send(OutgoingJsonRpcMessage::Response(response)).await;
+                        let _ = sender
+                            .send(OutgoingJsonRpcMessage::Response(response))
+                            .await;
                         continue;
                     }
                 };
 
+                tracing::warn!("rpc request: {rpc_request:?}");
+
                 let response = session.handle_request(rpc_request).await;
+
+                tracing::warn!("rpc response: {response:?}");
 
                 match response {
                     Ok(json_rpc_success) => {
-                        let _ = sender.send(OutgoingJsonRpcMessage::Response(json_rpc_success)).await;
+                        let _ = sender
+                            .send(OutgoingJsonRpcMessage::Response(json_rpc_success))
+                            .await;
                     }
                     Err(handler_error) => {
-                        let _ = sender.send(OutgoingJsonRpcMessage::Error(handler_error)).await;
+                        let _ = sender
+                            .send(OutgoingJsonRpcMessage::Error(handler_error))
+                            .await;
                     }
                 }
             }
             Message::Close(_) => {
                 // ack the close
                 let _ = sender.send(OutgoingJsonRpcMessage::Close).await;
-                break;
             }
-            _ => { }
+            _ => {}
         }
-    };
+    }
+
+    let _ = sender_handle.await;
 
     // clean up after ourselves
     session.terminate().await;
@@ -165,34 +178,40 @@ struct JrpcSession {
     // will be taken by a spawned future when succesfully connect to a worker for the first time.
     // used to send notifications via a second channel
     jrpc_result_sender: Sender<OutgoingJsonRpcMessage>,
-    notifications_future_dropguard: Option<DropGuard>
+    notifications_future_dropguard: Option<DropGuard>,
 }
 
 impl JrpcSession {
     fn new(
         debug_service: Arc<dyn DebugService>,
         auth_ctx: AuthCtx,
-        jrpc_result_sender: Sender<OutgoingJsonRpcMessage>
+        jrpc_result_sender: Sender<OutgoingJsonRpcMessage>,
     ) -> Self {
         Self {
             debug_service,
             auth_ctx,
             active_session: None,
             jrpc_result_sender,
-            notifications_future_dropguard: None
+            notifications_future_dropguard: None,
         }
     }
 
     async fn terminate(self) {
         if let Some(active_session) = self.active_session {
-            let result = self.debug_service.terminate_session(&active_session.connected_worker).await;
+            let result = self
+                .debug_service
+                .terminate_session(&active_session.connected_worker)
+                .await;
             if let Err(e) = result {
                 tracing::warn!("Failed to terminate debugging session: {e}");
             }
         }
     }
 
-    async fn handle_request(&mut self, request: JsonRpcRequest) -> Result<JsonRpcResponse, JrpcHandlerError> {
+    async fn handle_request(
+        &mut self,
+        request: JsonRpcRequest,
+    ) -> Result<JsonRpcResponse, JrpcHandlerError> {
         let jrpc_id: Id = request.id;
 
         match request.method.as_str() {
@@ -200,20 +219,27 @@ impl JrpcSession {
                 if let Some(active_session_data) = &self.active_session {
                     let owned_worker_id = active_session_data.connected_worker.clone();
 
-                    let result = self.debug_service.current_oplog_index(&owned_worker_id).await;
+                    let result = self
+                        .debug_service
+                        .current_oplog_index(&owned_worker_id)
+                        .await;
                     to_json_rpc_result(&jrpc_id, result)
                 } else {
                     Err(inactive_session_error(&jrpc_id))
                 }
             }
             "connect" => {
-                if let Some(_) = &self.active_session {
-                    Err(JrpcHandlerError::session_already_connected(jrpc_id.clone(), "Session is already connected to a worker".to_string()))?
+                if self.active_session.is_some() {
+                    Err(JrpcHandlerError::session_already_connected(
+                        jrpc_id.clone(),
+                        "Session is already connected to a worker".to_string(),
+                    ))?
                 }
 
                 let params: ConnectParams = parse_params(&jrpc_id, request.params)?;
 
-                let result = self.debug_service
+                let result = self
+                    .debug_service
                     .connect(&self.auth_ctx, &params.worker_id)
                     .await;
 
@@ -221,16 +247,14 @@ impl JrpcSession {
                     Ok((result, connected_worker, namespace, worker_event_receiver)) => {
                         self.active_session = Some(JrpcSessionData {
                             connected_worker,
-                            namespace
-                         });
+                            namespace,
+                        });
 
-                         self.register_worker_event_receiver(worker_event_receiver);
+                        self.register_worker_event_receiver(worker_event_receiver);
 
                         to_json_rpc_result(&jrpc_id, Ok(result))
-                    },
-                    Err(err) => {
-                        to_json_rpc_result::<ConnectResult>(&jrpc_id, Err(err))
                     }
+                    Err(err) => to_json_rpc_result::<ConnectResult>(&jrpc_id, Err(err)),
                 }
             }
             "playback" => {
@@ -239,7 +263,8 @@ impl JrpcSession {
 
                     let owned_worker_id = active_session_data.connected_worker.clone();
 
-                    let result = self.debug_service
+                    let result = self
+                        .debug_service
                         .playback(
                             &owned_worker_id,
                             &active_session_data.namespace.account_id,
@@ -264,7 +289,8 @@ impl JrpcSession {
 
                     let owned_worker_id = active_session_data.connected_worker.clone();
 
-                    let result = self.debug_service
+                    let result = self
+                        .debug_service
                         .rewind(
                             &owned_worker_id,
                             &active_session_data.namespace.account_id,
@@ -286,7 +312,8 @@ impl JrpcSession {
                     let owned_worker_id = active_session_data.connected_worker.clone();
 
                     let params: ForkParams = parse_params(&jrpc_id, request.params)?;
-                    let result = self.debug_service
+                    let result = self
+                        .debug_service
                         .fork(
                             &active_session_data.namespace.account_id,
                             &owned_worker_id,
@@ -314,29 +341,32 @@ impl JrpcSession {
         let mut worker_event_stream = worker_event_receiver.to_stream();
 
         tokio::spawn(async move {
-            select! {
-                _ = cloned_token.cancelled() => {}
-                event = worker_event_stream.next() => {
-                    match event {
-                        Some(Ok(event)) => {
-                            if let Some(log_notifiation) = LogNotification::from_internal_worker_event(event) {
-                                let params = serde_json::to_value(vec![log_notifiation]).expect("serializing message failed");
+            loop {
+                select! {
+                    _ = cloned_token.cancelled() => { break; }
+                    event = worker_event_stream.next() => {
+                        tracing::warn!("worker event {event:?}");
+                        match event {
+                            Some(Ok(event)) => {
+                                if let Some(log_notifiation) = LogNotification::from_internal_worker_event(event) {
+                                    let params = serde_json::to_value(vec![log_notifiation]).expect("serializing message failed");
 
-                                let notification = JsonRpcNotification { method: "emit-logs".to_string(), params };
+                                    let notification = JsonRpcNotification { method: "emit-logs".to_string(), params };
+
+                                    let _ = jrpc_result_sender.send(OutgoingJsonRpcMessage::Notification(notification)).await;
+                                }
+                            }
+                            Some(Err(BroadcastStreamRecvError::Lagged(number_of_missed_messages))) => {
+                                let value = LogsLaggedNotification { number_of_missed_messages };
+
+                                let params = serde_json::to_value(value).expect("serializing message failed");
+
+                                let notification = JsonRpcNotification { method: "notify-logs-lagged".to_string(), params };
 
                                 let _ = jrpc_result_sender.send(OutgoingJsonRpcMessage::Notification(notification)).await;
-                            }
+                            },
+                            None => {}
                         }
-                        Some(Err(BroadcastStreamRecvError::Lagged(number_of_missed_messages))) => {
-                            let value = LogsLaggedNotification { number_of_missed_messages };
-
-                            let params = serde_json::to_value(value).expect("serializing message failed");
-
-                            let notification = JsonRpcNotification { method: "notify-logs-lagged".to_string(), params };
-
-                            let _ = jrpc_result_sender.send(OutgoingJsonRpcMessage::Notification(notification)).await;
-                        },
-                        None => {}
                     }
                 }
             }
@@ -347,6 +377,7 @@ impl JrpcSession {
     }
 }
 
+#[derive(Debug)]
 struct JrpcHandlerError {
     jrpc_id: Id,
     error_type: JrpcHandlerErrorType,
@@ -393,12 +424,13 @@ impl JrpcHandlerError {
     }
 }
 
+#[derive(Debug)]
 enum JrpcHandlerErrorType {
     DebugServiceError(DebugServiceError),
     InactiveSession { error: String },
     InvalidParams { error: String },
     MethodNotFound { method: String },
-    SessionAlreadyConnected { error: String }
+    SessionAlreadyConnected { error: String },
 }
 
 impl JrpcHandlerError {
@@ -466,7 +498,9 @@ impl Display for JrpcHandlerError {
                 write!(f, "InactiveSessionError: {error}")
             }
             JrpcHandlerErrorType::InvalidParams { error } => write!(f, "JsonRpcError: {error}"),
-            JrpcHandlerErrorType::SessionAlreadyConnected { error } => write!(f, "SessionAlreadyConnected: {error}"),
+            JrpcHandlerErrorType::SessionAlreadyConnected { error } => {
+                write!(f, "SessionAlreadyConnected: {error}")
+            }
             JrpcHandlerErrorType::MethodNotFound { method } => {
                 write!(f, "MethodNotFound: {method}")
             }
@@ -530,5 +564,5 @@ enum OutgoingJsonRpcMessage {
     Response(JsonRpcResponse),
     Notification(JsonRpcNotification),
     Error(JrpcHandlerError),
-    Close
+    Close,
 }
