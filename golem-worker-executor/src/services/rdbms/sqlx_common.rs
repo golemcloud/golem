@@ -750,7 +750,7 @@ where
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
-        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::execute(self.inner().deref(), statement, params)
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::execute(self.inner(), statement, params)
             .await
     }
 
@@ -758,7 +758,7 @@ where
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
-        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::query(self.inner().deref(), statement, params)
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::query(self.inner(), statement, params)
             .await
     }
 
@@ -771,7 +771,7 @@ where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
         <SqlxDbTransaction<T, DB> as DbTransaction<T>>::query_stream(
-            self.inner().deref(),
+            self.inner(),
             statement,
             params,
         )
@@ -779,11 +779,11 @@ where
     }
 
     async fn commit(&self) -> Result<(), Error> {
-        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::commit(self.inner().deref()).await
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::commit(self.inner()).await
     }
 
     async fn rollback(&self) -> Result<(), Error> {
-        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::rollback(self.inner().deref()).await
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::rollback(self.inner()).await
     }
 
     async fn rollback_if_open(&self) -> Result<(), Error> {

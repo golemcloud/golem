@@ -29,8 +29,9 @@ use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test};
 use tokio::spawn;
 use tracing::Instrument;
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -38,7 +39,7 @@ inherit_test_dep!(Tracing);
 #[tracing::instrument]
 async fn http_client(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -95,7 +96,7 @@ async fn http_client(
 #[tracing::instrument]
 async fn http_client_using_reqwest(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -162,7 +163,7 @@ async fn http_client_using_reqwest(
 #[tracing::instrument]
 async fn http_client_using_reqwest_async(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -229,7 +230,7 @@ async fn http_client_using_reqwest_async(
 #[tracing::instrument]
 async fn http_client_using_reqwest_async_parallel(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -334,7 +335,7 @@ async fn http_client_using_reqwest_async_parallel(
 #[tracing::instrument]
 async fn outgoing_http_contains_idempotency_key(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -401,7 +402,7 @@ async fn outgoing_http_contains_idempotency_key(
 #[test]
 async fn http_response_request_chaining(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

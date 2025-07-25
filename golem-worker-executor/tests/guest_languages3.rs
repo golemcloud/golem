@@ -29,8 +29,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use test_r::{inherit_test_dep, test};
 use tracing::{info, Instrument};
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -38,7 +39,7 @@ inherit_test_dep!(Tracing);
 #[tracing::instrument]
 async fn javascript_example_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -109,7 +110,7 @@ async fn javascript_example_1(
 #[tracing::instrument]
 async fn javascript_example_2(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -153,7 +154,7 @@ async fn javascript_example_2(
 #[ignore]
 async fn csharp_example_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -202,7 +203,7 @@ async fn csharp_example_1(
 #[tracing::instrument]
 async fn python_http_client(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

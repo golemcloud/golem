@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Tracing;
+use crate::{Deps, Tracing};
 use assert2::{assert, check, let_assert};
 use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::v1::{
@@ -21,7 +21,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     LaunchNewWorkerSuccessResponse,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, InvokeResult, LogEvent, TargetWorkerId};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
@@ -31,11 +31,11 @@ use tracing::info;
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Deps);
 
 #[test]
 #[tracing::instrument]
-async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies) {
+async fn add_and_invoke_worker_with_args_and_env(deps: &Deps) {
     let admin = deps.admin();
 
     let (component_id, _) = admin
@@ -144,7 +144,7 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
 
 #[test]
 #[tracing::instrument]
-async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) {
+async fn stream_high_volume_log_output(deps: &Deps) {
     let user = deps.user().await;
 
     let component_id = user

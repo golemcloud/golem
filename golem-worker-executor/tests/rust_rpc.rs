@@ -23,8 +23,9 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use test_r::{inherit_test_dep, test};
 use tracing::info;
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -32,7 +33,7 @@ inherit_test_dep!(Tracing);
 #[tracing::instrument]
 async fn auction_example_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -106,7 +107,7 @@ async fn auction_example_1(
 #[tracing::instrument]
 async fn auction_example_2(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -180,7 +181,7 @@ async fn auction_example_2(
 #[tracing::instrument]
 async fn counter_resource_test_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -224,7 +225,7 @@ async fn counter_resource_test_1(
 #[tracing::instrument]
 async fn counter_resource_test_2(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -269,7 +270,7 @@ async fn counter_resource_test_2(
 #[tracing::instrument]
 async fn counter_resource_test_2_with_restart(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -318,7 +319,7 @@ async fn counter_resource_test_2_with_restart(
 #[tracing::instrument]
 async fn counter_resource_test_3(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -363,7 +364,7 @@ async fn counter_resource_test_3(
 #[tracing::instrument]
 async fn counter_resource_test_3_with_restart(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -412,7 +413,7 @@ async fn counter_resource_test_3_with_restart(
 #[tracing::instrument]
 async fn context_inheritance(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -504,7 +505,7 @@ async fn context_inheritance(
 #[tracing::instrument]
 async fn counter_resource_test_5(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -550,7 +551,7 @@ async fn counter_resource_test_5(
 #[tracing::instrument]
 async fn counter_resource_test_5_with_restart(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -618,7 +619,7 @@ async fn counter_resource_test_5_with_restart(
 #[tracing::instrument]
 async fn wasm_rpc_bug_32_test(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -667,7 +668,7 @@ async fn wasm_rpc_bug_32_test(
 #[tracing::instrument]
 async fn error_message_non_existing_target_component(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -724,7 +725,7 @@ async fn error_message_non_existing_target_component(
 #[tracing::instrument]
 async fn ephemeral_worker_invocation_via_rpc1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

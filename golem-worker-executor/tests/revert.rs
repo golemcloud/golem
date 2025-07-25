@@ -23,8 +23,9 @@ use golem_wasm_rpc::{IntoValue, IntoValueAndType};
 use log::info;
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -32,7 +33,7 @@ inherit_test_dep!(Tracing);
 #[tracing::instrument]
 async fn revert_successful_invocations(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -127,7 +128,7 @@ async fn revert_successful_invocations(
 #[tracing::instrument]
 async fn revert_failed_worker(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -185,7 +186,7 @@ async fn revert_failed_worker(
 #[tracing::instrument]
 async fn revert_auto_update(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -245,7 +246,7 @@ async fn revert_auto_update(
 #[tracing::instrument]
 async fn revert_manual_update(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

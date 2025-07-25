@@ -29,8 +29,9 @@ use test_r::{flaky, inherit_test_dep, test};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, Instrument};
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -138,7 +139,7 @@ impl TestHttpServer {
 #[tracing::instrument]
 async fn auto_update_on_running(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -216,7 +217,7 @@ async fn auto_update_on_running(
 #[tracing::instrument]
 async fn auto_update_on_idle(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -261,7 +262,7 @@ async fn auto_update_on_idle(
 #[flaky(10)] // TODO: remove when the test is stabilized
 async fn failing_auto_update_on_idle(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -324,7 +325,7 @@ async fn failing_auto_update_on_idle(
 #[tracing::instrument]
 async fn auto_update_on_idle_with_non_diverging_history(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -381,7 +382,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
 #[tracing::instrument]
 async fn failing_auto_update_on_running(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -466,7 +467,7 @@ async fn failing_auto_update_on_running(
 #[tracing::instrument]
 async fn manual_update_on_idle(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -532,7 +533,7 @@ async fn manual_update_on_idle(
 #[tracing::instrument]
 async fn manual_update_on_idle_without_save_snapshot(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -597,7 +598,7 @@ async fn manual_update_on_idle_without_save_snapshot(
 #[tracing::instrument]
 async fn auto_update_on_running_followed_by_manual(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -693,7 +694,7 @@ async fn auto_update_on_running_followed_by_manual(
 #[tracing::instrument]
 async fn manual_update_on_idle_with_failing_load(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -757,7 +758,7 @@ async fn manual_update_on_idle_with_failing_load(
 #[tracing::instrument]
 async fn manual_update_on_idle_using_v11(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -832,7 +833,7 @@ async fn manual_update_on_idle_using_v11(
 #[tracing::instrument]
 async fn manual_update_on_idle_using_golem_rust_sdk(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -907,7 +908,7 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
 #[tracing::instrument]
 async fn auto_update_on_idle_to_non_existing(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -964,7 +965,7 @@ async fn auto_update_on_idle_to_non_existing(
 #[tracing::instrument]
 async fn update_component_version_environment_variable(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);

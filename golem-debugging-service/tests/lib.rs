@@ -1,12 +1,5 @@
-pub mod debug_mode;
-pub mod debug_tests;
-pub mod regular_mode;
-pub mod services;
 
 use async_trait::async_trait;
-pub use debug_mode::context::DebugExecutorTestContext;
-pub use debug_mode::dsl::TestDslDebugMode;
-pub use debug_mode::start_debug_worker_executor;
 use golem_common::config::RedisConfig;
 use golem_common::model::{AccountId, ProjectId, RetryConfig};
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
@@ -39,8 +32,6 @@ use golem_worker_executor::services::golem_config::{
     ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
     WorkerServiceGrpcConfig,
 };
-pub use regular_mode::context::RegularExecutorTestContext;
-pub use regular_mode::start_regular_worker_executor;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;

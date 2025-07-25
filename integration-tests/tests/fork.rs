@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Tracing;
+use crate::{Deps, Tracing};
 use axum::extract::Path;
 use axum::routing::get;
 use axum::{Json, Router};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{IdempotencyKey, WorkerId, WorkerStatus};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::HashMap;
@@ -31,12 +31,12 @@ use tracing::{info, Instrument};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Deps);
 
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_interrupted_worker(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8586;
@@ -110,7 +110,7 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_running_worker_1(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
 
     let component_id = admin.component("shopping-cart").store().await;
@@ -196,7 +196,7 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[tracing::instrument]
 #[flaky(5)]
 #[timeout(120000)]
-async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_running_worker_2(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8587;
@@ -284,7 +284,7 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_idle_worker(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_id = admin.component("shopping-cart").store().await;
 
@@ -397,7 +397,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_worker_when_target_already_exists(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let admin = deps.admin();
@@ -444,7 +444,7 @@ async fn fork_worker_when_target_already_exists(
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_worker_with_invalid_oplog_index_cut_off(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let admin = deps.admin();
@@ -488,7 +488,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_invalid_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_invalid_worker(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_id = admin.component("shopping-cart").store().await;
 
@@ -524,7 +524,7 @@ async fn fork_invalid_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_worker_ensures_zero_divergence_until_cut_off(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let admin = deps.admin();
@@ -623,7 +623,7 @@ fn run_http_server(
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn fork_self(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_id = admin.component("golem-rust-tests").store().await;
 

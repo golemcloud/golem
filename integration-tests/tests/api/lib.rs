@@ -23,10 +23,9 @@ mod worker;
 
 use golem_api_grpc::proto::golem::rib::Expr;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use golem_test_framework::config::{
-    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
-};
+use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies, TestDependenciesDsl};
 use test_r::{tag_suite, test_dep};
+use golem_common::model::AccountId;
 
 test_r::enable!();
 
@@ -38,6 +37,7 @@ tag_suite!(invocation_context, http_only);
 
 pub struct Tracing;
 
+pub type Deps = TestDependenciesDsl<EnvBasedTestDependencies>;
 impl Tracing {
     pub fn init() -> Self {
         init_tracing_with_default_debug_env_filter(
@@ -48,21 +48,24 @@ impl Tracing {
 }
 
 #[test_dep]
-pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
-    let deps = EnvBasedTestDependencies::new(
-        EnvBasedTestDependenciesConfig {
-            number_of_shards_override: Some(3),
-            ..EnvBasedTestDependenciesConfig::new()
-        }
-        .with_env_overrides(),
-    )
-    .await;
+pub async fn create_deps(_tracing: &Tracing) -> Deps {
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
+        worker_executor_cluster_size: 3,
+        ..EnvBasedTestDependenciesConfig::new()
+    })
+        .await;
 
     deps.redis_monitor().assert_valid();
 
-    deps
-}
+    let deps2 = TestDependenciesDsl {
+        deps,
+        account_id: AccountId { value: "".to_string() },
+        account_email: "".to_string(),
+        token: Default::default(),
+    };
 
+    deps2
+}
 #[test_dep]
 pub fn tracing() -> Tracing {
     Tracing::init()

@@ -29,8 +29,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use test_r::{inherit_test_dep, test};
 use tracing::{info, Instrument};
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -38,7 +39,7 @@ inherit_test_dep!(Tracing);
 #[tracing::instrument]
 async fn zig_example_3(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -79,7 +80,7 @@ async fn zig_example_3(
 #[tracing::instrument]
 async fn tinygo_example(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -145,7 +146,7 @@ async fn tinygo_example(
 #[tracing::instrument]
 async fn tinygo_http_client(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -232,7 +233,7 @@ async fn tinygo_http_client(
 #[ignore] // Building with the latest Grain compiler fails in "WebAssembly Translation error"
 async fn grain_example_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -278,7 +279,7 @@ async fn grain_example_1(
 #[tracing::instrument]
 async fn java_example_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -326,7 +327,7 @@ async fn java_example_1(
 #[tracing::instrument]
 async fn java_shopping_cart(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -434,7 +435,7 @@ async fn java_shopping_cart(
 #[tracing::instrument]
 async fn c_example_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -474,7 +475,7 @@ async fn c_example_1(
 #[tracing::instrument]
 async fn c_example_2(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -516,7 +517,7 @@ async fn c_example_2(
 #[ignore]
 async fn c_example_3(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -546,7 +547,7 @@ async fn c_example_3(
 #[ignore]
 async fn c_example_4(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

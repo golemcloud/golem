@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::docker::DockerCloudService;
 use crate::components::cloud_service::provided::ProvidedCloudService;
 use crate::components::cloud_service::spawned::SpawnedCloudService;
 use crate::components::cloud_service::CloudService;
@@ -53,7 +54,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::Level;
 use uuid::Uuid;
-use crate::components::cloud_service::docker::DockerCloudService;
+use crate::dsl::TestDsl;
 
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
@@ -202,7 +203,7 @@ impl EnvBasedTestDependencies {
         }
     }
 
-    async fn make_redis(config: Arc<EnvBasedTestDependenciesConfig>) -> Arc<dyn Redis> {
+    async fn make_redis(config: Arc<EnvBasedTestDependenciesConfig>) -> Arc<dyn Redis + Send + Sync + 'static> {
         let prefix = config.redis_key_prefix.clone();
         if config.golem_docker_services {
             Arc::new(DockerRedis::new(&config.unique_network_id, prefix).await)
@@ -225,7 +226,7 @@ impl EnvBasedTestDependencies {
 
     async fn make_redis_monitor(
         config: Arc<EnvBasedTestDependenciesConfig>,
-        redis: Arc<dyn Redis>,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn RedisMonitor> {
         if config.golem_docker_services {
             Arc::new(DockerRedisMonitor::new(

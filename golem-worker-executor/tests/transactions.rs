@@ -34,8 +34,9 @@ use test_r::{inherit_test_dep, test, timeout};
 use tokio::task::JoinHandle;
 use tracing::info;
 use tracing::{debug, instrument, Instrument};
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -134,7 +135,7 @@ impl TestHttpServer {
 #[timeout(120_000)]
 async fn jump(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -197,7 +198,7 @@ async fn jump(
 #[instrument]
 async fn explicit_oplog_commit(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -230,7 +231,7 @@ async fn explicit_oplog_commit(
 #[instrument]
 async fn set_retry_policy(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -291,7 +292,7 @@ async fn set_retry_policy(
 #[timeout(120_000)]
 async fn atomic_region(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -328,7 +329,7 @@ async fn atomic_region(
 #[timeout(120_000)]
 async fn idempotence_on(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -370,7 +371,7 @@ async fn idempotence_on(
 #[timeout(120_000)]
 async fn idempotence_off(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -413,7 +414,7 @@ async fn idempotence_off(
 #[timeout(120_000)]
 async fn persist_nothing(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -453,7 +454,7 @@ async fn persist_nothing(
 #[instrument]
 async fn golem_rust_explicit_oplog_commit(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -486,7 +487,7 @@ async fn golem_rust_explicit_oplog_commit(
 #[instrument]
 async fn golem_rust_set_retry_policy(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -546,7 +547,7 @@ async fn golem_rust_set_retry_policy(
 #[timeout(120_000)]
 async fn golem_rust_atomic_region(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -583,7 +584,7 @@ async fn golem_rust_atomic_region(
 #[timeout(120_000)]
 async fn golem_rust_idempotence_on(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -630,7 +631,7 @@ async fn golem_rust_idempotence_on(
 #[timeout(120_000)]
 async fn golem_rust_idempotence_off(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -678,7 +679,7 @@ async fn golem_rust_idempotence_off(
 #[timeout(120_000)]
 async fn golem_rust_persist_nothing(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -722,7 +723,7 @@ async fn golem_rust_persist_nothing(
 #[timeout(120_000)]
 async fn golem_rust_fallible_transaction(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -786,7 +787,7 @@ async fn golem_rust_fallible_transaction(
 #[timeout(120_000)]
 async fn golem_rust_infallible_transaction(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -851,7 +852,7 @@ async fn golem_rust_infallible_transaction(
 #[timeout(120_000)]
 async fn idempotency_keys_in_ephemeral_workers(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

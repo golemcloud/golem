@@ -198,6 +198,15 @@ pub struct TestDependenciesDsl<Deps> {
     pub token: Uuid,
 }
 
+impl<Deps> std::fmt::Debug for TestDependenciesDsl<Deps> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TestDependenciesDsl")
+            .field("account_id", &self.account_id)
+            .field("account_email", &self.account_email)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum DbType {
     Postgres,

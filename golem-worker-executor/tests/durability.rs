@@ -31,8 +31,9 @@ use std::sync::Arc;
 use test_r::{inherit_test_dep, test};
 use tokio::sync::Mutex;
 use tracing::Instrument;
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -40,7 +41,7 @@ inherit_test_dep!(Tracing);
 #[tracing::instrument]
 async fn custom_durability_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -123,7 +124,7 @@ async fn custom_durability_1(
 #[tracing::instrument]
 async fn lazy_pollable(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

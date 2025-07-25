@@ -14,6 +14,7 @@
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{Deps};
 use golem_common::model::{WorkerId, WorkerStatus};
 use golem_common::serialization::{deserialize, serialize};
 use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
@@ -25,7 +26,7 @@ use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tracing::info;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -33,7 +34,7 @@ inherit_test_dep!(Tracing);
 #[tracing::instrument]
 async fn recover_shopping_cart_example(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -58,7 +59,7 @@ async fn recover_shopping_cart_example(
 #[tracing::instrument]
 async fn recover_shopping_cart_resource_example(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -83,7 +84,7 @@ async fn recover_shopping_cart_resource_example(
 #[tracing::instrument]
 async fn recover_environment_example(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -108,7 +109,7 @@ async fn recover_environment_example(
 #[tracing::instrument]
 async fn recover_read_stdin(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -129,7 +130,7 @@ async fn recover_read_stdin(
 #[tracing::instrument]
 async fn recover_jump(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -149,7 +150,7 @@ async fn recover_jump(
 #[tracing::instrument]
 async fn recover_js_example_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -169,7 +170,7 @@ async fn recover_js_example_1(
 #[tracing::instrument]
 async fn recover_auto_update_on_running(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -194,7 +195,7 @@ async fn recover_auto_update_on_running(
 #[tracing::instrument]
 async fn recover_counter_resource_test_2(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

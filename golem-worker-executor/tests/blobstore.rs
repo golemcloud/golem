@@ -20,8 +20,9 @@ use assert2::check;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -29,7 +30,7 @@ inherit_test_dep!(Tracing);
 #[tracing::instrument]
 async fn blobstore_exists_return_true_if_the_container_was_created(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -68,7 +69,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
 #[tracing::instrument]
 async fn blobstore_exists_return_false_if_the_container_was_not_created(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

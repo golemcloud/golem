@@ -30,6 +30,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use uuid::Uuid;
+use crate::Deps;
 
 #[async_trait]
 trait GetIndexedStorage: Debug {
@@ -54,7 +55,7 @@ impl GetIndexedStorage for InMemoryIndexedStorageWrapper {
 
 #[test_dep(tagged_as = "in_memory")]
 async fn in_memory_storage(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
 ) -> Arc<dyn GetIndexedStorage + Send + Sync> {
     Arc::new(InMemoryIndexedStorageWrapper)
 }
@@ -93,10 +94,10 @@ impl GetIndexedStorage for RedisIndexedStorageWrapper {
 
 #[test_dep(tagged_as = "redis")]
 async fn redis_storage(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) -> Arc<dyn GetIndexedStorage + Send + Sync> {
-    let redis = deps.redis.clone();
-    let redis_monitor = deps.redis_monitor.clone();
+    let redis = deps.deps.redis.clone();
+    let redis_monitor = deps.deps.redis_monitor.clone();
     redis.assert_valid();
     redis_monitor.assert_valid();
     Arc::new(RedisIndexedStorageWrapper { redis })
@@ -127,7 +128,7 @@ impl GetIndexedStorage for SqliteIndexedStorageWrapper {
 
 #[test_dep(tagged_as = "sqlite")]
 async fn sqlite_storage(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
 ) -> Arc<dyn GetIndexedStorage + Send + Sync> {
     Arc::new(SqliteIndexedStorageWrapper)
 }
@@ -142,14 +143,14 @@ fn ns2() -> IndexedStorageNamespace {
     IndexedStorageNamespace::CompressedOpLog { level: 1 }
 }
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 
 define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite");
 
 #[test]
 #[tracing::instrument]
 async fn exists_append(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -172,7 +173,7 @@ async fn exists_append(
 #[test]
 #[tracing::instrument]
 async fn namespaces_are_separate(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns1: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -193,7 +194,7 @@ async fn namespaces_are_separate(
 #[test]
 #[tracing::instrument]
 async fn can_append_and_get(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -226,7 +227,7 @@ async fn can_append_and_get(
 #[test]
 #[tracing::instrument]
 async fn append_cannot_overwrite(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -250,7 +251,7 @@ async fn append_cannot_overwrite(
 #[test]
 #[tracing::instrument]
 async fn append_can_skip(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -279,7 +280,7 @@ async fn append_can_skip(
 #[test]
 #[tracing::instrument]
 async fn length(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -308,7 +309,7 @@ async fn length(
 #[test]
 #[tracing::instrument]
 async fn scan_empty(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -335,7 +336,7 @@ async fn scan_empty(
 #[test]
 #[tracing::instrument]
 async fn scan_with_no_pattern_single_paged(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -375,7 +376,7 @@ async fn scan_with_no_pattern_single_paged(
 #[test]
 #[tracing::instrument]
 async fn scan_with_no_pattern_paginated(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -440,7 +441,7 @@ async fn scan_with_no_pattern_paginated(
 #[test]
 #[tracing::instrument]
 async fn scan_with_prefix_pattern_single_paged(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -485,7 +486,7 @@ async fn scan_with_prefix_pattern_single_paged(
 #[test]
 #[tracing::instrument]
 async fn scan_with_prefix_pattern_paginated(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -552,7 +553,7 @@ async fn scan_with_prefix_pattern_paginated(
 #[test]
 #[tracing::instrument]
 async fn exists_append_delete(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -576,7 +577,7 @@ async fn exists_append_delete(
 #[test]
 #[tracing::instrument]
 async fn delete_is_per_namespace(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns1: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -598,7 +599,7 @@ async fn delete_is_per_namespace(
 #[test]
 #[tracing::instrument]
 async fn delete_non_existing(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -615,7 +616,7 @@ async fn delete_non_existing(
 #[test]
 #[tracing::instrument]
 async fn first(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -648,7 +649,7 @@ async fn first(
 #[test]
 #[tracing::instrument]
 async fn last(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -681,7 +682,7 @@ async fn last(
 #[test]
 #[tracing::instrument]
 async fn closest_low(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -714,7 +715,7 @@ async fn closest_low(
 #[test]
 #[tracing::instrument]
 async fn closest_match(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -747,7 +748,7 @@ async fn closest_match(
 #[test]
 #[tracing::instrument]
 async fn closest_mid(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -780,7 +781,7 @@ async fn closest_mid(
 #[test]
 #[tracing::instrument]
 async fn closest_high(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -813,7 +814,7 @@ async fn closest_high(
 #[test]
 #[tracing::instrument]
 async fn drop_prefix_no_match(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -856,7 +857,7 @@ async fn drop_prefix_no_match(
 #[test]
 #[tracing::instrument]
 async fn drop_prefix_partial(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
@@ -892,7 +893,7 @@ async fn drop_prefix_partial(
 #[test]
 #[tracing::instrument]
 async fn drop_prefix_full(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
     #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,

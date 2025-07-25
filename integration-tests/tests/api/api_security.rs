@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Tracing;
+use crate::{Deps, Tracing};
 use assert2::assert;
 use golem_client::model::{Provider, SecuritySchemeData};
-use golem_test_framework::config::{EnvBasedTestDependencies, GolemClientProtocol, TestDependencies};
+use golem_test_framework::config::{GolemClientProtocol, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Deps);
 
 #[test]
 #[tracing::instrument]
-async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
+async fn create_api_security_scheme(deps: &Deps) {
     if deps.worker_service().client_protocol() != GolemClientProtocol::Http {
         return assert!(false, "Test requires to select HTTP golem client protocol");
     }
@@ -45,7 +45,7 @@ async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
 
 #[test]
 #[tracing::instrument]
-async fn get_api_security_scheme(deps: &EnvBasedTestDependencies) {
+async fn get_api_security_scheme(deps: &Deps) {
     if deps.worker_service().client_protocol() != GolemClientProtocol::Http {
         return assert!(false, "Test requires to select HTTP golem client protocol");
     }

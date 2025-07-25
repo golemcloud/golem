@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{to_grpc_rib_expr, Tracing};
+use crate::{to_grpc_rib_expr, Deps, Tracing};
 use assert2::{assert, check};
 use golem_api_grpc::proto::golem::apidefinition::v1::{
     api_definition_request, create_api_definition_request, update_api_definition_request,
@@ -24,18 +24,18 @@ use golem_api_grpc::proto::golem::apidefinition::{
     GatewayBindingType, HttpApiDefinition, HttpMethod, HttpRoute,
 };
 use golem_api_grpc::proto::golem::component::VersionedComponentId;
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Deps);
 
 #[test]
 #[tracing::instrument]
-async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
+async fn create_and_get_api_security_scheme(deps: &Deps) {
     let admin = deps.admin();
 
     let component_id = admin
@@ -137,7 +137,7 @@ async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
 
 #[test]
 #[tracing::instrument]
-async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
+async fn get_api_definition_versions(deps: &Deps) {
     let admin = deps.admin();
 
     let component_id = admin
@@ -385,7 +385,7 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
 
 #[test]
 #[tracing::instrument]
-async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
+async fn get_api_definition_all_versions(deps: &Deps) {
     let admin = deps.admin();
 
     let component_id_1 = admin
@@ -583,7 +583,7 @@ fn check_equal_api_definition_request_and_response(
 // Create API definition from OpenAPI YAML
 #[test]
 #[tracing::instrument]
-async fn create_openapi_yaml_definition(deps: &EnvBasedTestDependencies) {
+async fn create_openapi_yaml_definition(deps: &Deps) {
     let admin = deps.admin();
 
     let (_component_id, component_name) = admin
@@ -723,7 +723,7 @@ x-golem-api-definition-version: 0.0.1
 // Create API definition from OpenAPI JSON
 #[test]
 #[tracing::instrument]
-async fn create_openapi_json_definition(deps: &EnvBasedTestDependencies) {
+async fn create_openapi_json_definition(deps: &Deps) {
     let admin = deps.admin();
 
     let (_component_id, component_name) = admin

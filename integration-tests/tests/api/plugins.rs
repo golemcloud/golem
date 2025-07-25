@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Tracing;
+use crate::{Deps, Tracing};
 use assert2::let_assert;
 use axum::body::Bytes;
 use axum::extract::Multipart;
@@ -28,7 +28,7 @@ use golem_common::model::plugin::{
 use golem_common::model::plugin::{PluginScope, ProjectPluginScope};
 use golem_common::model::{ComponentFilePermissions, Empty, ScanCursor};
 use golem_test_framework::config::{
-    EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl,
+    TestDependencies, TestDependenciesDsl,
 };
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_test_framework::model::PluginDefinitionCreation;
@@ -43,10 +43,10 @@ use wac_graph::types::Package;
 use wac_graph::{plug, CompositionGraph, EncodeOptions, Processor};
 
 inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Deps);
 
 #[test]
-async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn component_transformer1(deps: &Deps, _tracing: &Tracing) {
     fn transform_component(component: Bytes) -> anyhow::Result<Vec<u8>> {
         let mut graph = CompositionGraph::new();
         let component = Package::from_bytes("component", None, component, graph.types_mut())?;
@@ -178,7 +178,7 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Trac
 }
 
 #[test]
-async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn component_transformer2(deps: &Deps, _tracing: &Tracing) {
     fn transform_component(plug_bytes: Bytes) -> anyhow::Result<Vec<u8>> {
         let mut graph = CompositionGraph::new();
         let plug = Package::from_bytes("component", None, plug_bytes, graph.types_mut())?;
@@ -313,7 +313,7 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
 }
 
 #[test]
-async fn component_transformer_env_var(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn component_transformer_env_var(deps: &Deps, _tracing: &Tracing) {
     async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
         while let Some(field) = multipart.next_field().await.unwrap() {
             let name = field.name().unwrap().to_string();
@@ -437,7 +437,7 @@ async fn component_transformer_env_var(deps: &EnvBasedTestDependencies, _tracing
 }
 
 #[test]
-async fn component_transformer_ifs(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn component_transformer_ifs(deps: &Deps, _tracing: &Tracing) {
     async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
         while let Some(field) = multipart.next_field().await.unwrap() {
             let name = field.name().unwrap().to_string();
@@ -567,7 +567,7 @@ async fn component_transformer_ifs(deps: &EnvBasedTestDependencies, _tracing: &T
 }
 
 #[test]
-async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn component_transformer_failed(deps: &Deps, _tracing: &Tracing) {
     async fn transform() -> StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
     }
@@ -622,7 +622,7 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing:
 }
 
 #[test]
-async fn oplog_processor_global_scope(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn oplog_processor_global_scope(deps: &Deps, _tracing: &Tracing) {
     let user = deps.user().await;
 
     let plugin_component_id = user.component("oplog-processor").unique().store().await;
@@ -781,7 +781,7 @@ async fn oplog_processor_global_scope(deps: &EnvBasedTestDependencies, _tracing:
 }
 
 #[test]
-async fn oplog_processor_project_scope(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn oplog_processor_project_scope(deps: &Deps, _tracing: &Tracing) {
     let user = deps.user().await;
     let project = user.create_project().await;
 
@@ -948,7 +948,7 @@ async fn oplog_processor_project_scope(deps: &EnvBasedTestDependencies, _tracing
 }
 
 #[test]
-async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn library_plugin(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_id = admin
         .component("app_and_library_app")
@@ -990,7 +990,7 @@ async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 }
 
 #[test]
-async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn app_plugin(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
 
     let component_id = admin
@@ -1034,7 +1034,7 @@ async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
 /// Test that a plugin can be recreated after deleting it
 #[test]
-async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn recreate_plugin(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
 
     let component_id = admin
@@ -1084,7 +1084,7 @@ async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
 /// Test that a component can be invoked after a plugin is unregistered that it depends on
 #[test]
-async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+async fn invoke_after_deleting_plugin(deps: &Deps, _tracing: &Tracing) {
     let user = deps.user().await;
 
     let component_id = user.component("app_and_library_app").unique().store().await;
@@ -1128,7 +1128,7 @@ async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing:
 #[test]
 #[tag(http_only)]
 async fn querying_plugins_return_only_plugins_valid_in_scope(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let user = deps.user().await;
@@ -1305,7 +1305,7 @@ async fn querying_plugins_return_only_plugins_valid_in_scope(
 #[test]
 #[tag(http_only)]
 async fn install_global_plugin_in_shared_project(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     // user 1 defines a project and a global plugin, user 2 installs the plugin to a component in the project
@@ -1361,7 +1361,7 @@ async fn install_global_plugin_in_shared_project(
 #[test]
 #[tag(http_only)]
 async fn install_project_plugin_in_shared_project(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     // user 1 defines a project, user 2 defines and installs the plugin to a component in the project
@@ -1423,7 +1423,7 @@ async fn install_project_plugin_in_shared_project(
 #[test]
 #[tag(http_only)]
 async fn install_component_plugin_in_shared_project(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     // user 1 defines a project, user 2 defines and installs the plugin to a component in the project

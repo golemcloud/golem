@@ -27,19 +27,21 @@ use golem_client::model::{
     ApiDefinitionInfo, ApiDeployment, ApiDeploymentRequest, ApiSite, ComponentType,
 };
 use golem_common::model::{ComponentId, ProjectId};
-use golem_test_framework::config::{EnvBasedTestDependencies, GolemClientProtocol, TestDependencies};
+use golem_test_framework::config::{EnvBasedTestDependencies, GolemClientProtocol, TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
 use std::panic;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
+type Deps = TestDependenciesDsl<EnvBasedTestDependencies>;
+
 inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Deps);
 
 #[test]
 #[tracing::instrument]
-async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
+async fn create_and_get_api_deployment(deps: &Deps) {
     if deps.worker_service().client_protocol() != GolemClientProtocol::Http {
         return assert!(false, "Test requires to select HTTP golem client protocol");
     }
@@ -47,8 +49,6 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
     let component_id = deps.component("shopping-cart").unique().store().await;
     let admin = deps.admin();
     let project_id = admin.default_project().await;
-
-    let component_id = admin.component("shopping-cart").unique().store().await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -201,7 +201,7 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
 // Delete the API deployment, and the update should succeed.
 #[test]
 #[tracing::instrument]
-async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependencies) {
+async fn create_api_deployment_and_update_component(deps: &Deps) {
     let admin = deps.admin();
     let project_id = admin.default_project().await;
 
@@ -290,7 +290,7 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
 // Delete the second API deployment, and the update should succeed.
 #[test]
 #[tracing::instrument]
-async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedTestDependencies) {
+async fn create_multiple_api_deployments_and_update_component_1(deps: &Deps) {
     let admin = deps.admin();
     let project_id = admin.default_project().await;
 
@@ -422,7 +422,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
 // Delete the API deployment that uses worker function, and the update should succeed.
 #[test]
 #[tracing::instrument]
-async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedTestDependencies) {
+async fn create_multiple_api_deployments_and_update_component_2(deps: &Deps) {
     let admin = deps.admin();
     let component_id = admin.component("shopping-cart").unique().store().await;
     let project_id = admin.default_project().await;
@@ -540,7 +540,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
 
 #[test]
 #[tracing::instrument]
-async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
+async fn get_all_api_deployments(deps: &Deps) {
     let admin = deps.admin();
     let project_id = admin.default_project().await;
     let component_id = admin.component("shopping-cart").unique().store().await;
@@ -676,7 +676,7 @@ async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
 }
 
 async fn create_api_definition_without_worker_calls(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     token: &Uuid,
     project: &ProjectId,
     component_id: &ComponentId,
@@ -735,7 +735,7 @@ async fn create_api_definition_without_worker_calls(
 }
 
 async fn create_api_definition(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     token: &Uuid,
     project: &ProjectId,
     component_id: &ComponentId,
@@ -797,7 +797,7 @@ async fn create_api_definition(
 
 #[test]
 #[tracing::instrument]
-async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
+async fn undeploy_api_test(deps: &Deps) {
     let admin = deps.admin();
     let component_id = admin.component("shopping-cart").unique().store().await;
     let project = admin.default_project().await;
@@ -930,7 +930,7 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
 
 #[test]
 #[tracing::instrument]
-async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
+async fn undeploy_component_constraint_test(deps: &Deps) {
     let admin = deps.admin();
     let project = admin.default_project().await;
 

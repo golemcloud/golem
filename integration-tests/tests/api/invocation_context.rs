@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Tracing;
+use crate::{Deps, Tracing};
 use assert2::check;
 use axum::http::HeaderMap;
 use axum::routing::post;
@@ -32,7 +32,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::invocation_context::{SpanId, TraceId};
 use golem_common::model::ComponentType;
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use reqwest::header::HeaderValue;
 use reqwest::Client;
@@ -45,13 +45,13 @@ use tracing::{info, Instrument};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Deps);
 
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
 #[allow(clippy::await_holding_lock)]
-async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
+async fn invocation_context_test(deps: &Deps) {
     let admin = deps.admin();
     let host_http_port = 8588;
 

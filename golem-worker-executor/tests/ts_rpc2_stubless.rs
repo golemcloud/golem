@@ -23,8 +23,9 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -35,7 +36,7 @@ static CALLER_COMPONENT_NAME: &str = "caller-ts";
 #[tracing::instrument]
 async fn counter_resource_test_2(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
@@ -106,7 +107,7 @@ async fn counter_resource_test_2(
 #[tracing::instrument]
 async fn counter_resource_test_2_with_restart(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);

@@ -1,4 +1,5 @@
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
+use crate::{Deps};
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -246,20 +247,20 @@ impl TestContext {
 }
 
 pub async fn start(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     context: &TestContext,
 ) -> anyhow::Result<TestWorkerExecutor> {
     start_customized(deps, context, None, None).await
 }
 
 pub async fn start_customized(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     context: &TestContext,
     system_memory_override: Option<u64>,
     retry_override: Option<RetryConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    let redis = deps.redis.clone();
-    let redis_monitor = deps.redis_monitor.clone();
+    let redis = deps.deps.redis.clone();
+    let redis_monitor = deps.deps.redis_monitor.clone();
     redis.assert_valid();
     redis_monitor.assert_valid();
     info!("Using Redis on port {}", redis.public_port());
@@ -309,7 +310,7 @@ pub async fn start_customized(
         info!("Waiting for worker-executor to be reachable on port {grpc_port}");
         let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
         if client.is_ok() {
-            let deps = deps.per_test(&context.redis_prefix(), details.http_port, grpc_port);
+            let deps = deps.deps.per_test(&context.redis_prefix(), details.http_port, grpc_port);
             break Ok(TestWorkerExecutor {
                 _join_set: Some(join_set),
                 deps,

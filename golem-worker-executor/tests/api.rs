@@ -14,7 +14,7 @@
 
 use crate::common::{start, TestContext};
 use crate::compatibility::worker_recovery::save_recovery_golden_file;
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{Deps, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use axum::routing::get;
 use axum::Router;
@@ -51,7 +51,7 @@ use test_r::{add_test, inherit_test_dep, test, test_gen, timeout};
 use tokio::time::sleep;
 use tracing::{debug, info, Instrument, Span};
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 inherit_test_dep!(
@@ -64,7 +64,7 @@ inherit_test_dep!(
 #[timeout(120_000)]
 async fn interruption(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -102,7 +102,7 @@ async fn interruption(
 #[timeout(120_000)]
 async fn simulated_crash(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -145,7 +145,7 @@ async fn simulated_crash(
 #[timeout(120_000)]
 async fn shopping_cart_example(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -265,7 +265,7 @@ async fn shopping_cart_example(
 #[timeout(120_000)]
 async fn dynamic_worker_creation(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -340,7 +340,7 @@ fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
 #[timeout(120_000)]
 async fn dynamic_worker_creation_without_name(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -379,7 +379,7 @@ async fn dynamic_worker_creation_without_name(
 #[timeout(120_000)]
 async fn ephemeral_worker_creation_without_name(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -422,7 +422,7 @@ async fn ephemeral_worker_creation_without_name(
 #[timeout(120_000)]
 async fn ephemeral_worker_creation_with_name_is_not_persistent(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -461,7 +461,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
 #[timeout(120_000)]
 async fn promise(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -546,7 +546,7 @@ async fn promise(
 #[timeout(120_000)]
 async fn get_workers_from_worker(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     #[tagged_as("golem_host")] type_resolve: &SharedAnalysedTypeResolve,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -649,7 +649,7 @@ async fn get_workers_from_worker(
 #[timeout(120_000)]
 async fn get_metadata_from_worker(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -760,7 +760,7 @@ async fn get_metadata_from_worker(
 #[timeout(120_000)]
 async fn invoking_with_same_idempotency_key_is_idempotent(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -827,7 +827,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
 #[timeout(120_000)]
 async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -897,7 +897,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
 #[timeout(120_000)]
 async fn component_env_variables(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -947,7 +947,7 @@ async fn component_env_variables(
 #[timeout(120_000)]
 async fn component_env_variables_update(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -997,7 +997,7 @@ async fn component_env_variables_update(
 #[timeout(120_000)]
 async fn component_env_and_worker_env_priority(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -1031,7 +1031,7 @@ async fn component_env_and_worker_env_priority(
 #[timeout(120_000)]
 async fn optional_parameters(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1104,7 +1104,7 @@ async fn optional_parameters(
 #[timeout(120_000)]
 async fn flags_parameters(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1168,7 +1168,7 @@ async fn flags_parameters(
 #[timeout(120_000)]
 async fn variants_with_no_payloads(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -1192,7 +1192,7 @@ async fn variants_with_no_payloads(
 #[timeout(120_000)]
 async fn delete_worker(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1242,7 +1242,7 @@ async fn delete_worker(
 #[timeout(120_000)]
 async fn get_workers(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     async fn get_check(
@@ -1380,7 +1380,7 @@ async fn get_workers(
 #[timeout(120_000)]
 async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_parameters(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -1404,7 +1404,7 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
 #[timeout(120_000)]
 async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameters(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -1436,7 +1436,7 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
 #[timeout(120_000)]
 async fn get_worker_metadata(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1444,7 +1444,7 @@ async fn get_worker_metadata(
 
     let component_id = executor.component("clock-service").store().await;
 
-    let expected_component_size = deps
+    let expected_component_size = deps.deps
         .component_service
         .get_component_size(&executor.token, &component_id, 0)
         .await
@@ -1503,7 +1503,7 @@ async fn get_worker_metadata(
 #[timeout(120_000)]
 async fn create_invoke_delete_create_invoke(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -1559,7 +1559,7 @@ async fn create_invoke_delete_create_invoke(
 #[timeout(120_000)]
 async fn recovering_an_old_worker_after_updating_a_component(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -1643,7 +1643,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
 #[timeout(120_000)]
 async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -1712,7 +1712,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
 #[timeout(120_000)]
 async fn trying_to_use_an_old_wasm_provides_good_error_message(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     // case: WASM is an old version, rejected by protector
@@ -1744,7 +1744,7 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message(
 #[timeout(120_000)]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     // case: WASM can be parsed but wasmtime does not support it
@@ -1790,7 +1790,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 #[timeout(120_000)]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message_after_recovery(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -1854,7 +1854,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 #[timeout(120_000)]
 async fn long_running_poll_loop_works_as_expected(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -1924,7 +1924,7 @@ async fn long_running_poll_loop_works_as_expected(
 #[timeout(120_000)]
 async fn long_running_poll_loop_works_as_expected_async_http(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -1994,7 +1994,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
 #[timeout(300_000)]
 async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -2136,7 +2136,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
 #[timeout(120_000)]
 async fn long_running_poll_loop_connection_breaks_on_interrupt(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -2218,7 +2218,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
 #[timeout(120_000)]
 async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_worker(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -2290,7 +2290,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
 #[timeout(120_000)]
 async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -2429,7 +2429,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
 #[timeout(120_000)]
 async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -2498,7 +2498,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
 #[timeout(120_000)]
 async fn shopping_cart_resource_example(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -2647,7 +2647,7 @@ async fn shopping_cart_resource_example(
 #[timeout(120_000)]
 async fn counter_resource_test_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -2774,7 +2774,7 @@ async fn counter_resource_test_1(
 #[timeout(120_000)]
 async fn counter_resource_test_2(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -2927,7 +2927,7 @@ async fn counter_resource_test_2(
 #[timeout(120_000)]
 async fn reconstruct_interrupted_state(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -2986,7 +2986,7 @@ async fn reconstruct_interrupted_state(
 #[timeout(120_000)]
 async fn invocation_queue_is_persistent(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -3094,7 +3094,7 @@ async fn invocation_queue_is_persistent(
 #[timeout(120_000)]
 async fn invoke_with_non_existing_function(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -3132,7 +3132,7 @@ async fn invoke_with_non_existing_function(
 #[timeout(120_000)]
 async fn invoke_with_wrong_parameters(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -3172,7 +3172,7 @@ async fn invoke_with_wrong_parameters(
 #[timeout(120_000)]
 async fn stderr_returned_for_failed_component(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -3249,7 +3249,7 @@ async fn stderr_returned_for_failed_component(
 #[timeout(120_000)]
 async fn cancelling_pending_invocations(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
@@ -3368,7 +3368,7 @@ async fn cancelling_pending_invocations(
 #[timeout(120_000)]
 async fn resolve_components_from_name(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -3429,7 +3429,7 @@ async fn scheduled_invocation_test(
     server_component_name: &str,
     client_component_name: &str,
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -3593,7 +3593,7 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
             ..Default::default()
         },
         move |last_unique_id: &LastUniqueId,
-              deps: &WorkerExecutorTestDependencies,
+              deps: &Deps,
               tracing: &Tracing| async {
             scheduled_invocation_test(
                 "it_scheduled_invocation_server",
@@ -3613,7 +3613,7 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
             ..Default::default()
         },
         move |last_unique_id: &LastUniqueId,
-              deps: &WorkerExecutorTestDependencies,
+              deps: &Deps,
               tracing: &Tracing| async {
             scheduled_invocation_test(
                 "it_scheduled_invocation_server_stubless",
@@ -3632,7 +3632,7 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
 #[timeout(120_000)]
 async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();

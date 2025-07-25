@@ -26,7 +26,7 @@ use golem_common::model::{
     IdempotencyKey, WorkerStatus,
 };
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
-use golem_test_framework::config::TestDependencies;
+use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::{
     drain_connection, stderr_events, stdout_events, worker_error_logs, worker_error_message,
     worker_error_underlying_error, TestDslUnsafe,
@@ -42,9 +42,9 @@ use tokio::spawn;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use tracing::{info, Instrument};
-use golem_test_framework::config::TestDependencies;
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -57,7 +57,7 @@ const LINE_ENDING: &'static str = "\n";
 #[tracing::instrument]
 async fn write_stdout(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -91,7 +91,7 @@ async fn write_stdout(
 #[tracing::instrument]
 async fn write_stderr(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -125,7 +125,7 @@ async fn write_stderr(
 #[tracing::instrument]
 async fn read_stdin(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -147,7 +147,7 @@ async fn read_stdin(
 #[tracing::instrument]
 async fn clocks(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -199,7 +199,7 @@ async fn clocks(
 #[tracing::instrument]
 async fn file_write_read_delete(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -235,7 +235,7 @@ async fn file_write_read_delete(
 #[tracing::instrument]
 async fn initial_file_read_write(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -292,8 +292,8 @@ async fn initial_file_read_write(
     );
 }
 
-async fn get_file_size(executor: &TestWorkerExecutor, path: &str) -> u64 {
-    let source_path = executor.component_directory().join(path);
+async fn get_file_size(executor: &TestDependenciesDsl<TestWorkerExecutor>, path: &str) -> u64 {
+    let source_path = executor.deps.component_directory().join(path);
     let meta = tokio::fs::metadata(source_path);
 
     let size = meta.await.unwrap().len();
@@ -304,7 +304,7 @@ async fn get_file_size(executor: &TestWorkerExecutor, path: &str) -> u64 {
 #[tracing::instrument]
 async fn initial_file_listing_through_api(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -393,7 +393,7 @@ async fn initial_file_listing_through_api(
 #[tracing::instrument]
 async fn initial_file_reading_through_api(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -452,7 +452,7 @@ async fn initial_file_reading_through_api(
 #[tracing::instrument]
 async fn directories(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -512,7 +512,7 @@ async fn directories(
 #[tracing::instrument]
 async fn directories_replay(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -581,7 +581,7 @@ async fn directories_replay(
 #[tracing::instrument]
 async fn file_write_read(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -628,7 +628,7 @@ async fn file_write_read(
 #[tracing::instrument]
 async fn file_update_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -843,7 +843,7 @@ async fn file_update_1(
 #[tracing::instrument]
 async fn file_update_in_the_middle_of_exported_function(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -967,7 +967,7 @@ async fn file_update_in_the_middle_of_exported_function(
 #[tracing::instrument]
 async fn environment_service(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1028,7 +1028,7 @@ async fn environment_service(
 #[tracing::instrument]
 async fn http_client_response_persisted_between_invocations(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1099,7 +1099,7 @@ async fn http_client_response_persisted_between_invocations(
 #[tracing::instrument]
 async fn http_client_interrupting_response_stream(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1208,7 +1208,7 @@ async fn http_client_interrupting_response_stream(
 #[tracing::instrument]
 async fn http_client_interrupting_response_stream_async(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1317,7 +1317,7 @@ async fn http_client_interrupting_response_stream_async(
 #[tracing::instrument]
 async fn sleep(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1360,7 +1360,7 @@ async fn sleep(
 #[tracing::instrument]
 async fn resuming_sleep(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1419,7 +1419,7 @@ async fn resuming_sleep(
 #[tracing::instrument]
 async fn failing_worker(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1479,7 +1479,7 @@ async fn failing_worker(
 #[tracing::instrument]
 async fn file_service_write_direct(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1526,7 +1526,7 @@ async fn file_service_write_direct(
 #[tracing::instrument]
 async fn filesystem_write_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1576,7 +1576,7 @@ async fn filesystem_write_replay_restores_file_times(
 #[tracing::instrument]
 async fn filesystem_create_dir_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1623,7 +1623,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
 #[tracing::instrument]
 async fn file_hard_link(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1677,7 +1677,7 @@ async fn file_hard_link(
 #[tracing::instrument]
 async fn filesystem_link_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1772,7 +1772,7 @@ async fn filesystem_link_replay_restores_file_times(
 #[tracing::instrument]
 async fn filesystem_remove_dir_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1835,7 +1835,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
 #[tracing::instrument]
 async fn filesystem_symlink_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -1933,7 +1933,7 @@ async fn filesystem_symlink_replay_restores_file_times(
 #[tracing::instrument]
 async fn filesystem_rename_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -2046,7 +2046,7 @@ async fn filesystem_rename_replay_restores_file_times(
 #[tracing::instrument]
 async fn filesystem_remove_file_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -2115,7 +2115,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
 #[tracing::instrument]
 async fn filesystem_write_via_stream_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -2167,7 +2167,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
 #[tracing::instrument]
 async fn filesystem_metadata_hash(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -2219,7 +2219,7 @@ async fn filesystem_metadata_hash(
 #[tracing::instrument]
 async fn ip_address_resolve(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -2259,7 +2259,7 @@ async fn ip_address_resolve(
 #[tracing::instrument]
 async fn wasi_incoming_request_handler(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -2319,7 +2319,7 @@ async fn wasi_incoming_request_handler(
 #[tracing::instrument]
 async fn wasi_incoming_request_handler_echo(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -2464,7 +2464,7 @@ async fn wasi_incoming_request_handler_echo(
 #[tracing::instrument]
 async fn wasi_incoming_request_handler_state(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

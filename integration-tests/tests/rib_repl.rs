@@ -14,14 +14,14 @@
 
 use test_r::test;
 
-use crate::Tracing;
+use crate::{Deps, Tracing};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, TargetWorkerId};
 use golem_rib_repl::{ComponentSource, RibRepl};
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
 use golem_wasm_ast::analysis::AnalysedType;
@@ -33,33 +33,33 @@ use test_r::inherit_test_dep;
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Deps);
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
+async fn test_rib_repl(deps: &Deps) {
     test_repl_invoking_functions(deps, Some("worker-repl-simple-test")).await;
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_repl_without_worker_param(deps: &EnvBasedTestDependencies) {
+async fn test_rib_repl_without_worker_param(deps: &Deps) {
     test_repl_invoking_functions(deps, None).await;
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
+async fn test_rib_repl_with_resource(deps: &Deps) {
     test_repl_invoking_resource_methods(deps, Some("worker-repl-resource-test")).await;
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_repl_with_resource_without_param(deps: &EnvBasedTestDependencies) {
+async fn test_rib_repl_with_resource_without_param(deps: &Deps) {
     test_repl_invoking_resource_methods(deps, None).await;
 }
 
-async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
+async fn test_repl_invoking_functions(deps: &Deps, worker_name: Option<&str>) {
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
         dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
@@ -165,7 +165,7 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
 }
 
 async fn test_repl_invoking_resource_methods(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     worker_name: Option<&str>,
 ) {
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {

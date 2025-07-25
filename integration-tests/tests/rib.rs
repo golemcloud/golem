@@ -14,11 +14,11 @@
 
 use test_r::test;
 
-use crate::Tracing;
+use crate::{Deps, Tracing};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, TargetWorkerId};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
 use golem_wasm_ast::analysis::AnalysedType;
@@ -32,45 +32,45 @@ use std::sync::Arc;
 use test_r::inherit_test_dep;
 
 inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Deps);
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_simple_without_worker_name(deps: &EnvBasedTestDependencies) {
+async fn test_rib_simple_without_worker_name(deps: &Deps) {
     test_simple_rib(deps, None).await;
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_simple_with_worker_name(deps: &EnvBasedTestDependencies) {
+async fn test_rib_simple_with_worker_name(deps: &Deps) {
     test_simple_rib(deps, Some("rib-simple-worker")).await;
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_complex_without_worker_name(deps: &EnvBasedTestDependencies) {
+async fn test_rib_complex_without_worker_name(deps: &Deps) {
     test_rib_for_loop(deps, None).await;
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_complex_with_worker_name(deps: &EnvBasedTestDependencies) {
+async fn test_rib_complex_with_worker_name(deps: &Deps) {
     test_rib_for_loop(deps, Some("rib-complex-worker")).await;
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_with_resource_methods_without_worker_param(deps: &EnvBasedTestDependencies) {
+async fn test_rib_with_resource_methods_without_worker_param(deps: &Deps) {
     test_rib_with_resource_methods(deps, None).await;
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_with_resource_methods_with_worker_param(deps: &EnvBasedTestDependencies) {
+async fn test_rib_with_resource_methods_with_worker_param(deps: &Deps) {
     test_rib_with_resource_methods(deps, Some("rib-with-resource-worker")).await;
 }
 
-async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
+async fn test_simple_rib(deps: &Deps, worker_name: Option<&str>) {
     let admin = deps.admin();
     let component_id = admin.component("shopping-cart").store().await;
 
@@ -87,7 +87,7 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 
-    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
+    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.deps.clone()));
 
     let rib = match worker_name {
         Some(worker_name) => {
@@ -153,7 +153,7 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
     );
 }
 
-async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
+async fn test_rib_for_loop(deps: &Deps, worker_name: Option<&str>) {
     let admin = deps.admin();
     let component_id = admin.component("shopping-cart").store().await;
 
@@ -170,7 +170,7 @@ async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 
-    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
+    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.deps.clone()));
 
     let rib = match worker_name {
         Some(worker_name) => {
@@ -253,7 +253,7 @@ async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<
 }
 
 async fn test_rib_with_resource_methods(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     worker_name: Option<&str>,
 ) {
     let admin = deps.admin();
@@ -272,7 +272,7 @@ async fn test_rib_with_resource_methods(
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 
-    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
+    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.deps.clone()));
 
     let rib = match worker_name {
         Some(worker_name) => {

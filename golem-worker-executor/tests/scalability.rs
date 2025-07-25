@@ -26,8 +26,9 @@ use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
 use tokio::task::JoinSet;
 use tracing::{info, Instrument};
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -35,7 +36,7 @@ inherit_test_dep!(Tracing);
 #[tracing::instrument]
 async fn spawning_many_workers_that_sleep(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -127,7 +128,7 @@ async fn spawning_many_workers_that_sleep(
 #[tracing::instrument]
 async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -244,7 +245,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 #[allow(clippy::needless_range_loop)]
 async fn initial_large_memory_allocation(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -290,7 +291,7 @@ async fn initial_large_memory_allocation(
 #[allow(clippy::needless_range_loop)]
 async fn dynamic_large_memory_allocation(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

@@ -32,8 +32,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test};
 use tracing::Instrument;
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -41,7 +42,7 @@ inherit_test_dep!(Tracing);
 #[tracing::instrument]
 async fn get_oplog_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -116,7 +117,7 @@ async fn get_oplog_1(
 #[tracing::instrument]
 async fn search_oplog_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -216,7 +217,7 @@ async fn search_oplog_1(
 #[tracing::instrument]
 async fn get_oplog_with_api_changing_updates(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -266,7 +267,7 @@ async fn get_oplog_with_api_changing_updates(
 #[tracing::instrument]
 async fn get_oplog_starting_with_updated_component(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -297,7 +298,7 @@ async fn get_oplog_starting_with_updated_component(
 #[allow(clippy::await_holding_lock)]
 async fn invocation_context_test(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

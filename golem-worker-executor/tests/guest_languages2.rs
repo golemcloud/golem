@@ -21,8 +21,9 @@ use golem_test_framework::dsl::{events_to_lines, TestDslUnsafe};
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::time::{Duration, Instant};
 use test_r::{inherit_test_dep, test, timeout};
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -31,7 +32,7 @@ inherit_test_dep!(Tracing);
 #[timeout(300_000)]
 async fn javascript_example_3(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -62,7 +63,7 @@ async fn javascript_example_3(
 #[tracing::instrument]
 async fn javascript_example_4(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -87,7 +88,7 @@ async fn javascript_example_4(
 #[tracing::instrument]
 async fn python_example_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
@@ -131,7 +132,7 @@ async fn python_example_1(
 #[ignore]
 async fn swift_example_1(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);

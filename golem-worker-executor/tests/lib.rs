@@ -30,7 +30,7 @@ use golem_test_framework::components::worker_executor::provided::ProvidedWorkerE
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
-use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies};
+use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies, TestDependenciesDsl};
 use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -98,6 +98,8 @@ tag_suite!(guest_languages3, group7);
 
 tag_suite!(ts_rpc2, group8);
 tag_suite!(ts_rpc2_stubless, group8);
+
+pub type Deps = TestDependenciesDsl<WorkerExecutorTestDependencies>;
 
 #[derive(Clone)]
 pub struct WorkerExecutorPerTestDependencies {
@@ -235,8 +237,17 @@ pub fn tracing() -> Tracing {
 }
 
 #[test_dep]
-pub async fn test_dependencies(_tracing: &Tracing) -> WorkerExecutorTestDependencies {
-    WorkerExecutorTestDependencies::new().await
+pub async fn test_dependencies(_tracing: &Tracing) -> Deps {
+    let deps = WorkerExecutorTestDependencies::new().await;
+
+    let deps2 = TestDependenciesDsl {
+        deps,
+        account_id: AccountId { value: "".to_string() },
+        account_email: "".to_string(),
+        token: Default::default(),
+    };
+
+    deps2
 }
 
 #[derive(Debug)]

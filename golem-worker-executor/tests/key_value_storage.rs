@@ -28,6 +28,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use uuid::Uuid;
+use crate::Deps;
 
 #[async_trait]
 trait GetKeyValueStorage: Debug {
@@ -51,7 +52,7 @@ impl GetKeyValueStorage for InMemoryKeyValueStorageWrapper {
 
 #[test_dep(tagged_as = "in_memory")]
 async fn in_memory_storage(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
     Arc::new(InMemoryKeyValueStorageWrapper)
 }
@@ -90,10 +91,10 @@ impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
 
 #[test_dep(tagged_as = "redis")]
 async fn redis_storage(
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
-    let redis = deps.redis.clone();
-    let redis_monitor = deps.redis_monitor.clone();
+    let redis = deps.deps.redis.clone();
+    let redis_monitor = deps.deps.redis_monitor.clone();
     redis.assert_valid();
     redis_monitor.assert_valid();
     Arc::new(RedisKeyValueStorageWrapper { redis })
@@ -124,7 +125,7 @@ impl GetKeyValueStorage for SqliteKeyValueStorageWrapper {
 
 #[test_dep(tagged_as = "sqlite")]
 async fn sqlite_storage(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
     Arc::new(SqliteKeyValueStorageWrapper)
 }
@@ -157,7 +158,7 @@ fn ns2() -> Namespaces {
     }
 }
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 
 define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite");
 define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2");
@@ -165,7 +166,7 @@ define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2");
 #[test]
 #[tracing::instrument]
 async fn get_set_get(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -190,7 +191,7 @@ async fn get_set_get(
 #[test]
 #[tracing::instrument]
 async fn namespaces_are_separate(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -227,7 +228,7 @@ async fn namespaces_are_separate(
 #[test]
 #[tracing::instrument]
 async fn get_set_get_many(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -279,7 +280,7 @@ async fn get_set_get_many(
 #[test]
 #[tracing::instrument]
 async fn set_if_not_exists(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -307,7 +308,7 @@ async fn set_if_not_exists(
 #[test]
 #[tracing::instrument]
 async fn del(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -335,7 +336,7 @@ async fn del(
 #[test]
 #[tracing::instrument]
 async fn del_many(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -395,7 +396,7 @@ async fn del_many(
 #[test]
 #[tracing::instrument]
 async fn exists_set_exists(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -417,7 +418,7 @@ async fn exists_set_exists(
 #[test]
 #[tracing::instrument]
 async fn exists_is_per_namespace(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -442,7 +443,7 @@ async fn exists_is_per_namespace(
 #[test]
 #[tracing::instrument]
 async fn keys(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -489,7 +490,7 @@ async fn keys(
 #[test]
 #[tracing::instrument]
 async fn sets(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -594,7 +595,7 @@ async fn sets(
 #[test]
 #[tracing::instrument]
 async fn sorted_sets(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -715,7 +716,7 @@ async fn sorted_sets(
 #[test]
 #[tracing::instrument]
 async fn add_to_sorted_set_updates_score(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {
@@ -748,7 +749,7 @@ async fn add_to_sorted_set_updates_score(
 #[test]
 #[tracing::instrument]
 async fn query_sorted_set(
-    _deps: &WorkerExecutorTestDependencies,
+    _deps: &Deps,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
     #[dimension(nss)] nss: &Namespaces,
 ) {

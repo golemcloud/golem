@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Tracing;
+use crate::{Deps, Tracing};
 use assert2::{assert, check};
 use golem_api_grpc::proto::golem::component::v1::{
     GetComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
@@ -24,7 +24,7 @@ use golem_common::model::component_metadata::{
 use golem_common::model::{
     ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
 };
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
@@ -32,11 +32,11 @@ use tokio::join;
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Deps);
 
 #[test]
 #[tracing::instrument]
-async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
+async fn get_components_many_component(deps: &Deps) {
     let user = deps.user().await;
 
     // Create some components
@@ -214,7 +214,7 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
 
 #[test]
 #[tracing::instrument]
-async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
+async fn get_components_many_versions(deps: &Deps) {
     let user = deps.user().await;
 
     // Create component
@@ -267,7 +267,7 @@ async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
 
 #[test]
 #[tracing::instrument]
-async fn get_component_latest_version(deps: &EnvBasedTestDependencies) {
+async fn get_component_latest_version(deps: &Deps) {
     let admin = deps.admin();
 
     // Create component
@@ -300,7 +300,7 @@ async fn get_component_latest_version(deps: &EnvBasedTestDependencies) {
 
 #[test]
 #[tracing::instrument]
-async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
+async fn get_component_metadata_all_versions(deps: &Deps) {
     let admin = deps.admin();
 
     // Create component

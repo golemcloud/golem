@@ -15,6 +15,7 @@
 use crate::components::cloud_service::k8s::K8sCloudService;
 use crate::components::cloud_service::provided::ProvidedCloudService;
 use crate::components::cloud_service::spawned::SpawnedCloudService;
+use crate::components::cloud_service::docker::DockerCloudService;
 use crate::components::cloud_service::CloudService;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::k8s::K8sComponentCompilationService;
@@ -416,7 +417,7 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let redis: Arc<dyn Redis> =
+        let redis: Arc<dyn Redis + Send + Sync + 'static> =
             Arc::new(DockerRedis::new(&unique_network_id, redis_prefix.to_string()).await);
 
         let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
@@ -581,7 +582,7 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let redis: Arc<dyn Redis> = Arc::new(SpawnedRedis::new(
+        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
             redis_port,
             redis_prefix.to_string(),
             out_level,
@@ -735,7 +736,7 @@ impl CliTestDependencies {
             .await,
         );
 
-        let redis: Arc<dyn Redis> = Arc::new(
+        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
             K8sRedis::new(
                 &namespace,
                 &routing_type,
@@ -898,7 +899,7 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let redis: Arc<dyn Redis> = Arc::new(
+        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
             K8sRedis::new(
                 &namespace,
                 &routing_type,
@@ -1019,7 +1020,7 @@ impl CliTestDependencies {
 
                 let rdb: Arc<dyn Rdb> = Arc::new(ProvidedPostgresRdb::new(postgres.clone()));
 
-                let redis: Arc<dyn Redis> = Arc::new(ProvidedRedis::new(
+                let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(ProvidedRedis::new(
                     redis_host.clone(),
                     *redis_port,
                     redis_prefix.clone(),

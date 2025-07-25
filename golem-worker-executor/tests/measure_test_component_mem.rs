@@ -17,8 +17,9 @@ use std::fmt::Write;
 use std::path::Path;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tracing::{error, info};
+use crate::Deps;
 
-inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -26,7 +27,7 @@ inherit_test_dep!(Tracing);
 #[ignore]
 async fn measure(
     last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
     let mut system = System::new_all();

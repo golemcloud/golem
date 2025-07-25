@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Tracing;
+use crate::{Deps, Tracing};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl,
 };
@@ -20,15 +20,15 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Deps);
 
 #[test]
 async fn get_account_of_owner_of_shared_project(
-    deps: &EnvBasedTestDependencies,
+    deps: &Deps,
     _tracing: &Tracing,
 ) {
-    let user_1 = deps.user().await;
-    let user_2 = deps.user().await;
+    let user_1 = TestDslUnsafe::user(deps).await;
+    let user_2 = TestDslUnsafe::user(deps).await;
 
     let project = user_1.create_project().await;
     user_1
@@ -40,9 +40,9 @@ async fn get_account_of_owner_of_shared_project(
 }
 
 #[test]
-async fn cannot_get_unrelated_user(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let user_1 = deps.user().await;
-    let user_2 = deps.user().await;
+async fn cannot_get_unrelated_user(deps: &Deps, _tracing: &Tracing) {
+    let user_1 = TestDslUnsafe::user(deps).await;
+    let user_2 = TestDslUnsafe::user(deps).await;
 
     let result = <TestDependenciesDsl<_> as golem_test_framework::dsl::TestDsl>::get_account(
         &user_2,
