@@ -58,3 +58,33 @@ pub struct ComponentRevisionForDeploymentRecord {
     pub status: ComponentStatus,
     pub hash: Option<SqlBlake3Hash>,
 }
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct DeploymentHttpApiDefinitionRevisionRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub http_api_definition_id: Uuid,
+    pub http_api_definition_revision_id: i64,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct DeploymentHttpApiDeploymentRevisionRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub http_api_deployment_id: Uuid,
+    pub http_api_deployment_revision_id: i64,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct HttpApiDefinitionRevisionForDeploymentRecord {
+    pub http_api_definition_id: Uuid,
+    pub name: String,
+    pub hash: SqlBlake3Hash,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct HttpApiDeploymentRevisionForDeploymentRecord {
+    pub http_api_deployment_id: Uuid,
+    pub name: String,
+    pub hash: SqlBlake3Hash,
+}

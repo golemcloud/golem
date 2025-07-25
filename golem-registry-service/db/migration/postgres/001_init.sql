@@ -259,8 +259,6 @@ CREATE UNIQUE INDEX components_name_uk
     ON components (environment_id, name)
     WHERE deleted_at IS NULL;
 
--- TODO: index for environment id, deleted_at
-
 CREATE TABLE component_revisions
 (
     component_id                 UUID      NOT NULL,
@@ -378,3 +376,139 @@ CREATE TABLE deployment_component_revisions
 
 CREATE INDEX deployment_component_revisions_component_idx
     ON deployment_component_revisions (environment_id, component_id, component_revision_id);
+
+CREATE TABLE http_api_definitions
+(
+    http_api_definition_id UUID      NOT NULL,
+    name                   TEXT      NOT NULL,
+    environment_id         UUID      NOT NULL,
+
+    created_at             TIMESTAMP NOT NULL,
+    updated_at             TIMESTAMP NOT NULL,
+    deleted_at             TIMESTAMP,
+    modified_by            UUID      NOT NULL,
+
+    current_revision_id    BIGINT    NOT NULL,
+
+    CONSTRAINT http_api_definitions_pk
+        PRIMARY KEY (http_api_definition_id),
+    CONSTRAINT http_api_definitions_fk
+        FOREIGN KEY (environment_id) REFERENCES environments
+);
+
+CREATE UNIQUE INDEX http_api_definitions_name_uk
+    ON http_api_definitions (environment_id, name)
+    WHERE deleted_at IS NULL;
+
+CREATE TABLE http_api_definition_revisions
+(
+    http_api_definition_id UUID      NOT NULL,
+    revision_id            BIGINT    NOT NULL,
+    version                TEXT      NOT NULL,
+
+    hash                   BYTEA     NOT NULL,
+
+    created_at             TIMESTAMP NOT NULL,
+    created_by             UUID      NOT NULL,
+    deleted                BOOLEAN   NOT NULL,
+
+    definition             BYTEA     NOT NULL,
+
+    CONSTRAINT http_api_definition_revisions_pk
+        PRIMARY KEY (http_api_definition_id, revision_id),
+    CONSTRAINT http_api_definition_revisions_http_api_definitions_fk
+        FOREIGN KEY (http_api_definition_id) REFERENCES http_api_definitions
+);
+
+CREATE INDEX http_api_definitions_revisions_latest_revision_by_id_idx
+    ON http_api_definition_revisions (http_api_definition_id, revision_id DESC);
+
+CREATE TABLE http_api_deployments
+(
+    http_api_deployment_id UUID      NOT NULL,
+    name                   TEXT      NOT NULL,
+    environment_id         UUID      NOT NULL,
+
+    host                   TEXT      NOT NULL,
+    subdomain              TEXT,
+
+    created_at             TIMESTAMP NOT NULL,
+    updated_at             TIMESTAMP NOT NULL,
+    deleted_at             TIMESTAMP,
+    modified_by            UUID      NOT NULL,
+
+    current_revision_id    BIGINT    NOT NULL,
+
+    CONSTRAINT http_api_deployments_pk
+        PRIMARY KEY (http_api_deployment_id),
+    CONSTRAINT http_api_deployments_environments_fk
+        FOREIGN KEY (environment_id) REFERENCES environments
+);
+
+CREATE UNIQUE INDEX http_api_deployments_name_uk
+    ON components (environment_id, name)
+    WHERE deleted_at IS NULL;
+
+CREATE TABLE http_api_deployment_revisions
+(
+    http_api_deployment_id UUID      NOT NULL,
+    revision_id            BIGINT    NOT NULL,
+
+    hash                   BYTEA     NOT NULL,
+
+    created_at             TIMESTAMP NOT NULL,
+    created_by             UUID      NOT NULL,
+    deleted                BOOLEAN   NOT NULL,
+
+    CONSTRAINT http_api_deployment_revisions_pk
+        PRIMARY KEY (http_api_deployment_id, revision_id),
+    CONSTRAINT http_api_deployment_revisions_components_fk
+        FOREIGN KEY (http_api_deployment_id) REFERENCES components
+);
+
+CREATE INDEX http_api_deployment_revisions_latest_revision_by_id_idx
+    ON http_api_deployment_revisions (http_api_deployment_id, revision_id DESC);
+
+CREATE TABLE http_api_deployment_definitions
+(
+    http_api_deployment_id UUID   NOT NULL,
+    revision_id            BIGINT NOT NULL,
+    http_definition_id     UUID   NOT NULL,
+
+    CONSTRAINT http_api_deployment_definitions_pk
+        PRIMARY KEY (http_api_deployment_id, revision_id, http_definition_id),
+    CONSTRAINT http_api_deployment_definitions_http_api_deployments_fk
+        FOREIGN KEY (http_api_deployment_id, revision_id) REFERENCES http_api_deployment_revisions
+);
+
+CREATE TABLE deployment_http_api_definition_revisions
+(
+    environment_id                  UUID   NOT NULL,
+    deployment_revision_id          BIGINT NOT NULL,
+    http_api_definition_id          UUID   NOT NULL,
+    http_api_definition_revision_id BIGINT NOT NULL,
+    CONSTRAINT deployment_http_api_definition_revisions_pk
+        PRIMARY KEY (environment_id, deployment_revision_id, http_api_definition_id),
+    CONSTRAINT deployment_http_api_definition_revisions_deployment_fk
+        FOREIGN KEY (environment_id, deployment_revision_id)
+            REFERENCES deployment_revisions (environment_id, revision_id),
+    CONSTRAINT deployment_http_api_definition_revisions_http_fk
+        FOREIGN KEY (http_api_definition_id, http_api_definition_revision_id)
+            REFERENCES http_api_definition_revisions (http_api_definition_id, revision_id)
+);
+
+CREATE TABLE deployment_http_api_deployment_revisions
+(
+    environment_id                  UUID   NOT NULL,
+    deployment_revision_id          BIGINT NOT NULL,
+    http_api_deployment_id          UUID   NOT NULL,
+    http_api_deployment_revision_id BIGINT NOT NULL,
+    CONSTRAINT deployment_http_api_deployment_revisions_pk
+        PRIMARY KEY (environment_id, deployment_revision_id, http_api_deployment_id),
+    CONSTRAINT deployment_http_api_deployment_revisions_deployment_fk
+        FOREIGN KEY (environment_id, deployment_revision_id)
+            REFERENCES deployment_revisions (environment_id, revision_id),
+    CONSTRAINT deployment_http_api_deployment_revisions_http_fk
+        FOREIGN KEY (http_api_deployment_id, http_api_deployment_revision_id)
+            REFERENCES http_api_deployment_revisions (http_api_deployment_id, revision_id)
+);
