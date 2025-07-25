@@ -14,7 +14,6 @@
 
 use crate::jrpc::run_jrpc_debug_websocket_session;
 use crate::services::debug_service::DebugService;
-use futures_util::StreamExt;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_service_base::api_tags::ApiTags;
