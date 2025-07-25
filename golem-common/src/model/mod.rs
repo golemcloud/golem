@@ -1887,6 +1887,13 @@ impl Display for ComponentFilePathWithPermissionsList {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum GetFileSystemNodeResult {
+    Ok(Vec<ComponentFileSystemNode>),
+    File(ComponentFileSystemNode),
+    NotFound,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum ComponentFileSystemNodeDetails {
     File {
         permissions: ComponentFilePermissions,

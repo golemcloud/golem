@@ -31,8 +31,8 @@ use golem_common::model::auth::Namespace;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
+use golem_wasm_rpc::ValueAndType;
 use rib::{RibInput, RibInputTypeInfo};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -43,7 +43,7 @@ pub struct GatewayResolvedWorkerRequest {
     pub component_id: ComponentId,
     pub worker_name: Option<String>,
     pub function_name: String,
-    pub function_params: Vec<TypeAnnotatedValue>,
+    pub function_params: Vec<ValueAndType>,
     pub idempotency_key: Option<IdempotencyKey>,
     pub invocation_context: InvocationContextStack,
     pub namespace: Namespace,
@@ -92,13 +92,8 @@ impl WorkerDetails {
             Some(worker_details_type) => {
                 let rib_input_with_request_content = &self.as_json();
                 let request_value =
-                    TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, worker_details_type)
+                    ValueAndType::parse_with_type(rib_input_with_request_content, worker_details_type)
                         .map_err(|err| RibInputTypeMismatch(format!("Worker details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), worker_details_type)))?;
-                let request_value = request_value.try_into().map_err(|err| {
-                    RibInputTypeMismatch(format!(
-                        "Internal error converting between value representations: {err}"
-                    ))
-                })?;
 
                 let mut rib_input_map = HashMap::new();
                 rib_input_map.insert("worker".to_string(), request_value);

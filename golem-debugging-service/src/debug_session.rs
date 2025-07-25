@@ -34,7 +34,6 @@ use golem_common::model::{
     WorkerMetadata,
 };
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor::durable_host::http::serialized::{
     SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
@@ -1052,7 +1051,7 @@ fn convert_response_value_and_type_to_oplog_payload(
 
 fn get_invoke_and_await_result(
     value_and_type: &ValueAndType,
-) -> Result<Result<TypeAnnotatedValue, SerializableError>, String> {
+) -> Result<Result<ValueAndType, SerializableError>, String> {
     match &value_and_type.value {
         Value::Result(Ok(Some(value))) => match &value_and_type.typ {
             AnalysedType::Result(type_result) => {
@@ -1064,9 +1063,7 @@ fn get_invoke_and_await_result(
                     .clone();
                 let value = value.deref().clone();
                 let value_and_type = ValueAndType::new(value, typ);
-                let type_annotated_value =
-                    TypeAnnotatedValue::try_from(value_and_type).map_err(|err| err.join(", "))?;
-                Ok(Ok(type_annotated_value))
+                Ok(Ok(value_and_type))
             }
 
             _ => Err("Failed to obtain type annotated value".to_string()),

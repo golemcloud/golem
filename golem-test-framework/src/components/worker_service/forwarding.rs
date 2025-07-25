@@ -25,14 +25,14 @@ use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
 use golem_api_grpc::proto::golem::worker::v1::{
     revert_worker_response, CancelInvocationRequest, CancelInvocationResponse,
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
-    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
-    GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse,
-    InvokeJsonRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
-    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
+    ForkWorkerResponse, GetFileContentsRequest, GetFileSystemNodeRequest,
+    GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
+    InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ListFileSystemNodeResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
     RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
@@ -876,18 +876,18 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         token: &Uuid,
-        request: ListDirectoryRequest,
-    ) -> crate::Result<ListDirectoryResponse> {
+        request: GetFileSystemNodeRequest,
+    ) -> crate::Result<GetFileSystemNodeResponse> {
         let account_id = self.cloud_service.get_account_id(token).await?;
         let project_id = self.cloud_service.get_default_project(token).await?;
         let result = self
             .worker_executor
             .client()
             .await?
-            .list_directory(workerexecutor::v1::ListDirectoryRequest {
+            .get_file_system_node(workerexecutor::v1::GetFileSystemNodeRequest {
                 worker_id: request.worker_id,
                 account_id: Some(account_id.into()),
                 project_id: Some(project_id.into()),
@@ -904,18 +904,27 @@ impl WorkerService for ForwardingWorkerService {
             None => Err(anyhow!(
                 "No response from golem-worker-executor list-directory call"
             )),
-            Some(workerexecutor::v1::list_directory_response::Result::Success(data)) => {
-                Ok(ListDirectoryResponse {
-                    result: Some(worker::v1::list_directory_response::Result::Success(
-                        ListDirectorySuccessResponse { nodes: data.nodes },
+            Some(workerexecutor::v1::get_file_system_node_response::Result::DirSuccess(data)) => {
+                Ok(GetFileSystemNodeResponse {
+                    result: Some(worker::v1::get_file_system_node_response::Result::Success(
+                        ListFileSystemNodeResponse { nodes: data.nodes },
                     )),
                 })
             }
-            Some(workerexecutor::v1::list_directory_response::Result::Failure(error)) => {
-                Ok(ListDirectoryResponse {
-                    result: Some(worker::v1::list_directory_response::Result::Error(
+            Some(workerexecutor::v1::get_file_system_node_response::Result::Failure(error)) => {
+                Ok(GetFileSystemNodeResponse {
+                    result: Some(worker::v1::get_file_system_node_response::Result::Error(
                         WorkerError {
                             error: Some(worker::v1::worker_error::Error::InternalError(error)),
+                        },
+                    )),
+                })
+            }
+            Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(data)) => {
+                Ok(GetFileSystemNodeResponse {
+                    result: Some(worker::v1::get_file_system_node_response::Result::Success(
+                        ListFileSystemNodeResponse {
+                            nodes: vec![data.file.expect("File data should be present")],
                         },
                     )),
                 })

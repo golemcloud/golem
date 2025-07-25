@@ -354,9 +354,8 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "1.2.2-dev.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8aaf3f36a5872245f170e0647991da429e6514ee96bc76e85a0e583834ead29"
+version = "0.0.0"
+source = "git+https://github.com/golemcloud/golem?branch=type-names#6682aca89656b91f3e538729332b399f87249d26"
 dependencies = [
  "cargo_metadata",
  "chrono",

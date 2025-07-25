@@ -1654,7 +1654,7 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         .start_worker(&component_id, "initial-file-read-write-1")
         .await;
 
-    let result = admin.list_directory(&worker_id, "/").await;
+    let result = admin.get_file_system_node(&worker_id, "/").await;
 
     let mut result = result
         .into_iter()
@@ -1691,6 +1691,54 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
                     }
                 },
             ]
+    );
+
+    let result = admin.get_file_system_node(&worker_id, "/bar").await;
+
+    let mut result = result
+        .into_iter()
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by_key(|e| e.name.clone());
+
+    check!(
+        result
+            == vec![ComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: ComponentFilePermissions::ReadWrite,
+                    size: 4,
+                }
+            },]
+    );
+
+    let result = admin.get_file_system_node(&worker_id, "/baz.txt").await;
+
+    let mut result = result
+        .into_iter()
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by_key(|e| e.name.clone());
+
+    check!(
+        result
+            == vec![ComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: ComponentFilePermissions::ReadWrite,
+                    size: 4,
+                }
+            },]
     );
 }
 

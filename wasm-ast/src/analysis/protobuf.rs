@@ -50,7 +50,7 @@ impl TryFrom<&Type> for AnalysedType {
                     .as_ref()
                     .ok_or_else(|| "List element type is None".to_string())?;
                 let analysed_type = AnalysedType::try_from(elem_type.as_ref())?;
-                Ok(list(analysed_type))
+                Ok(list(analysed_type).with_optional_name(inner.name.clone()))
             }
             Some(r#type::Type::Tuple(inner)) => {
                 let elems = inner
@@ -58,7 +58,7 @@ impl TryFrom<&Type> for AnalysedType {
                     .iter()
                     .map(AnalysedType::try_from)
                     .collect::<Result<Vec<_>, String>>()?;
-                Ok(tuple(elems))
+                Ok(tuple(elems).with_optional_name(inner.name.clone()))
             }
             Some(r#type::Type::Record(inner)) => {
                 let fields = inner
@@ -72,7 +72,7 @@ impl TryFrom<&Type> for AnalysedType {
                         Ok(field(&proto_field.name, analysed_type))
                     })
                     .collect::<Result<Vec<_>, String>>()?;
-                Ok(record(fields))
+                Ok(record(fields).with_optional_name(inner.name.clone()))
             }
             Some(r#type::Type::Flags(inner)) => Ok(flags(
                 &inner
@@ -80,21 +80,23 @@ impl TryFrom<&Type> for AnalysedType {
                     .iter()
                     .map(|s| s.as_str())
                     .collect::<Vec<&str>>(),
-            )),
+            )
+            .with_optional_name(inner.name.clone())),
             Some(r#type::Type::Enum(inner)) => Ok(r#enum(
                 &inner
                     .names
                     .iter()
                     .map(|s| s.as_str())
                     .collect::<Vec<&str>>(),
-            )),
+            )
+            .with_optional_name(inner.name.clone())),
             Some(r#type::Type::Option(inner)) => {
                 let elem_type = inner
                     .elem
                     .as_ref()
                     .ok_or_else(|| "Option element type is None".to_string())?;
                 let analysed_type = AnalysedType::try_from(elem_type.as_ref())?;
-                Ok(option(analysed_type))
+                Ok(option(analysed_type).with_optional_name(inner.name.clone()))
             }
             Some(r#type::Type::Result(inner)) => {
                 let ok_type = inner
@@ -110,7 +112,9 @@ impl TryFrom<&Type> for AnalysedType {
                 Ok(AnalysedType::Result(crate::analysis::TypeResult {
                     ok: ok_type.map(Box::new),
                     err: err_type.map(Box::new),
-                }))
+                    name: inner.name.clone(),
+                })
+                .with_optional_name(inner.name.clone()))
             }
             Some(r#type::Type::Variant(inner)) => {
                 let cases = inner
@@ -125,7 +129,7 @@ impl TryFrom<&Type> for AnalysedType {
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?;
-                Ok(variant(cases))
+                Ok(variant(cases).with_optional_name(inner.name.clone()))
             }
             Some(r#type::Type::Handle(inner)) => {
                 let resource_mode = match inner.mode {
@@ -133,7 +137,8 @@ impl TryFrom<&Type> for AnalysedType {
                     1 => Ok(AnalysedResourceMode::Borrowed),
                     _ => Err("Invalid resource mode".to_string()),
                 }?;
-                Ok(handle(AnalysedResourceId(inner.resource_id), resource_mode))
+                Ok(handle(AnalysedResourceId(inner.resource_id), resource_mode)
+                    .with_optional_name(inner.name.clone()))
             }
             None => Err("Type is None".to_string()),
         }
@@ -182,20 +187,22 @@ impl From<&AnalysedType> for Type {
             AnalysedType::Str(_) => Some(r#type::Type::Primitive(TypePrimitive {
                 primitive: PrimitiveType::Str as i32,
             })),
-            AnalysedType::List(crate::analysis::TypeList { inner }) => {
+            AnalysedType::List(crate::analysis::TypeList { inner, name }) => {
                 Some(r#type::Type::List(Box::new(TypeList {
                     elem: Some(Box::new(Type::from(inner.deref()))),
+                    name: name.clone(),
                 })))
             }
-            AnalysedType::Tuple(crate::analysis::TypeTuple { items }) => {
+            AnalysedType::Tuple(crate::analysis::TypeTuple { items, name }) => {
                 Some(r#type::Type::Tuple(TypeTuple {
                     elems: items
                         .iter()
                         .map(|analysed_type| analysed_type.into())
                         .collect(),
+                    name: name.clone(),
                 }))
             }
-            AnalysedType::Record(crate::analysis::TypeRecord { fields }) => {
+            AnalysedType::Record(crate::analysis::TypeRecord { fields, name }) => {
                 Some(r#type::Type::Record(TypeRecord {
                     fields: fields
                         .iter()
@@ -204,24 +211,28 @@ impl From<&AnalysedType> for Type {
                             typ: Some((&pair.typ).into()),
                         })
                         .collect(),
+                    name: name.clone(),
                 }))
             }
-            AnalysedType::Flags(crate::analysis::TypeFlags { names }) => {
+            AnalysedType::Flags(crate::analysis::TypeFlags { names, name }) => {
                 Some(r#type::Type::Flags(TypeFlags {
                     names: names.clone(),
+                    name: name.clone(),
                 }))
             }
-            AnalysedType::Enum(crate::analysis::TypeEnum { cases }) => {
+            AnalysedType::Enum(crate::analysis::TypeEnum { cases, name }) => {
                 Some(r#type::Type::Enum(TypeEnum {
                     names: cases.clone(),
+                    name: name.clone(),
                 }))
             }
-            AnalysedType::Option(crate::analysis::TypeOption { inner }) => {
+            AnalysedType::Option(crate::analysis::TypeOption { inner, name }) => {
                 Some(r#type::Type::Option(Box::new(TypeOption {
                     elem: Some(Box::new(Type::from(inner.deref()))),
+                    name: name.clone(),
                 })))
             }
-            AnalysedType::Result(crate::analysis::TypeResult { ok, err }) => {
+            AnalysedType::Result(crate::analysis::TypeResult { ok, err, name }) => {
                 Some(r#type::Type::Result(Box::new(TypeResult {
                     ok: ok
                         .clone()
@@ -229,9 +240,10 @@ impl From<&AnalysedType> for Type {
                     err: err
                         .clone()
                         .map(|err_type| Box::new(Type::from(err_type.as_ref()))),
+                    name: name.clone(),
                 })))
             }
-            AnalysedType::Variant(crate::analysis::TypeVariant { cases }) => {
+            AnalysedType::Variant(crate::analysis::TypeVariant { cases, name }) => {
                 Some(r#type::Type::Variant(TypeVariant {
                     cases: cases
                         .iter()
@@ -240,17 +252,21 @@ impl From<&AnalysedType> for Type {
                             typ: pair.typ.as_ref().map(|analysed_type| analysed_type.into()),
                         })
                         .collect(),
+                    name: name.clone(),
                 }))
             }
-            AnalysedType::Handle(crate::analysis::TypeHandle { resource_id, mode }) => {
-                Some(r#type::Type::Handle(TypeHandle {
-                    resource_id: resource_id.0,
-                    mode: match mode {
-                        AnalysedResourceMode::Owned => 0,
-                        AnalysedResourceMode::Borrowed => 1,
-                    },
-                }))
-            }
+            AnalysedType::Handle(crate::analysis::TypeHandle {
+                resource_id,
+                mode,
+                name,
+            }) => Some(r#type::Type::Handle(TypeHandle {
+                resource_id: resource_id.0,
+                mode: match mode {
+                    AnalysedResourceMode::Owned => 0,
+                    AnalysedResourceMode::Borrowed => 1,
+                },
+                name: name.clone(),
+            })),
         };
 
         Type { r#type }

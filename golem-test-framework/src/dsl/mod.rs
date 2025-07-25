@@ -25,17 +25,18 @@ use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
-    cancel_invocation_response, fork_worker_response, get_oplog_response,
-    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response,
-    revert_worker_response, search_oplog_response, update_worker_response, worker_execution_error,
-    CancelInvocationRequest, ConnectWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
-    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest,
-    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, LaunchNewWorkerRequest,
-    ListDirectoryRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+    cancel_invocation_response, fork_worker_response, get_file_system_node_response,
+    get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
+    interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
+    invoke_and_await_typed_response, invoke_response, launch_new_worker_response,
+    resume_worker_response, revert_worker_response, search_oplog_response, update_worker_response,
+    worker_execution_error, CancelInvocationRequest, ConnectWorkerRequest, DeleteWorkerRequest,
+    ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetFileSystemNodeRequest,
+    GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitJsonRequest, LaunchNewWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest,
+    SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
 use golem_client::model::Account;
@@ -433,7 +434,7 @@ pub trait TestDsl {
 
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()>;
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
@@ -1100,15 +1101,12 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             Some(invoke_and_await_typed_response::Result::Success(response)) => {
                 match response.result {
                     None => Ok(Ok(None)),
-                    Some(response) => match response.type_annotated_value {
-                        Some(response) => {
-                            let response: ValueAndType = response.try_into().map_err(|err| {
-                                anyhow!("Invocation result had unexpected format: {err}")
-                            })?;
-                            Ok(Ok(Some(response)))
-                        }
-                        None => Err(anyhow!("Missing type_annotated_value field")),
-                    },
+                    Some(response) => {
+                        let response: ValueAndType = response.try_into().map_err(|err| {
+                            anyhow!("Invocation result had unexpected format: {err}")
+                        })?;
+                        Ok(Ok(Some(response)))
+                    }
                 }
             }
             Some(invoke_and_await_typed_response::Result::Error(WorkerError {
@@ -1562,7 +1560,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         Ok(())
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
@@ -1572,9 +1570,9 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         let response = self
             .deps
             .worker_service()
-            .list_directory(
+            .get_file_system_node(
                 &self.token,
-                ListDirectoryRequest {
+                GetFileSystemNodeRequest {
                     worker_id: Some(target_worker_id.into()),
                     path: path.to_string(),
                 },
@@ -1582,7 +1580,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .await?;
 
         match response.result {
-            Some(list_directory_response::Result::Success(response)) => {
+            Some(get_file_system_node_response::Result::Success(response)) => {
                 let converted = response
                     .nodes
                     .into_iter()
@@ -2330,7 +2328,7 @@ pub trait TestDslUnsafe {
 
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId);
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
@@ -2701,14 +2699,14 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Oplog check failed")
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
     ) -> Vec<ComponentFileSystemNode> {
-        <T as TestDsl>::list_directory(self, worker_id, path)
+        <T as TestDsl>::get_file_system_node(self, worker_id, path)
             .await
-            .expect("Failed to list directory")
+            .expect("Failed to get file system node")
     }
     async fn get_file_contents(
         &self,

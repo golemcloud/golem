@@ -129,7 +129,7 @@ impl ProjectServiceGrpc {
         let project_name = project_name.to_string();
 
         with_retries(
-            "component",
+            "projects",
             "resolve_project_remotely",
             Some(format!("{account_id}/{project_name}").to_string()),
             &retry_config,
@@ -191,7 +191,7 @@ impl ProjectServiceGrpc {
         let access_token = self.access_token;
 
         with_retries(
-            "component",
+            "projects",
             "get_project_owner_remotely",
             Some(project_id.to_string()),
             &retry_config,

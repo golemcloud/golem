@@ -49,20 +49,20 @@ use golem_api_grpc::proto::golem::rib::Expr;
 pub use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient as WorkerServiceGrpcClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     cancel_invocation_response, delete_worker_response, get_file_contents_response,
-    get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
-    interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
-    invoke_and_await_typed_response, invoke_response, launch_new_worker_response,
-    list_directory_response, resume_worker_response, revert_worker_response, search_oplog_response,
-    update_worker_response, CancelInvocationRequest, CancelInvocationResponse,
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
-    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
-    GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
+    get_file_system_node_response, get_oplog_response, get_worker_metadata_response,
+    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
+    invoke_and_await_response, invoke_and_await_typed_response, invoke_response,
+    launch_new_worker_response, resume_worker_response, revert_worker_response,
+    search_oplog_response, update_worker_response, CancelInvocationRequest,
+    CancelInvocationResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
+    ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetFileSystemNodeRequest,
+    GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ListFileSystemNodeResponse, ResumeWorkerRequest,
     ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
     SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
@@ -90,7 +90,6 @@ use golem_client::{Context, Security};
 use golem_common::model::ProjectId;
 use golem_common::model::WorkerEvent;
 use golem_service_base::clients::authorised_request;
-use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::HashMap;
 use std::future::Future;
@@ -448,7 +447,7 @@ pub trait WorkerService: Send + Sync {
                 Ok(InvokeAndAwaitResponse {
                     result: Some(invoke_and_await_response::Result::Success(InvokeResult {
                         result: result.result.map(|result| {
-                            let value: Value = result.try_into().unwrap();
+                            let value: Value = result.into();
                             value.into()
                         }),
                     })),
@@ -497,9 +496,7 @@ pub trait WorkerService: Send + Sync {
                 Ok(InvokeAndAwaitTypedResponse {
                     result: Some(invoke_and_await_typed_response::Result::Success(
                         InvokeResultTyped {
-                            result: Some(TypeAnnotatedValue {
-                                type_annotated_value: result.result,
-                            }),
+                            result: result.result.map(|vnt| vnt.into()),
                         },
                     )),
                 })
@@ -805,16 +802,16 @@ pub trait WorkerService: Send + Sync {
         }
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         token: &Uuid,
-        request: ListDirectoryRequest,
-    ) -> crate::Result<ListDirectoryResponse> {
+        request: GetFileSystemNodeRequest,
+    ) -> crate::Result<GetFileSystemNodeResponse> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => {
                 let mut client = self.worker_grpc_client().await;
                 let request = authorised_request(request, token);
-                Ok(client.list_directory(request).await?.into_inner())
+                Ok(client.get_file_system_node(request).await?.into_inner())
             }
             GolemClientProtocol::Http => {
                 let client = self.worker_http_client(token).await;
@@ -835,9 +832,9 @@ pub trait WorkerService: Send + Sync {
                     )
                     .await?;
 
-                Ok(ListDirectoryResponse {
-                    result: Some(list_directory_response::Result::Success(
-                        ListDirectorySuccessResponse {
+                Ok(GetFileSystemNodeResponse {
+                    result: Some(get_file_system_node_response::Result::Success(
+                        ListFileSystemNodeResponse {
                             nodes: result.nodes.into_iter().map(|node|
                                 FileSystemNode {
                                     value: Some(

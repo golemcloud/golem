@@ -48,9 +48,9 @@ use golem_common::model::invocation_context::{
 use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
 use golem_service_base::headers::TraceContextHeaders;
-use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord};
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_ast::analysis::analysed_type::record;
+use golem_wasm_ast::analysis::{AnalysedType, NameTypePair};
+use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use http::StatusCode;
 use poem::Body;
@@ -682,8 +682,8 @@ async fn resolve_rib_input(
                             ))
                         })?;
 
-                        let body_value = TypeAnnotatedValue::parse_with_type(body, &record.typ)
-                            .map_err(|err| {
+                        let body_value =
+                            ValueAndType::parse_with_type(body, &record.typ).map_err(|err| {
                                 GatewayHttpError::BadRequest(format!(
                                     "invalid http request body\n{}\nexpected request body: {}",
                                     err.join("\n"),
@@ -693,15 +693,7 @@ async fn resolve_rib_input(
                                 ))
                             })?;
 
-                        let converted_value =
-                            ValueAndType::try_from(body_value).map_err(|err| {
-                                error!("internal value conversion error: {}", err);
-                                GatewayHttpError::InternalError(
-                                    "internal value conversion error".to_string(),
-                                )
-                            })?;
-
-                        values.push(converted_value.value);
+                        values.push(body_value.value);
                     }
                     "headers" | "header" => {
                         let header_values = get_wasm_rpc_value_for_primitives(
@@ -772,28 +764,18 @@ async fn resolve_rib_input(
                                     "missing auth data".to_string(),
                                 ))?;
 
-                        let auth_value =
-                            TypeAnnotatedValue::parse_with_type(auth_data, &record.typ).map_err(
-                                |err| {
-                                    GatewayHttpError::BadRequest(format!(
-                                        "invalid auth data\n{}\nexpected auth: {}",
-                                        err.join("\n"),
-                                        TypeName::try_from(record.typ.clone())
-                                            .map(|x| x.to_string())
-                                            .unwrap_or_else(|_| format!("{:?}", &record.typ))
-                                    ))
-                                },
-                            )?;
-
-                        let converted_value =
-                            ValueAndType::try_from(auth_value).map_err(|err| {
-                                error!("internal value conversion error: {}", err);
-                                GatewayHttpError::InternalError(
-                                    "internal value conversion error".to_string(),
-                                )
+                        let auth_value = ValueAndType::parse_with_type(auth_data, &record.typ)
+                            .map_err(|err| {
+                                GatewayHttpError::BadRequest(format!(
+                                    "invalid auth data\n{}\nexpected auth: {}",
+                                    err.join("\n"),
+                                    TypeName::try_from(record.typ.clone())
+                                        .map(|x| x.to_string())
+                                        .unwrap_or_else(|_| format!("{:?}", &record.typ))
+                                ))
                             })?;
 
-                        values.push(converted_value.value);
+                        values.push(auth_value.value);
                     }
                     field_name => {
                         // This is already type checked during API registration,
@@ -810,10 +792,7 @@ async fn resolve_rib_input(
 
             result_map.insert(
                 "request".to_string(),
-                ValueAndType::new(
-                    golem_wasm_rpc::Value::Record(values),
-                    AnalysedType::Record(TypeRecord { fields: types }),
-                ),
+                ValueAndType::new(golem_wasm_rpc::Value::Record(values), record(types)),
             );
 
             Ok(RibInput { input: result_map })
@@ -882,7 +861,7 @@ fn get_status_code_from_api_lookup_error(error: &ApiDefinitionLookupError) -> St
 /// Map against the required types and get `wasm_rpc::Value` from http request
 /// # Parameters
 /// - `analysed_type: &AnalysedType`
-///   - RibInput requirement follows a pseudo form like `{request : {headers: record-type, query: record-type, path: record-type, body: analysed-type}}`).
+///   - RibInput requirement follows a pseudo form like `{request : {headers: record-type, query: record-type, path: record-type, body: analysed-type}}`.
 ///   - The `analysed_type` here is the type of headers, query, or path (and not body). i.e, `record-type` in the above pseudo form.
 ///   - This `record-type` is expected to have primitive field types. Example for a Rib `request.path.user-id` `user-id` is some primitive and `path` should be hence a record.
 ///   - This analysed doesn't handle (or shouldn't correspond to) the `body` field because it can be anything and not a record of primitives

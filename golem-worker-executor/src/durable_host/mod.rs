@@ -22,8 +22,8 @@ use crate::durable_host::serialized::SerializableError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InvocationContext, LastError, ListDirectoryResult,
-    ReadFileResult, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
+    WorkerConfig,
 };
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
@@ -76,9 +76,9 @@ use golem_common::model::{exports, AccountId, PluginInstallationId, ProjectId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
-    FailedUpdateRecord, IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor,
-    ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    FailedUpdateRecord, GetFileSystemNodeResult, IdempotencyKey, InitialComponentFile,
+    OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter,
+    WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
@@ -1998,10 +1998,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
 #[async_trait]
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWorkerCtx<Ctx> {
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         path: &ComponentFilePath,
-    ) -> Result<ListDirectoryResult, WorkerExecutorError> {
+    ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         let root = self.temp_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
@@ -2013,20 +2013,43 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
                 }
             })?;
             if !exists {
-                return Ok(ListDirectoryResult::NotFound);
+                return Ok(GetFileSystemNodeResult::NotFound);
             };
         }
 
-        {
-            let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to get metadata: {e}"),
-                }
-            })?;
-            if !metadata.is_dir() {
-                return Ok(ListDirectoryResult::NotADirectory);
+        let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
+            WorkerExecutorError::FileSystemError {
+                path: path.to_string(),
+                reason: format!("Failed to get metadata: {e}"),
+            }
+        })?;
+
+        if metadata.is_file() {
+            let is_readonly_by_host = metadata.permissions().readonly();
+            let is_readonly_by_us = self.state.read_only_paths.read().unwrap().contains(&target);
+
+            let permissions = if is_readonly_by_host || is_readonly_by_us {
+                ComponentFilePermissions::ReadOnly
+            } else {
+                ComponentFilePermissions::ReadWrite
             };
+
+            let last_modified = metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH);
+            let file_name = target
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let file_node = ComponentFileSystemNode {
+                name: file_name,
+                last_modified,
+                details: ComponentFileSystemNodeDetails::File {
+                    size: metadata.len(),
+                    permissions,
+                },
+            };
+
+            return Ok(GetFileSystemNodeResult::File(file_node));
         }
 
         let mut entries = tokio::fs::read_dir(target).await.map_err(|e| {
@@ -2083,7 +2106,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
                 });
             };
         }
-        Ok(ListDirectoryResult::Ok(result))
+        Ok(GetFileSystemNodeResult::Ok(result))
     }
 
     async fn read_file(

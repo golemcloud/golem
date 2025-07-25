@@ -3,14 +3,14 @@ syntax = "proto3";
 package golem.rib;
 
 import "wasm/ast/type.proto";
-import "wasm/rpc/type_annotated_value.proto";
+import "wasm/rpc/value_and_type.proto";
 import "golem/rib/function_name.proto";
 import "golem/rib/expr.proto";
 
 
 message RibIR {
     oneof instruction {
-        wasm.rpc.TypeAnnotatedValue push_lit = 1;
+        wasm.rpc.ValueAndType push_lit = 1;
         VariableId assign_var = 2;
         VariableId load_var = 3;
         wasm.ast.Type create_and_push_record = 4;
@@ -33,7 +33,7 @@ message RibIR {
         wasm.ast.Type deconstruct = 21;
         InvokeFunctionInstruction invoke_function = 22;
         string throw = 23;
-        wasm.rpc.TypeAnnotatedValue push_flag = 24;
+        wasm.rpc.ValueAndType push_flag = 24;
         GetTag get_tag = 25;
         VariantConstructionInstruction variant_construction = 26;
         PushTupleInstruction push_tuple = 27;

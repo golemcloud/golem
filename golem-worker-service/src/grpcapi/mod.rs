@@ -25,7 +25,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, WorkerError, WorkerExecutionError,
 };
 use golem_common::model::{ComponentFilePath, TargetWorkerId, WorkerId};
-use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
+use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
@@ -270,8 +270,8 @@ pub fn error_to_status(error: WorkerError) -> Status {
 
 pub fn parse_json_invoke_parameters(
     parameters: &[String],
-) -> Result<Vec<OptionallyTypeAnnotatedValueJson>, WorkerError> {
-    let optionally_typed_parameters: Vec<OptionallyTypeAnnotatedValueJson> = parameters
+) -> Result<Vec<OptionallyValueAndTypeJson>, WorkerError> {
+    let optionally_typed_parameters: Vec<OptionallyValueAndTypeJson> = parameters
         .iter()
         .map(|param| serde_json::from_str(param))
         .collect::<Result<Vec<_>, _>>()

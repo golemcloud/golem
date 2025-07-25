@@ -54,10 +54,6 @@ pub mod serde;
 #[cfg(feature = "text")]
 mod text;
 
-/// A version of values annotated with golem-wasm-ast generated type information
-#[cfg(all(feature = "typeinfo", feature = "protobuf"))]
-mod type_annotated_value;
-
 #[cfg(feature = "typeinfo")]
 mod value_and_type;
 
@@ -80,7 +76,7 @@ pub use bindings::wasi;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc0_2_1 as golem_rpc_0_2_x;
+pub use bindings::golem::rpc0_2_2 as golem_rpc_0_2_x;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
@@ -119,7 +115,7 @@ mod generated {
 pub use generated::wasi;
 
 #[cfg(feature = "host-bindings")]
-pub use generated::golem::rpc0_2_1 as golem_rpc_0_2_x;
+pub use generated::golem::rpc0_2_2 as golem_rpc_0_2_x;
 
 #[cfg(feature = "host-bindings")]
 pub use golem_rpc_0_2_x::types::{
@@ -184,12 +180,6 @@ impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
 pub struct CancellationTokenEntry {
     pub schedule_id: Vec<u8>, // ScheduleId is defined locally in the worker-executor, so store a serialized version here
 }
-
-#[cfg(all(feature = "typeinfo", feature = "protobuf"))]
-pub use type_annotated_value::*;
-
-#[cfg(all(feature = "text", feature = "protobuf"))]
-pub use text::{parse_type_annotated_value, print_type_annotated_value};
 
 #[cfg(feature = "text")]
 pub use text::{parse_value_and_type, print_value_and_type};

@@ -690,15 +690,15 @@ impl From<&AnalysedType> for InferredType {
                 )
             }
             AnalysedType::Variant(vs) => InferredType::from_type_variant(vs),
-            AnalysedType::Handle(golem_wasm_ast::analysis::TypeHandle { resource_id, mode }) => {
-                InferredType::resource(
-                    resource_id.0,
-                    match mode {
-                        AnalysedResourceMode::Owned => 0,
-                        AnalysedResourceMode::Borrowed => 1,
-                    },
-                )
-            }
+            AnalysedType::Handle(TypeHandle {
+                resource_id, mode, ..
+            }) => InferredType::resource(
+                resource_id.0,
+                match mode {
+                    AnalysedResourceMode::Owned => 0,
+                    AnalysedResourceMode::Borrowed => 1,
+                },
+            ),
         }
     }
 }

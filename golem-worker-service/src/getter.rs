@@ -14,10 +14,8 @@
 
 use crate::headers::ResolvedResponseHeaders;
 use crate::path::{Path, PathComponent};
-use golem_wasm_ast::analysis::{AnalysedType, TypeRecord};
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::{TypedList, TypedRecord, TypedTuple};
+use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeRecord, TypeTuple};
+use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
 use golem_wasm_rpc::{Value, ValueAndType};
 use http::StatusCode;
 use rib::GetLiteralValue;
@@ -42,36 +40,45 @@ pub enum GetError {
 }
 
 // To deal with fields in a TypeAnnotatedValue (that's returned from golem-rib)
-impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
-    fn get(&self, key: &Path) -> Result<TypeAnnotatedValue, GetError> {
+impl Getter<ValueAndType> for ValueAndType {
+    fn get(&self, key: &Path) -> Result<ValueAndType, GetError> {
         let size = key.0.len();
         fn go(
-            type_annotated_value: &TypeAnnotatedValue,
+            value_and_type: &ValueAndType,
             paths: Vec<PathComponent>,
             index: usize,
             size: usize,
-        ) -> Result<TypeAnnotatedValue, GetError> {
+        ) -> Result<ValueAndType, GetError> {
             if index < size {
                 match &paths[index] {
-                    PathComponent::KeyName(key) => match type_annotated_value {
-                        TypeAnnotatedValue::Record(TypedRecord { value, .. }) => {
-                            let new_value = value
-                                .iter()
-                                .find(|name_value| name_value.name == key.0)
-                                .and_then(|v| v.value.clone().map(|vv| vv.type_annotated_value))
-                                .flatten();
-
-                            match new_value {
-                                Some(new_value) => go(&new_value, paths, index + 1, size),
-                                _ => Err(GetError::KeyNotFound(key.0.clone())),
+                    PathComponent::KeyName(key) => {
+                        match (&value_and_type.typ, &value_and_type.value) {
+                            (
+                                AnalysedType::Record(TypeRecord { fields, .. }),
+                                Value::Record(field_values),
+                            ) => {
+                                let new_value = fields
+                                    .iter()
+                                    .zip(field_values)
+                                    .find(|(field, _value)| field.name == key.0)
+                                    .map(|(field, value)| {
+                                        ValueAndType::new(value.clone(), field.typ.clone())
+                                    });
+                                match new_value {
+                                    Some(new_value) => go(&new_value, paths, index + 1, size),
+                                    _ => Err(GetError::KeyNotFound(key.0.clone())),
+                                }
                             }
+                            _ => match value_and_type.to_json_value() {
+                                Ok(json) => Err(GetError::NotRecord {
+                                    key_name: key.0.clone(),
+                                    found: json.to_string(),
+                                }),
+                                Err(err) => Err(GetError::Internal(err)),
+                            },
                         }
-                        _ => Err(GetError::NotRecord {
-                            key_name: key.0.clone(),
-                            found: type_annotated_value.to_json_value().to_string(),
-                        }),
-                    },
-                    PathComponent::Index(value_index) => match get_array(type_annotated_value) {
+                    }
+                    PathComponent::Index(value_index) => match get_array(value_and_type) {
                         Some(type_values) => {
                             let new_value = type_values.get(value_index.0);
                             match new_value {
@@ -79,14 +86,17 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
                                 None => Err(GetError::IndexNotFound(value_index.0)),
                             }
                         }
-                        None => Err(GetError::NotArray {
-                            index: value_index.0,
-                            found: type_annotated_value.to_json_value().to_string(),
-                        }),
+                        None => match value_and_type.to_json_value() {
+                            Ok(json) => Err(GetError::NotArray {
+                                index: value_index.0,
+                                found: json.to_string(),
+                            }),
+                            Err(err) => Err(GetError::Internal(err)),
+                        },
                     },
                 }
             } else {
-                Ok(type_annotated_value.clone())
+                Ok(value_and_type.clone())
             }
         }
 
@@ -94,30 +104,20 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
     }
 }
 
-impl Getter<ValueAndType> for ValueAndType {
-    fn get(&self, key: &Path) -> Result<ValueAndType, GetError> {
-        let tav: TypeAnnotatedValue = self
-            .clone()
-            .try_into()
-            .map_err(|errs: Vec<String>| GetError::Internal(errs.join(", ")))?;
-        let result = tav.get(key)?;
-        result.try_into().map_err(GetError::Internal)
-    }
-}
-
-fn get_array(value: &TypeAnnotatedValue) -> Option<Vec<TypeAnnotatedValue>> {
-    match value {
-        TypeAnnotatedValue::List(TypedList { values, .. }) => {
+fn get_array(value: &ValueAndType) -> Option<Vec<ValueAndType>> {
+    match (&value.typ, &value.value) {
+        (AnalysedType::List(TypeList { inner, .. }), Value::List(values)) => {
             let vec = values
                 .iter()
-                .filter_map(|v| v.clone().type_annotated_value)
+                .map(|v| ValueAndType::new(v.clone(), (**inner).clone()))
                 .collect::<Vec<_>>();
             Some(vec)
         }
-        TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) => {
-            let vec = value
+        (AnalysedType::Tuple(TypeTuple { items, .. }), Value::Tuple(values)) => {
+            let vec = items
                 .iter()
-                .filter_map(|v| v.clone().type_annotated_value)
+                .zip(values)
+                .map(|(typ, v)| ValueAndType::new(v.clone(), typ.clone()))
                 .collect::<Vec<_>>();
             Some(vec)
         }

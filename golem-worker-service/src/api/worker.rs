@@ -1001,7 +1001,7 @@ impl WorkerApi {
 
         let nodes = self
             .worker_service
-            .list_directory(&worker_id.into_target_worker_id(), path, namespace)
+            .get_file_system_node(&worker_id.into_target_worker_id(), path, namespace)
             .await?;
 
         Ok(Json(GetFilesResponse {

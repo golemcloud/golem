@@ -22,10 +22,9 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, ProjectId, WorkerMetadata};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
 use golem_wasm_rpc::protobuf::Val;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{Value, ValueAndType};
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use std::sync::Arc;
 use tracing::warn;
@@ -111,7 +110,7 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 }
 
 impl ProtobufInvocationDetails
-    for golem_api_grpc::proto::golem::workerexecutor::v1::ListDirectoryRequest
+    for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileSystemNodeRequest
 {
     fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
         &self.account_id
@@ -452,20 +451,15 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
                 param.name
             ))
         })?;
-        let type_annotated_value =
-            TypeAnnotatedValue::parse_with_type(&json, &param.typ).map_err(|errors| {
+        let value_and_type =
+            ValueAndType::parse_with_type(&json, &param.typ).map_err(|errors| {
                 WorkerExecutorError::invalid_request(format!(
                     "Parameter {} has unexpected type: {}",
                     param.name,
                     errors.join(", ")
                 ))
             })?;
-        let val: Value = type_annotated_value.try_into().map_err(|err| {
-            WorkerExecutorError::invalid_request(format!(
-                "Invalid parameter value for {}: {err}",
-                param.name
-            ))
-        })?;
+        let val: Value = value_and_type.value;
         input.push(val.into());
     }
 

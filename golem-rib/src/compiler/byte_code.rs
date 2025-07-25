@@ -726,6 +726,7 @@ mod internal {
                         value: Value::Flags(bitmap),
                         typ: AnalysedType::Flags(TypeFlags {
                             names: all_flags.iter().map(|n| n.to_string()).collect(),
+                            name: None,
                         }),
                     }));
                 }
@@ -1017,8 +1018,8 @@ mod compiler_tests {
 
     use super::*;
     use crate::{ArmPattern, InferredType, MatchArm, RibCompiler, VariableId};
-    use golem_wasm_ast::analysis::analysed_type::{list, s32, str};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
+    use golem_wasm_ast::analysis::analysed_type;
+    use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32, str};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
     #[test]
@@ -1267,18 +1268,10 @@ mod compiler_tests {
         let instruction_set = vec![
             RibIR::PushLit(bar_value),
             RibIR::PushLit(foo_value),
-            RibIR::CreateAndPushRecord(AnalysedType::Record(TypeRecord {
-                fields: vec![
-                    NameTypePair {
-                        name: "foo_key".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
-                    },
-                    NameTypePair {
-                        name: "bar_key".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
-                    },
-                ],
-            })),
+            RibIR::CreateAndPushRecord(record(vec![
+                field("foo_key", str()),
+                field("bar_key", str()),
+            ])),
             RibIR::UpdateRecord("foo_key".to_string()),
             RibIR::UpdateRecord("bar_key".to_string()),
         ];
@@ -1419,18 +1412,10 @@ mod compiler_tests {
         let instruction_set = vec![
             RibIR::PushLit(bar_value),
             RibIR::PushLit(foo_value),
-            RibIR::CreateAndPushRecord(AnalysedType::Record(TypeRecord {
-                fields: vec![
-                    NameTypePair {
-                        name: "bar_key".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
-                    },
-                    NameTypePair {
-                        name: "foo_key".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
-                    },
-                ],
-            })),
+            RibIR::CreateAndPushRecord(analysed_type::record(vec![
+                field("bar_key", str()),
+                field("foo_key", str()),
+            ])),
             RibIR::UpdateRecord("foo_key".to_string()), // next pop is foo_value
             RibIR::UpdateRecord("bar_key".to_string()), // last pop is bar_value
             RibIR::SelectField("bar_key".to_string()),
@@ -1539,7 +1524,7 @@ mod compiler_tests {
 
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{Expr, RibCompiler, RibCompilerConfig};
-        use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
+        use golem_wasm_ast::analysis::analysed_type::str;
 
         #[test]
         fn test_unknown_function() {
@@ -1581,11 +1566,7 @@ mod compiler_tests {
 
         #[test]
         fn test_invalid_arg_size_function() {
-            let metadata = internal::get_component_metadata(
-                "foo",
-                vec![AnalysedType::Str(TypeStr)],
-                AnalysedType::Str(TypeStr),
-            );
+            let metadata = internal::get_component_metadata("foo", vec![str()], str());
 
             let expr = r#"
                let user_id = "user";
@@ -1630,11 +1611,7 @@ mod compiler_tests {
 
         #[test]
         fn test_invalid_arg_types_function() {
-            let metadata = internal::get_component_metadata(
-                "foo",
-                vec![AnalysedType::Str(TypeStr)],
-                AnalysedType::Str(TypeStr),
-            );
+            let metadata = internal::get_component_metadata("foo", vec![str()], str());
 
             let expr = r#"
                let result = foo(1u64);
@@ -1706,16 +1683,16 @@ mod compiler_tests {
 
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{Expr, RibCompiler, RibCompilerConfig};
-        use golem_wasm_ast::analysis::{
-            AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeList, TypeOption,
-            TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
+        use golem_wasm_ast::analysis::analysed_type::{
+            case, field, list, option, r#enum, record, result, str, tuple, u32, u64, unit_case,
+            variant,
         };
 
         #[test]
         async fn test_str_global_input() {
-            let request_value_type = AnalysedType::Str(TypeStr);
+            let request_value_type = str();
 
-            let output_analysed_type = AnalysedType::Str(TypeStr);
+            let output_analysed_type = str();
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1744,9 +1721,9 @@ mod compiler_tests {
 
         #[test]
         async fn test_number_global_input() {
-            let request_value_type = AnalysedType::U32(TypeU32);
+            let request_value_type = u32();
 
-            let output_analysed_type = AnalysedType::Str(TypeStr);
+            let output_analysed_type = str();
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1775,24 +1752,13 @@ mod compiler_tests {
 
         #[test]
         async fn test_variant_type_info() {
-            let request_value_type = AnalysedType::Variant(TypeVariant {
-                cases: vec![
-                    NameOptionTypePair {
-                        name: "register-user".to_string(),
-                        typ: Some(AnalysedType::U64(TypeU64)),
-                    },
-                    NameOptionTypePair {
-                        name: "process-user".to_string(),
-                        typ: Some(AnalysedType::Str(TypeStr)),
-                    },
-                    NameOptionTypePair {
-                        name: "validate".to_string(),
-                        typ: None,
-                    },
-                ],
-            });
+            let request_value_type = variant(vec![
+                case("register-user", u64()),
+                case("process-user", str()),
+                unit_case("validate"),
+            ]);
 
-            let output_analysed_type = AnalysedType::Str(TypeStr);
+            let output_analysed_type = str();
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1826,12 +1792,9 @@ mod compiler_tests {
 
         #[test]
         async fn test_result_type_info() {
-            let request_value_type = AnalysedType::Result(TypeResult {
-                ok: Some(Box::new(AnalysedType::U64(TypeU64))),
-                err: Some(Box::new(AnalysedType::Str(TypeStr))),
-            });
+            let request_value_type = result(u64(), str());
 
-            let output_analysed_type = AnalysedType::Str(TypeStr);
+            let output_analysed_type = str();
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1865,11 +1828,9 @@ mod compiler_tests {
 
         #[test]
         async fn test_option_type_info() {
-            let request_value_type = AnalysedType::Option(TypeOption {
-                inner: Box::new(AnalysedType::Str(TypeStr)),
-            });
+            let request_value_type = option(str());
 
-            let output_analysed_type = AnalysedType::Str(TypeStr);
+            let output_analysed_type = str();
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1903,11 +1864,8 @@ mod compiler_tests {
 
         #[test]
         async fn test_enum_type_info() {
-            let request_value_type = AnalysedType::Enum(TypeEnum {
-                cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()],
-            });
-
-            let output_analysed_type = AnalysedType::Str(TypeStr);
+            let request_value_type = r#enum(&["prod", "dev", "test"]);
+            let output_analysed_type = str();
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1942,19 +1900,10 @@ mod compiler_tests {
 
         #[test]
         async fn test_record_global_input() {
-            let request_value_type = AnalysedType::Record(TypeRecord {
-                fields: vec![NameTypePair {
-                    name: "path".to_string(),
-                    typ: AnalysedType::Record(TypeRecord {
-                        fields: vec![NameTypePair {
-                            name: "user".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        }],
-                    }),
-                }],
-            });
+            let request_value_type =
+                record(vec![field("path", record(vec![field("user", str())]))]);
 
-            let output_analysed_type = AnalysedType::Str(TypeStr);
+            let output_analysed_type = str();
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1992,20 +1941,9 @@ mod compiler_tests {
 
         #[test]
         async fn test_tuple_global_input() {
-            let request_value_type = AnalysedType::Tuple(TypeTuple {
-                items: vec![
-                    AnalysedType::Str(TypeStr),
-                    AnalysedType::U32(TypeU32),
-                    AnalysedType::Record(TypeRecord {
-                        fields: vec![NameTypePair {
-                            name: "user".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        }],
-                    }),
-                ],
-            });
+            let request_value_type = tuple(vec![str(), u32(), record(vec![field("user", str())])]);
 
-            let output_analysed_type = AnalysedType::Str(TypeStr);
+            let output_analysed_type = str();
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -2038,11 +1976,9 @@ mod compiler_tests {
 
         #[test]
         async fn test_list_global_input() {
-            let request_value_type = AnalysedType::List(TypeList {
-                inner: Box::new(AnalysedType::Str(TypeStr)),
-            });
+            let request_value_type = list(str());
 
-            let output_analysed_type = AnalysedType::Str(TypeStr);
+            let output_analysed_type = str();
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -2076,6 +2012,9 @@ mod compiler_tests {
 
     mod internal {
         use crate::{ComponentDependency, ComponentDependencyKey, RibInputTypeInfo};
+        use golem_wasm_ast::analysis::analysed_type::{
+            case, field, record, str, u64, unit_case, variant,
+        };
         use golem_wasm_ast::analysis::*;
         use std::collections::HashMap;
         use uuid::Uuid;
@@ -2087,27 +2026,17 @@ mod compiler_tests {
                     name: "foo".to_string(),
                     parameters: vec![AnalysedFunctionParameter {
                         name: "param1".to_string(),
-                        typ: AnalysedType::Variant(TypeVariant {
-                            cases: vec![
-                                NameOptionTypePair {
-                                    name: "register-user".to_string(),
-                                    typ: Some(AnalysedType::U64(TypeU64)),
-                                },
-                                NameOptionTypePair {
-                                    name: "process-user".to_string(),
-                                    typ: Some(AnalysedType::Str(TypeStr)),
-                                },
-                                NameOptionTypePair {
-                                    name: "validate".to_string(),
-                                    typ: None,
-                                },
-                            ],
-                        }),
+                        typ: variant(vec![
+                            case("register-user", u64()),
+                            case("process-user", str()),
+                            unit_case("validate"),
+                        ]),
                     }],
                     result: Some(AnalysedFunctionResult {
                         typ: AnalysedType::Handle(TypeHandle {
                             resource_id: AnalysedResourceId(0),
                             mode: AnalysedResourceMode::Owned,
+                            name: None,
                         }),
                     }),
                 }],
@@ -2134,12 +2063,13 @@ mod compiler_tests {
                         name: "[constructor]cart".to_string(),
                         parameters: vec![AnalysedFunctionParameter {
                             name: "param1".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
+                            typ: str(),
                         }],
                         result: Some(AnalysedFunctionResult {
                             typ: AnalysedType::Handle(TypeHandle {
                                 resource_id: AnalysedResourceId(0),
                                 mode: AnalysedResourceMode::Owned,
+                                name: None,
                             }),
                         }),
                     },
@@ -2151,16 +2081,12 @@ mod compiler_tests {
                                 typ: AnalysedType::Handle(TypeHandle {
                                     resource_id: AnalysedResourceId(0),
                                     mode: AnalysedResourceMode::Borrowed,
+                                    name: None,
                                 }),
                             },
                             AnalysedFunctionParameter {
                                 name: "item".to_string(),
-                                typ: AnalysedType::Record(TypeRecord {
-                                    fields: vec![NameTypePair {
-                                        name: "name".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    }],
-                                }),
+                                typ: record(vec![field("name", str())]),
                             },
                         ],
                         result: None,

@@ -295,13 +295,13 @@ mod internal {
     use crate::path::Path;
 
     use crate::headers::ResolvedResponseHeaders;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::ValueAndType;
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
 
     #[derive(Debug)]
     pub(crate) struct IntermediateHttpResponse {
-        body: Option<TypeAnnotatedValue>,
+        body: Option<ValueAndType>,
         status: StatusCode,
         headers: ResolvedResponseHeaders,
     }
@@ -317,14 +317,9 @@ mod internal {
                     let headers =
                         get_response_headers_or_default(rib_result).map_err(RibRuntimeError)?;
 
-                    let tav: TypeAnnotatedValue = rib_result
-                        .clone()
-                        .try_into()
-                        .map_err(|errs: Vec<String>| RibRuntimeError(errs.join(", ")))?;
-
-                    let body = tav
+                    let body = rib_result
                         .get_optional(&Path::from_key("body"))
-                        .unwrap_or(tav.clone());
+                        .unwrap_or(rib_result.clone());
 
                     Ok(IntermediateHttpResponse {
                         body: Some(body),

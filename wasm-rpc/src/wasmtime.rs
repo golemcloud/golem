@@ -732,7 +732,11 @@ pub fn type_to_analysed_type(typ: &Type) -> Result<AnalysedType, String> {
                 Some(ty) => Some(Box::new(type_to_analysed_type(&ty)?)),
                 None => None,
             };
-            Ok(AnalysedType::Result(TypeResult { ok, err }))
+            Ok(AnalysedType::Result(TypeResult {
+                ok,
+                err,
+                name: None,
+            }))
         }
         Type::Flags(wflags) => Ok(flags(&wflags.names().collect::<Vec<_>>())),
         Type::Own(_) => Err("Cannot extract information about owned resource type".to_string()),

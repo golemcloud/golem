@@ -5,10 +5,8 @@ use golem_wasm_ast::analysis::analysed_type::{
 use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-    AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysisContext,
+    AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
 };
-use golem_wasm_ast::component::Component;
-use golem_wasm_ast::IgnoreAllButMetadata;
 use test_r::test;
 
 test_r::enable!();
@@ -16,10 +14,7 @@ test_r::enable!();
 #[test]
 fn exports_shopping_cart_component() {
     let source_bytes = include_bytes!("../wasm/shopping-cart.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
 
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -45,7 +40,8 @@ fn exports_shopping_cart_component() {
                         field("name", str()),
                         field("price", f32()),
                         field("quantity", u32()),
-                    ]),
+                    ])
+                    .named("product-item"),
                 }],
                 result: None,
             },
@@ -77,36 +73,39 @@ fn exports_shopping_cart_component() {
                 result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
                         case("error", str()),
-                        case("success", record(vec![field("order-id", str())])),
-                    ]),
+                        case(
+                            "success",
+                            record(vec![field("order-id", str())]).named("order-confirmation"),
+                        ),
+                    ])
+                    .named("checkout-result"),
                 }),
             },
             AnalysedFunction {
                 name: "get-cart-contents".to_string(),
                 parameters: vec![],
                 result: Some(AnalysedFunctionResult {
-                    typ: list(record(vec![
-                        field("product-id", str()),
-                        field("name", str()),
-                        field("price", f32()),
-                        field("quantity", u32()),
-                    ])),
+                    typ: list(
+                        record(vec![
+                            field("product-id", str()),
+                            field("name", str()),
+                            field("price", f32()),
+                            field("quantity", u32()),
+                        ])
+                        .named("product-item"),
+                    ),
                 }),
             },
         ],
     })];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
 fn exports_file_service_component() {
     let source_bytes = include_bytes!("../wasm/file-service.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
 
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -178,13 +177,16 @@ fn exports_file_service_component() {
                         record(vec![
                             field(
                                 "last-modified",
-                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+                                    .named("datetime"),
                             ),
                             field(
                                 "last-accessed",
-                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+                                    .named("datetime"),
                             ),
-                        ]),
+                        ])
+                        .named("file-info"),
                         str(),
                     ),
                 }),
@@ -200,13 +202,16 @@ fn exports_file_service_component() {
                         record(vec![
                             field(
                                 "last-modified",
-                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+                                    .named("datetime"),
                             ),
                             field(
                                 "last-accessed",
-                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+                                    .named("datetime"),
                             ),
-                        ]),
+                        ])
+                        .named("file-info"),
                         str(),
                     ),
                 }),
@@ -297,7 +302,8 @@ fn exports_file_service_component() {
                 }],
                 result: Some(AnalysedFunctionResult {
                     typ: result(
-                        record(vec![field("lower", u64()), field("upper", u64())]),
+                        record(vec![field("lower", u64()), field("upper", u64())])
+                            .named("metadata-hash-value"),
                         str(),
                     ),
                 }),
@@ -305,17 +311,13 @@ fn exports_file_service_component() {
         ],
     })];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
 fn exports_auction_registry_composed_component() {
     let source_bytes = include_bytes!("../wasm/auction_registry_composed.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
 
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -337,7 +339,7 @@ fn exports_auction_registry_composed_component() {
                     },
                 ],
                 result: Some(AnalysedFunctionResult {
-                    typ: record(vec![field("bidder-id", str())]),
+                    typ: record(vec![field("bidder-id", str())]).named("bidder-id"),
                 }),
             },
             AnalysedFunction {
@@ -361,36 +363,37 @@ fn exports_auction_registry_composed_component() {
                     },
                 ],
                 result: Some(AnalysedFunctionResult {
-                    typ: record(vec![field("auction-id", str())]),
+                    typ: record(vec![field("auction-id", str())]).named("auction-id"),
                 }),
             },
             AnalysedFunction {
                 name: "get-auctions".to_string(),
                 parameters: vec![],
                 result: Some(AnalysedFunctionResult {
-                    typ: list(record(vec![
-                        field("auction-id", record(vec![field("auction-id", str())])),
-                        field("name", str()),
-                        field("description", str()),
-                        field("limit-price", f32()),
-                        field("expiration", u64()),
-                    ])),
+                    typ: list(
+                        record(vec![
+                            field(
+                                "auction-id",
+                                record(vec![field("auction-id", str())]).named("auction-id"),
+                            ),
+                            field("name", str()),
+                            field("description", str()),
+                            field("limit-price", f32()),
+                            field("expiration", u64()),
+                        ])
+                        .named("auction"),
+                    ),
                 }),
             },
         ],
     })];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
 fn exports_shopping_cart_resource_component() {
     let source_bytes = include_bytes!("../wasm/shopping-cart-resource.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
-
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -423,7 +426,8 @@ fn exports_shopping_cart_resource_component() {
                             field("name", str()),
                             field("price", f32()),
                             field("quantity", u32()),
-                        ]),
+                        ])
+                        .named("product-item"),
                     },
                 ],
                 result: None,
@@ -469,8 +473,12 @@ fn exports_shopping_cart_resource_component() {
                 result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
                         case("error", str()),
-                        case("success", record(vec![field("order-id", str())])),
-                    ]),
+                        case(
+                            "success",
+                            record(vec![field("order-id", str())]).named("order-confirmation"),
+                        ),
+                    ])
+                    .named("checkout-result"),
                 }),
             },
             AnalysedFunction {
@@ -480,12 +488,15 @@ fn exports_shopping_cart_resource_component() {
                     typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 }],
                 result: Some(AnalysedFunctionResult {
-                    typ: list(record(vec![
-                        field("product-id", str()),
-                        field("name", str()),
-                        field("price", f32()),
-                        field("quantity", u32()),
-                    ])),
+                    typ: list(
+                        record(vec![
+                            field("product-id", str()),
+                            field("name", str()),
+                            field("price", f32()),
+                            field("quantity", u32()),
+                        ])
+                        .named("product-item"),
+                    ),
                 }),
             },
             AnalysedFunction {
@@ -505,17 +516,12 @@ fn exports_shopping_cart_resource_component() {
         ],
     })];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
 fn exports_shopping_cart_resource_versioned_component() {
     let source_bytes = include_bytes!("../wasm/shopping-cart-resource-versioned.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
-
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -548,7 +554,8 @@ fn exports_shopping_cart_resource_versioned_component() {
                             field("name", str()),
                             field("price", f32()),
                             field("quantity", u32()),
-                        ]),
+                        ])
+                        .named("product-item"),
                     },
                 ],
                 result: None,
@@ -594,8 +601,12 @@ fn exports_shopping_cart_resource_versioned_component() {
                 result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
                         case("error", str()),
-                        case("success", record(vec![field("order-id", str())])),
-                    ]),
+                        case(
+                            "success",
+                            record(vec![field("order-id", str())]).named("order-confirmation"),
+                        ),
+                    ])
+                    .named("checkout-result"),
                 }),
             },
             AnalysedFunction {
@@ -605,12 +616,15 @@ fn exports_shopping_cart_resource_versioned_component() {
                     typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 }],
                 result: Some(AnalysedFunctionResult {
-                    typ: list(record(vec![
-                        field("product-id", str()),
-                        field("name", str()),
-                        field("price", f32()),
-                        field("quantity", u32()),
-                    ])),
+                    typ: list(
+                        record(vec![
+                            field("product-id", str()),
+                            field("name", str()),
+                            field("price", f32()),
+                            field("quantity", u32()),
+                        ])
+                        .named("product-item"),
+                    ),
                 }),
             },
             AnalysedFunction {
@@ -630,17 +644,12 @@ fn exports_shopping_cart_resource_versioned_component() {
         ],
     })];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
 fn exports_caller_composed_component() {
     let source_bytes = include_bytes!("../wasm/caller_composed.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
-
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -680,15 +689,14 @@ fn exports_caller_composed_component() {
             name: "bug-wasm-rpc-i32".to_string(),
             parameters: vec![AnalysedFunctionParameter {
                 name: "in".to_string(),
-                typ: variant(vec![unit_case("leaf")]),
+                typ: variant(vec![unit_case("leaf")]).named("timeline-node"),
             }],
             result: Some(AnalysedFunctionResult {
-                typ: variant(vec![unit_case("leaf")]),
+                typ: variant(vec![unit_case("leaf")]).named("timeline-node"),
             }),
         }),
     ];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
@@ -696,10 +704,6 @@ fn exports_caller_composed_component() {
 fn exports_caller_component() {
     // NOTE: Same as caller_composed.wasm but not composed with the generated stub
     let source_bytes = include_bytes!("../wasm/caller.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
-
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -739,10 +743,10 @@ fn exports_caller_component() {
             name: "bug-wasm-rpc-i32".to_string(),
             parameters: vec![AnalysedFunctionParameter {
                 name: "in".to_string(),
-                typ: variant(vec![unit_case("leaf")]),
+                typ: variant(vec![unit_case("leaf")]).named("timeline-node"),
             }],
             result: Some(AnalysedFunctionResult {
-                typ: variant(vec![unit_case("leaf")]),
+                typ: variant(vec![unit_case("leaf")]).named("timeline-node"),
             }),
         }),
         AnalysedExport::Function(AnalysedFunction {
@@ -754,6 +758,5 @@ fn exports_caller_component() {
         }),
     ];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
