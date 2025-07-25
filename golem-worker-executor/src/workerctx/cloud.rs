@@ -330,8 +330,9 @@ impl ExternalOperations<Context> for Context {
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Context> + Send),
         instance: &Instance,
+        refresh_replay_target: bool,
     ) -> Result<RetryDecision, WorkerExecutorError> {
-        DurableWorkerCtx::<Context>::resume_replay(store, instance).await
+        DurableWorkerCtx::<Context>::resume_replay(store, instance, refresh_replay_target).await
     }
 
     async fn prepare_instance(

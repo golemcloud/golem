@@ -390,6 +390,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
+        refresh_replay_target: bool,
     ) -> Result<RetryDecision, WorkerExecutorError>;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.

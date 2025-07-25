@@ -158,7 +158,7 @@ async fn test_connect_and_playback(
     let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
 
     let playback_result = debug_executor
-        .playback(first_invocation_boundary, None, 3)
+        .playback(first_invocation_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -234,20 +234,24 @@ async fn test_connect_and_playback_raw(
     let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
     let fourth_invocation_boundary = nth_invocation_boundary(&oplogs, 4);
 
-    debug_executor
-        .playback(fourth_invocation_boundary, None, 3)
+    let playback_result_1 = debug_executor
+        .playback(fourth_invocation_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
+    assert!(!playback_result_1.incremental_playback);
+
     debug_executor
-        .rewind(first_invocation_boundary, 3)
+        .rewind(first_invocation_boundary)
         .await
         .expect("Failed to rewind the worker in debug mode");
 
-    debug_executor
-        .playback(fourth_invocation_boundary, None, 3)
+    let playback_result_2 = debug_executor
+        .playback(fourth_invocation_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
+
+    assert!(playback_result_2.incremental_playback);
 
     let all_messages = debug_executor.all_read_messages();
 
@@ -299,17 +303,13 @@ async fn test_connect_and_playback_raw(
                 ..
             },
             UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
                 result: Some(_),
                 ..
             },
         ]
     ));
 
-    for id in [1, 2, 3, 4, 6, 8, 9, 10, 11] {
+    for id in [1, 2, 3, 4, 6, 8, 9, 10] {
         assert_eq!(all_messages[id].method, Some("emit-logs".to_string()))
     }
 
@@ -367,7 +367,7 @@ async fn test_connect_and_playback_to_middle_of_invocation(
     let index_in_middle = previous_index(first_invocation_boundary);
 
     let playback_result = debug_executor
-        .playback(index_in_middle, None, 3)
+        .playback(index_in_middle, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -424,7 +424,7 @@ async fn test_playback_from_breakpoint(
         .expect("Failed to connect to the worker in debug mode");
 
     let playback_result1 = debug_executor
-        .playback(initialize_boundary, None, 3)
+        .playback(initialize_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -440,7 +440,7 @@ async fn test_playback_from_breakpoint(
     assert_eq!(current_index, initialize_boundary);
 
     let playback_result2 = debug_executor
-        .playback(add_item_boundary, None, 3)
+        .playback(add_item_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -454,7 +454,9 @@ async fn test_playback_from_breakpoint(
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result1.worker_id, worker_id);
     assert_eq!(playback_result1.current_index, initialize_boundary);
+    assert!(!playback_result1.incremental_playback);
     assert_eq!(playback_result2.worker_id, worker_id);
+    assert!(playback_result2.incremental_playback);
 }
 
 #[test]
@@ -502,12 +504,12 @@ async fn test_playback_and_rewind(
         .expect("Failed to connect to the worker in debug mode");
 
     let playback_result = debug_executor
-        .playback(second_boundary, None, 3)
+        .playback(second_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
     let rewind_result = debug_executor
-        .rewind(first_boundary, 3)
+        .rewind(first_boundary)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -563,7 +565,7 @@ async fn test_playback_and_fork(
         .expect("Failed to connect to the worker in debug mode");
 
     let playback_result = debug_executor
-        .playback(first_boundary, None, 3)
+        .playback(first_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -672,7 +674,6 @@ async fn test_playback_with_overrides(
         .playback(
             shopping_cart_execution_result.last_add_item_boundary,
             Some(vec![oplog_overrides]),
-            3,
         )
         .await
         .expect("Failed to playback the worker in debug mode");

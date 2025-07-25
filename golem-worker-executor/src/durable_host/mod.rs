@@ -1548,8 +1548,27 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
+        refresh_replay_target: bool,
     ) -> Result<RetryDecision, WorkerExecutorError> {
         let mut number_of_replayed_functions = 0;
+
+        if refresh_replay_target {
+            let new_target = store
+                .as_context()
+                .data()
+                .durable_ctx()
+                .state
+                .oplog
+                .current_oplog_index()
+                .await;
+            store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .state
+                .replay_state
+                .set_replay_target(new_target);
+        }
 
         let resume_result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay();
@@ -1828,7 +1847,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         }
                         UpdateDescription::Automatic { target_version, .. } => {
                             // snapshot update will be succeeded as part of the replay.
-                            let result = Self::resume_replay(store, instance).await;
+                            let result = Self::resume_replay(store, instance, false).await;
                             record_resume_worker(start.elapsed());
 
                             match result {
@@ -1887,7 +1906,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     }
                 }
                 None => {
-                    let result = Self::resume_replay(store, instance).await;
+                    let result = Self::resume_replay(store, instance, false).await;
                     record_resume_worker(start.elapsed());
 
                     result

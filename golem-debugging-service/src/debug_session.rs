@@ -51,7 +51,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::ops::Deref;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 // A shared debug session which will be internally used by the custom oplog service
@@ -172,10 +172,17 @@ impl PlaybackOverridesInternal {
     }
     pub fn from_playback_override(
         playback_overrides: Vec<PlaybackOverride>,
+        current_index: OplogIndex,
     ) -> Result<Self, String> {
         let mut overrides = HashMap::new();
         for override_data in playback_overrides {
             let oplog_index = override_data.index;
+            if oplog_index <= current_index {
+                return Err(
+                    "Cannot create overrides for oplogs indices that are in the past".to_string(),
+                );
+            }
+
             let public_oplog_entry: PublicOplogEntry = override_data.oplog;
             let oplog_entry = get_oplog_entry_from_public_oplog_entry(public_oplog_entry)?;
             overrides.insert(oplog_index, oplog_entry);
@@ -223,24 +230,6 @@ impl ActiveSessionData {
             cloud_namespace,
             worker_id,
         }
-    }
-}
-
-#[derive(Default)]
-pub struct ActiveSession {
-    pub active_session: Arc<RwLock<Option<ActiveSessionData>>>,
-}
-
-impl ActiveSession {
-    pub async fn set_active_session(&self, worker_id: WorkerId, cloud_namespace: Namespace) {
-        let mut active_session = self.active_session.write().unwrap();
-        *active_session = Some(ActiveSessionData::new(cloud_namespace, worker_id));
-    }
-
-    pub async fn get_active_session(&self) -> Option<ActiveSessionData> {
-        let active_session = &self.active_session.read().unwrap();
-        let active_session = active_session.as_ref();
-        active_session.cloned()
     }
 }
 

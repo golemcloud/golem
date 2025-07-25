@@ -108,6 +108,10 @@ impl ReplayState {
         self.replay_target.get()
     }
 
+    pub fn set_replay_target(&mut self, new_target: OplogIndex) {
+        self.replay_target.set(new_target)
+    }
+
     pub async fn skipped_regions(&self) -> DeletedRegions {
         let internal = self.internal.read().await;
         internal.skipped_regions.clone()
