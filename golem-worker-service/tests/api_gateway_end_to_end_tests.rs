@@ -34,7 +34,7 @@ use golem_worker_service::gateway_security::{Provider, SecurityScheme, SecurityS
 use golem_worker_service::service::gateway::api_definition_validator::ValidationErrors;
 use golem_worker_service::service::gateway::{ComponentView, ConversionContext};
 use golem_worker_service::{api, gateway_api_definition};
-use http::header::{LOCATION, ORIGIN};
+use http::header::{HOST, LOCATION, ORIGIN};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
@@ -65,6 +65,7 @@ async fn execute(
         api_specification,
         &internal::get_component_metadata(),
         &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .expect("Failed to compile API definition");
 
@@ -73,6 +74,7 @@ async fn execute(
         internal::get_test_file_server_binding_handler(),
         Arc::new(DefaultAuthCallBack),
         internal::get_test_http_handler_binding_handler(),
+        internal::get_test_swagger_binding_handler(),
         Arc::new(internal::TestApiDefinitionLookup::new(compiled)),
         Arc::clone(session_store),
         Arc::new(test_identity_provider.clone()),
@@ -96,8 +98,15 @@ impl ConversionContext for TestConversionContext {
             Err("component not found".to_string())
         }
     }
-    async fn component_by_id(&self, _component_id: &ComponentId) -> Result<ComponentView, String> {
-        unimplemented!()
+    async fn component_by_id(&self, component_id: &ComponentId) -> Result<ComponentView, String> {
+        match component_id.to_string().as_str() {
+            "0b6d9cd8-f373-4e29-8a5a-548e61b868a5" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("test-component".to_string()),
+                latest_version: 0,
+            }),
+            _ => Err("component not found".to_string()),
+        }
     }
 }
 
@@ -317,6 +326,7 @@ async fn test_api_def_with_invalid_path_lookup() {
         &api_specification,
         &internal::get_component_metadata(),
         &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
@@ -347,6 +357,7 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
         &api_specification1,
         &internal::get_component_metadata(),
         &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
@@ -368,6 +379,7 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
         &api_specification2,
         &internal::get_component_metadata(),
         &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
@@ -439,6 +451,7 @@ async fn test_api_def_with_invalid_query_lookup() {
         &api_specification,
         &internal::get_component_metadata(),
         &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
@@ -2466,6 +2479,7 @@ mod internal {
         CompiledHttpApiDefinition, ComponentDetails, ComponentMetadataDictionary,
     };
     use golem_worker_service::gateway_api_deployment::ApiSiteString;
+    use golem_worker_service::gateway_binding::SwaggerUiBinding;
     use golem_worker_service::gateway_execution::api_definition_lookup::{
         ApiDefinitionLookupError, HttpApiDefinitionsLookup,
     };
@@ -2477,6 +2491,9 @@ mod internal {
     };
     use golem_worker_service::gateway_execution::http_handler_binding_handler::{
         HttpHandlerBindingHandler, HttpHandlerBindingResult,
+    };
+    use golem_worker_service::gateway_execution::swagger_binding_handler::{
+        SwaggerBindingHandler, SwaggerBindingResult, SwaggerBindingSuccess,
     };
     use golem_worker_service::gateway_execution::WorkerDetails;
     use golem_worker_service::gateway_execution::{
@@ -3103,6 +3120,25 @@ mod internal {
 
     pub fn get_session_store_with_zero_ttl() -> GatewaySessionStore {
         Arc::new(NoopTestSessionBackend)
+    }
+
+    struct TestSwaggerBindingHandler {}
+    // Create a test swagger binding handler which outputs a static html page
+    #[async_trait]
+    impl SwaggerBindingHandler for TestSwaggerBindingHandler {
+        async fn handle_swagger_binding_request(
+            &self,
+            _authority: &str,
+            _swagger_binding: &SwaggerUiBinding,
+        ) -> SwaggerBindingResult {
+            Ok(SwaggerBindingSuccess {
+                html_content: "<html><body>Test Swagger UI</body></html>".to_string(),
+            })
+        }
+    }
+
+    pub fn get_test_swagger_binding_handler() -> Arc<dyn SwaggerBindingHandler + Sync + Send> {
+        Arc::new(TestSwaggerBindingHandler {})
     }
 }
 
@@ -3750,4 +3786,80 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
 
         cookies
     }
+}
+
+#[test]
+async fn test_swagger_ui_binding() {
+    // Create a Swagger UI API definition
+    let api_specification = get_api_def_with_swagger_ui("/swagger-ui").await;
+
+    // Create a request to the Swagger UI endpoint
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static("localhost:8080"));
+    let api_request = get_gateway_request("/swagger-ui", None, &headers, Value::Null);
+
+    // Create a session store
+    let session_store = internal::get_session_store();
+
+    // Execute the request
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    // Verify response status code
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Get response body
+    let body = match response.into_body().into_bytes().await {
+        Ok(b) => b,
+        Err(_) => panic!("Failed to read body"),
+    };
+    let html_content = String::from_utf8(body.to_vec()).unwrap();
+
+    // Verify the HTML contains the expected Swagger UI content
+    // The test checks whether the static html page
+    // is properly returned by the swagger binding handler
+    assert!(html_content.contains("<html><body>Test Swagger UI</body></html>"));
+}
+
+// Helper function to create an API definition with a Swagger UI binding
+async fn get_api_def_with_swagger_ui(path_pattern: &str) -> HttpApiDefinition {
+    let yaml_string = format!(
+        r#"
+          id: api-docs
+          version: 0.0.1
+          createdAt: 2024-08-21T07:42:15.696Z
+          routes:
+          - method: Get
+            path: {path_pattern}
+            binding:
+              bindingType: swagger-ui
+        "#,
+    );
+
+    // Parse the YAML into an API definition request
+    let http_api_definition_request: api::dto::HttpApiDefinitionRequest =
+        serde_yaml::from_str(yaml_string.as_str()).unwrap();
+
+    // Convert to core request
+    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
+        http_api_definition_request
+            .into_core(&TestConversionContext.boxed())
+            .await
+            .unwrap();
+
+    // Create the API definition
+    let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
+    HttpApiDefinition::from_http_api_definition_request(
+        &test_namespace(),
+        core_request,
+        create_at,
+        &security::get_test_security_scheme_service(TestIdentityProvider::default()),
+    )
+    .await
+    .unwrap()
 }

@@ -44,3 +44,8 @@ message DeleteApiDefinitionRequest {
 }
 
 message GetAllApiDefinitionsRequest {}
+
+message ExportOpenapiSpecRequest {
+  ApiDefinitionId api_definition_id = 1;
+  string version = 2;
+}

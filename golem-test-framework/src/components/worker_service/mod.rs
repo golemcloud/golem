@@ -34,8 +34,10 @@ use golem_api_grpc::proto::golem::apidefinition::api_definition::Definition;
 use golem_api_grpc::proto::golem::apidefinition::v1::{
     api_definition_request, create_api_definition_request, update_api_definition_request,
     ApiDefinitionRequest, CreateApiDefinitionRequest, DeleteApiDefinitionRequest,
-    GetApiDefinitionRequest, GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
+    ExportOpenapiSpecRequest, GetApiDefinitionRequest, GetApiDefinitionVersionsRequest,
+    UpdateApiDefinitionRequest,
 };
+use golem_api_grpc::proto::golem::apidefinition::ExportOpenApiSpec;
 use golem_api_grpc::proto::golem::apidefinition::{
     static_binding, ApiDefinition, ApiDefinitionId, CorsPreflight, GatewayBinding,
     GatewayBindingType, HttpApiDefinition, HttpMethod, HttpRoute, StaticBinding,
@@ -84,7 +86,8 @@ use golem_client::api::ApiSecurityClientLive as ApiSecurityServiceHttpClientLive
 use golem_client::api::WorkerClient as WorkerServiceHttpClient;
 use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
 use golem_client::model::{
-    ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, SecuritySchemeData,
+    ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, OpenApiHttpApiDefinitionResponse,
+    SecuritySchemeData,
 };
 use golem_client::{Context, Security};
 use golem_common::model::ProjectId;
@@ -1219,6 +1222,30 @@ pub trait WorkerService: Send + Sync {
         }
     }
 
+    async fn export_openapi_spec(
+        &self,
+        token: &Uuid,
+        project_id: &ProjectId,
+        request: ExportOpenapiSpecRequest,
+    ) -> crate::Result<ExportOpenApiSpec> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("export_openapi_spec"),
+            GolemClientProtocol::Http => {
+                let client = self.api_definition_http_client(token).await;
+
+                let result = client
+                    .export_definition(
+                        &project_id.0,
+                        &request.api_definition_id.unwrap().value,
+                        &request.version,
+                    )
+                    .await?;
+
+                Ok(http_export_openapi_spec_to_grpc(result))
+            }
+        }
+    }
+
     async fn create_or_update_api_deployment(
         &self,
         token: &Uuid,
@@ -1736,6 +1763,9 @@ async fn http_api_definition_to_grpc(
                                 golem_client::model::GatewayBindingType::HttpHandler => {
                                     GatewayBindingType::HttpHandler
                                 }
+                                golem_client::model::GatewayBindingType::SwaggerUi => {
+                                    GatewayBindingType::SwaggerUi
+                                }
                                 golem_client::model::GatewayBindingType::CorsPreflight => {
                                     GatewayBindingType::CorsPreflight
                                 }
@@ -1811,6 +1841,9 @@ async fn grpc_api_definition_request_to_http(
                                         GatewayBindingType::FileServer => {
                                             golem_client::model::GatewayBindingType::FileServer
                                         }
+                                        GatewayBindingType::SwaggerUi => {
+                                            golem_client::model::GatewayBindingType::SwaggerUi
+                                        }
                                         GatewayBindingType::CorsPreflight => {
                                             golem_client::model::GatewayBindingType::CorsPreflight
                                         }
@@ -1871,6 +1904,16 @@ fn to_http_rib_expr(expr: Expr) -> String {
 
 fn not_available_on_grpc_api<T>(endpoint: &str) -> crate::Result<T> {
     Err(anyhow!("not available on GRPC API: {endpoint}"))
+}
+
+fn http_export_openapi_spec_to_grpc(
+    response: OpenApiHttpApiDefinitionResponse,
+) -> ExportOpenApiSpec {
+    ExportOpenApiSpec {
+        id: Some(ApiDefinitionId { value: response.id }),
+        version: response.version,
+        openapi_yaml: response.openapi_yaml,
+    }
 }
 
 #[async_trait]

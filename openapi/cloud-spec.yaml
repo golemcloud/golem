@@ -3163,6 +3163,7 @@ components:
       - CreatePluginDefinition
       - UpdatePluginDefinition
       - DeletePluginDefinition
+      - ExportApiDefinition
     ProjectPolicy:
       type: object
       title: ProjectPolicy
