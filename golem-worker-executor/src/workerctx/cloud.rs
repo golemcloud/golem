@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::LogEventEmitBehaviour;
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{
@@ -635,6 +636,8 @@ impl InvocationContextManagement for Context {
 #[async_trait]
 impl WorkerCtx for Context {
     type PublicState = PublicDurableWorkerState<Context>;
+
+    const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour = LogEventEmitBehaviour::LiveOnly;
 
     async fn create(
         account_id: AccountId,

@@ -14,19 +14,20 @@
 
 use crate::auth::AuthService;
 use crate::debug_context::DebugContext;
-use crate::debug_session::{ActiveSession, PlaybackOverridesInternal};
+use crate::debug_session::PlaybackOverridesInternal;
 use crate::debug_session::{DebugSessionData, DebugSessionId, DebugSessions};
 use crate::model::params::*;
 use async_trait::async_trait;
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use gethostname::gethostname;
 use golem_common::base_model::ProjectId;
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::oplog::Oplog;
+use golem_worker_executor::services::worker_event::WorkerEventReceiver;
 use golem_worker_executor::services::{
     All, HasConfig, HasExtraDeps, HasOplog, HasShardManagerService, HasShardService,
     HasWorkerForkService, HasWorkerService,
@@ -44,8 +45,7 @@ pub trait DebugService: Send + Sync {
         &self,
         authentication_context: &AuthCtx,
         source_worker_id: &WorkerId,
-        active_session: Arc<ActiveSession>,
-    ) -> Result<ConnectResult, DebugServiceError>;
+    ) -> Result<(ConnectResult, OwnedWorkerId, Namespace, WorkerEventReceiver), DebugServiceError>;
 
     async fn playback(
         &self,
@@ -168,8 +168,8 @@ impl DebugServiceError {
 }
 
 pub struct DebugServiceDefault {
-    worker_auth_service: Arc<dyn AuthService + Sync + Send>,
-    debug_session: Arc<dyn DebugSessions + Sync + Send>,
+    worker_auth_service: Arc<dyn AuthService>,
+    debug_session: Arc<dyn DebugSessions>,
     all: All<DebugContext>,
 }
 
@@ -193,7 +193,7 @@ impl DebugServiceDefault {
         worker_id: WorkerId,
         account_id: &AccountId,
         project_id: &ProjectId,
-    ) -> Result<WorkerMetadata, DebugServiceError> {
+    ) -> Result<(WorkerMetadata, WorkerEventReceiver), DebugServiceError> {
         let owned_worker_id = OwnedWorkerId::new(project_id, &worker_id);
 
         // This get will only look at the oplogs to see if a worker presumably exists in the real executor.
@@ -244,7 +244,9 @@ impl DebugServiceDefault {
                 .get_metadata()
                 .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
 
-            Ok(metadata)
+            let receiver = worker.event_service().receiver();
+
+            Ok((metadata, receiver))
         } else {
             Err(DebugServiceError::internal(
                 "Worker doesn't exist in live/real worker executor for it to connect to"
@@ -278,22 +280,15 @@ impl DebugServiceDefault {
                 &self.all,
                 account_id,
                 owned_worker_id,
-                debug_session_data
-                    .worker_metadata
-                    .as_ref()
-                    .map(|m| m.args.clone()),
-                debug_session_data
-                    .worker_metadata
-                    .as_ref()
-                    .map(|m| m.env.clone()),
-                debug_session_data
-                    .worker_metadata
-                    .as_ref()
-                    .map(|m| m.last_known_status.component_version),
-                debug_session_data
-                    .worker_metadata
-                    .as_ref()
-                    .and_then(|m| m.parent.clone()),
+                Some(debug_session_data.worker_metadata.args.clone()),
+                Some(debug_session_data.worker_metadata.env.clone()),
+                Some(
+                    debug_session_data
+                        .worker_metadata
+                        .last_known_status
+                        .component_version,
+                ),
+                debug_session_data.worker_metadata.parent.clone(),
             )
             .await
             .map_err(|e| {
@@ -408,71 +403,69 @@ impl DebugServiceDefault {
             }
         }
 
-        if let Some(worker_metadata) = session_data.worker_metadata {
-            // At this point, the worker do exist after the connect
-            // however, the debug session is updated with a different target index
-            // allowing replaying to (potentially) stop at this index
-            let worker = Worker::get_or_create_suspended(
-                &self.all,
-                account_id,
-                &owned_worker_id,
-                Some(worker_metadata.args.clone()),
-                Some(worker_metadata.env.clone()),
-                Some(worker_metadata.last_known_status.component_version),
-                worker_metadata.parent.clone(),
+        // At this point, the worker do exist after the connect
+        // however, the debug session is updated with a different target index
+        // allowing replaying to (potentially) stop at this index
+        let worker = Worker::get_or_create_suspended(
+            &self.all,
+            account_id,
+            &owned_worker_id,
+            Some(session_data.worker_metadata.args.clone()),
+            Some(session_data.worker_metadata.env.clone()),
+            Some(
+                session_data
+                    .worker_metadata
+                    .last_known_status
+                    .component_version,
+            ),
+            session_data.worker_metadata.parent.clone(),
+        )
+        .await
+        .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+
+        // We select a new target index based on the given target index
+        // such that it is always in an invocation boundary
+        let new_target_index = if ensure_invocation_boundary {
+            Self::target_index_at_invocation_boundary(worker_id, &worker, target_index).await?
+        } else {
+            target_index
+        };
+
+        let mut playback_overrides_validated = None;
+
+        if let Some(overrides) = playback_overrides {
+            playback_overrides_validated =
+                Some(Self::validate_playback_overrides(worker_id.clone(), overrides).await?);
+        }
+
+        // We update the session with the new target index
+        // before starting the worker
+        self.debug_session
+            .update(
+                debug_session_id.clone(),
+                new_target_index,
+                playback_overrides_validated,
             )
+            .await;
+
+        if existing_target_oplog_index.is_some() {
+            worker.stop().await;
+        }
+
+        Worker::start_if_needed(worker.clone())
             .await
             .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
 
-            // We select a new target index based on the given target index
-            // such that it is always in an invocation boundary
-            let new_target_index = if ensure_invocation_boundary {
-                Self::target_index_at_invocation_boundary(worker_id, &worker, target_index).await?
-            } else {
-                target_index
-            };
+        tokio::time::sleep(timeout).await;
 
-            let mut playback_overrides_validated = None;
+        let last_index = self
+            .debug_session
+            .get(&debug_session_id)
+            .await
+            .map(|d| d.current_oplog_index)
+            .unwrap_or(OplogIndex::INITIAL);
 
-            if let Some(overrides) = playback_overrides {
-                playback_overrides_validated =
-                    Some(Self::validate_playback_overrides(worker_id.clone(), overrides).await?);
-            }
-
-            // We update the session with the new target index
-            // before starting the worker
-            self.debug_session
-                .update(
-                    debug_session_id.clone(),
-                    new_target_index,
-                    playback_overrides_validated,
-                )
-                .await;
-
-            if existing_target_oplog_index.is_some() {
-                worker.stop().await;
-            }
-
-            Worker::start_if_needed(worker.clone())
-                .await
-                .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
-
-            tokio::time::sleep(timeout).await;
-
-            let last_index = self
-                .debug_session
-                .get(&debug_session_id)
-                .await
-                .map(|d| d.current_oplog_index)
-                .unwrap_or(OplogIndex::INITIAL);
-
-            Ok(last_index)
-        } else {
-            Err(DebugServiceError::internal(
-                "No initial metadata found".to_string(),
-                Some(worker_id.clone()),
-            ))
-        }
+        Ok(last_index)
     }
 
     pub async fn validate_playback_overrides(
@@ -543,8 +536,8 @@ impl DebugService for DebugServiceDefault {
         &self,
         auth_ctx: &AuthCtx,
         worker_id: &WorkerId,
-        active_session: Arc<ActiveSession>,
-    ) -> Result<ConnectResult, DebugServiceError> {
+    ) -> Result<(ConnectResult, OwnedWorkerId, Namespace, WorkerEventReceiver), DebugServiceError>
+    {
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(
@@ -566,13 +559,8 @@ impl DebugService for DebugServiceDefault {
             ));
         }
 
-        // Ensuring active session is set with the fundamental details of worker_id that is going to be debugged
-        active_session
-            .set_active_session(owned_worker_id.worker_id.clone(), namespace.clone())
-            .await;
-
         // This simply migrates the worker to the debug mode, but it doesn't start the worker
-        let metadata = self
+        let (worker_metadata, worker_event_receiver) = self
             .connect_worker(
                 worker_id.clone(),
                 &namespace.account_id,
@@ -582,9 +570,9 @@ impl DebugService for DebugServiceDefault {
 
         self.debug_session
             .insert(
-                DebugSessionId::new(owned_worker_id),
+                debug_session_id,
                 DebugSessionData {
-                    worker_metadata: Some(metadata),
+                    worker_metadata,
                     target_oplog_index: None,
                     playback_overrides: PlaybackOverridesInternal::empty(),
                     current_oplog_index: OplogIndex::NONE,
@@ -592,11 +580,18 @@ impl DebugService for DebugServiceDefault {
             )
             .await;
 
-        Ok(ConnectResult {
+        let connect_result = ConnectResult {
             worker_id: worker_id.clone(),
             success: true,
             message: format!("Worker {worker_id} connected to namespace {namespace}"),
-        })
+        };
+
+        Ok((
+            connect_result,
+            owned_worker_id,
+            namespace,
+            worker_event_receiver,
+        ))
     }
 
     async fn playback(

@@ -45,7 +45,7 @@ impl TestDslDebugMode for DebugWorkerExecutorClient {
             )
             .await?;
 
-        self.read_jrpc_msg(id).await
+        self.read_jrpc_response(id).await
     }
 
     async fn playback(
@@ -66,7 +66,7 @@ impl TestDslDebugMode for DebugWorkerExecutorClient {
             )
             .await?;
 
-        self.read_jrpc_msg(id).await
+        self.read_jrpc_response(id).await
     }
 
     async fn rewind(
@@ -85,7 +85,7 @@ impl TestDslDebugMode for DebugWorkerExecutorClient {
             )
             .await?;
 
-        self.read_jrpc_msg(id).await
+        self.read_jrpc_response(id).await
     }
 
     async fn fork(
@@ -103,13 +103,13 @@ impl TestDslDebugMode for DebugWorkerExecutorClient {
             )
             .await?;
 
-        self.read_jrpc_msg(id).await
+        self.read_jrpc_response(id).await
     }
 
     async fn current_index(&mut self) -> anyhow::Result<OplogIndex> {
         let id = self.send_jrpc_msg("current_oplog_index", ()).await?;
 
-        let result = self.read_jrpc_msg(id).await?;
+        let result = self.read_jrpc_response(id).await?;
 
         Ok(result)
     }
