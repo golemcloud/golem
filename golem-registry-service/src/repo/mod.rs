@@ -22,6 +22,8 @@ pub mod application;
 pub mod component;
 pub mod deployment;
 pub mod environment;
+pub mod http_api_definition;
+pub mod http_api_deployment;
 pub mod plan;
 
 // Model for SQL records and fields

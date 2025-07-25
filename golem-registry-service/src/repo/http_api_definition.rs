@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::component::{
-    ComponentFileRecord, ComponentRecord, ComponentRevisionRecord,
-};
+use crate::repo::model::http_api::{HttpApiDefinitionRecord, HttpApiDefinitionRevisionRecord};
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -31,35 +29,35 @@ use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 
 #[async_trait]
-pub trait ComponentRepo: Send + Sync {
+pub trait HttpApiDefinitionRepo: Send + Sync {
     async fn create(
         &self,
         environment_id: &Uuid,
         name: &str,
-        revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentRevisionRecord>>;
+        revision: HttpApiDefinitionRevisionRecord,
+    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>>;
 
     async fn update(
         &self,
         current_revision_id: i64,
-        revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentRevisionRecord>>;
+        revision: HttpApiDefinitionRevisionRecord,
+    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>>;
 
     async fn delete(
         &self,
         user_account_id: &Uuid,
-        component_id: &Uuid,
+        http_api_definition_id: &Uuid,
         current_revision_id: i64,
     ) -> repo::Result<bool>;
 }
 
-pub struct LoggedComponentRepo<Repo: ComponentRepo> {
+pub struct LoggedHttpApiDefinitionRepo<Repo: HttpApiDefinitionRepo> {
     repo: Repo,
 }
 
-static SPAN_NAME: &str = "component repository";
+static SPAN_NAME: &str = "http_api_definition repository";
 
-impl<Repo: ComponentRepo> LoggedComponentRepo<Repo> {
+impl<Repo: HttpApiDefinitionRepo> LoggedHttpApiDefinitionRepo<Repo> {
     pub fn new(repo: Repo) -> Self {
         Self { repo }
     }
@@ -68,19 +66,19 @@ impl<Repo: ComponentRepo> LoggedComponentRepo<Repo> {
         info_span!(SPAN_NAME, environment_id = %environment_id, name)
     }
 
-    fn span_component_id(component_id: &Uuid) -> Span {
-        info_span!(SPAN_NAME, component_id = %component_id)
+    fn span_http_api_definition_id(http_api_definition_id: &Uuid) -> Span {
+        info_span!(SPAN_NAME, http_api_definition_id = %http_api_definition_id)
     }
 }
 
 #[async_trait]
-impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
+impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinitionRepo<Repo> {
     async fn create(
         &self,
         environment_id: &Uuid,
         name: &str,
-        revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentRevisionRecord>> {
+        revision: HttpApiDefinitionRevisionRecord,
+    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
         self.repo
             .create(environment_id, name, revision)
             .instrument(Self::span_name(environment_id, name))
@@ -90,10 +88,11 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn update(
         &self,
         current_revision_id: i64,
-        revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentRevisionRecord>> {
-        let span = Self::span_component_id(&revision.component_id);
-        self.update(current_revision_id, revision)
+        revision: HttpApiDefinitionRevisionRecord,
+    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+        let span = Self::span_http_api_definition_id(&revision.http_api_definition_id);
+        self.repo
+            .update(current_revision_id, revision)
             .instrument(span)
             .await
     }
@@ -101,22 +100,23 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn delete(
         &self,
         user_account_id: &Uuid,
-        component_id: &Uuid,
+        http_api_definition_id: &Uuid,
         current_revision_id: i64,
     ) -> repo::Result<bool> {
-        self.delete(user_account_id, component_id, current_revision_id)
-            .instrument(Self::span_component_id(component_id))
+        self.repo
+            .delete(user_account_id, http_api_definition_id, current_revision_id)
+            .instrument(Self::span_http_api_definition_id(http_api_definition_id))
             .await
     }
 }
 
-pub struct DbComponentRepo<DBP: Pool> {
+pub struct DbHttpApiDefinitionRepo<DBP: Pool> {
     db_pool: DBP,
 }
 
 static METRICS_SVC_NAME: &str = "environment";
 
-impl<DBP: Pool> DbComponentRepo<DBP> {
+impl<DBP: Pool> DbHttpApiDefinitionRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
     }
@@ -139,29 +139,29 @@ impl<DBP: Pool> DbComponentRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
-impl ComponentRepo for DbComponentRepo<PostgresPool> {
+impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
     async fn create(
         &self,
         environment_id: &Uuid,
         name: &str,
-        revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentRevisionRecord>> {
+        revision: HttpApiDefinitionRevisionRecord,
+    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
         let environment_id = *environment_id;
         let name = name.to_owned();
         let revision = revision.ensure_first();
 
-        let result: repo::Result<ComponentRevisionRecord> = self
+        let result: repo::Result<HttpApiDefinitionRevisionRecord> = self
             .with_tx("create", |tx| {
                 async move {
                     tx.execute(
                         sqlx::query(indoc! { r#"
-                            INSERT INTO components
-                            (component_id, name, environment_id,
+                            INSERT INTO http_api_definitions
+                            (http_api_definition_id, name, environment_id,
                                 created_at, updated_at, deleted_at, modified_by,
                                 current_revision_id)
                             VALUES ($1, $2, $3, $4, $5, NULL, $6, 0)
                         "# })
-                        .bind(revision.component_id)
+                        .bind(revision.http_api_definition_id)
                         .bind(&name)
                         .bind(environment_id)
                         .bind(&revision.audit.created_at)
@@ -186,10 +186,10 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn update(
         &self,
         current_revision_id: i64,
-        revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentRevisionRecord>> {
-        let Some(_checked_component) = self
-            .check_current_revision(&revision.component_id, current_revision_id)
+        revision: HttpApiDefinitionRevisionRecord,
+    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+        let Some(_checked_http_api_definition) = self
+            .check_current_revision(&revision.http_api_definition_id, current_revision_id)
             .await?
         else {
             return Ok(None);
@@ -197,22 +197,22 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
 
         // TODO: if env requires check version name uniqueness (but comparing only to deployed ones!)
 
-        let result: repo::Result<ComponentRevisionRecord> = self
+        let result: repo::Result<HttpApiDefinitionRevisionRecord> = self
             .with_tx("update", |tx| {
                 async move {
-                    let revision: ComponentRevisionRecord =
+                    let revision: HttpApiDefinitionRevisionRecord =
                         Self::insert_revision(tx, revision.ensure_new(current_revision_id)).await?;
 
                     tx.execute(
                         sqlx::query(indoc! { r#"
-                            UPDATE components
+                            UPDATE http_api_definitions
                             SET updated_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE component_id = $4
+                            WHERE http_api_definition_id = $4
                         "#})
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by)
                         .bind(revision.revision_id)
-                        .bind(revision.component_id),
+                        .bind(revision.http_api_definition_id),
                     )
                     .await?;
 
@@ -232,14 +232,14 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn delete(
         &self,
         user_account_id: &Uuid,
-        component_id: &Uuid,
+        http_api_definition_id: &Uuid,
         current_revision_id: i64,
     ) -> repo::Result<bool> {
         let user_account_id = *user_account_id;
-        let component_id = *component_id;
+        let http_api_definition_id = *http_api_definition_id;
 
         let Some(_checked_env) = self
-            .check_current_revision(&component_id, current_revision_id)
+            .check_current_revision(&http_api_definition_id, current_revision_id)
             .await?
         else {
             return Ok(false);
@@ -248,11 +248,11 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         let result: repo::Result<()> = self
             .with_tx("delete", |tx| {
                 async move {
-                    let revision: ComponentRevisionRecord = Self::insert_revision(
+                    let revision: HttpApiDefinitionRevisionRecord = Self::insert_revision(
                         tx,
-                        ComponentRevisionRecord::deletion(
+                        HttpApiDefinitionRevisionRecord::deletion(
                             user_account_id,
-                            component_id,
+                            http_api_definition_id,
                             current_revision_id,
                         ),
                     )
@@ -260,14 +260,14 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
 
                     tx.execute(
                         sqlx::query(indoc! { r#"
-                            UPDATE components
+                            UPDATE http_api_definitions
                             SET deleted_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE component_id = $4
+                            WHERE http_api_definition_id = $4
                         "#})
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by)
                         .bind(revision.revision_id)
-                        .bind(revision.component_id),
+                        .bind(revision.http_api_definition_id),
                     )
                     .await?;
 
@@ -286,48 +286,43 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
 }
 
 #[async_trait]
-trait ComponentRepoInternal: ComponentRepo {
+trait HttpApiDefinitionRepoInternal: HttpApiDefinitionRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
     async fn check_current_revision(
         &self,
-        component_id: &Uuid,
+        http_api_definition_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<Option<ComponentRecord>>;
+    ) -> repo::Result<Option<HttpApiDefinitionRecord>>;
 
     async fn insert_revision(
         tx: &mut Self::Tx,
-        revision: ComponentRevisionRecord,
-    ) -> repo::Result<ComponentRevisionRecord>;
-
-    async fn insert_file(
-        tx: &mut Self::Tx,
-        file: ComponentFileRecord,
-    ) -> repo::Result<ComponentFileRecord>;
+        revision: HttpApiDefinitionRevisionRecord,
+    ) -> repo::Result<HttpApiDefinitionRevisionRecord>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
-impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
+impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
     async fn check_current_revision(
         &self,
-        component_id: &Uuid,
+        http_api_definition_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<Option<ComponentRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionRecord>> {
         self.with_ro("check_current_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT component_id, name, environment_id,
+                    SELECT http_api_definition_id, name, environment_id,
                            created_at, updated_at, deleted_at, modified_by,
                            current_revision_id
-                    FROM components
-                    WHERE component_id = $1 AND current_revision_id = $2 and deleted_at IS NULL
+                    FROM http_api_definitions
+                    WHERE http_api_definition_id = $1 AND current_revision_id = $2 and deleted_at IS NULL
                 "#})
-                .bind(component_id)
+                .bind(http_api_definition_id)
                 .bind(current_revision_id),
             )
             .await
@@ -335,71 +330,26 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
 
     async fn insert_revision(
         tx: &mut Self::Tx,
-        revision: ComponentRevisionRecord,
-    ) -> repo::Result<ComponentRevisionRecord> {
-        let files = revision.files;
-
-        let mut revision: ComponentRevisionRecord = {
-            tx.fetch_one_as(
-                sqlx::query_as(indoc! { r#"
-                    INSERT INTO component_revisions
-                    (component_id, revision_id, version, hash,
-                        created_at, created_by, deleted,
-                        component_type,size, metadata, env, status,
-                        object_store_key, binary_hash, transformed_object_store_key)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                    RETURNING component_id, revision_id, version, hash,
-                        created_at, created_by, deleted,
-                        component_type,size, metadata, env, status,
-                        object_store_key, binary_hash, transformed_object_store_key
-                "# })
-                .bind(revision.component_id)
-                .bind(revision.revision_id)
-                .bind(revision.version)
-                .bind(revision.hash)
-                .bind_deletable_revision_audit(revision.audit)
-                .bind(revision.component_type)
-                .bind(revision.size)
-                .bind(revision.metadata)
-                .bind(revision.env)
-                .bind(revision.status)
-                .bind(revision.object_store_key)
-                .bind(revision.binary_hash)
-                .bind(revision.transformed_object_store_key),
-            )
-            .await?
-        };
-
-        revision.files = {
-            let mut inserted_files = Vec::<ComponentFileRecord>::with_capacity(files.len());
-            for file in files {
-                inserted_files.push(Self::insert_file(tx, file).await?);
-            }
-            inserted_files
-        };
-
-        revision.files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
-
-        Ok(revision)
-    }
-
-    async fn insert_file(
-        tx: &mut Self::Tx,
-        file: ComponentFileRecord,
-    ) -> repo::Result<ComponentFileRecord> {
+        revision: HttpApiDefinitionRevisionRecord,
+    ) -> repo::Result<HttpApiDefinitionRevisionRecord> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
-                INSERT INTO component_files
-                (component_id, revision_id, file_path, hash, created_at, created_by, file_key, file_permissions)
+                INSERT INTO http_api_definition_revisions
+                (http_api_definition_id, revision_id, version, hash,
+                    created_at, created_by, deleted,
+                    definition)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            "#})
-                .bind(file.component_id)
-                .bind(file.revision_id)
-                .bind(file.file_path)
-                .bind(file.hash)
-                .bind_revision_audit(file.audit)
-                .bind(file.file_key)
-                .bind(file.file_permissions)
-        ).await
+                RETURNING http_api_definition_id, revision_id, version, hash,
+                    created_at, created_by, deleted,
+                    definition
+            "# })
+            .bind(revision.http_api_definition_id)
+            .bind(revision.revision_id)
+            .bind(revision.version)
+            .bind(revision.hash)
+            .bind_deletable_revision_audit(revision.audit)
+            .bind(revision.definition),
+        )
+        .await
     }
 }

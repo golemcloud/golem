@@ -14,7 +14,9 @@
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use blake3;
 use sqlx::FromRow;
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -38,6 +40,39 @@ pub struct HttpApiDefinitionRevisionRecord {
     pub definition: Vec<u8>, // TODO: model
 }
 
+impl HttpApiDefinitionRevisionRecord {
+    pub fn ensure_first(self) -> Self {
+        Self {
+            revision_id: 0,
+            audit: self.audit.ensure_new(),
+            ..self
+        }
+    }
+
+    pub fn ensure_new(self, current_revision_id: i64) -> Self {
+        Self {
+            revision_id: current_revision_id + 1,
+            audit: self.audit.ensure_new(),
+            ..self
+        }
+    }
+
+    pub fn deletion(
+        created_by: Uuid,
+        http_api_definition_id: Uuid,
+        current_revision_id: i64,
+    ) -> Self {
+        Self {
+            http_api_definition_id,
+            revision_id: current_revision_id + 1,
+            version: "".to_string(),
+            hash: blake3::hash("".as_bytes()).into(),
+            audit: DeletableRevisionAuditFields::deletion(created_by),
+            definition: vec![],
+        }
+    }
+}
+
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDeploymentRecord {
     pub http_api_deployment_id: Uuid,
@@ -57,6 +92,41 @@ pub struct HttpApiDeploymentRevisionRecord {
     pub hash: Option<SqlBlake3Hash>,
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
+
+    #[sqlx(skip)]
+    pub http_api_definitions: BTreeSet<Uuid>,
+}
+
+impl HttpApiDeploymentRevisionRecord {
+    pub fn ensure_first(self) -> Self {
+        Self {
+            revision_id: 0,
+            audit: self.audit.ensure_new(),
+            ..self
+        }
+    }
+
+    pub fn ensure_new(self, current_revision_id: i64) -> Self {
+        Self {
+            revision_id: current_revision_id + 1,
+            audit: self.audit.ensure_new(),
+            ..self
+        }
+    }
+
+    pub fn deletion(
+        created_by: Uuid,
+        http_api_deployment_id: Uuid,
+        current_revision_id: i64,
+    ) -> Self {
+        Self {
+            http_api_deployment_id,
+            revision_id: current_revision_id + 1,
+            hash: None,
+            audit: DeletableRevisionAuditFields::deletion(created_by),
+            http_api_definitions: BTreeSet::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
