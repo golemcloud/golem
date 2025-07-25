@@ -27,7 +27,8 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::select;
-use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::mpsc::{self, Sender, UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{debug, warn};
@@ -132,11 +133,7 @@ pub async fn run_jrpc_debug_websocket_session(
                     }
                 };
 
-                tracing::warn!("rpc request: {rpc_request:?}");
-
                 let response = session.handle_request(rpc_request).await;
-
-                tracing::warn!("rpc response: {response:?}");
 
                 match response {
                     Ok(json_rpc_success) => {
@@ -177,22 +174,30 @@ struct JrpcSession {
 
     // will be taken by a spawned future when succesfully connect to a worker for the first time.
     // used to send notifications via a second channel
-    jrpc_result_sender: Sender<OutgoingJsonRpcMessage>,
-    notifications_future_dropguard: Option<DropGuard>,
+    notifications_sidechannel: Sender<OutgoingJsonRpcMessage>,
+    worker_events_processor_dropguard: Option<DropGuard>,
+
+    // used to coordinate a final poll of notifications before returning to the calles
+    events_poll_sender: UnboundedSender<oneshot::Sender<()>>,
+    events_poll_receiver: Option<UnboundedReceiver<oneshot::Sender<()>>>,
 }
 
 impl JrpcSession {
     fn new(
         debug_service: Arc<dyn DebugService>,
         auth_ctx: AuthCtx,
-        jrpc_result_sender: Sender<OutgoingJsonRpcMessage>,
+        notifications_sidechannel: Sender<OutgoingJsonRpcMessage>,
     ) -> Self {
+        let (events_poll_sender, events_poll_receiver) = mpsc::unbounded_channel();
+
         Self {
             debug_service,
             auth_ctx,
             active_session: None,
-            jrpc_result_sender,
-            notifications_future_dropguard: None,
+            notifications_sidechannel,
+            worker_events_processor_dropguard: None,
+            events_poll_sender,
+            events_poll_receiver: Some(events_poll_receiver),
         }
     }
 
@@ -203,7 +208,7 @@ impl JrpcSession {
                 .terminate_session(&active_session.connected_worker)
                 .await;
             if let Err(e) = result {
-                tracing::warn!("Failed to terminate debugging session: {e}");
+                warn!("Failed to terminate debugging session: {e}");
             }
         }
     }
@@ -250,7 +255,9 @@ impl JrpcSession {
                             namespace,
                         });
 
-                        self.register_worker_event_receiver(worker_event_receiver);
+                        self.start_worker_event_processor(worker_event_receiver);
+
+                        self.ensure_pending_notifications_are_emitted().await;
 
                         to_json_rpc_result(&jrpc_id, Ok(result))
                     }
@@ -278,6 +285,8 @@ impl JrpcSession {
                         )
                         .await;
 
+                    self.ensure_pending_notifications_are_emitted().await;
+
                     to_json_rpc_result(&jrpc_id, result)
                 } else {
                     Err(inactive_session_error(&jrpc_id))
@@ -302,6 +311,9 @@ impl JrpcSession {
                                 .unwrap_or(Duration::from_secs(5)),
                         )
                         .await;
+
+                    self.ensure_pending_notifications_are_emitted().await;
+
                     to_json_rpc_result(&jrpc_id, result)
                 } else {
                     Err(inactive_session_error(&jrpc_id))
@@ -332,48 +344,63 @@ impl JrpcSession {
     }
 
     /// start forwarding notifications. May only be called once
-    fn register_worker_event_receiver(&mut self, worker_event_receiver: WorkerEventReceiver) {
-        let jrpc_result_sender = self.jrpc_result_sender.clone();
+    fn start_worker_event_processor(&mut self, worker_event_receiver: WorkerEventReceiver) {
+        let notifications_sidechannel = self.notifications_sidechannel.clone();
+        let mut events_poll_receiver = self
+            .events_poll_receiver
+            .take()
+            .expect("events_poll_receiver was already taken");
 
         let token = CancellationToken::new();
         let cloned_token = token.clone();
 
         let mut worker_event_stream = worker_event_receiver.to_stream();
 
+        // use a biased select to ensure the stream is empty before
         tokio::spawn(async move {
             loop {
                 select! {
+                    biased;
                     _ = cloned_token.cancelled() => { break; }
-                    event = worker_event_stream.next() => {
-                        tracing::warn!("worker event {event:?}");
+                    Some(event) = worker_event_stream.next() => {
                         match event {
-                            Some(Ok(event)) => {
+                            Ok(event) => {
                                 if let Some(log_notifiation) = LogNotification::from_internal_worker_event(event) {
                                     let params = serde_json::to_value(vec![log_notifiation]).expect("serializing message failed");
 
                                     let notification = JsonRpcNotification { method: "emit-logs".to_string(), params };
 
-                                    let _ = jrpc_result_sender.send(OutgoingJsonRpcMessage::Notification(notification)).await;
+                                    let _ = notifications_sidechannel.send(OutgoingJsonRpcMessage::Notification(notification)).await;
                                 }
                             }
-                            Some(Err(BroadcastStreamRecvError::Lagged(number_of_missed_messages))) => {
+                            Err(BroadcastStreamRecvError::Lagged(number_of_missed_messages)) => {
                                 let value = LogsLaggedNotification { number_of_missed_messages };
 
                                 let params = serde_json::to_value(value).expect("serializing message failed");
 
                                 let notification = JsonRpcNotification { method: "notify-logs-lagged".to_string(), params };
 
-                                let _ = jrpc_result_sender.send(OutgoingJsonRpcMessage::Notification(notification)).await;
+                                let _ = notifications_sidechannel.send(OutgoingJsonRpcMessage::Notification(notification)).await;
                             },
-                            None => {}
                         }
+                    }
+                    Some(sender) = events_poll_receiver.recv() => {
+                        sender.send(()).expect("Failed to send event poll response");
                     }
                 }
             }
         });
 
         // cancel spawned forwarding future when we are dropped
-        self.notifications_future_dropguard = Some(token.drop_guard());
+        self.worker_events_processor_dropguard = Some(token.drop_guard());
+    }
+
+    // Send a signal to the background worker that will only completed once the event stream contains no more messages.
+    // may only be called after start_worker_event_processor;
+    async fn ensure_pending_notifications_are_emitted(&self) {
+        let (sender, receiver) = oneshot::channel();
+        self.events_poll_sender.send(sender).unwrap();
+        receiver.await.unwrap();
     }
 }
 
