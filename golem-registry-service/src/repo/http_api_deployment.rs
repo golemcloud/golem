@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::http_api::{
+use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
+use crate::repo::model::http_api_deployment::{
     HttpApiDeploymentDefinitionRecord, HttpApiDeploymentRecord, HttpApiDeploymentRevisionRecord,
 };
 use crate::repo::model::BindFields;
@@ -35,7 +36,6 @@ pub trait HttpApiDeploymentRepo: Send + Sync {
     async fn create(
         &self,
         environment_id: &Uuid,
-        name: &str,
         host: &str,
         subdomain: Option<&str>,
         revision: HttpApiDeploymentRevisionRecord,
@@ -73,8 +73,8 @@ impl<Repo: HttpApiDeploymentRepo> LoggedHttpApiDeploymentRepo<Repo> {
         Self { repo }
     }
 
-    fn span_name(environment_id: &Uuid, name: &str) -> Span {
-        info_span!(SPAN_NAME, environment_id = %environment_id, name)
+    fn span_host_and_subdomain(environment_id: &Uuid, host: &str, subdomain: Option<&str>) -> Span {
+        info_span!(SPAN_NAME, environment_id = %environment_id, host, subdomain = ?subdomain)
     }
 
     fn span_http_api_deployment_id(http_api_deployment_id: &Uuid) -> Span {
@@ -87,14 +87,17 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
     async fn create(
         &self,
         environment_id: &Uuid,
-        name: &str,
         host: &str,
         subdomain: Option<&str>,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>> {
         self.repo
-            .create(environment_id, name, host, subdomain, revision)
-            .instrument(Self::span_name(environment_id, name))
+            .create(environment_id, host, subdomain, revision)
+            .instrument(Self::span_host_and_subdomain(
+                environment_id,
+                host,
+                subdomain,
+            ))
             .await
     }
 
@@ -168,13 +171,11 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
     async fn create(
         &self,
         environment_id: &Uuid,
-        name: &str,
         host: &str,
         subdomain: Option<&str>,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>> {
         let environment_id = *environment_id;
-        let name = name.to_owned();
         let host = host.to_owned();
         let subdomain = subdomain.map(|s| s.to_owned());
         let revision = revision.ensure_first();
@@ -185,13 +186,12 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                     tx.execute(
                         sqlx::query(indoc! { r#"
                             INSERT INTO http_api_deployments
-                            (http_api_deployment_id, name, environment_id, host, subdomain,
+                            (http_api_deployment_id, environment_id, host, subdomain,
                                 created_at, updated_at, deleted_at, modified_by,
                                 current_revision_id)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, 0)
+                            VALUES ($1, $2, $3, $4, $5, $6, NULL, $8, 0)
                         "# })
                         .bind(revision.http_api_deployment_id)
-                        .bind(&name)
                         .bind(environment_id)
                         .bind(&host)
                         .bind(&subdomain)
@@ -370,7 +370,7 @@ trait HttpApiDeploymentRepoInternal: HttpApiDeploymentRepo {
         http_api_deployment_id: &Uuid,
         revision_id: i64,
         http_definition_id: &Uuid,
-    ) -> repo::Result<()>;
+    ) -> repo::Result<HttpApiDefinitionRevisionIdentityRecord>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -387,7 +387,7 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         self.with_ro("check_current_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT http_api_deployment_id, name, environment_id, host, subdomain,
+                    SELECT http_api_deployment_id, environment_id, host, subdomain,
                            created_at, updated_at, deleted_at, modified_by,
                            current_revision_id
                     FROM http_api_deployments
@@ -408,13 +408,13 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         let mut revision: HttpApiDeploymentRevisionRecord = tx
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"
-                INSERT INTO http_api_deployment_revisions
-                (http_api_deployment_id, revision_id, hash,
-                    created_at, created_by, deleted)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING http_api_deployment_id, revision_id, hash,
-                    created_at, created_by, deleted
-            "# })
+                    INSERT INTO http_api_deployment_revisions
+                    (http_api_deployment_id, revision_id, hash,
+                        created_at, created_by, deleted)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING http_api_deployment_id, revision_id, hash,
+                        created_at, created_by, deleted
+                "# })
                 .bind(revision.http_api_deployment_id)
                 .bind(revision.revision_id)
                 .bind(revision.hash)
@@ -423,16 +423,19 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
             .await?;
 
         revision.http_api_definitions = {
-            for definition_id in definitions.iter() {
-                Self::insert_definition(
-                    tx,
-                    &revision.http_api_deployment_id,
-                    revision.revision_id,
-                    definition_id,
-                )
-                .await?;
+            let mut inserted_definitions = Vec::with_capacity(definitions.len());
+            for definition in definitions.iter() {
+                inserted_definitions.push(
+                    Self::insert_definition(
+                        tx,
+                        &revision.http_api_deployment_id,
+                        revision.revision_id,
+                        &definition.http_api_definition_id,
+                    )
+                    .await?,
+                );
             }
-            definitions
+            inserted_definitions
         };
 
         Ok(revision)
@@ -443,7 +446,7 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         http_api_deployment_id: &Uuid,
         revision_id: i64,
         http_definition_id: &Uuid,
-    ) -> repo::Result<()> {
+    ) -> repo::Result<HttpApiDefinitionRevisionIdentityRecord> {
         tx.execute(
             sqlx::query(indoc! { r#"
                 INSERT INTO http_api_deployment_definitions
@@ -455,6 +458,26 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
             .bind(http_definition_id),
         )
         .await?;
-        Ok(())
+
+        // TODO: should we filter for deleted here?
+        // TODO: how should we handle deletion of referenced definitions?
+        //       check if we can use partial foreign key VS delaying this
+        tx.fetch_one_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT
+                    d.http_api_definition_id as http_definition_id,
+                    d.name as name,
+                    dr.revision_id as revision_id,
+                    dr.version as version,
+                    dr.hash as hash
+                FROM http_api_definitions d
+                INNER JOIN http_api_definition_revisions dr ON
+                    d.http_api_definition_id = dr.http_api_definition_id AND
+                    d.current_revision_id = dr.revision_id
+                WHERE dr.http_api_definition_id = $1
+            "#})
+            .bind(http_definition_id),
+        )
+        .await
     }
 }

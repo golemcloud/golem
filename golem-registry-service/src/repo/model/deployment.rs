@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::repo::model::audit::RevisionAuditFields;
-use crate::repo::model::component::ComponentStatus;
 use crate::repo::model::hash::SqlBlake3Hash;
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -52,14 +51,6 @@ pub struct DeploymentRevisionRecord {
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct ComponentRevisionForDeploymentRecord {
-    pub component_id: Uuid,
-    pub name: String,
-    pub status: ComponentStatus,
-    pub hash: Option<SqlBlake3Hash>,
-}
-
-#[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct DeploymentHttpApiDefinitionRevisionRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
@@ -73,18 +64,4 @@ pub struct DeploymentHttpApiDeploymentRevisionRecord {
     pub deployment_revision_id: i64,
     pub http_api_deployment_id: Uuid,
     pub http_api_deployment_revision_id: i64,
-}
-
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct HttpApiDefinitionRevisionForDeploymentRecord {
-    pub http_api_definition_id: Uuid,
-    pub name: String,
-    pub hash: SqlBlake3Hash,
-}
-
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct HttpApiDeploymentRevisionForDeploymentRecord {
-    pub http_api_deployment_id: Uuid,
-    pub name: String,
-    pub hash: SqlBlake3Hash,
 }

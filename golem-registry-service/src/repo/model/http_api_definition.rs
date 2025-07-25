@@ -18,28 +18,27 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct EnvironmentRecord {
-    pub environment_id: Uuid,
+pub struct HttpApiDefinitionRecord {
+    pub http_api_definition_id: Uuid,
     pub name: String,
-    pub application_id: Uuid,
+    pub environment_id: Uuid,
     #[sqlx(flatten)]
     pub audit: AuditFields,
     pub current_revision_id: i64,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct EnvironmentRevisionRecord {
-    pub environment_id: Uuid,
+pub struct HttpApiDefinitionRevisionRecord {
+    pub http_api_definition_id: Uuid,
     pub revision_id: i64,
+    pub version: String,
     pub hash: SqlBlake3Hash,
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
-    pub compatibility_check: bool,
-    pub version_check: bool,
-    pub security_overrides: bool,
+    pub definition: Vec<u8>, // TODO: model
 }
 
-impl EnvironmentRevisionRecord {
+impl HttpApiDefinitionRevisionRecord {
     pub fn ensure_first(self) -> Self {
         Self {
             revision_id: 0,
@@ -56,23 +55,27 @@ impl EnvironmentRevisionRecord {
         }
     }
 
-    pub fn deletion(created_by: Uuid, environment_id: Uuid, current_revision_id: i64) -> Self {
+    pub fn deletion(
+        created_by: Uuid,
+        http_api_definition_id: Uuid,
+        current_revision_id: i64,
+    ) -> Self {
         Self {
-            environment_id,
+            http_api_definition_id,
             revision_id: current_revision_id + 1,
-            audit: DeletableRevisionAuditFields::deletion(created_by),
-            compatibility_check: false,
-            version_check: false,
-            security_overrides: false,
+            version: "".to_string(),
             hash: SqlBlake3Hash::empty(),
+            audit: DeletableRevisionAuditFields::deletion(created_by),
+            definition: vec![],
         }
     }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct EnvironmentCurrentRevisionRecord {
+pub struct HttpApiDefinitionRevisionIdentityRecord {
+    pub http_api_definition_id: Uuid,
     pub name: String,
-    pub application_id: Uuid,
-    #[sqlx(flatten)]
-    pub revision: EnvironmentRevisionRecord,
+    pub revision_id: i64,
+    pub version: String,
+    pub hash: SqlBlake3Hash,
 }

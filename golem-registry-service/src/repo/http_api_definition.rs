@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::http_api::{HttpApiDefinitionRecord, HttpApiDefinitionRevisionRecord};
+use crate::repo::model::http_api_definition::{
+    HttpApiDefinitionRecord, HttpApiDefinitionRevisionRecord,
+};
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;

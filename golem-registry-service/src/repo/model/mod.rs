@@ -20,7 +20,8 @@ pub mod datetime;
 pub mod deployment;
 pub mod environment;
 pub mod hash;
-pub mod http_api;
+pub mod http_api_definition;
+pub mod http_api_deployment;
 pub mod plan;
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};

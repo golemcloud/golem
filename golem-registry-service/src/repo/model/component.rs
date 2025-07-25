@@ -343,7 +343,7 @@ impl ComponentRevisionRecord {
             env: Default::default(),
             status: ComponentStatus::Created,
             object_store_key: "".to_string(),
-            binary_hash: blake3::hash("".as_bytes()).into(),
+            binary_hash: SqlBlake3Hash::empty(),
             transformed_object_store_key: None,
             files: vec![],
         }
@@ -360,4 +360,14 @@ pub struct ComponentFileRecord {
     pub audit: RevisionAuditFields,
     pub file_key: String,
     pub file_permissions: SqlComponentFilePermissions,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ComponentRevisionIdentityRecord {
+    pub component_id: Uuid,
+    pub name: String,
+    pub revision_id: i64,
+    pub version: String,
+    pub status: ComponentStatus,
+    pub hash: Option<SqlBlake3Hash>,
 }

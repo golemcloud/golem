@@ -426,7 +426,6 @@ CREATE INDEX http_api_definitions_revisions_latest_revision_by_id_idx
 CREATE TABLE http_api_deployments
 (
     http_api_deployment_id UUID      NOT NULL,
-    name                   TEXT      NOT NULL,
     environment_id         UUID      NOT NULL,
 
     host                   TEXT      NOT NULL,

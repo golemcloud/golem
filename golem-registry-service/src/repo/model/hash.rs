@@ -31,6 +31,13 @@ impl SqlBlake3Hash {
         Self { hash }
     }
 
+    pub fn empty() -> Self {
+        Self {
+            // TODO: const?
+            hash: blake3::hash(&[]),
+        }
+    }
+
     pub fn as_blake3_hash(&self) -> &blake3::Hash {
         &self.hash
     }

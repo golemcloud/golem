@@ -15,10 +15,11 @@
 use crate::model::diff;
 use crate::model::diff::Hashable;
 use crate::repo::model::audit::RevisionAuditFields;
-use crate::repo::model::deployment::{
-    ComponentRevisionForDeploymentRecord, CurrentDeploymentRevisionRecord, DeploymentRevisionRecord,
-};
+use crate::repo::model::component::ComponentRevisionIdentityRecord;
+use crate::repo::model::deployment::{CurrentDeploymentRevisionRecord, DeploymentRevisionRecord};
 use crate::repo::model::hash::SqlBlake3Hash;
+use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
+use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -147,8 +148,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
         self.with_tx("deploy", |tx| {
             async move {
-                // TODO: if env requires check version uniqueness
-
                 let deployment_revision = Self::create_deployment_revision(
                     tx,
                     user_account_id,
@@ -159,23 +158,45 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 )
                 .await?;
 
+                // TODO: if env requires check version uniqueness
+
                 let components = Self::get_components(tx, &environment_id).await?;
+                let http_api_definitions =
+                    Self::get_http_api_definitions(tx, &environment_id).await?;
+                let http_api_deployments =
+                    Self::get_http_api_deployments(tx, &environment_id).await?;
+
                 // TODO: validate component state and existence of hashes
+                // TODO: validate cross-references
 
                 let diff_deployment = diff::Deployment {
                     components: components
-                        .into_iter()
+                        .iter()
                         .map(|component| {
                             (
-                                component.name,
-                                diff::HashOf::<diff::Component>::from_blake3_hash(
-                                    component.hash.expect("TODO").into(),
-                                ),
+                                component.name.clone(),
+                                diff::HashOf::from_blake3_hash(component.hash.unwrap().into()), // TODO: unwrap
                             )
                         })
                         .collect(),
-                    http_api_definitions: todo!(),
-                    http_api_deployments: todo!(),
+                    http_api_definitions: http_api_definitions
+                        .iter()
+                        .map(|definition| {
+                            (
+                                definition.name.clone(),
+                                diff::HashOf::from_blake3_hash(definition.hash.into()),
+                            )
+                        })
+                        .collect(),
+                    http_api_deployments: http_api_deployments
+                        .iter()
+                        .map(|deployment| {
+                            (
+                                (deployment.subdomain.as_ref(), &deployment.host).into(),
+                                diff::HashOf::from_blake3_hash(deployment.hash.into()),
+                            )
+                        })
+                        .collect(),
                 };
 
                 let hash = diff_deployment.hash();
@@ -207,7 +228,17 @@ trait DeploymentRepoInternal: DeploymentRepo {
     async fn get_components(
         tx: &mut Self::Tx,
         environment_id: &Uuid,
-    ) -> Result<Vec<ComponentRevisionForDeploymentRecord>, RepoError>;
+    ) -> Result<Vec<ComponentRevisionIdentityRecord>, RepoError>;
+
+    async fn get_http_api_definitions(
+        tx: &mut Self::Tx,
+        environment_id: &Uuid,
+    ) -> Result<Vec<HttpApiDefinitionRevisionIdentityRecord>, RepoError>;
+
+    async fn get_http_api_deployments(
+        tx: &mut Self::Tx,
+        environment_id: &Uuid,
+    ) -> Result<Vec<HttpApiDeploymentRevisionIdentityRecord>, RepoError>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -251,16 +282,68 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     async fn get_components(
         tx: &mut Self::Tx,
         environment_id: &Uuid,
-    ) -> Result<Vec<ComponentRevisionForDeploymentRecord>, RepoError> {
+    ) -> Result<Vec<ComponentRevisionIdentityRecord>, RepoError> {
         tx.fetch_all(
             sqlx::query_as(indoc! { r#"
-                SELECT c.component_id as component_id, c.name as name, cr.status as status, cr.hash as hash
+                SELECT
+                    c.component_id as component_id,
+                    c.name as name, cr.revision_id as revision_id,
+                    cr.revision_id as revision_id,
+                    cr.version as version,
+                    cr.status as status, cr.hash as hash
                 FROM components c
                 LEFT JOIN component_revisions cr ON
-                    cr.component_id = c.component_id AND cr.revision_id = c.current_revision_id
+                    cr.component_id = c.component_id
+                        AND cr.revision_id = c.current_revision_id
                 WHERE c.environment_id = $1 AND c.deleted_at IS NULL
             "#})
-                .bind(environment_id)
-        ).await
+            .bind(environment_id),
+        )
+        .await
+    }
+
+    async fn get_http_api_definitions(
+        tx: &mut Self::Tx,
+        environment_id: &Uuid,
+    ) -> Result<Vec<HttpApiDefinitionRevisionIdentityRecord>, RepoError> {
+        tx.fetch_all(
+            sqlx::query_as(indoc! { r#"
+                SELECT
+                    d.http_api_definition_id as http_api_definition_id,
+                    d.name as name,
+                    dr.revision_id as revision_id,
+                    dr.version as version,
+                    dr.hash as hash
+                FROM http_api_definitions d
+                LEFT JOIN http_api_definition_revisions dr ON
+                    d.http_api_definition_id = dr.http_api_definition_id
+                        AND d.current_revision_id = dr.revision_id
+                WHERE d.environment_id = $1 AND d.deleted_at IS NULL
+            "#})
+            .bind(environment_id),
+        )
+        .await
+    }
+
+    async fn get_http_api_deployments(
+        tx: &mut Self::Tx,
+        environment_id: &Uuid,
+    ) -> Result<Vec<HttpApiDeploymentRevisionIdentityRecord>, RepoError> {
+        tx.fetch_all(
+            sqlx::query_as(indoc! { r#"
+                SELECT
+                    d.http_api_deployment_id as http_api_deployment_id,
+                    d.name as name,
+                    dr.revision_id as revision_id,
+                    dr.hash as hash
+                FROM http_api_deployments d
+                LEFT JOIN http_api_deployment_revisions dr ON
+                    d.http_api_deployment_id = dr.http_api_deployment_id
+                        AND d.current_revision_id = dr.revision_id
+                WHERE d.environment_id = $1 AND d.deleted_at IS NULL
+            "#})
+            .bind(environment_id),
+        )
+        .await
     }
 }
