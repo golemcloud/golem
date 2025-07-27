@@ -33,6 +33,7 @@ use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies, TestDependenciesDsl};
 use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
@@ -99,7 +100,21 @@ tag_suite!(guest_languages3, group7);
 tag_suite!(ts_rpc2, group8);
 tag_suite!(ts_rpc2_stubless, group8);
 
-pub type Deps = TestDependenciesDsl<WorkerExecutorTestDependencies>;
+pub struct Deps(pub TestDependenciesDsl<WorkerExecutorTestDependencies>);
+
+impl std::fmt::Debug for Deps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Deps").finish_non_exhaustive()
+    }
+}
+
+impl Deref for Deps {
+    type Target = WorkerExecutorTestDependencies;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.deps
+    }
+}
 
 #[derive(Clone)]
 pub struct WorkerExecutorPerTestDependencies {
@@ -247,7 +262,7 @@ pub async fn test_dependencies(_tracing: &Tracing) -> Deps {
         token: Default::default(),
     };
 
-    deps2
+    Deps(deps2)
 }
 
 #[derive(Debug)]

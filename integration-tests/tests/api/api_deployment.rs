@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{to_grpc_rib_expr, Tracing};
+use crate::{to_grpc_rib_expr, Deps, Tracing};
 use assert2::{assert, check};
 use golem_api_grpc::proto::golem::apidefinition::v1::{
     api_definition_request, create_api_definition_request, ApiDefinitionRequest,
@@ -34,8 +34,6 @@ use std::panic;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
-type Deps = TestDependenciesDsl<EnvBasedTestDependencies>;
-
 inherit_test_dep!(Tracing);
 inherit_test_dep!(Deps);
 
@@ -46,8 +44,8 @@ async fn create_and_get_api_deployment(deps: &Deps) {
         return assert!(false, "Test requires to select HTTP golem client protocol");
     }
 
-    let component_id = deps.component("shopping-cart").unique().store().await;
     let admin = deps.admin();
+    let component_id = admin.component("shopping-cart").unique().store().await;
     let project_id = admin.default_project().await;
 
     fn new_api_definition_id(prefix: &str) -> String {

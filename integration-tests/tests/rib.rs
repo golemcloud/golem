@@ -87,7 +87,7 @@ async fn test_simple_rib(deps: &Deps, worker_name: Option<&str>) {
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 
-    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.deps.clone()));
+    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new( deps.clone() ));
 
     let rib = match worker_name {
         Some(worker_name) => {
@@ -170,7 +170,7 @@ async fn test_rib_for_loop(deps: &Deps, worker_name: Option<&str>) {
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 
-    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.deps.clone()));
+    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new( deps.clone() ));
 
     let rib = match worker_name {
         Some(worker_name) => {
@@ -272,7 +272,7 @@ async fn test_rib_with_resource_methods(
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 
-    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.deps.clone()));
+    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new( deps.clone() ));
 
     let rib = match worker_name {
         Some(worker_name) => {
@@ -355,11 +355,11 @@ async fn test_rib_with_resource_methods(
 }
 
 struct TestRibFunctionInvoke {
-    dependencies: EnvBasedTestDependencies,
+    dependencies: Deps,
 }
 
 impl TestRibFunctionInvoke {
-    fn new(dependencies: EnvBasedTestDependencies) -> Self {
+    fn new(dependencies: Deps) -> Self {
         Self { dependencies }
     }
 }

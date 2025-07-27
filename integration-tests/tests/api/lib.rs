@@ -21,6 +21,7 @@ mod invocation_context;
 mod plugins;
 mod worker;
 
+use std::ops::Deref;
 use golem_api_grpc::proto::golem::rib::Expr;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies, TestDependenciesDsl};
@@ -37,7 +38,21 @@ tag_suite!(invocation_context, http_only);
 
 pub struct Tracing;
 
-pub type Deps = TestDependenciesDsl<EnvBasedTestDependencies>;
+pub struct Deps(pub TestDependenciesDsl<EnvBasedTestDependencies>);
+
+impl Deref for Deps {
+    type Target = EnvBasedTestDependencies;
+    fn deref(&self) -> &Self::Target {
+        &self.0.deps
+    }
+}
+
+impl std::fmt::Debug for Deps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Deps").finish_non_exhaustive()
+    }
+}
+
 impl Tracing {
     pub fn init() -> Self {
         init_tracing_with_default_debug_env_filter(
@@ -64,7 +79,7 @@ pub async fn create_deps(_tracing: &Tracing) -> Deps {
         token: Default::default(),
     };
 
-    deps2
+    Deps(deps2)
 }
 #[test_dep]
 pub fn tracing() -> Tracing {

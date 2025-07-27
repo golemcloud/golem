@@ -1444,7 +1444,7 @@ async fn get_worker_metadata(
 
     let component_id = executor.component("clock-service").store().await;
 
-    let expected_component_size = deps.deps
+    let expected_component_size = deps
         .component_service
         .get_component_size(&executor.token, &component_id, 0)
         .await

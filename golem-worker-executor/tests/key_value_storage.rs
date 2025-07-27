@@ -93,8 +93,8 @@ impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
 async fn redis_storage(
     deps: &Deps,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
-    let redis = deps.deps.redis.clone();
-    let redis_monitor = deps.deps.redis_monitor.clone();
+    let redis = deps.redis.clone();
+    let redis_monitor = deps.redis_monitor.clone();
     redis.assert_valid();
     redis_monitor.assert_valid();
     Arc::new(RedisKeyValueStorageWrapper { redis })
