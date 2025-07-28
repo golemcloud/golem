@@ -15,7 +15,7 @@
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentType, BinaryDescriptor,
     BinaryReference, BinarySource, BinaryType, DataSchema, DataValue, ElementSchema, ElementValue,
-    NamedElementSchema, TextDescriptor, TextReference, TextSource, TextType,
+    NamedElementSchema, NamedElementValue, TextDescriptor, TextReference, TextSource, TextType,
 };
 
 impl From<super::bindings::golem::agent::common::AgentConstructor> for AgentConstructor {
@@ -220,7 +220,12 @@ impl From<super::bindings::golem::agent::common::DataValue> for DataValue {
             }
             crate::model::agent::bindings::golem::agent::common::DataValue::Multimodal(
                 multimodal,
-            ) => DataValue::Multimodal(multimodal.into_iter().map(ElementValue::from).collect()),
+            ) => DataValue::Multimodal(
+                multimodal
+                    .into_iter()
+                    .map(NamedElementValue::from)
+                    .collect(),
+            ),
         }
     }
 }
@@ -233,7 +238,10 @@ impl From<DataValue> for super::bindings::golem::agent::common::DataValue {
             ),
             DataValue::Multimodal(multimodal) => {
                 super::bindings::golem::agent::common::DataValue::Multimodal(
-                    multimodal.into_iter().map(ElementValue::into).collect(),
+                    multimodal
+                        .into_iter()
+                        .map(|v| (v.name, ElementValue::into(v.value)))
+                        .collect(),
                 )
             }
         }
@@ -272,6 +280,20 @@ impl From<ElementSchema> for super::bindings::golem::agent::common::ElementSchem
                     binary.into(),
                 )
             }
+        }
+    }
+}
+
+impl From<(String, super::bindings::golem::agent::common::ElementValue)> for NamedElementValue {
+    fn from(
+        value: (
+            String,
+            crate::model::agent::bindings::golem::agent::common::ElementValue,
+        ),
+    ) -> Self {
+        Self {
+            name: value.0,
+            value: ElementValue::from(value.1),
         }
     }
 }

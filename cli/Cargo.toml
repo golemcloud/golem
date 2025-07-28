@@ -72,6 +72,7 @@ itertools = "0.14.0"
 lenient_bool = "0.1.1"
 log = "0.4.25"
 minijinja = "2.7.0"
+moonbit-component-generator = { version = "0.0.2", features = ["get-script"] }
 nanoid = "0.4.0"
 native-tls = "0.2.13"
 nondestructive = "0.0.26"
@@ -119,19 +120,19 @@ uuid = "1.13.2"
 version-compare = "0.2.0"
 wac-graph = "0.6.1"
 walkdir = "2.5.0"
-wasm-wave = "0.228"
+wasm-wave = "0.235"
 wax = "0.6.0"
 wasm-metadata = { version = "0.228", features = ["oci"] }
-wasmparser = "0.228.0"
-wasm-encoder = "0.228.0"
+wasmparser = "0.235.0"
+wasm-encoder = "0.235.0"
 wasm-rquickjs = "0.0.4"
 wasmtime = { version = "33.0.0", features = ["async", "component-model"] }
 wasmtime-wasi = { version = "33.0.0" }
-wit-bindgen = "0.40.0"
-wit-bindgen-rust = "0.40.0"
-wit-component = "0.228"
-wit-encoder = "0.228"
-wit-parser = "0.228"
+wit-bindgen = "0.43.0"
+wit-bindgen-rust = "0.43.0"
+wit-component = "0.235"
+wit-encoder = "0.235"
+wit-parser = "0.235"
 
 [patch.crates-io]
 golem-client = { git = "https://github.com/golemcloud/golem.git", tag = "v1.3.0-dev.19" }

@@ -1086,6 +1086,9 @@ fn wit_value_builder(
                 TypeDefKind::List(elem) => {
                     wit_list_value_builder(elem, name, def, builder_expr)
                 }
+                TypeDefKind::FixedSizeList(elem, _) => {
+                    wit_list_value_builder(elem, name, def, builder_expr)
+                }
                 TypeDefKind::Future(_) => Ok(quote!(todo!("future"))),
                 TypeDefKind::Stream(_) => Ok(quote!(todo!("stream"))),
                 TypeDefKind::Type(typ) => wit_value_builder(typ, name, def, builder_expr, is_reference),
@@ -1408,6 +1411,7 @@ fn extract_from_wit_value(
                     extract_from_result_value(result, def, base_expr)
                 }
                 TypeDefKind::List(elem) => extract_from_list_value(elem, def, base_expr),
+                TypeDefKind::FixedSizeList(elem, _) => extract_from_list_value(elem, def, base_expr),
                 TypeDefKind::Future(_) => Ok(quote!(panic!("Future is not supported yet"))),
                 TypeDefKind::Stream(_) => Ok(quote!(panic!("Stream is not supported yet"))),
                 TypeDefKind::Type(typ) => extract_from_wit_value(typ, def, base_expr),

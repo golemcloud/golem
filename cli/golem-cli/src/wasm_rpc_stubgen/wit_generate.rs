@@ -1203,6 +1203,7 @@ impl UsedTypeIdents for Type {
                 idents
             }
             Type::List(type_) => type_.used_type_idents(),
+            Type::FixedSizeList(type_, _) => type_.used_type_idents(),
             Type::Tuple(tuple) => tuple
                 .types()
                 .iter()

@@ -38,13 +38,16 @@ interface common {
   variant data-schema {
     /// List of named elements
     %tuple(list<tuple<string, element-schema>>),
-    /// List of named variants
+    /// List of named variants that can be used 0 or more times in a multimodal `data-value`
     multimodal(list<tuple<string, element-schema>>),
   }
 
   variant data-value {
+    /// List of element values, each corresponding to an element of the tuple `data-schema`
     %tuple(list<element-value>),
-    multimodal(list<element-value>),
+    /// List of element values and their schema names; each name points to one named element of the corresponding
+    /// multimodal `data-schema`.
+    multimodal(list<tuple<string, element-value>>),
   }
 
   variant element-schema {

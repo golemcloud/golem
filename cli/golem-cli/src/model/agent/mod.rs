@@ -14,7 +14,11 @@
 
 mod conversions;
 pub mod extraction;
+pub mod moonbit;
 pub mod wit;
+
+#[cfg(test)]
+pub mod test;
 
 // Golem Agent types
 // NOTE: this is going to be moved to golem-common
@@ -121,7 +125,13 @@ pub enum DataSchema {
 #[derive(Debug, Clone, Encode, Decode, IntoValue)]
 pub enum DataValue {
     Tuple(Vec<ElementValue>),
-    Multimodal(Vec<ElementValue>),
+    Multimodal(Vec<NamedElementValue>),
+}
+
+#[derive(Debug, Clone, Encode, Decode, IntoValue)]
+pub struct NamedElementValue {
+    pub name: String,
+    pub value: ElementValue,
 }
 
 #[derive(Debug, Clone, Encode, Decode, IntoValue)]
