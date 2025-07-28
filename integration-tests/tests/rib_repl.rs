@@ -70,16 +70,22 @@ async fn test_repl_invoking_agentic_functions(
     deps: &EnvBasedTestDependencies,
     worker_name: Option<&str>,
 ) {
+    let _ = deps
+        .admin()
+        .component("weather_agent")
+        .store()
+        .await;
+
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
         dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
         worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
         printer: None,
         component_source: Some(ComponentSource {
-            component_name: "multi_agent_rpc_wrapper".to_string(),
+            component_name: "assistant_agent".to_string(),
             source_path: deps
                 .component_directory()
-                .join("multi_agent_rpc_wrapper.wasm"),
+                .join("assistant_agent.wasm"),
         }),
         prompt: None,
         command_registry: None,
@@ -94,7 +100,7 @@ async fn test_repl_invoking_agentic_functions(
     "#;
 
     let rib3 = r#"
-      r.ask("foo")
+      r.ask("foo", 42, 42, {data: "foo", value: 42})
      "#;
 
     let result = rib_repl
