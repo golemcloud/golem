@@ -503,7 +503,7 @@ impl DebugService for DebugServiceDefault {
             incremental_playback,
             message: format!(
                 "Playback worker {} stopped at index {}",
-                owned_worker_id.worker_id, current_oplog_index
+                owned_worker_id.worker_id, stopped_at_index
             ),
         })
     }
@@ -600,7 +600,7 @@ impl DebugService for DebugServiceDefault {
 
         let _ = worker.await_ready_to_process_commands().await;
 
-        let last_index = self
+        let stopped_at_index = self
             .debug_session
             .get(&debug_session_id)
             .await
@@ -609,7 +609,7 @@ impl DebugService for DebugServiceDefault {
 
         Ok(RewindResult {
             worker_id: owned_worker_id.worker_id.clone(),
-            current_index: last_index,
+            current_index: stopped_at_index,
             message: format!("Rewinding the worker to index {target_index}"),
         })
     }
