@@ -214,7 +214,7 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
 
         self.db_pool
             .with_ro("project", "get_all")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -247,7 +247,7 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
 
         self.db_pool
             .with_ro("project", "get_owned")
-            .fetch_all(query.build_query_as::<ProjectRecord>())
+            .fetch_all_as(query.build_query_as::<ProjectRecord>())
             .await
     }
 
@@ -293,7 +293,7 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
 
         self.db_pool
             .with_ro("project", "get_by_ids")
-            .fetch_all(query.build_query_as::<OwnerAccountIdRow>())
+            .fetch_all_as(query.build_query_as::<OwnerAccountIdRow>())
             .await
             .map(|vs| vs.into_iter().map(|v| v.owner_account_id).collect())
     }
@@ -354,7 +354,7 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
         Ok(self
             .db_pool
             .with_ro("project", "get_installed_plugins")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?)
     }
 

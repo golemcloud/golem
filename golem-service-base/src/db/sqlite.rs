@@ -121,7 +121,17 @@ impl SqliteLabelledTransaction {
         Ok(query_as.fetch_optional(&mut *self.tx).await?)
     }
 
-    pub async fn fetch_all<'a, O, A>(
+    pub async fn fetch_all<'a, A>(
+        &mut self,
+        query: Query<'a, Sqlite, A>,
+    ) -> Result<Vec<SqliteRow>, RepoError>
+    where
+        A: 'a + IntoArguments<'a, Sqlite>,
+    {
+        Ok(query.fetch_all(&mut *self.tx).await?)
+    }
+
+    pub async fn fetch_all_as<'a, O, A>(
         &mut self,
         query_as: QueryAs<'a, Sqlite, O, A>,
     ) -> Result<Vec<O>, RepoError>
@@ -191,7 +201,17 @@ impl super::PoolApi for SqliteLabelledTransaction {
         SqliteLabelledTransaction::fetch_optional_as(self, query_as).await
     }
 
-    async fn fetch_all<'a, O, A>(
+    async fn fetch_all<'a, A>(
+        &mut self,
+        query: Query<'a, Self::Db, A>,
+    ) -> Result<Vec<SqliteRow>, RepoError>
+    where
+        A: 'a + IntoArguments<'a, Self::Db>,
+    {
+        SqliteLabelledTransaction::fetch_all(self, query).await
+    }
+
+    async fn fetch_all_as<'a, O, A>(
         &mut self,
         query_as: QueryAs<'a, Self::Db, O, A>,
     ) -> Result<Vec<O>, RepoError>
@@ -199,7 +219,7 @@ impl super::PoolApi for SqliteLabelledTransaction {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        SqliteLabelledTransaction::fetch_all(self, query_as).await
+        SqliteLabelledTransaction::fetch_all_as(self, query_as).await
     }
 }
 
@@ -267,7 +287,18 @@ impl SqliteLabelledApi {
         self.record_self(start, query_as.fetch_optional(&self.pool).await)
     }
 
-    pub async fn fetch_all<'a, O, A>(
+    pub async fn fetch_all<'a, A>(
+        &self,
+        query: Query<'a, Sqlite, A>,
+    ) -> Result<Vec<SqliteRow>, RepoError>
+    where
+        A: 'a + IntoArguments<'a, Sqlite>,
+    {
+        let start = Instant::now();
+        self.record_self(start, query.fetch_all(&self.pool).await)
+    }
+
+    pub async fn fetch_all_as<'a, O, A>(
         &self,
         query_as: QueryAs<'a, Sqlite, O, A>,
     ) -> Result<Vec<O>, RepoError>
@@ -355,7 +386,17 @@ impl super::PoolApi for SqliteLabelledApi {
         SqliteLabelledApi::fetch_optional_as(self, query_as).await
     }
 
-    async fn fetch_all<'a, O, A>(
+    async fn fetch_all<'a, A>(
+        &mut self,
+        query: Query<'a, Self::Db, A>,
+    ) -> Result<Vec<Self::Row>, RepoError>
+    where
+        A: 'a + IntoArguments<'a, Self::Db>,
+    {
+        SqliteLabelledApi::fetch_all(self, query).await
+    }
+
+    async fn fetch_all_as<'a, O, A>(
         &mut self,
         query_as: QueryAs<'a, Self::Db, O, A>,
     ) -> Result<Vec<O>, RepoError>
@@ -363,7 +404,7 @@ impl super::PoolApi for SqliteLabelledApi {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        SqliteLabelledApi::fetch_all(self, query_as).await
+        SqliteLabelledApi::fetch_all_as(self, query_as).await
     }
 }
 

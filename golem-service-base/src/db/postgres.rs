@@ -118,7 +118,17 @@ impl PostgresLabelledTransaction {
         Ok(query_as.fetch_optional(&mut *self.tx).await?)
     }
 
-    pub async fn fetch_all<'a, O, A>(
+    pub async fn fetch_all<'a, A>(
+        &mut self,
+        query: Query<'a, Postgres, A>,
+    ) -> Result<Vec<PgRow>, RepoError>
+    where
+        A: 'a + IntoArguments<'a, Postgres>,
+    {
+        Ok(query.fetch_all(&mut *self.tx).await?)
+    }
+
+    pub async fn fetch_all_as<'a, O, A>(
         &mut self,
         query_as: QueryAs<'a, Postgres, O, A>,
     ) -> Result<Vec<O>, RepoError>
@@ -165,7 +175,17 @@ impl super::PoolApi for PostgresLabelledTransaction {
         PostgresLabelledTransaction::fetch_optional_as(self, query_as).await
     }
 
-    async fn fetch_all<'a, O, A>(
+    async fn fetch_all<'a, A>(
+        &mut self,
+        query_as: Query<'a, Self::Db, A>,
+    ) -> Result<Vec<Self::Row>, RepoError>
+    where
+        A: 'a + IntoArguments<'a, Self::Db>,
+    {
+        PostgresLabelledTransaction::fetch_all(self, query_as).await
+    }
+
+    async fn fetch_all_as<'a, O, A>(
         &mut self,
         query_as: QueryAs<'a, Self::Db, O, A>,
     ) -> Result<Vec<O>, RepoError>
@@ -173,7 +193,7 @@ impl super::PoolApi for PostgresLabelledTransaction {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        PostgresLabelledTransaction::fetch_all(self, query_as).await
+        PostgresLabelledTransaction::fetch_all_as(self, query_as).await
     }
 }
 
@@ -241,7 +261,18 @@ impl PostgresLabelledApi {
         self.record_self(start, query_as.fetch_optional(&self.pool).await)
     }
 
-    pub async fn fetch_all<'a, O, A>(
+    pub async fn fetch_all<'a, A>(
+        &self,
+        query: Query<'a, Postgres, A>,
+    ) -> Result<Vec<PgRow>, RepoError>
+    where
+        A: 'a + IntoArguments<'a, Postgres>,
+    {
+        let start = Instant::now();
+        self.record_self(start, query.fetch_all(&self.pool).await)
+    }
+
+    pub async fn fetch_all_as<'a, O, A>(
         &self,
         query_as: QueryAs<'a, Postgres, O, A>,
     ) -> Result<Vec<O>, RepoError>
@@ -335,7 +366,17 @@ impl super::PoolApi for PostgresLabelledApi {
         PostgresLabelledApi::fetch_optional_as(self, query_as).await
     }
 
-    async fn fetch_all<'a, O, A>(
+    async fn fetch_all<'a, A>(
+        &mut self,
+        query: Query<'a, Self::Db, A>,
+    ) -> Result<Vec<Self::Row>, RepoError>
+    where
+        A: 'a + IntoArguments<'a, Self::Db>,
+    {
+        PostgresLabelledApi::fetch_all(self, query).await
+    }
+
+    async fn fetch_all_as<'a, O, A>(
         &mut self,
         query_as: QueryAs<'a, Self::Db, O, A>,
     ) -> Result<Vec<O>, RepoError>
@@ -343,7 +384,7 @@ impl super::PoolApi for PostgresLabelledApi {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        PostgresLabelledApi::fetch_all(self, query_as).await
+        PostgresLabelledApi::fetch_all_as(self, query_as).await
     }
 }
 

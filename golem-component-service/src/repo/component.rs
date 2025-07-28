@@ -547,7 +547,7 @@ impl DbComponentRepo<golem_service_base::db::postgres::PostgresPool> {
         .bind(version as i64);
         self.db_pool
             .with_ro("component", "get_files")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -573,7 +573,7 @@ impl DbComponentRepo<golem_service_base::db::postgres::PostgresPool> {
         .bind(version as i64);
         self.db_pool
             .with_ro("component", "get_transformed_files")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -596,7 +596,7 @@ impl DbComponentRepo<golem_service_base::db::postgres::PostgresPool> {
             query.build_query_as::<PluginInstallationRecord<ComponentPluginInstallationTarget>>();
         self.db_pool
             .with_ro("component", "get_installed_plugins_for_component")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -790,7 +790,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with("component", "get")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -831,7 +831,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with_ro("component", "get")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -867,7 +867,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with("component", "get_all")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -903,7 +903,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with_ro("component", "get_all")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -1112,7 +1112,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with("component", "get_by_name")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         Ok(self.add_joined_data(components).await?)
@@ -1216,7 +1216,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with("component", "get_by_names")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -1317,7 +1317,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with_ro("component", "get_by_names_sqlite")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -1358,7 +1358,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with_ro("component", "get_by_name")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -1625,7 +1625,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
 
         self.db_pool
             .with_ro("component", "get_installed_plugins")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 }

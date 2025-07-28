@@ -284,7 +284,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with("api_deployment", "get_all")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
     #[when(golem_service_base::db::sqlite::SqlitePool -> get_all)]
@@ -301,7 +301,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with_ro("api_deployment", "get_all")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -324,7 +324,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with("api_deployment", "get_by_id")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -347,7 +347,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with_ro("api_deployment", "get_by_id")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -372,7 +372,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with("api_deployment", "get_by_id_and_version")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -397,7 +397,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with_ro("api_deployment", "get_by_id_and_version")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -419,7 +419,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with("api_deployment", "get_by_site")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -441,7 +441,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with_ro("api_deployment", "get_by_site")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -465,7 +465,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with("api_deployment", "get_definitions_by_site")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -489,7 +489,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with_ro("api_deployment", "get_definitions_by_site")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -511,7 +511,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with("api_deployment", "get_all_definitions_by_site")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -533,7 +533,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with_ro("api_deployment", "get_all_definitions_by_site")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 }

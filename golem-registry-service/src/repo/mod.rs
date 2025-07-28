@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::db::postgres::PostgresLabelledTransaction;
-use golem_service_base::db::sqlite::SqliteLabelledTransaction;
-use golem_service_base::db::LabelledPoolTransaction;
-
 // Repos
 pub mod account;
 pub mod application;
@@ -28,18 +24,3 @@ pub mod plan;
 
 // Model for SQL records and fields
 pub mod model;
-
-trait ForUpdateSupport: LabelledPoolTransaction {
-    fn requires_and_supports_for_update(&self) -> bool {
-        true
-    }
-}
-
-impl ForUpdateSupport for PostgresLabelledTransaction {}
-
-// NOTE: Sqlite does not support FOR UPDATE, but only one transaction can write at a time
-impl ForUpdateSupport for SqliteLabelledTransaction {
-    fn requires_and_supports_for_update(&self) -> bool {
-        false
-    }
-}

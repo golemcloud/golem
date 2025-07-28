@@ -87,4 +87,7 @@ pub struct HttpApiDeploymentRevisionIdentityRecord {
     pub subdomain: Option<String>,
     pub revision_id: i64,
     pub hash: SqlBlake3Hash,
+
+    #[sqlx(skip)]
+    pub http_api_definitions: Vec<Uuid>,
 }

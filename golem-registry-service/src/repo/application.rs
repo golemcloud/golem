@@ -158,7 +158,7 @@ impl<DBP: Pool> DbApplicationRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx<F, R>(&self, api_name: &'static str, f: F) -> repo::Result<R>
+    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> repo::Result<R>
     where
         R: Send,
         F: for<'f> FnOnce(
@@ -209,7 +209,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         owner_account_id: &Uuid,
     ) -> repo::Result<Vec<ApplicationRecord>> {
         self.with_ro("get_all_by_owner")
-            .fetch_all(
+            .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
                     SELECT application_id, name, account_id, created_at, updated_at, deleted_at, modified_by
                     FROM applications
@@ -225,7 +225,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         application_id: &Uuid,
     ) -> repo::Result<Vec<ApplicationRevisionRecord>> {
         self.with_ro("get_revisions")
-            .fetch_all(
+            .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
                     SELECT application_id, revision_id, name, account_id, created_at, created_by, deleted
                     FROM application_revisions

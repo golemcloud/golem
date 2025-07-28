@@ -12,19 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::RepoError;
+use crate::repo::{BusinessResult, RepoError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{future, TryFutureExt};
 use sqlx::query::{Query, QueryAs};
 use sqlx::{Database, Error, FromRow, IntoArguments, Row};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use tracing::{error, warn};
 
 pub mod postgres;
 pub mod sqlite;
 
+// TODO: better name, should not be in common?
 #[derive(sqlx::FromRow, Debug)]
 pub struct DBValue {
     value: Vec<u8>,
@@ -33,6 +34,50 @@ pub struct DBValue {
 impl DBValue {
     pub fn into_bytes(self) -> Bytes {
         Bytes::from(self.value)
+    }
+}
+
+#[derive(Debug)]
+pub enum TxError<E: Display> {
+    Repo(RepoError),
+    Business(E),
+}
+
+impl<E: Display> From<RepoError> for TxError<E> {
+    fn from(value: RepoError) -> Self {
+        TxError::Repo(value)
+    }
+}
+
+pub trait ToBusiness<T, E> {
+    fn to_business_result(self) -> BusinessResult<T, E>;
+    fn to_business_error_on_unique_violation<F>(self, to_business_error: F) -> BusinessResult<T, E>
+    where
+        F: FnOnce() -> E;
+}
+
+impl<T, E> ToBusiness<T, E> for Result<T, TxError<E>>
+where
+    E: Display,
+{
+    fn to_business_result(self) -> BusinessResult<T, E> {
+        match self {
+            Ok(result) => Ok(Ok(result)),
+            Err(err) => match err {
+                TxError::Repo(err) => Err(err),
+                TxError::Business(err) => Ok(Err(err)),
+            },
+        }
+    }
+
+    fn to_business_error_on_unique_violation<F>(self, to_business_error: F) -> BusinessResult<T, E>
+    where
+        F: FnOnce() -> E,
+    {
+        match self {
+            Err(TxError::Repo(err)) if err.is_unique_violation() => Ok(Err(to_business_error())),
+            other => other.to_business_result(),
+        }
     }
 }
 
@@ -51,18 +96,65 @@ pub trait Pool: Debug + Sync {
 
     /// With_tx gets a pooled database interface for READ/WRITE operations, starts a transaction,
     /// then executes f with the transaction as a parameter, which has to return a Result.
-    /// If f returns a RepoError, then the transaction will be rolled back
-    /// otherwise it will be commited. This means that f should not explicitly call commit or
+    /// If f returns a RepoError or business error, then the transaction will be rolled back,
+    /// otherwise it will be committed. This means that f should not explicitly call commit or
     /// rollback, this is ensured by only sharing a mut ref (given rollback and commit consumes the transaction).
     ///
-    /// One reason to prefer using this functions compared to direct usage of transactions is that
-    /// this style enforces calling labelled rollback on any error. In direct style, rollback usually
+    /// One reason to prefer using this function compared to direct usage of transactions is that
+    /// this style enforces calling labelled rollback on any error. In direct style, rollback is usually
     /// only called on the sqlx::Transaction drop, unless explicitly handled by the code, which means
     /// that those rollbacks are not visible for metrics.
     ///
-    /// TODO: rollback by business logic?
-    /// TODO: rollback without failure?
-    async fn with_tx<F, R>(
+    ///
+    async fn with_tx_err<R, E, F>(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        f: F,
+    ) -> Result<R, TxError<E>>
+    where
+        R: Send,
+        E: Display + Send,
+        F: for<'f> FnOnce(
+                &'f mut <Self::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+            ) -> BoxFuture<'f, Result<R, TxError<E>>>
+            + Send,
+    {
+        let mut tx = self.with_rw(svc_name, api_name).begin().await?;
+        match f(&mut tx).await {
+            Ok(result) => {
+                tx.commit().await?;
+                Ok(result)
+            }
+            Err(err) => {
+                match &err {
+                    TxError::Repo(err) => {
+                        warn!(
+                            svc_name, api_name, error = %err,
+                            "Rolling back, transaction failed with repo error",
+                        );
+                    }
+                    TxError::Business(err) => {
+                        warn!(
+                            svc_name, api_name, error = %err,
+                            "Rolling back, transaction failed with business error",
+                        );
+                    }
+                }
+
+                // If rollback fails, we still return the original error, but log the rollback error
+                if let Err(err) = tx.rollback().await {
+                    error!(svc_name, api_name, error = %err, "Rollback failed");
+                }
+
+                Err(err)
+            }
+        }
+    }
+
+    /// A simplified version of with_tx_err for cases when there is no need for rollbacks based on
+    /// business logic and errors. See with_tx for more info.
+    async fn with_tx<R, F>(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
@@ -82,11 +174,16 @@ pub trait Pool: Debug + Sync {
                 Ok(result)
             }
             Err(err) => {
-                warn!(svc_name, api_name, error = %err, "Rolling back, transaction failed");
-                // If rollback fails we still return the original error, but log the rollback error
+                warn!(
+                    svc_name, api_name, error = %err,
+                    "Rolling back, transaction failed with repo error",
+                );
+
+                // If rollback fails, we still return the original error, but log the rollback error
                 if let Err(err) = tx.rollback().await {
                     error!(svc_name, api_name, error = %err, "Rollback failed");
                 }
+
                 Err(err)
             }
         }
@@ -151,7 +248,14 @@ pub trait PoolApi: Send {
             .await
     }
 
-    async fn fetch_all<'a, O, A>(
+    async fn fetch_all<'a, A>(
+        &mut self,
+        query: Query<'a, Self::Db, A>,
+    ) -> Result<Vec<Self::Row>, RepoError>
+    where
+        A: 'a + IntoArguments<'a, Self::Db>;
+
+    async fn fetch_all_as<'a, O, A>(
         &mut self,
         query_as: QueryAs<'a, Self::Db, O, A>,
     ) -> Result<Vec<O>, RepoError>

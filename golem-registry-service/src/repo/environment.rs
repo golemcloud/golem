@@ -164,7 +164,7 @@ impl<DBP: Pool> DbEnvironmentRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx<F, R>(&self, api_name: &'static str, f: F) -> Result<R, RepoError>
+    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> Result<R, RepoError>
     where
         R: Send,
         F: for<'f> FnOnce(
@@ -200,7 +200,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.version_check AS version_check,
                         r.security_overrides AS security_overrides
                     FROM environments e
-                    LEFT JOIN environment_revisions r
+                    INNER JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
                     WHERE e.application_id = $1 AND e.name = $2 AND e.deleted_at IS NULL
                 "# })
@@ -230,7 +230,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.version_check AS version_check,
                         r.security_overrides AS security_overrides
                     FROM environments e
-                    LEFT JOIN environment_revisions r
+                    INNER JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
                     WHERE e.environment_id = $1 AND e.deleted_at IS NULL
                 "# })

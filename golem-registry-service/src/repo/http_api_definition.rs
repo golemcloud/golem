@@ -127,7 +127,7 @@ impl<DBP: Pool> DbHttpApiDefinitionRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx<F, R>(&self, api_name: &'static str, f: F) -> Result<R, RepoError>
+    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> Result<R, RepoError>
     where
         R: Send,
         F: for<'f> FnOnce(
