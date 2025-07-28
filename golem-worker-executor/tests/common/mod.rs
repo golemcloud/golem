@@ -1,4 +1,4 @@
-use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
+use crate::{LastUniqueId, WorkerExecutorPerTestDependencies};
 use crate::{Deps};
 use anyhow::Error;
 use async_trait::async_trait;
@@ -103,14 +103,13 @@ use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::components::rdb::provided_mysql::ProvidedMysqlRdb;
 use golem_test_framework::components::rdb::provided_postgres::ProvidedPostgresRdb;
-use golem_worker_executor::services::rdbms::{Rdbms, RdbmsServiceDefault};
+use golem_worker_executor::services::rdbms::Rdbms;
 use golem_worker_executor::services::rdbms::postgres::{
     types as postgres_types, PostgresType,
 };
 use golem_worker_executor::services::rdbms::mysql::{
     types as mysql_types, MysqlType
 };
-use golem_worker_executor::services::rdbms::RdbmsService;
 
 pub struct TestWorkerExecutor {
     _join_set: Option<JoinSet<anyhow::Result<()>>>,

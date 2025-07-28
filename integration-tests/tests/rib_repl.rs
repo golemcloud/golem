@@ -21,7 +21,7 @@ use golem_common::model::{ComponentId, TargetWorkerId};
 use golem_rib_repl::{ComponentSource, RibRepl};
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl};
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
 use golem_wasm_ast::analysis::AnalysedType;

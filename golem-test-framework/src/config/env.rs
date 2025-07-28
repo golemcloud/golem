@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::components::cloud_service::docker::DockerCloudService;
-use crate::components::cloud_service::provided::ProvidedCloudService;
 use crate::components::cloud_service::spawned::SpawnedCloudService;
 use crate::components::cloud_service::CloudService;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
@@ -54,7 +53,6 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::Level;
 use uuid::Uuid;
-use crate::dsl::TestDsl;
 
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,

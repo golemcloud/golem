@@ -15,7 +15,7 @@
 use test_r::{inherit_test_dep, test};
 
 use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{LastUniqueId, Tracing};
 use assert2::check;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;

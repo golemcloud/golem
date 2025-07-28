@@ -27,7 +27,7 @@ use golem_client::model::{
     ApiDefinitionInfo, ApiDeployment, ApiDeploymentRequest, ApiSite, ComponentType,
 };
 use golem_common::model::{ComponentId, ProjectId};
-use golem_test_framework::config::{EnvBasedTestDependencies, GolemClientProtocol, TestDependencies, TestDependenciesDsl};
+use golem_test_framework::config::{GolemClientProtocol, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
 use std::panic;

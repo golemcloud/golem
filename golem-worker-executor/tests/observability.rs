@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{LastUniqueId, Tracing};
 use assert2::check;
 use axum::routing::post;
 use axum::{Json, Router};

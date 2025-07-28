@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{common, LastUniqueId, Tracing};
 use assert2::check;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,

@@ -18,7 +18,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::io;
 use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
-use wasm_wave::{from_str, to_string};
+use wasm_wave::from_str;
 use wasm_wave::writer as wave_writer;
 use wasm_wave::writer::{WriterError};
 
@@ -729,7 +729,7 @@ mod type_annotated_value {
     use std::borrow::Cow;
     use std::ops::Deref;
     use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
-    use wasm_wave::{from_str, to_string};
+    use wasm_wave::from_str;
     use wasm_wave::writer::Writer;
     use crate::text::TextWriter;
 

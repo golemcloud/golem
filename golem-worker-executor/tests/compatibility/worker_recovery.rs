@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{LastUniqueId, Tracing};
 use crate::{Deps};
 use golem_common::model::{WorkerId, WorkerStatus};
 use golem_common::serialization::{deserialize, serialize};

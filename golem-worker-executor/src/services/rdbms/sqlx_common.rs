@@ -787,7 +787,7 @@ where
     }
 
     async fn rollback_if_open(&self) -> Result<(), Error> {
-        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::rollback_if_open(self.inner().deref()).await
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::rollback_if_open(self.inner()).await
     }
 }
 

@@ -14,7 +14,7 @@
 
 use crate::common::{start, TestContext};
 use crate::compatibility::worker_recovery::save_recovery_golden_file;
-use crate::{Deps, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{Deps, LastUniqueId, Tracing};
 use assert2::check;
 use axum::routing::get;
 use axum::Router;

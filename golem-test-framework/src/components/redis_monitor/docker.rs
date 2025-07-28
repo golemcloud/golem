@@ -19,7 +19,6 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tracing::info;
 use tracing::Level;
-use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 
 pub struct DockerRedisMonitor {
     child: Arc<Mutex<Option<Child>>>,

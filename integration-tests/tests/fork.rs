@@ -19,7 +19,7 @@ use axum::{Json, Router};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{IdempotencyKey, WorkerId, WorkerStatus};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl};
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::HashMap;

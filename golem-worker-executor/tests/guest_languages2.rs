@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{LastUniqueId, Tracing};
 use assert2::{check, let_assert};
 use chrono::Datelike;
 use golem_test_framework::config::TestDependencies;

@@ -15,12 +15,12 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::time::Duration;
-use test_r::{inherit_test_dep, test, test_dep, timeout};
+use test_r::{inherit_test_dep, test, timeout};
 use tracing::Instrument;
 
-use crate::common::{mysql_host, postgres_host, start, RdbMysqlHost, RdbPostgresHost, TestContext, TestWorkerExecutor};
+use crate::common::{mysql_host, postgres_host, start, TestContext};
 use golem_test_framework::components::rdb::RdbConnection;
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{LastUniqueId, Tracing};
 use assert2::check;
 use golem_common::model::public_oplog::{
     EndRegionParameters, ImportedFunctionInvokedParameters, PublicDurableFunctionType,
@@ -28,9 +28,7 @@ use golem_common::model::public_oplog::{
 };
 use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
 use golem_service_base::model::PublicOplogEntryWithIndex;
-use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
-use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
-use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::{Value, ValueAndType};

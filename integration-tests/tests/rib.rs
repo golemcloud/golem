@@ -18,7 +18,7 @@ use crate::{Deps, Tracing};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, TargetWorkerId};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl};
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
 use golem_wasm_ast::analysis::AnalysedType;

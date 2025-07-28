@@ -19,7 +19,7 @@ use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 use aws_sdk_s3::Client;
-use aws_sdk_s3::{error::SdkError, Error};
+use aws_sdk_s3::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
@@ -34,22 +34,19 @@ use golem_service_base::storage::blob::*;
 use golem_service_base::storage::blob::{fs, memory, s3, BlobStorage, BlobStorageNamespace};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::Debug;
-use std::io::empty;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
-use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
+use test_r::{define_matrix_dimension, test, test_dep};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers::core::ContainerPort;
 use testcontainers_modules::minio::MinIO;
 use tracing::warn;
 use unix_path::Path as UnixPath;
-use unix_path::PathBuf as UnixPathBuf;
 use uuid::Uuid;
 use golem_service_base::storage::blob::as_std_path;
-use crate::Tracing;
 
 #[async_trait]
 trait GetBlobStorage: Debug {

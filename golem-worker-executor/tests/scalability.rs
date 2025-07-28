@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, start_customized, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{LastUniqueId, Tracing};
 use assert2::check;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;

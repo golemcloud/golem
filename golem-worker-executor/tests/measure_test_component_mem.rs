@@ -1,7 +1,7 @@
 use test_r::{inherit_test_dep, test};
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{LastUniqueId, Tracing};
 use anyhow::anyhow;
 use golem_common::model::ComponentType;
 use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};

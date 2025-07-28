@@ -22,9 +22,7 @@ use golem_test_framework::components::cloud_service::{AdminOnlyStubCloudService,
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
 use golem_test_framework::components::redis::provided::ProvidedRedis;
-use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
@@ -39,7 +37,6 @@ use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
 use tempfile::TempDir;
 use test_r::{tag_suite, test_dep};
-use tracing::Level;
 use uuid::Uuid;
 
 mod common;

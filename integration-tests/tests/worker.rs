@@ -34,7 +34,7 @@ use golem_common::model::{
     FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator, TargetWorkerId,
     Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
 };
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl};
+use golem_test_framework::config::TestDependencies;
 use golem_wasm_ast::analysis::analysed_type;
 use rand::seq::IteratorRandom;
 use serde_json::json;

@@ -15,10 +15,9 @@
 use crate::components::redis::Redis;
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tracing::{info, Level};
 
 pub struct SpawnedRedis {

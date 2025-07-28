@@ -15,9 +15,7 @@
 use assert2::check;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
-use golem_common::model::{ComponentId, WorkerId};
-use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
-use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
+use golem_common::model::WorkerId;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use golem_worker_executor::services::rdbms::mysql::{types as mysql_types, MysqlType};
 use golem_worker_executor::services::rdbms::postgres::{types as postgres_types, PostgresType};
@@ -35,11 +33,8 @@ use test_r::{test, test_dep, timeout};
 use tokio::task::JoinSet;
 use tracing::{info, Instrument};
 use uuid::Uuid;
-use golem_test_framework::components::rdb::provided_postgres::ProvidedPostgresRdb;
-use golem_test_framework::components::rdb::{DbInfo, MysqlInfo, PostgresInfo, Rdb, RdbConnection};
-use golem_test_framework::components::rdb::provided_mysql::ProvidedMysqlRdb;
+use golem_test_framework::components::rdb::RdbConnection;
 use crate::common::{mysql_host, new_worker_id, postgres_host};
-use crate::compatibility::v1::worker_id;
 
 #[test_dep]
 fn rdbms_service() -> RdbmsServiceDefault {

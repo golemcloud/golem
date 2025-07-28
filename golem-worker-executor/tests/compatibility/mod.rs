@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Deps, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{Deps, LastUniqueId, Tracing};
 use test_r::inherit_test_dep;
 
 pub mod v1;

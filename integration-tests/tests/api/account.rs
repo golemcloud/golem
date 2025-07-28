@@ -14,7 +14,7 @@
 
 use crate::{Deps, Tracing};
 use golem_test_framework::config::{
-    EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl,
+    TestDependencies, TestDependenciesDsl,
 };
 use golem_test_framework::dsl::TestDslUnsafe;
 use test_r::{inherit_test_dep, test};

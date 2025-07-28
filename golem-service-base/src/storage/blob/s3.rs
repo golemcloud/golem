@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{as_std_path, as_unix_path};
+use super::as_unix_path;
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
@@ -40,7 +40,6 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use tracing::info;
-use unix_path::Path as UnixPath;
 use unix_path::PathBuf as UnixPathBuf;
 
 #[derive(Debug)]

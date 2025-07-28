@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{LastUniqueId, Tracing};
 use assert2::check;
 use golem_common::model::OplogIndex;
 use golem_service_base::model::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
