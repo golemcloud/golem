@@ -21,60 +21,15 @@ use crate::services::projects::ProjectService;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::component_metadata::{DynamicLinkedInstance, LinearMemory};
-use golem_common::model::plugin::PluginInstallation;
-use golem_common::model::{
-    ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ProjectId,
-};
+use golem_common::model::{ComponentId, ComponentVersion, ProjectId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_service_base::testing::LocalFileSystemComponentMetadata;
-use golem_wasm_ast::analysis::AnalysedExport;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
-
-#[derive(Debug, Clone)]
-pub struct ComponentMetadata {
-    pub version: ComponentVersion,
-    pub size: u64,
-    pub memories: Vec<LinearMemory>,
-    pub exports: Vec<AnalysedExport>,
-    pub component_type: ComponentType,
-    pub files: Vec<InitialComponentFile>,
-    pub plugin_installations: Vec<PluginInstallation>,
-    pub component_owner: ComponentOwner,
-    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-    pub env: HashMap<String, String>,
-    pub root_package_name: Option<String>,
-    pub root_package_version: Option<String>,
-}
-
-impl From<LocalFileSystemComponentMetadata> for ComponentMetadata {
-    fn from(value: LocalFileSystemComponentMetadata) -> Self {
-        Self {
-            version: value.version,
-            size: value.size,
-            memories: value.memories,
-            exports: value.exports,
-            component_type: value.component_type,
-            files: value.files,
-            plugin_installations: vec![],
-            component_owner: ComponentOwner {
-                account_id: value.account_id,
-                project_id: value.project_id,
-            },
-            dynamic_linking: value.dynamic_linking,
-            env: value.env,
-            root_package_name: None, // NOTE: we could extract this information from the WASM component metadata sections
-            root_package_version: None,
-        }
-    }
-}
 
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
@@ -85,14 +40,14 @@ pub trait ComponentService: Send + Sync {
         project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: ComponentVersion,
-    ) -> Result<(Component, ComponentMetadata), WorkerExecutorError>;
+    ) -> Result<(Component, golem_service_base::model::Component), WorkerExecutorError>;
 
     async fn get_metadata(
         &self,
         project_id: &ProjectId,
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
-    ) -> Result<ComponentMetadata, WorkerExecutorError>;
+    ) -> Result<golem_service_base::model::Component, WorkerExecutorError>;
 
     /// Resolve a component given a user provided string. The syntax of the provided string is allowed to vary between implementations.
     /// Resolving component is the component in whoose context the resolution is being performed
@@ -170,8 +125,8 @@ fn create_component_cache(
 mod filesystem {
     use super::create_component_cache;
     use super::record_compilation_time;
+    use super::ComponentKey;
     use super::ComponentService;
-    use super::{ComponentKey, ComponentMetadata};
     use crate::services::compiled_component::CompiledComponentService;
     use async_lock::{RwLock, Semaphore};
     use async_trait::async_trait;
@@ -380,7 +335,7 @@ mod filesystem {
             &self,
             component_id: &ComponentId,
             component_version: ComponentVersion,
-        ) -> Result<ComponentMetadata, WorkerExecutorError> {
+        ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
             let key = ComponentKey {
                 component_id: component_id.clone(),
                 component_version,
@@ -403,7 +358,7 @@ mod filesystem {
         async fn get_latest_metadata(
             &self,
             component_id: &ComponentId,
-        ) -> Result<ComponentMetadata, WorkerExecutorError> {
+        ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
             self.refresh_index().await?;
 
             let index = self.index.read().await;
@@ -438,7 +393,8 @@ mod filesystem {
             project_id: &ProjectId,
             component_id: &ComponentId,
             component_version: ComponentVersion,
-        ) -> Result<(Component, ComponentMetadata), WorkerExecutorError> {
+        ) -> Result<(Component, golem_service_base::model::Component), WorkerExecutorError>
+        {
             let key = ComponentKey {
                 component_id: component_id.clone(),
                 component_version,
@@ -475,7 +431,7 @@ mod filesystem {
             _project_id: &ProjectId,
             component_id: &ComponentId,
             forced_version: Option<ComponentVersion>,
-        ) -> Result<ComponentMetadata, WorkerExecutorError> {
+        ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
             match forced_version {
                 Some(version) => self.get_metadata_for_version(component_id, version).await,
                 None => self.get_latest_metadata(component_id).await,
@@ -517,7 +473,7 @@ mod filesystem {
 }
 
 mod grpc {
-    use super::{create_component_cache, ComponentKey, ComponentMetadata, ComponentService};
+    use super::{create_component_cache, ComponentKey, ComponentService};
     use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
     use crate::metrics::component::record_compilation_time;
     use crate::services::compiled_component::CompiledComponentService;
@@ -539,10 +495,10 @@ mod grpc {
     use golem_common::model::{ProjectId, RetryConfig};
     use golem_common::retries::with_retries;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use golem_wasm_ast::analysis::AnalysedExport;
+
     use http::Uri;
     use prost::Message;
-    use std::collections::HashMap;
+
     use std::future::Future;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -556,7 +512,8 @@ mod grpc {
 
     pub struct ComponentServiceGrpc {
         component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
-        component_metadata_cache: Cache<ComponentKey, (), ComponentMetadata, WorkerExecutorError>,
+        component_metadata_cache:
+            Cache<ComponentKey, (), golem_service_base::model::Component, WorkerExecutorError>,
         resolved_component_cache:
             Cache<(ProjectId, String), (), Option<ComponentId>, WorkerExecutorError>,
         access_token: Uuid,
@@ -696,7 +653,8 @@ mod grpc {
             project_id: &ProjectId,
             component_id: &ComponentId,
             component_version: ComponentVersion,
-        ) -> Result<(Component, ComponentMetadata), WorkerExecutorError> {
+        ) -> Result<(Component, golem_service_base::model::Component), WorkerExecutorError>
+        {
             let key = ComponentKey {
                 component_id: component_id.clone(),
                 component_version,
@@ -802,7 +760,7 @@ mod grpc {
             project_id: &ProjectId,
             component_id: &ComponentId,
             forced_version: Option<ComponentVersion>,
-        ) -> Result<ComponentMetadata, WorkerExecutorError> {
+        ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
             match forced_version {
                 Some(version) => {
                     let client = self.component_client.clone();
@@ -827,12 +785,12 @@ mod grpc {
                                         forced_version,
                                     )
                                     .await?;
-                                    for installation in &metadata.plugin_installations {
+                                    for installation in &metadata.installed_plugins {
                                         plugin_observations
                                             .observe_plugin_installation(
                                                 &account_id,
                                                 &component_id,
-                                                metadata.version,
+                                                metadata.versioned_component_id.version,
                                                 installation,
                                             )
                                             .await?;
@@ -858,7 +816,7 @@ mod grpc {
                         .get_or_insert_simple(
                             &ComponentKey {
                                 component_id: component_id.clone(),
-                                component_version: metadata.version,
+                                component_version: metadata.versioned_component_id.version,
                             },
                             || Box::pin(async move { Ok(metadata) }),
                         )
@@ -970,7 +928,7 @@ mod grpc {
         retry_config: &RetryConfig,
         component_id: &ComponentId,
         component_version: Option<ComponentVersion>,
-    ) -> Result<ComponentMetadata, WorkerExecutorError> {
+    ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
         let desc = format!("Getting component metadata of {component_id}");
         debug!("{}", &desc);
         with_retries(
@@ -1025,103 +983,7 @@ mod grpc {
                         }
                     }?;
 
-                    let root_package_name = component
-                        .metadata
-                        .as_ref()
-                        .and_then(|m| m.root_package_name.clone());
-                    let root_package_version = component
-                        .metadata
-                        .as_ref()
-                        .and_then(|m| m.root_package_version.clone());
-
-                    let result = ComponentMetadata {
-                        version: component
-                            .versioned_component_id
-                            .as_ref()
-                            .map(|id| id.version)
-                            .ok_or(GrpcError::Unexpected(
-                                "Undefined component version".to_string(),
-                            ))?,
-                        size: component.component_size,
-                        component_type: component.component_type().into(),
-                        memories: component
-                            .metadata
-                            .as_ref()
-                            .map(|metadata| metadata.memories.iter().map(|m| (*m).into()).collect())
-                            .unwrap_or_default(),
-                        exports: component
-                            .metadata
-                            .as_ref()
-                            .map(|metadata| {
-                                let export = &metadata.exports;
-                                let vec: Vec<Result<AnalysedExport, String>> = export
-                                    .iter()
-                                    .cloned()
-                                    .map(AnalysedExport::try_from)
-                                    .collect();
-                                vec.into_iter().collect()
-                            })
-                            .unwrap_or_else(|| Ok(Vec::new()))
-                            .map_err(|err| {
-                                GrpcError::Unexpected(format!("Failed to get the exports: {err}"))
-                            })?,
-                        files: component
-                            .files
-                            .into_iter()
-                            .map(|file| file.try_into())
-                            .collect::<Result<Vec<_>, _>>()
-                            .map_err(|err| {
-                                GrpcError::Unexpected(format!("Failed to get the files: {err}"))
-                            })?,
-                        plugin_installations: component
-                            .installed_plugins
-                            .into_iter()
-                            .map(|plugin| plugin.try_into())
-                            .collect::<Result<Vec<_>, _>>()
-                            .map_err(|err| {
-                                GrpcError::Unexpected(format!(
-                                    "Failed to get the plugin installations: {err}"
-                                ))
-                            })?,
-                        dynamic_linking: HashMap::from_iter(
-                            component
-                                .metadata
-                                .map(|metadata| {
-                                    metadata
-                                        .dynamic_linking
-                                        .into_iter()
-                                        .map(|(k, v)| v.try_into().map(|v| (k.clone(), v)))
-                                        .collect::<Result<Vec<_>, String>>()
-                                })
-                                .unwrap_or_else(|| Ok(Vec::new()))
-                                .map_err(|err| {
-                                    GrpcError::Unexpected(format!(
-                                        "Failed to get the dynamic linking information: {err}"
-                                    ))
-                                })?,
-                        ),
-                        component_owner: ComponentOwner {
-                            account_id: component
-                                .account_id
-                                .ok_or(GrpcError::Unexpected(
-                                    "Missing account_id for component".to_string(),
-                                ))?
-                                .into(),
-                            project_id: ProjectId(
-                                component
-                                    .project_id
-                                    .and_then(|p| p.value)
-                                    .ok_or(GrpcError::Unexpected(
-                                        "Missing project_id for component".to_string(),
-                                    ))?
-                                    .into(),
-                            ),
-                        },
-                        env: component.env,
-                        root_package_name,
-                        root_package_version,
-                    };
-
+                    let result = component.try_into()?;
                     record_external_call_response_size_bytes("components", "get_metadata", len);
 
                     Ok(result)
@@ -1158,7 +1020,7 @@ mod grpc {
     fn create_component_metadata_cache(
         max_capacity: usize,
         time_to_idle: Duration,
-    ) -> Cache<ComponentKey, (), ComponentMetadata, WorkerExecutorError> {
+    ) -> Cache<ComponentKey, (), golem_service_base::model::Component, WorkerExecutorError> {
         Cache::new(
             Some(max_capacity),
             FullCacheEvictionMode::LeastRecentlyUsed(1),

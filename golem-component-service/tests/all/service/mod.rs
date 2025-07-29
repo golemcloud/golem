@@ -212,6 +212,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService>) {
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();
@@ -227,6 +228,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService>) {
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();
@@ -308,6 +310,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService>) {
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .map_err(|err| err.to_string())
@@ -570,6 +573,7 @@ async fn test_initial_component_file_upload(component_service: &Arc<dyn Componen
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();
@@ -623,6 +627,7 @@ async fn test_initial_component_file_data_sharing(component_service: &Arc<dyn Co
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();
@@ -645,6 +650,7 @@ async fn test_initial_component_file_data_sharing(component_service: &Arc<dyn Co
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();
@@ -685,6 +691,7 @@ async fn test_component_constraint_incompatible_updates(
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();
@@ -719,6 +726,7 @@ async fn test_component_constraint_incompatible_updates(
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap_err()
@@ -781,6 +789,7 @@ async fn test_component_oplog_process_plugin_creation(
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();
@@ -821,6 +830,7 @@ async fn test_component_oplog_process_plugin_creation(
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();
@@ -878,6 +888,7 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();
@@ -932,6 +943,7 @@ async fn test_failing_component_transformer_plugin(
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();
@@ -1002,6 +1014,7 @@ async fn test_library_plugin_creation(
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();
@@ -1089,6 +1102,7 @@ async fn test_app_plugin_creation(
             HashMap::new(),
             &test_component_owner(),
             HashMap::new(),
+            vec![],
         )
         .await
         .unwrap();

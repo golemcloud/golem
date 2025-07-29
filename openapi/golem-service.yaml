@@ -2890,6 +2890,8 @@ paths:
                   $ref: '#/components/schemas/DynamicLinking'
                 env:
                   $ref: '#/components/schemas/ComponentEnv'
+                agentTypes:
+                  $ref: '#/components/schemas/AgentTypes'
               required:
               - component
         required: true
@@ -3042,6 +3044,8 @@ paths:
                   $ref: '#/components/schemas/DynamicLinking'
                 env:
                   $ref: '#/components/schemas/ComponentEnv'
+                agentTypes:
+                  $ref: '#/components/schemas/AgentTypes'
               required:
               - query
               - component
@@ -7922,6 +7926,92 @@ components:
     WebFlowCallbackSuccessResponse:
       title: WebFlowCallbackSuccessResponse
       type: object
+    AgentConstructor:
+      title: AgentConstructor
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        promptHint:
+          type: string
+        inputSchema:
+          $ref: '#/components/schemas/DataSchema'
+      required:
+      - description
+      - inputSchema
+    AgentDependency:
+      title: AgentDependency
+      type: object
+      properties:
+        typeName:
+          type: string
+        description:
+          type: string
+        constructor:
+          $ref: '#/components/schemas/AgentConstructor'
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentMethod'
+      required:
+      - typeName
+      - constructor
+      - methods
+    AgentMethod:
+      title: AgentMethod
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        promptHint:
+          type: string
+        inputSchema:
+          $ref: '#/components/schemas/DataSchema'
+        outputSchema:
+          $ref: '#/components/schemas/DataSchema'
+      required:
+      - name
+      - description
+      - inputSchema
+      - outputSchema
+    AgentType:
+      title: AgentType
+      type: object
+      properties:
+        typeName:
+          type: string
+        description:
+          type: string
+        constructor:
+          $ref: '#/components/schemas/AgentConstructor'
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentMethod'
+        dependencies:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentDependency'
+      required:
+      - typeName
+      - description
+      - constructor
+      - methods
+      - dependencies
+    AgentTypes:
+      title: AgentTypes
+      type: object
+      properties:
+        types:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
+      required:
+      - types
     AnalysedExport:
       discriminator:
         propertyName: type
@@ -8330,6 +8420,22 @@ components:
           type: string
       required:
       - blobStorageKey
+    BinaryDescriptor:
+      title: BinaryDescriptor
+      type: object
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/BinaryType'
+    BinaryType:
+      title: BinaryType
+      type: object
+      properties:
+        mimeType:
+          type: string
+      required:
+      - mimeType
     Component:
       title: Component
       type: object
@@ -8441,12 +8547,17 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/DynamicLinkedInstance'
+        agentTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
       required:
       - exports
       - producers
       - memories
       - binaryWit
       - dynamicLinking
+      - agentTypes
     ComponentPluginScope:
       title: ComponentPluginScope
       type: object
@@ -8511,6 +8622,28 @@ components:
       enum:
       - Durable
       - Ephemeral
+    DataSchema:
+      discriminator:
+        propertyName: type
+        mapping:
+          Tuple: '#/components/schemas/DataSchema_NamedElementSchemas'
+          Multimodal: '#/components/schemas/DataSchema_NamedElementSchemas'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
+      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
+    DataSchema_NamedElementSchemas:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Multimodal
+            type: string
+            enum:
+            - Multimodal
+        required:
+        - type
+      - $ref: '#/components/schemas/NamedElementSchemas'
     DynamicLinkedInstance:
       discriminator:
         propertyName: type
@@ -8552,6 +8685,54 @@ components:
             $ref: '#/components/schemas/DynamicLinkedInstance'
       required:
       - dynamicLinking
+    ElementSchema:
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentModel: '#/components/schemas/ElementSchema_AnalysedType'
+          UnstructuredText: '#/components/schemas/ElementSchema_TextDescriptor'
+          UnstructuredBinary: '#/components/schemas/ElementSchema_BinaryDescriptor'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ElementSchema_AnalysedType'
+      - $ref: '#/components/schemas/ElementSchema_TextDescriptor'
+      - $ref: '#/components/schemas/ElementSchema_BinaryDescriptor'
+    ElementSchema_AnalysedType:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentModel
+            type: string
+            enum:
+            - ComponentModel
+        required:
+        - type
+      - $ref: '#/components/schemas/AnalysedType'
+    ElementSchema_BinaryDescriptor:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredBinary
+            type: string
+            enum:
+            - UnstructuredBinary
+        required:
+        - type
+      - $ref: '#/components/schemas/BinaryDescriptor'
+    ElementSchema_TextDescriptor:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredText
+            type: string
+            enum:
+            - UnstructuredText
+        required:
+        - type
+      - $ref: '#/components/schemas/TextDescriptor'
     InitialComponentFile:
       title: InitialComponentFile
       type: object
@@ -8613,6 +8794,27 @@ components:
       required:
       - name
       - typ
+    NamedElementSchema:
+      title: NamedElementSchema
+      type: object
+      properties:
+        name:
+          type: string
+        schema:
+          $ref: '#/components/schemas/ElementSchema'
+      required:
+      - name
+      - schema
+    NamedElementSchemas:
+      title: NamedElementSchemas
+      type: object
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamedElementSchema'
+      required:
+      - elements
     OplogProcessorDefinition:
       title: OplogProcessorDefinition
       type: object
@@ -8878,6 +9080,22 @@ components:
           format: uuid
       required:
       - projectId
+    TextDescriptor:
+      title: TextDescriptor
+      type: object
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TextType'
+    TextType:
+      title: TextType
+      type: object
+      properties:
+        languageCode:
+          type: string
+      required:
+      - languageCode
     TypeBool:
       title: TypeBool
       type: object

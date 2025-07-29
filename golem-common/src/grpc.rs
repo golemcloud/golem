@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_api_grpc::proto::golem::apidefinition;
 use golem_api_grpc::proto::golem::common;
 use golem_api_grpc::proto::golem::component;
 use golem_api_grpc::proto::golem::worker;
@@ -80,94 +79,4 @@ pub fn proto_invocation_context_parent_worker_id_string(
 pub enum ProtoApiDefinitionKind {
     Golem,
     OpenAPI,
-}
-
-pub trait HasProtoApiDefinitionRequest {
-    fn proto_api_definition_kind(&self) -> ProtoApiDefinitionKind;
-    fn api_definition(&self) -> Option<&apidefinition::v1::ApiDefinitionRequest>;
-}
-
-impl HasProtoApiDefinitionRequest
-    for apidefinition::v1::create_api_definition_request::ApiDefinition
-{
-    fn proto_api_definition_kind(&self) -> ProtoApiDefinitionKind {
-        match self {
-            apidefinition::v1::create_api_definition_request::ApiDefinition::Definition(_) => {
-                ProtoApiDefinitionKind::Golem
-            }
-            apidefinition::v1::create_api_definition_request::ApiDefinition::Openapi(_) => {
-                ProtoApiDefinitionKind::OpenAPI
-            }
-        }
-    }
-
-    fn api_definition(&self) -> Option<&apidefinition::v1::ApiDefinitionRequest> {
-        match self {
-            apidefinition::v1::create_api_definition_request::ApiDefinition::Definition(
-                api_def,
-            ) => Some(api_def),
-            apidefinition::v1::create_api_definition_request::ApiDefinition::Openapi(_) => None,
-        }
-    }
-}
-
-impl HasProtoApiDefinitionRequest
-    for apidefinition::v1::update_api_definition_request::ApiDefinition
-{
-    fn proto_api_definition_kind(&self) -> ProtoApiDefinitionKind {
-        match self {
-            apidefinition::v1::update_api_definition_request::ApiDefinition::Definition(_) => {
-                ProtoApiDefinitionKind::Golem
-            }
-            apidefinition::v1::update_api_definition_request::ApiDefinition::Openapi(_) => {
-                ProtoApiDefinitionKind::OpenAPI
-            }
-        }
-    }
-
-    fn api_definition(&self) -> Option<&apidefinition::v1::ApiDefinitionRequest> {
-        match self {
-            apidefinition::v1::update_api_definition_request::ApiDefinition::Definition(
-                api_def,
-            ) => Some(api_def),
-            apidefinition::v1::update_api_definition_request::ApiDefinition::Openapi(_) => None,
-        }
-    }
-}
-
-pub fn proto_api_definition_kind_string<T: HasProtoApiDefinitionRequest>(
-    opt_t: &Option<T>,
-) -> Option<String> {
-    opt_t.as_ref().map(|t| match t.proto_api_definition_kind() {
-        ProtoApiDefinitionKind::Golem => "golem".to_owned(),
-        ProtoApiDefinitionKind::OpenAPI => "openapi".to_owned(),
-    })
-}
-
-pub fn proto_api_definition_id_string<T: HasProtoApiDefinitionRequest>(
-    api_definition: &Option<T>,
-) -> Option<String> {
-    api_definition
-        .as_ref()
-        .and_then(|d| d.api_definition())
-        .and_then(|d| d.id.clone())
-        .map(|id| id.value)
-}
-
-pub fn proto_api_definition_version_string<T: HasProtoApiDefinitionRequest>(
-    api_definition: &Option<T>,
-) -> Option<String> {
-    api_definition
-        .as_ref()
-        .and_then(|d| d.api_definition())
-        .map(|d| d.version.clone())
-}
-
-pub fn proto_api_definition_draft_string<T: HasProtoApiDefinitionRequest>(
-    api_definition: &Option<T>,
-) -> Option<String> {
-    api_definition
-        .as_ref()
-        .and_then(|d| d.api_definition())
-        .map(|d| d.draft.to_string())
 }

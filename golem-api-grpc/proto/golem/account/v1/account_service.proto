@@ -7,7 +7,7 @@ import public "golem/account/account.proto";
 import public "golem/common/account_id.proto";
 import public "golem/account/account_data.proto";
 import public "golem/account/v1/account_error.proto";
-import public "golem/plan/plan.proto";
+import public "golem/account/plan.proto";
 
 service CloudAccountService {
   rpc DeleteAccount (AccountDeleteRequest) returns (AccountDeleteResponse);
@@ -45,7 +45,7 @@ message AccountGetPlanRequest {
 
 message AccountGetPlanResponse {
   oneof result {
-    golem.plan.Plan plan = 1;
+    golem.account.Plan plan = 1;
     golem.account.v1.AccountError error = 2;
   }
 }

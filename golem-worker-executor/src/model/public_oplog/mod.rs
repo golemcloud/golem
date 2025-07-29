@@ -353,7 +353,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let function = function_by_name(&metadata.exports, &function_name)?.ok_or(
+                let function = function_by_name(&metadata.metadata.exports, &function_name)?.ok_or(
                     format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                 )?;
 
@@ -475,7 +475,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                             .await
                             .map_err(|err| err.to_string())?;
 
-                        let function = function_by_name(&metadata.exports, &full_function_name)?;
+                        let function =
+                            function_by_name(&metadata.metadata.exports, &full_function_name)?;
 
                         // It is not guaranteed that we can resolve the enqueued invocation's parameter types because
                         // we only know the current component version. If the client enqueued an update earlier and assumes
@@ -626,17 +627,19 @@ impl PublicOplogEntryOps for PublicOplogEntry {
 
                 let resource_name = indexed_resource.resource_name.clone();
                 let resource_constructor_name = ParsedFunctionName::new(
-                    find_resource_site(&metadata.exports, &resource_name).ok_or(format!(
-                        "Resource site for resource {} not found in component {} version {}",
-                        resource_name,
-                        owned_worker_id.component_id(),
-                        component_version
-                    ))?,
+                    find_resource_site(&metadata.metadata.exports, &resource_name).ok_or(
+                        format!(
+                            "Resource site for resource {} not found in component {} version {}",
+                            resource_name,
+                            owned_worker_id.component_id(),
+                            component_version
+                        ),
+                    )?,
                     ParsedFunctionReference::RawResourceConstructor {
                         resource: resource_name.clone(),
                     },
                 );
-                let constructor_def = function_by_name(&metadata.exports, &resource_constructor_name.to_string())?.ok_or(
+                let constructor_def = function_by_name(&metadata.metadata.exports, &resource_constructor_name.to_string())?.ok_or(
                         format!("Resource constructor {resource_constructor_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                     )?;
 

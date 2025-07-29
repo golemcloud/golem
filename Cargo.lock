@@ -3484,6 +3484,7 @@ dependencies = [
  "typed-path",
  "url",
  "uuid",
+ "wasmtime",
 ]
 
 [[package]]

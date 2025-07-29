@@ -32,6 +32,7 @@ model = [
     "dep:golem-wasm-rpc",
     "dep:golem-wasm-ast",
     "dep:golem-rib",
+    "dep:wasmtime"
 ]
 observability = [
     "config",
@@ -141,6 +142,7 @@ tracing-serde = { workspace = true, optional = true }
 typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+wasmtime = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

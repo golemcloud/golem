@@ -171,6 +171,7 @@ impl FileSystemComponentService {
                 binary_wit: raw_component_metadata.binary_wit,
                 root_package_name: raw_component_metadata.root_package_name,
                 root_package_version: raw_component_metadata.root_package_version,
+                agent_types: vec![],
             }),
             account_id: Some(self.account_id.clone().into()),
             project_id: Some(self.default_project_id.clone().into()),
