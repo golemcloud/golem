@@ -39,6 +39,10 @@ impl RibDependencyManager for TestRibReplDependencyManager {
             .store()
             .await;
 
+        dbg!("Expecting component Id raw {:?}", &component_id);
+
+        dbg!("Expecting component Id {:?}", golem_wasm_rpc::ComponentId::from(component_id.clone()));
+
         let metadata = self
             .dependencies
             .admin()

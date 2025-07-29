@@ -1010,7 +1010,7 @@ mod grpc {
                             let request = authorised_grpc_request(
                                 GetComponentsRequest {
                                     project_id: None,
-                                    component_name: Some("weather_agent".to_string()),
+                                    component_name: Some("agentic_guest".to_string()),
                                 },
                                 access_token,
                             );

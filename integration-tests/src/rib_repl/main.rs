@@ -4,6 +4,7 @@ use golem_test_framework::config::{
 };
 use integration_tests::rib_repl::bootstrap::*;
 use std::sync::Arc;
+use uuid::Uuid;
 use golem_test_framework::dsl::TestDslUnsafe;
 
 #[tokio::main]
@@ -12,13 +13,14 @@ async fn main() {
 
     // Making sure golem is loaded with a component called weather_agent
     // which the assistant_agent will be talking to
-    let _ = deps
-        .admin()
-        .component("weather_agent")
-        .store()
-        .await;
+    // let _ = deps
+    //     .admin()
+    //     .component("weather_agent")
+    //     .store()
+    //     .await;
 
     // REPL will be loaded only with a single component, but in REPL's context
+
     let component_name = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "shopping-cart".to_string());

@@ -106,8 +106,8 @@ impl AuthedComponentService {
                     .await
             }
             None => Err(ComponentError::Unauthorized(format!(
-                "Account unauthorized to perform action on component {}: {}",
-                component_id.0, action
+                "Account {:?} unauthorized to perform action on component {}: {}",
+                owner, component_id.0, action
             ))),
         }
     }
