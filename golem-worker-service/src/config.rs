@@ -251,6 +251,8 @@ pub fn make_worker_service_config_loader() -> ConfigLoader<WorkerServiceConfig> 
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::path::PathBuf;
     use test_r::test;
 
     use super::make_worker_service_config_loader;
@@ -258,6 +260,8 @@ mod tests {
 
     #[test]
     pub fn config_is_loadable() {
+        env::set_current_dir( PathBuf::from(env!("CARGO_MANIFEST_DIR")) ).expect("Failed to set current directory");
+
         make_worker_service_config_loader()
             .load_or_dump_config()
             .expect("Failed to load config");

@@ -210,11 +210,15 @@ pub fn make_config_loader() -> ConfigLoader<CloudServiceConfig> {
 #[cfg(test)]
 mod tests {
     use test_r::test;
+    use std::env;
+    use std::path::PathBuf;
 
     use crate::config::make_config_loader;
 
     #[test]
     pub fn config_is_loadable() {
+        env::set_current_dir( PathBuf::from(env!("CARGO_MANIFEST_DIR")) ).expect("Failed to set current directory");
+
         make_config_loader().load().expect("Failed to load config");
     }
 }

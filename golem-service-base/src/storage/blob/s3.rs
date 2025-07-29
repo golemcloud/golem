@@ -142,9 +142,6 @@ impl S3BlobStorage {
                 let account_id_string = account_id.to_string();
                 base.push(account_id_string);
             }
-            BlobStorageNamespace::Components => {
-                // none
-            },
             BlobStorageNamespace::PluginWasmFiles { account_id } => {
                 let account_id_string = account_id.to_string();
                 base.push(account_id_string);

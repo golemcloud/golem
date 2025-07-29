@@ -102,16 +102,16 @@ impl<W: io::Write> TextWriter<W> {
         Ok(())
     }
 
-    /// Gets a mutable reference to the underlying `io::Write` sink
-    /// originally wrapped by the `wave_writer::Writer`.
-    pub fn get_mut(&mut self) -> &mut W {
-        self.inner_wave_writer.as_mut()
-    }
-
-    /// Unwraps this `TextWriter`, returning the underlying `wasm_wave::writer::Writer<W>`.
-    pub fn into_wave_writer(self) -> wave_writer::Writer<W> {
-        self.inner_wave_writer
-    }
+    // /// Gets a mutable reference to the underlying `io::Write` sink
+    // /// originally wrapped by the `wave_writer::Writer`.
+    // pub fn get_mut(&mut self) -> &mut W {
+    //     self.inner_wave_writer.as_mut()
+    // }
+    //
+    // /// Unwraps this `TextWriter`, returning the underlying `wasm_wave::writer::Writer<W>`.
+    // pub fn into_wave_writer(self) -> wave_writer::Writer<W> {
+    //     self.inner_wave_writer
+    // }
 }
 
 impl WasmValue for ValueAndType {
