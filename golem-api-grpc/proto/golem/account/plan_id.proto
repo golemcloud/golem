@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package golem.plan;
+package golem.account;
 
 import "golem/common/uuid.proto";
 
