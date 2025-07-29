@@ -17,7 +17,12 @@ use std::collections::HashMap;
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 
-use golem_common::model::component_metadata::{DynamicLinkedInstance, LinearMemory};
+use crate::model::{Component, ComponentName};
+use golem_common::model::base64::Base64;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
+use golem_common::model::component_metadata::{
+    ComponentMetadata, DynamicLinkedInstance, LinearMemory,
+};
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ProjectId,
 };
@@ -42,4 +47,35 @@ pub struct LocalFileSystemComponentMetadata {
 
     #[serde(default)]
     pub env: HashMap<String, String>,
+}
+
+impl From<LocalFileSystemComponentMetadata> for Component {
+    fn from(value: LocalFileSystemComponentMetadata) -> Self {
+        Self {
+            owner: ComponentOwner {
+                account_id: value.account_id,
+                project_id: value.project_id,
+            },
+            versioned_component_id: VersionedComponentId {
+                component_id: value.component_id,
+                version: value.version,
+            },
+            component_name: ComponentName(value.component_name),
+            component_size: value.size,
+            metadata: ComponentMetadata {
+                exports: value.exports,
+                producers: vec![],
+                memories: value.memories,
+                binary_wit: Base64(vec![]),
+                root_package_name: None,
+                root_package_version: None,
+                dynamic_linking: value.dynamic_linking,
+            },
+            created_at: Default::default(),
+            component_type: value.component_type,
+            files: value.files,
+            installed_plugins: vec![],
+            env: value.env,
+        }
+    }
 }

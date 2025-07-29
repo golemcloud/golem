@@ -564,7 +564,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let component_metadata = self.store.as_context().data().component_metadata();
 
         let function_results =
-            exports::function_by_name(&component_metadata.exports, &full_function_name);
+            exports::function_by_name(&component_metadata.metadata.exports, &full_function_name);
 
         match function_results {
             Ok(Some(export_function)) => {

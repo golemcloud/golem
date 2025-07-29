@@ -1280,7 +1280,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<(WorkerMetadata, Arc<std::sync::RwLock<ExecutionStatus>>), WorkerExecutorError>
     {
         let component_id = owned_worker_id.component_id();
-        let component_metadata = this
+        let component = this
             .component_service()
             .get_metadata(
                 &owned_worker_id.project_id,
@@ -1289,7 +1289,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
 
-        let worker_env = merge_worker_env_with_component_env(worker_env, component_metadata.env);
+        let worker_env = merge_worker_env_with_component_env(worker_env, component.env);
 
         match this.worker_service().get(owned_worker_id).await {
             None => {
@@ -1304,16 +1304,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     created_at: Timestamp::now_utc(),
                     parent,
                     last_known_status: WorkerStatusRecord {
-                        component_version: component_metadata.version,
-                        component_version_for_replay: component_metadata.version,
-                        component_size: component_metadata.size,
-                        total_linear_memory_size: component_metadata
+                        component_version: component.versioned_component_id.version,
+                        component_version_for_replay: component.versioned_component_id.version,
+                        component_size: component.component_size,
+                        total_linear_memory_size: component
+                            .metadata
                             .memories
                             .iter()
                             .map(|m| m.initial)
                             .sum(),
-                        active_plugins: component_metadata
-                            .plugin_installations
+                        active_plugins: component
+                            .installed_plugins
                             .iter()
                             .map(|i| i.id.clone())
                             .collect(),
@@ -1322,7 +1323,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 };
                 let execution_status = this
                     .worker_service()
-                    .add(&worker_metadata, component_metadata.component_type)
+                    .add(&worker_metadata, component.component_type)
                     .await?;
                 Ok((worker_metadata, execution_status))
             }
@@ -1339,7 +1340,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let execution_status =
                     Arc::new(std::sync::RwLock::new(ExecutionStatus::Suspended {
                         last_known_status: worker_metadata.last_known_status.clone(),
-                        component_type: component_metadata.component_type,
+                        component_type: component.component_type,
                         timestamp: Timestamp::now_utc(),
                     }));
                 Ok((worker_metadata, execution_status))
@@ -1671,7 +1672,7 @@ impl RunningWorker {
             parent.config(),
             WorkerConfig::new(
                 worker_metadata.worker_id.clone(),
-                component_metadata.version,
+                component_metadata.versioned_component_id.version,
                 worker_metadata.args.clone(),
                 worker_env,
                 worker_metadata.last_known_status.skipped_regions.clone(),

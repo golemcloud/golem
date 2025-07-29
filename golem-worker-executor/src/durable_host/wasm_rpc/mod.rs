@@ -1150,11 +1150,11 @@ async fn try_get_typed_parameters(
     function_name: &str,
     params: &[WitValue],
 ) -> Vec<ValueAndType> {
-    if let Ok(metadata) = components
+    if let Ok(component) = components
         .get_metadata(project_id, component_id, None)
         .await
     {
-        if let Ok(Some(function)) = function_by_name(&metadata.exports, function_name) {
+        if let Ok(Some(function)) = function_by_name(&component.metadata.exports, function_name) {
             if function.parameters.len() == params.len() {
                 return params
                     .iter()
