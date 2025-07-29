@@ -278,6 +278,14 @@ script = '''
 cargo test --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
 '''
 
+[tasks.worker-executor-tests-rdbms-service]
+dependencies = ["wit"]
+description = "Runs only untagged worker-executor-tests"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+cargo test --package golem-worker-executor --test integration :tag:rdbms-service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
+'''
+
 [tasks.worker-executor-tests-group1]
 dependencies = ["wit"]
 description = "Runs worker executor tests only (group 1/8)"

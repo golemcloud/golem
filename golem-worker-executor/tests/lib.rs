@@ -98,6 +98,8 @@ tag_suite!(guest_languages3, group7);
 tag_suite!(ts_rpc2, group8);
 tag_suite!(ts_rpc2_stubless, group8);
 
+tag_suite!(rdbms_service, rdbms_service);
+
 #[derive(Clone)]
 pub struct WorkerExecutorPerTestDependencies {
     redis: Arc<dyn Redis>,
