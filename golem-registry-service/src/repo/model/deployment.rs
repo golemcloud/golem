@@ -23,8 +23,8 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum DeployError {
-    #[error("Deployment revision concurrent modification")]
-    DeploymentRevisionConcurrentModification,
+    #[error("Deployment concurrent revision creation")]
+    DeploymentConcurrentRevisionCreation,
     #[error("Deployment hash mismatch: requested hash: {requested_hash:?}, actual hash: {actual_hash:?}.")]
     DeploymentHashMismatch {
         requested_hash: SqlBlake3Hash,
@@ -102,13 +102,13 @@ pub struct DeploymentHttpApiDeploymentRevisionRecord {
     pub http_api_deployment_revision_id: i64,
 }
 
-pub struct DeploymentStage {
+pub struct DeploymentIdentity {
     pub components: Vec<ComponentRevisionIdentityRecord>,
     pub http_api_definitions: Vec<HttpApiDefinitionRevisionIdentityRecord>,
     pub http_api_deployments: Vec<HttpApiDeploymentRevisionIdentityRecord>,
 }
 
-impl DeploymentStage {
+impl DeploymentIdentity {
     pub fn to_diffable(&self) -> diff::Deployment {
         diff::Deployment {
             components: self
