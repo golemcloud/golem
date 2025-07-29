@@ -444,7 +444,13 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
-                    JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
+                    JOIN component_revisions cr ON c.component_id = cr.component_id
+                    JOIN current_deployments cd ON cd.environment_id = c.environment_id
+                    JOIN deployment_revisions dr
+                        ON dr.environment_id = cd.environment_id AND dr.revision_id = cd.current_revision_id
+                    JOIN deployment_component_revisions dcr
+                        ON dcr.environment_id = cd.environment_id AND dcr.deployment_revision_id = dr.revision_id
+                               AND dcr.component_revision_id = cr.revision_id
                     WHERE c.component_id = $1 AND c.deleted_at IS NULL
                 "#})
                     .bind(component_id),
@@ -470,7 +476,13 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
-                    JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
+                    JOIN component_revisions cr ON c.component_id = cr.component_id
+                    JOIN current_deployments cd ON cd.environment_id = c.environment_id
+                    JOIN deployment_revisions dr
+                        ON dr.environment_id = cd.environment_id AND dr.revision_id = cd.current_revision_id
+                    JOIN deployment_component_revisions dcr
+                        ON dcr.environment_id = cd.environment_id AND dcr.deployment_revision_id = dr.revision_id
+                               AND dcr.component_revision_id = cr.revision_id
                     WHERE c.environment_id = $1 AND c.name = $2 AND c.deleted_at IS NULL
                 "#})
                     .bind(environment_id)
@@ -522,8 +534,14 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
-                    JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
-                    WHERE c.environment_id = $1 AND c.deleted_at IS NULL AND cr.status = 'deployed'
+                    JOIN component_revisions cr ON c.component_id = cr.component_id
+                    JOIN current_deployments cd ON cd.environment_id = c.environment_id
+                    JOIN deployment_revisions dr
+                        ON dr.environment_id = cd.environment_id AND dr.revision_id = cd.current_revision_id
+                    JOIN deployment_component_revisions dcr
+                        ON dcr.environment_id = cd.environment_id AND dcr.deployment_revision_id = dr.revision_id
+                               AND dcr.component_revision_id = cr.revision_id
+                    WHERE c.environment_id = $1 AND c.deleted_at IS NULL
                     ORDER BY c.name
                 "#})
                     .bind(environment_id),
