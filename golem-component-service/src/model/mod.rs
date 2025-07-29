@@ -20,6 +20,7 @@ pub use self::component::*;
 pub use self::conflict::*;
 use bincode::{Decode, Encode};
 use golem_common::base_model::ComponentVersion;
+use golem_common::model::agent::AgentTypes;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::{ComponentFilePathWithPermissionsList, ComponentType, ProjectId};
 use golem_service_base::model::ComponentName;
@@ -38,6 +39,7 @@ pub struct UpdatePayload {
     pub files: Option<TempFileUpload>,
     pub dynamic_linking: Option<JsonField<DynamicLinking>>,
     pub env: Option<JsonField<ComponentEnv>>,
+    pub agent_types: Option<JsonField<AgentTypes>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Object)]

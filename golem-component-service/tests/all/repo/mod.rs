@@ -82,6 +82,7 @@ async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo>) {
         HashMap::new(),
         owner1.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -127,6 +128,7 @@ async fn test_repo_component_name_unique_in_namespace(component_repo: Arc<dyn Co
         HashMap::new(),
         owner1.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
     let component2 = Component::new(
@@ -139,6 +141,7 @@ async fn test_repo_component_name_unique_in_namespace(component_repo: Arc<dyn Co
         HashMap::new(),
         owner2.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -189,6 +192,7 @@ async fn test_repo_component_find_by_names(component_repo: Arc<dyn ComponentRepo
         HashMap::new(),
         test_component_owner(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -210,6 +214,7 @@ async fn test_repo_component_find_by_names(component_repo: Arc<dyn ComponentRepo
         HashMap::new(),
         test_component_owner(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -439,6 +444,7 @@ async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo>) {
         HashMap::new(),
         test_component_owner(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -498,6 +504,7 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo>)
         HashMap::new(),
         owner1.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -594,6 +601,7 @@ async fn test_default_plugin_repo(
         HashMap::new(),
         owner.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
     let component2 = Component::new(
@@ -606,6 +614,7 @@ async fn test_default_plugin_repo(
         HashMap::new(),
         owner.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 

@@ -25,7 +25,7 @@ use golem_worker_executor::model::{
 };
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::blob_store::BlobStoreService;
-use golem_worker_executor::services::component::{ComponentMetadata, ComponentService};
+use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
@@ -145,7 +145,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_worker_id()
     }
 
-    fn component_metadata(&self) -> &ComponentMetadata {
+    fn component_metadata(&self) -> &golem_service_base::model::Component {
         self.durable_ctx.component_metadata()
     }
 
@@ -340,7 +340,7 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
         engine: &Engine,
         linker: &mut Linker<TestWorkerCtx>,
         component: &Component,
-        component_metadata: &ComponentMetadata,
+        component_metadata: &golem_service_base::model::Component,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)

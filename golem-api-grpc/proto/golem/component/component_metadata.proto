@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package golem.component;
 
+import "golem/component/agent.proto";
 import "golem/component/export.proto";
 import "golem/component/producers.proto";
 import "golem/component/linear_memory.proto";
@@ -15,4 +16,5 @@ message ComponentMetadata {
   bytes binary_wit = 5;
   optional string root_package_name = 6;
   optional string root_package_version = 7;
+  repeated golem.component.AgentType agent_types = 8;
 }

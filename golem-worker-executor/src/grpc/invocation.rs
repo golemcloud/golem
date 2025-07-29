@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::component::ComponentMetadata;
 use crate::services::HasComponentService;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -21,6 +20,7 @@ use golem_common::base_model::{TargetWorkerId, WorkerId};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, ProjectId, WorkerMetadata};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::Component;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
 use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
 use golem_wasm_rpc::protobuf::Val;
@@ -378,14 +378,14 @@ fn assume_future_component_version(metadata: &WorkerMetadata) -> ComponentVersio
 }
 
 fn resolve_function<'t>(
-    component: &'t ComponentMetadata,
+    component: &'t Component,
     function: &str,
 ) -> Result<(&'t AnalysedFunction, ParsedFunctionName), WorkerExecutorError> {
     let parsed =
         ParsedFunctionName::parse(function).map_err(WorkerExecutorError::invalid_request)?;
     let mut functions = Vec::new();
 
-    for export in &component.exports {
+    for export in &component.metadata.exports {
         match export {
             AnalysedExport::Instance(interface) => {
                 if matches!(parsed.site().interface_name(), Some(name) if name == interface.name) {
