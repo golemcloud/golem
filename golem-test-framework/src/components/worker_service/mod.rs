@@ -27,25 +27,12 @@ use crate::config::GolemClientProtocol;
 use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::future::join_all;
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
-use golem_api_grpc::proto::golem::apidefinition::api_definition::Definition;
-use golem_api_grpc::proto::golem::apidefinition::v1::{
-    api_definition_request, create_api_definition_request, update_api_definition_request,
-    ApiDefinitionRequest, CreateApiDefinitionRequest, DeleteApiDefinitionRequest,
-    GetApiDefinitionRequest, GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
-};
-use golem_api_grpc::proto::golem::apidefinition::{
-    static_binding, ApiDefinition, ApiDefinitionId, CorsPreflight, GatewayBinding,
-    GatewayBindingType, HttpApiDefinition, HttpMethod, HttpRoute, StaticBinding,
-};
 use golem_api_grpc::proto::golem::common::{
     AccountId, Empty, FilterComparator, PluginInstallationId, StringFilterComparator,
 };
-use golem_api_grpc::proto::golem::component as grpc_components;
 use golem_api_grpc::proto::golem::component::ComponentFilePermissions;
-use golem_api_grpc::proto::golem::rib::Expr;
 pub use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient as WorkerServiceGrpcClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     cancel_invocation_response, delete_worker_response, get_file_contents_response,
@@ -84,7 +71,8 @@ use golem_client::api::ApiSecurityClientLive as ApiSecurityServiceHttpClientLive
 use golem_client::api::WorkerClient as WorkerServiceHttpClient;
 use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
 use golem_client::model::{
-    ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, SecuritySchemeData,
+    ApiDeployment, ApiDeploymentRequest, HttpApiDefinitionRequest, HttpApiDefinitionResponseData,
+    SecuritySchemeData,
 };
 use golem_client::{Context, Security};
 use golem_common::model::ProjectId;
@@ -92,7 +80,6 @@ use golem_common::model::WorkerEvent;
 use golem_service_base::clients::authorised_request;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::TcpStream;
@@ -1029,49 +1016,58 @@ pub trait WorkerService: Send + Sync {
         &self,
         token: &Uuid,
         project_id: &ProjectId,
-        request: CreateApiDefinitionRequest,
-    ) -> crate::Result<ApiDefinition> {
+        request: &HttpApiDefinitionRequest,
+    ) -> crate::Result<HttpApiDefinitionResponseData> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => not_available_on_grpc_api("create_api_definition"),
             GolemClientProtocol::Http => {
                 let client = self.api_definition_http_client(token).await;
 
-                match request.api_definition.unwrap() {
-                    create_api_definition_request::ApiDefinition::Definition(request) => {
-                        match client
-                            .create_definition_json(
-                                &project_id.0,
-                                &grpc_api_definition_request_to_http(
-                                    token,
-                                    request,
-                                    self.component_service(),
-                                )
-                                .await,
-                            )
-                            .await
-                        {
-                            Ok(result) => Ok(http_api_definition_to_grpc(
-                                token,
-                                result,
-                                self.component_service(),
-                            )
-                            .await),
-                            Err(error) => Err(anyhow!("{error:?}")),
-                        }
-                    }
-                    create_api_definition_request::ApiDefinition::Openapi(open_api) => match client
-                        .import_open_api_yaml(&project_id.0, &serde_yaml::from_str(&open_api)?)
-                        .await
-                    {
-                        Ok(result) => Ok(http_api_definition_to_grpc(
-                            token,
-                            result,
-                            self.component_service(),
-                        )
-                        .await),
-                        Err(error) => Err(anyhow!("{error:?}")),
-                    },
-                }
+                let result = client
+                    .create_definition_json(&project_id.0, request)
+                    .await?;
+
+                Ok(result)
+            }
+        }
+    }
+
+    async fn create_api_definition_from_yaml(
+        &self,
+        token: &Uuid,
+        project_id: &ProjectId,
+        open_api_yaml: &str,
+    ) -> crate::Result<HttpApiDefinitionResponseData> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("create_api_definition"),
+            GolemClientProtocol::Http => {
+                let client = self.api_definition_http_client(token).await;
+
+                let result = client
+                    .import_open_api_yaml(&project_id.0, &serde_yaml::from_str(open_api_yaml)?)
+                    .await?;
+
+                Ok(result)
+            }
+        }
+    }
+
+    async fn create_api_definition_from_json(
+        &self,
+        token: &Uuid,
+        project_id: &ProjectId,
+        open_api_json: &str,
+    ) -> crate::Result<HttpApiDefinitionResponseData> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("create_api_definition"),
+            GolemClientProtocol::Http => {
+                let client = self.api_definition_http_client(token).await;
+
+                let result = client
+                    .import_open_api_json(&project_id.0, &serde_json::from_str(open_api_json)?)
+                    .await?;
+
+                Ok(result)
             }
         }
     }
@@ -1080,47 +1076,18 @@ pub trait WorkerService: Send + Sync {
         &self,
         token: &Uuid,
         project_id: &ProjectId,
-        request: UpdateApiDefinitionRequest,
-    ) -> crate::Result<ApiDefinition> {
+        request: &HttpApiDefinitionRequest,
+    ) -> crate::Result<HttpApiDefinitionResponseData> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => not_available_on_grpc_api("update_api_definition"),
             GolemClientProtocol::Http => {
                 let client = self.api_definition_http_client(token).await;
 
-                match request.api_definition.unwrap() {
-                    update_api_definition_request::ApiDefinition::Definition(request) => {
-                        match client
-                            .update_definition_yaml(
-                                &project_id.0,
-                                &request.id.clone().unwrap().value,
-                                &request.clone().version,
-                                &grpc_api_definition_request_to_http(
-                                    token,
-                                    ApiDefinitionRequest {
-                                        id: request.id,
-                                        version: request.version,
-                                        draft: request.draft,
-                                        definition: request.definition,
-                                    },
-                                    self.component_service(),
-                                )
-                                .await,
-                            )
-                            .await
-                        {
-                            Ok(result) => Ok(http_api_definition_to_grpc(
-                                token,
-                                result,
-                                self.component_service(),
-                            )
-                            .await),
-                            Err(error) => Err(anyhow!("{error:?}")),
-                        }
-                    }
-                    update_api_definition_request::ApiDefinition::Openapi(_) => {
-                        todo!() // TODO: see worker-service-base for how this is interpreted
-                    }
-                }
+                let result = client
+                    .update_definition_json(&project_id.0, &request.id, &request.version, request)
+                    .await?;
+
+                Ok(result)
             }
         }
     }
@@ -1129,22 +1096,19 @@ pub trait WorkerService: Send + Sync {
         &self,
         token: &Uuid,
         project_id: &ProjectId,
-        request: GetApiDefinitionRequest,
-    ) -> crate::Result<ApiDefinition> {
+        api_definition_id: &str,
+        api_definition_version: &str,
+    ) -> crate::Result<HttpApiDefinitionResponseData> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => not_available_on_grpc_api("get_api_definition"),
             GolemClientProtocol::Http => {
                 let client = self.api_definition_http_client(token).await;
 
                 let result = client
-                    .get_definition(
-                        &project_id.0,
-                        &request.api_definition_id.unwrap().value,
-                        &request.version,
-                    )
+                    .get_definition(&project_id.0, api_definition_id, api_definition_version)
                     .await?;
 
-                Ok(http_api_definition_to_grpc(token, result, self.component_service()).await)
+                Ok(result)
             }
         }
     }
@@ -1153,24 +1117,18 @@ pub trait WorkerService: Send + Sync {
         &self,
         token: &Uuid,
         project_id: &ProjectId,
-        request: GetApiDefinitionVersionsRequest,
-    ) -> crate::Result<Vec<ApiDefinition>> {
+        api_definition_id: &str,
+    ) -> crate::Result<Vec<HttpApiDefinitionResponseData>> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => not_available_on_grpc_api("get_api_definition_versions"),
             GolemClientProtocol::Http => {
                 let client = self.api_definition_http_client(token).await;
 
                 let result = client
-                    .list_definitions(
-                        &project_id.0,
-                        request.api_definition_id.map(|id| id.value).as_deref(),
-                    )
+                    .list_definitions(&project_id.0, Some(api_definition_id))
                     .await?;
 
-                Ok(join_all(result.into_iter().map(async |def| {
-                    http_api_definition_to_grpc(token, def, self.component_service()).await
-                }))
-                .await)
+                Ok(result)
             }
         }
     }
@@ -1179,7 +1137,7 @@ pub trait WorkerService: Send + Sync {
         &self,
         token: &Uuid,
         project_id: &ProjectId,
-    ) -> crate::Result<Vec<ApiDefinition>> {
+    ) -> crate::Result<Vec<HttpApiDefinitionResponseData>> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => not_available_on_grpc_api("get_all_api_definitions"),
             GolemClientProtocol::Http => {
@@ -1187,10 +1145,7 @@ pub trait WorkerService: Send + Sync {
 
                 let result = client.list_definitions(&project_id.0, None).await?;
 
-                Ok(join_all(result.into_iter().map(async |def| {
-                    http_api_definition_to_grpc(token, def, self.component_service()).await
-                }))
-                .await)
+                Ok(result)
             }
         }
     }
@@ -1199,7 +1154,8 @@ pub trait WorkerService: Send + Sync {
         &self,
         token: &Uuid,
         project_id: &ProjectId,
-        request: DeleteApiDefinitionRequest,
+        api_definition_id: &str,
+        api_definition_version: &str,
     ) -> crate::Result<()> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => not_available_on_grpc_api("delete_api_definition"),
@@ -1207,11 +1163,7 @@ pub trait WorkerService: Send + Sync {
                 let client = self.api_definition_http_client(token).await;
 
                 client
-                    .delete_definition(
-                        &project_id.0,
-                        &request.api_definition_id.unwrap().value,
-                        &request.version,
-                    )
+                    .delete_definition(&project_id.0, api_definition_id, api_definition_version)
                     .await?;
 
                 Ok(())
@@ -1665,208 +1617,6 @@ fn invoke_parameters_to_grpc(parameters: Vec<ValueAndType>) -> Option<InvokePara
             .map(|param| param.value.into())
             .collect(),
     })
-}
-
-async fn http_api_definition_to_grpc(
-    token: &Uuid,
-    response: golem_client::model::HttpApiDefinitionResponseData,
-    component_service: &Arc<dyn ComponentService>,
-) -> ApiDefinition {
-    ApiDefinition {
-        id: Some(ApiDefinitionId { value: response.id }),
-        version: response.version,
-        draft: response.draft,
-        created_at: response.created_at.map(|ts| SystemTime::from(ts).into()),
-        definition: Some(Definition::Http(HttpApiDefinition {
-            routes: join_all(response.routes.into_iter().map(async |route| {
-                HttpRoute {
-                    method: match route.method {
-                        golem_client::model::MethodPattern::Get => HttpMethod::Get,
-                        golem_client::model::MethodPattern::Connect => HttpMethod::Connect,
-                        golem_client::model::MethodPattern::Post => HttpMethod::Post,
-                        golem_client::model::MethodPattern::Delete => HttpMethod::Delete,
-                        golem_client::model::MethodPattern::Put => HttpMethod::Put,
-                        golem_client::model::MethodPattern::Patch => HttpMethod::Patch,
-                        golem_client::model::MethodPattern::Options => HttpMethod::Options,
-                        golem_client::model::MethodPattern::Trace => HttpMethod::Trace,
-                        golem_client::model::MethodPattern::Head => HttpMethod::Head,
-                    } as i32,
-                    path: route.path,
-                    binding: Some(GatewayBinding {
-                        component: join_option(route.binding.component.map(async |component| {
-                            let response = component_service
-                                .get_components(
-                                    token,
-                                    grpc_components::v1::GetComponentsRequest {
-                                        project_id: None,
-                                        component_name: Some(component.name),
-                                    },
-                                )
-                                .await
-                                .unwrap();
-                            let resolved_component = response.first().unwrap();
-
-                            grpc_components::VersionedComponentId {
-                                component_id: Some(
-                                    resolved_component
-                                        .versioned_component_id
-                                        .unwrap()
-                                        .component_id
-                                        .unwrap(),
-                                ),
-                                version: component.version,
-                            }
-                        }))
-                        .await,
-                        worker_name: route.binding.worker_name.as_deref().map(to_grpc_rib_expr),
-                        response: route.binding.response.as_deref().map(to_grpc_rib_expr),
-                        idempotency_key: route
-                            .binding
-                            .idempotency_key
-                            .as_deref()
-                            .map(to_grpc_rib_expr),
-                        binding_type: route.binding.binding_type.map(
-                            |binding_type| match binding_type {
-                                golem_client::model::GatewayBindingType::Default => {
-                                    GatewayBindingType::Default
-                                }
-                                golem_client::model::GatewayBindingType::FileServer => {
-                                    GatewayBindingType::FileServer
-                                }
-                                golem_client::model::GatewayBindingType::HttpHandler => {
-                                    GatewayBindingType::HttpHandler
-                                }
-                                golem_client::model::GatewayBindingType::CorsPreflight => {
-                                    GatewayBindingType::CorsPreflight
-                                }
-                            } as i32,
-                        ),
-                        static_binding: route.binding.cors_preflight.map(|cors_preflight| {
-                            // TODO: should there be AuthCallback in the HTTP API? and how this relates to middleware
-                            StaticBinding {
-                                static_binding: Some(
-                                    static_binding::StaticBinding::HttpCorsPreflight(
-                                        CorsPreflight {
-                                            allow_origin: Some(cors_preflight.allow_origin),
-                                            allow_methods: Some(cors_preflight.allow_methods),
-                                            allow_headers: Some(cors_preflight.allow_headers),
-                                            expose_headers: cors_preflight.expose_headers,
-                                            max_age: cors_preflight.max_age,
-                                            allow_credentials: cors_preflight.allow_credentials,
-                                        },
-                                    ),
-                                ),
-                            }
-                        }),
-                        invocation_context: None, // TODO
-                    }),
-                    middleware: None, // TODO
-                }
-            }))
-            .await,
-        })),
-    }
-}
-
-async fn join_option<F: Future>(value: Option<F>) -> Option<F::Output> {
-    match value {
-        Some(inner) => Some(inner.await),
-        None => None,
-    }
-}
-
-async fn grpc_api_definition_request_to_http(
-    token: &Uuid,
-    request: ApiDefinitionRequest,
-    component_service: &Arc<dyn ComponentService>,
-) -> golem_client::model::HttpApiDefinitionRequest {
-    golem_client::model::HttpApiDefinitionRequest {
-        id: request.id.unwrap().value,
-        version: request.version,
-        security: None, // TODO: is this missing in GRPC (or deprecated)?
-        routes: join_option(request.definition.map(async |definition| {
-            match definition {
-                api_definition_request::Definition::Http(definition) => {
-                    join_all(definition.routes.into_iter().map(async |route| {
-                        let binding = route.binding.unwrap();
-                        golem_client::model::RouteRequestData {
-                            method: match HttpMethod::try_from(route.method).unwrap() {
-                                HttpMethod::Get => golem_client::model::MethodPattern::Get,
-                                HttpMethod::Connect => golem_client::model::MethodPattern::Connect,
-                                HttpMethod::Post => golem_client::model::MethodPattern::Post,
-                                HttpMethod::Delete => golem_client::model::MethodPattern::Delete,
-                                HttpMethod::Put => golem_client::model::MethodPattern::Put,
-                                HttpMethod::Patch => golem_client::model::MethodPattern::Patch,
-                                HttpMethod::Options => golem_client::model::MethodPattern::Options,
-                                HttpMethod::Trace => golem_client::model::MethodPattern::Trace,
-                                HttpMethod::Head => golem_client::model::MethodPattern::Head,
-                            },
-                            path: route.path,
-                            binding: golem_client::model::GatewayBindingData {
-                                binding_type: binding.binding_type.map(|binding_type| {
-                                    match GatewayBindingType::try_from(binding_type).unwrap() {
-                                        GatewayBindingType::Default => {
-                                            golem_client::model::GatewayBindingType::Default
-                                        }
-                                        GatewayBindingType::FileServer => {
-                                            golem_client::model::GatewayBindingType::FileServer
-                                        }
-                                        GatewayBindingType::CorsPreflight => {
-                                            golem_client::model::GatewayBindingType::CorsPreflight
-                                        }
-                                        GatewayBindingType::AuthCallBack => {
-                                            panic!("auth callback is not supported on HTTP API")
-                                        }
-                                        GatewayBindingType::HttpHandler => {
-                                            golem_client::model::GatewayBindingType::HttpHandler
-                                        }
-                                    }
-                                }),
-                                component: join_option(binding.component.map(
-                                    async |versioned_component_id| {
-                                        let component = component_service
-                                            .get_latest_component_metadata(
-                                                token,
-                                                grpc_components::v1::GetLatestComponentRequest {
-                                                    component_id: versioned_component_id
-                                                        .component_id,
-                                                },
-                                            )
-                                            .await
-                                            .unwrap();
-                                        GatewayBindingComponent {
-                                            name: component.component_name,
-                                            version: Some(versioned_component_id.version),
-                                        }
-                                    },
-                                ))
-                                .await,
-                                worker_name: binding.worker_name.map(to_http_rib_expr),
-                                idempotency_key: binding.idempotency_key.map(to_http_rib_expr),
-                                invocation_context: binding
-                                    .invocation_context
-                                    .map(to_http_rib_expr),
-                                response: binding.response.map(to_http_rib_expr),
-                            },
-                            security: None,
-                        }
-                    }))
-                    .await
-                }
-            }
-        }))
-        .await
-        .unwrap_or_default(),
-        draft: request.draft,
-    }
-}
-
-fn to_grpc_rib_expr(expr: &str) -> Expr {
-    rib::Expr::from_text(expr).unwrap().into()
-}
-
-fn to_http_rib_expr(expr: Expr) -> String {
-    rib::Expr::try_from(expr).unwrap().to_string()
 }
 
 fn not_available_on_grpc_api<T>(endpoint: &str) -> crate::Result<T> {
