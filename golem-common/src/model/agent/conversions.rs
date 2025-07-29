@@ -15,7 +15,8 @@
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentType, BinaryDescriptor,
     BinaryReference, BinarySource, BinaryType, DataSchema, DataValue, ElementSchema, ElementValue,
-    NamedElementSchema, NamedElementValue, TextDescriptor, TextReference, TextSource, TextType,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, TextDescriptor, TextReference,
+    TextSource, TextType,
 };
 
 impl From<super::bindings::golem::agent::common::AgentConstructor> for AgentConstructor {
@@ -166,27 +167,27 @@ impl From<super::bindings::golem::agent::common::DataSchema> for DataSchema {
     fn from(value: crate::model::agent::bindings::golem::agent::common::DataSchema) -> Self {
         match value {
             crate::model::agent::bindings::golem::agent::common::DataSchema::Tuple(tuple) => {
-                DataSchema::Tuple(
-                    tuple
+                DataSchema::Tuple(NamedElementSchemas {
+                    elements: tuple
                         .into_iter()
                         .map(|(name, schema)| NamedElementSchema {
                             name,
                             schema: ElementSchema::from(schema),
                         })
                         .collect(),
-                )
+                })
             }
             crate::model::agent::bindings::golem::agent::common::DataSchema::Multimodal(
                 multimodal,
-            ) => DataSchema::Multimodal(
-                multimodal
+            ) => DataSchema::Multimodal(NamedElementSchemas {
+                elements: multimodal
                     .into_iter()
                     .map(|(name, schema)| NamedElementSchema {
                         name,
                         schema: ElementSchema::from(schema),
                     })
                     .collect(),
-            ),
+            }),
         }
     }
 }
@@ -196,6 +197,7 @@ impl From<DataSchema> for super::bindings::golem::agent::common::DataSchema {
         match value {
             DataSchema::Tuple(tuple) => super::bindings::golem::agent::common::DataSchema::Tuple(
                 tuple
+                    .elements
                     .into_iter()
                     .map(|named| (named.name, named.schema.into()))
                     .collect(),
@@ -203,6 +205,7 @@ impl From<DataSchema> for super::bindings::golem::agent::common::DataSchema {
             DataSchema::Multimodal(multimodal) => {
                 super::bindings::golem::agent::common::DataSchema::Multimodal(
                     multimodal
+                        .elements
                         .into_iter()
                         .map(|named| (named.name, named.schema.into()))
                         .collect(),

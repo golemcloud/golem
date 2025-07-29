@@ -36,6 +36,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         false,
         true,
         &[
+            ("AgentType", "golem_common::model::agent::AgentType"),
             ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
             ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
             ("PluginScope", "golem_common::model::plugin::PluginScope"),

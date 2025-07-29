@@ -512,6 +512,7 @@ pub trait ComponentService: Send + Sync {
                                     .map(|(k, v)| (k.clone(), v.clone().into())),
                             ),
                             env: env.clone(),
+                            agent_types: vec![],
                         },
                     )),
                 }];
@@ -600,6 +601,7 @@ pub trait ComponentService: Send + Sync {
                         Some(&golem_client::model::ComponentEnv {
                             key_values: env.clone(),
                         }),
+                        None,
                     )
                     .await
                 {
@@ -668,6 +670,7 @@ pub trait ComponentService: Send + Sync {
                                     .map(|(k, v)| (k.clone(), v.clone().into())),
                             ),
                             env: env.clone(),
+                            agent_types: vec![],
                         },
                     )),
                 }];
@@ -750,6 +753,7 @@ pub trait ComponentService: Send + Sync {
                         archive_file,
                         to_http_dynamic_linking(dynamic_linking).as_ref(),
                         Some(&component_env),
+                        None,
                     )
                     .await
                 {

@@ -14,6 +14,9 @@
 
 mod conversions;
 
+#[cfg(feature = "protobuf")]
+mod protobuf;
+
 mod bindings {
     wasmtime::component::bindgen!({
           path: "wit",
@@ -36,7 +39,10 @@ use serde::{Deserialize, Serialize};
 // to work with WitValue and WitType directly in the application code. Instead, we are converting them
 // to Value and AnalysedType which are much more ergonomic to work with.
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct AgentConstructor {
     pub name: Option<String>,
     pub description: String,
@@ -44,7 +50,10 @@ pub struct AgentConstructor {
     pub input_schema: DataSchema,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct AgentDependency {
     pub type_name: String,
     pub description: Option<String>,
@@ -61,7 +70,10 @@ pub enum AgentError {
     CustomError(DataValue),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct AgentMethod {
     pub name: String,
     pub description: String,
@@ -70,7 +82,10 @@ pub struct AgentMethod {
     pub output_schema: DataSchema,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct AgentType {
     pub type_name: String,
     pub description: String,
@@ -79,7 +94,10 @@ pub struct AgentType {
     pub dependencies: Vec<AgentDependency>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct BinaryDescriptor {
     pub restrictions: Option<Vec<BinaryType>>,
 }
@@ -91,26 +109,46 @@ pub enum BinaryReference {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct BinarySource {
     pub data: Vec<u8>,
     pub binary_type: BinaryType,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct BinaryType {
     pub mime_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct NamedElementSchema {
     pub name: String,
     pub schema: ElementSchema,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct NamedElementSchemas {
+    pub elements: Vec<NamedElementSchema>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
 pub enum DataSchema {
-    Tuple(Vec<NamedElementSchema>),
-    Multimodal(Vec<NamedElementSchema>),
+    Tuple(NamedElementSchemas),
+    Multimodal(NamedElementSchemas),
 }
 
 #[derive(Debug, Clone, Encode, Decode, IntoValue)]
@@ -132,14 +170,20 @@ pub enum ElementValue {
     UnstructuredBinary(BinaryReference),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
 pub enum ElementSchema {
     ComponentModel(AnalysedType),
     UnstructuredText(TextDescriptor),
     UnstructuredBinary(BinaryDescriptor),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct TextDescriptor {
     pub restrictions: Option<Vec<TextType>>,
 }
@@ -151,12 +195,26 @@ pub enum TextReference {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct TextSource {
     pub data: String,
     pub text_type: Option<TextType>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct TextType {
     pub language_code: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTypes {
+    pub types: Vec<AgentType>,
 }

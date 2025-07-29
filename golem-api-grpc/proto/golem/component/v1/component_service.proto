@@ -5,6 +5,7 @@ package golem.component.v1;
 import public "golem/common/plugin_installation_id.proto";
 import public "golem/common/project_id.proto";
 import public "golem/common/empty.proto";
+import public "golem/component/agent.proto";
 import public "golem/component/component.proto";
 import public "golem/component/component_type.proto";
 import public "golem/component/dynamic_linked_instance.proto";
@@ -92,6 +93,7 @@ message CreateComponentRequestHeader {
   repeated InitialComponentFile files = 4;
   map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 5;
   map<string, string> env = 6;
+  repeated golem.component.AgentType agent_types = 7;
 }
 
 message CreateComponentRequestChunk {
@@ -168,6 +170,7 @@ message UpdateComponentRequestHeader {
   repeated InitialComponentFile files = 4;
   map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 5;
   map<string, string> env = 6;
+  repeated golem.component.AgentType agent_types = 7;
 }
 
 message UpdateComponentRequestChunk {

@@ -18,6 +18,7 @@ use crate::model::{Component, ComponentByNameAndVersion, ComponentConstraints};
 use crate::service::component::ComponentService;
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
+use golem_common::model::agent::AgentType;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
 use golem_common::model::component::ComponentOwner;
@@ -122,6 +123,7 @@ impl AuthedComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &AuthCtx,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let component_id = ComponentId::new_v4();
         let owner = self
@@ -140,6 +142,7 @@ impl AuthedComponentService {
                 dynamic_linking,
                 &owner,
                 env,
+                agent_types,
             )
             .await?;
 
@@ -156,6 +159,7 @@ impl AuthedComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &AuthCtx,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let component_id = ComponentId::new_v4();
         let owner = self
@@ -174,6 +178,7 @@ impl AuthedComponentService {
                 dynamic_linking,
                 &owner,
                 env,
+                agent_types,
             )
             .await?;
 
@@ -189,6 +194,7 @@ impl AuthedComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &AuthCtx,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
@@ -204,6 +210,7 @@ impl AuthedComponentService {
                 dynamic_linking,
                 &owner,
                 env,
+                agent_types,
             )
             .await?;
 
@@ -219,6 +226,7 @@ impl AuthedComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &AuthCtx,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
@@ -234,6 +242,7 @@ impl AuthedComponentService {
                 dynamic_linking,
                 &owner,
                 env,
+                agent_types,
             )
             .await?;
 

@@ -70,6 +70,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 root_package_name: None,
                 root_package_version: None,
                 dynamic_linking: value.dynamic_linking,
+                agent_types: vec![],
             },
             created_at: Default::default(),
             component_type: value.component_type,

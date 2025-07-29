@@ -178,6 +178,13 @@ impl ComponentGrpcApi {
                 })?,
         );
 
+        let agent_types = request
+            .agent_types
+            .iter()
+            .map(|agent_type| agent_type.clone().try_into())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| bad_request_error(&format!("Invalid agent types: {e}")))?;
+
         let result = self
             .component_service
             .create_internal(
@@ -189,6 +196,7 @@ impl ComponentGrpcApi {
                 dynamic_linking,
                 &auth,
                 request.env,
+                agent_types,
             )
             .await?;
 
@@ -233,6 +241,13 @@ impl ComponentGrpcApi {
                 })?,
         );
 
+        let agent_types = request
+            .agent_types
+            .iter()
+            .map(|agent_type| agent_type.clone().try_into())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| bad_request_error(&format!("Invalid agent types: {e}")))?;
+
         let result = self
             .component_service
             .update_internal(
@@ -243,6 +258,7 @@ impl ComponentGrpcApi {
                 dynamic_linking,
                 &auth,
                 request.env,
+                agent_types,
             )
             .await?;
 
