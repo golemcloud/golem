@@ -18,7 +18,7 @@ use crate::service::worker::{WorkerService, WorkerServiceError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use futures_util::TryStreamExt;
+use futures::TryStreamExt;
 use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::{ComponentFilePath, ComponentId, TargetWorkerId, WorkerId};
 use golem_common::SafeDisplay;

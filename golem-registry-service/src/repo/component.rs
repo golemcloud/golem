@@ -18,8 +18,8 @@ use crate::repo::model::component::{
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use futures_util::future::BoxFuture;
-use futures_util::FutureExt;
+use futures::future::BoxFuture;
+use futures::{stream, FutureExt, StreamExt, TryStreamExt};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -51,6 +51,38 @@ pub trait ComponentRepo: Send + Sync {
         component_id: &Uuid,
         current_revision_id: i64,
     ) -> repo::Result<bool>;
+
+    async fn get_staged_by_id(
+        &self,
+        component_id: &Uuid,
+    ) -> repo::Result<Option<ComponentRevisionRecord>>;
+
+    async fn get_staged_by_name(
+        &self,
+        environment_id: &Uuid,
+        name: &str,
+    ) -> repo::Result<Option<ComponentRevisionRecord>>;
+
+    async fn get_deployed_by_id(
+        &self,
+        component_id: &Uuid,
+    ) -> repo::Result<Option<ComponentRevisionRecord>>;
+
+    async fn get_deployed_by_name(
+        &self,
+        environment_id: &Uuid,
+        name: &str,
+    ) -> repo::Result<Option<ComponentRevisionRecord>>;
+
+    async fn list_staged(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<ComponentRevisionRecord>>;
+
+    async fn list_deployed(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<ComponentRevisionRecord>>;
 }
 
 pub struct LoggedComponentRepo<Repo: ComponentRepo> {
@@ -93,7 +125,8 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         revision: ComponentRevisionRecord,
     ) -> repo::Result<Option<ComponentRevisionRecord>> {
         let span = Self::span_component_id(&revision.component_id);
-        self.update(current_revision_id, revision)
+        self.repo
+            .update(current_revision_id, revision)
             .instrument(span)
             .await
     }
@@ -104,8 +137,71 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         component_id: &Uuid,
         current_revision_id: i64,
     ) -> repo::Result<bool> {
-        self.delete(user_account_id, component_id, current_revision_id)
+        self.repo
+            .delete(user_account_id, component_id, current_revision_id)
             .instrument(Self::span_component_id(component_id))
+            .await
+    }
+
+    async fn get_staged_by_id(
+        &self,
+        component_id: &Uuid,
+    ) -> repo::Result<Option<ComponentRevisionRecord>> {
+        self.repo
+            .get_staged_by_id(component_id)
+            .instrument(Self::span_component_id(component_id))
+            .await
+    }
+
+    async fn get_staged_by_name(
+        &self,
+        environment_id: &Uuid,
+        name: &str,
+    ) -> repo::Result<Option<ComponentRevisionRecord>> {
+        self.repo
+            .get_staged_by_name(environment_id, name)
+            .instrument(Self::span_name(environment_id, name))
+            .await
+    }
+
+    async fn get_deployed_by_id(
+        &self,
+        component_id: &Uuid,
+    ) -> repo::Result<Option<ComponentRevisionRecord>> {
+        self.repo
+            .get_deployed_by_id(component_id)
+            .instrument(Self::span_component_id(component_id))
+            .await
+    }
+
+    async fn get_deployed_by_name(
+        &self,
+        environment_id: &Uuid,
+        name: &str,
+    ) -> repo::Result<Option<ComponentRevisionRecord>> {
+        self.repo
+            .get_deployed_by_name(environment_id, name)
+            .instrument(Self::span_name(environment_id, name))
+            .await
+    }
+
+    async fn list_staged(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<ComponentRevisionRecord>> {
+        self.repo
+            .list_staged(environment_id)
+            .instrument(info_span!(SPAN_NAME, environment_id = %environment_id))
+            .await
+    }
+
+    async fn list_deployed(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<ComponentRevisionRecord>> {
+        self.repo
+            .list_deployed(environment_id)
+            .instrument(info_span!(SPAN_NAME, environment_id = %environment_id))
             .await
     }
 }
@@ -283,6 +379,162 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             Err(err) => Err(err),
         }
     }
+
+    async fn get_staged_by_id(
+        &self,
+        component_id: &Uuid,
+    ) -> repo::Result<Option<ComponentRevisionRecord>> {
+        let revision: Option<ComponentRevisionRecord> = self.with_ro("get_staged_by_id")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT cr.component_id, cr.revision_id, cr.version, cr.hash,
+                           cr.created_at, cr.created_by, cr.deleted,
+                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
+                    FROM components c
+                    JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
+                    WHERE c.component_id = $1 AND c.deleted_at IS NULL
+                "#})
+                .bind(component_id),
+        )
+            .await?;
+
+        match revision {
+            Some(revision) => Ok(Some(self.with_component_files(revision).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_staged_by_name(
+        &self,
+        environment_id: &Uuid,
+        name: &str,
+    ) -> repo::Result<Option<ComponentRevisionRecord>> {
+        let revision = self.with_ro("get_staged_by_name")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT cr.component_id, cr.revision_id, cr.version, cr.hash,
+                           cr.created_at, cr.created_by, cr.deleted,
+                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
+                    FROM components c
+                    JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
+                    WHERE c.environment_id = $1 AND c.name = $2 AND c.deleted_at IS NULL
+                "#})
+                    .bind(environment_id)
+                    .bind(name),
+            )
+            .await?;
+
+        match revision {
+            Some(revision) => Ok(Some(self.with_component_files(revision).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_deployed_by_id(
+        &self,
+        component_id: &Uuid,
+    ) -> repo::Result<Option<ComponentRevisionRecord>> {
+        let revision = self.with_ro("get_deployed_by_id")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT cr.component_id, cr.revision_id, cr.version, cr.hash,
+                           cr.created_at, cr.created_by, cr.deleted,
+                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
+                    FROM components c
+                    JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
+                    WHERE c.component_id = $1 AND c.deleted_at IS NULL
+                "#})
+                    .bind(component_id),
+            )
+            .await?;
+
+        match revision {
+            Some(revision) => Ok(Some(self.with_component_files(revision).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_deployed_by_name(
+        &self,
+        environment_id: &Uuid,
+        name: &str,
+    ) -> repo::Result<Option<ComponentRevisionRecord>> {
+        let revision = self.with_ro("get_deployed_by_name")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT cr.component_id, cr.revision_id, cr.version, cr.hash,
+                           cr.created_at, cr.created_by, cr.deleted,
+                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
+                    FROM components c
+                    JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
+                    WHERE c.environment_id = $1 AND c.name = $2 AND c.deleted_at IS NULL
+                "#})
+                    .bind(environment_id)
+                    .bind(name),
+            )
+            .await?;
+
+        match revision {
+            Some(revision) => Ok(Some(self.with_component_files(revision).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_staged(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<ComponentRevisionRecord>> {
+        let revisions = self.with_ro("list_staged")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT cr.component_id, cr.revision_id, cr.version, cr.hash,
+                           cr.created_at, cr.created_by, cr.deleted,
+                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
+                    FROM components c
+                    JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
+                    WHERE c.environment_id = $1 AND c.deleted_at IS NULL
+                    ORDER BY c.name
+                "#})
+                    .bind(environment_id),
+            )
+            .await?;
+
+        stream::iter(revisions)
+            .then(|revision| self.with_component_files(revision))
+            .try_collect()
+            .await
+    }
+
+    async fn list_deployed(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<ComponentRevisionRecord>> {
+        let revisions = self.with_ro("list_deployed")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT cr.component_id, cr.revision_id, cr.version, cr.hash,
+                           cr.created_at, cr.created_by, cr.deleted,
+                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
+                    FROM components c
+                    JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
+                    WHERE c.environment_id = $1 AND c.deleted_at IS NULL AND cr.status = 'deployed'
+                    ORDER BY c.name
+                "#})
+                    .bind(environment_id),
+            )
+            .await?;
+
+        stream::iter(revisions)
+            .then(|revision| self.with_component_files(revision))
+            .try_collect()
+            .await
+    }
 }
 
 #[async_trait]
@@ -295,6 +547,17 @@ trait ComponentRepoInternal: ComponentRepo {
         component_id: &Uuid,
         current_revision_id: i64,
     ) -> repo::Result<Option<ComponentRecord>>;
+
+    async fn get_component_files(
+        &self,
+        component_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::Result<Vec<ComponentFileRecord>>;
+
+    async fn with_component_files(
+        &self,
+        component: ComponentRevisionRecord,
+    ) -> repo::Result<ComponentRevisionRecord>;
 
     async fn insert_revision(
         tx: &mut Self::Tx,
@@ -322,8 +585,8 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT component_id, name, environment_id,
-                           created_at, updated_at, deleted_at, modified_by,
-                           current_revision_id
+                      created_at, updated_at, deleted_at, modified_by,
+                      current_revision_id
                     FROM components
                     WHERE component_id = $1 AND current_revision_id = $2 and deleted_at IS NULL
                 "#})
@@ -331,6 +594,38 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 .bind(current_revision_id),
             )
             .await
+    }
+
+    async fn get_component_files(
+        &self,
+        component_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::Result<Vec<ComponentFileRecord>> {
+        self.with_ro("get_component_files")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT component_id, revision_id, file_path, hash,
+                           created_at, created_by, file_key, file_permissions
+                    FROM component_files
+                    WHERE component_id = $1 AND revision_id = $2
+                    ORDER BY file_path
+                "#})
+                .bind(component_id)
+                .bind(revision_id),
+            )
+            .await
+    }
+
+    // TODO: create a variant the accepts multiple component records, and which batches
+    //       queries (e.g. with "IN")
+    async fn with_component_files(
+        &self,
+        mut component: ComponentRevisionRecord,
+    ) -> repo::Result<ComponentRevisionRecord> {
+        component.files = self
+            .get_component_files(&component.component_id, component.revision_id)
+            .await?;
+        Ok(component)
     }
 
     async fn insert_revision(

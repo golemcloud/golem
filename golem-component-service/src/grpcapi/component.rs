@@ -16,9 +16,9 @@ use crate::api::common::ComponentTraceErrorKind;
 use crate::authed::component::AuthedComponentService;
 use crate::grpcapi::{auth, bad_request_error, internal_error, require_component_id};
 use async_trait::async_trait;
-use futures_util::stream::BoxStream;
-use futures_util::StreamExt;
-use futures_util::TryStreamExt;
+use futures::stream::BoxStream;
+use futures::StreamExt;
+use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentService as GrpcComponentService;
 use golem_api_grpc::proto::golem::component::v1::{

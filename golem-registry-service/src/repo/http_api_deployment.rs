@@ -19,8 +19,8 @@ use crate::repo::model::http_api_deployment::{
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use futures_util::future::BoxFuture;
-use futures_util::FutureExt;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -450,7 +450,7 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         tx.execute(
             sqlx::query(indoc! { r#"
                 INSERT INTO http_api_deployment_definitions
-                    (http_api_deployment_id, revision_id, http_definition_id)
+                (http_api_deployment_id, revision_id, http_definition_id)
                 VALUES ($1, $2, $3)
             "#})
             .bind(http_api_deployment_id)
@@ -459,17 +459,9 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         )
         .await?;
 
-        // TODO: should we filter for deleted here?
-        // TODO: how should we handle deletion of referenced definitions?
-        //       check if we can use partial foreign key VS delaying this
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
-                SELECT
-                    d.http_api_definition_id as http_definition_id,
-                    d.name as name,
-                    dr.revision_id as revision_id,
-                    dr.version as version,
-                    dr.hash as hash
+                SELECT d.http_api_definition_id, d.name, dr.revision_id, dr.version, dr.hash
                 FROM http_api_definitions d
                 INNER JOIN http_api_definition_revisions dr ON
                     d.http_api_definition_id = dr.http_api_definition_id AND

@@ -51,7 +51,6 @@ derive_more = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }
 futures = { workspace = true }
-futures-util = { workspace = true }
 headers = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }

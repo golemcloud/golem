@@ -18,8 +18,8 @@ use crate::repo::model::http_api_definition::{
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use futures_util::future::BoxFuture;
-use futures_util::FutureExt;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};

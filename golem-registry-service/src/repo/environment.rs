@@ -18,8 +18,8 @@ pub use crate::repo::model::environment::{
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use futures_util::future::BoxFuture;
-use futures_util::FutureExt;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -188,17 +188,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name AS name,
-                        e.application_id AS application_id,
-                        r.environment_id AS environment_id,
-                        r.revision_id AS revision_id,
-                        r.hash AS hash,
-                        r.created_at AS created_at,
-                        r.created_by AS created_by,
-                        r.deleted AS deleted,
-                        r.compatibility_check AS compatibility_check,
-                        r.version_check AS version_check,
-                        r.security_overrides AS security_overrides
+                        e.name, e.application_id,
+                        r.environment_id, r.revision_id, r.hash,
+                        r.created_at, r.created_by, r.deleted,
+                        r.compatibility_check, r.version_check, r.security_overrides
                     FROM environments e
                     INNER JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
@@ -218,17 +211,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name AS name,
-                        e.application_id AS application_id,
-                        r.environment_id AS environment_id,
-                        r.revision_id AS revision_id,
-                        r.hash AS hash,
-                        r.created_at AS created_at,
-                        r.created_by AS created_by,
-                        r.deleted AS deleted,
-                        r.compatibility_check AS compatibility_check,
-                        r.version_check AS version_check,
-                        r.security_overrides AS security_overrides
+                        e.name,e.application_id,
+                        r.environment_id, r.revision_id, r.hash,
+                        r.created_at, r.created_by, r.deleted,
+                        r.compatibility_check, r.version_check, r.security_overrides
                     FROM environments e
                     INNER JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id

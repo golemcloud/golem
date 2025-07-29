@@ -27,9 +27,9 @@ use crate::config::GolemClientProtocol;
 use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::future::join_all;
-use futures_util::stream::SplitStream;
-use futures_util::{SinkExt, StreamExt};
+use futures::future::join_all;
+use futures::stream::SplitStream;
+use futures::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::apidefinition::api_definition::Definition;
 use golem_api_grpc::proto::golem::apidefinition::v1::{
     api_definition_request, create_api_definition_request, update_api_definition_request,

@@ -19,7 +19,7 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::{BoxError, Router};
 use bytes::Bytes;
-use futures_util::{stream, StreamExt};
+use futures::{stream, StreamExt};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};

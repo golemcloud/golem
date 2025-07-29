@@ -29,7 +29,7 @@ use async_zip::tokio::read::seek::ZipFileReader;
 use async_zip::ZipEntry;
 use bytes::Bytes;
 use futures::TryStreamExt;
-use futures_util::stream::BoxStream;
+use futures::stream::BoxStream;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::FunctionConstraints;

@@ -15,7 +15,7 @@
 use crate::repo::Deps;
 use assert2::{assert, check, let_assert};
 use chrono::Utc;
-use futures_util::future::join_all;
+use futures::future::join_all;
 use golem_registry_service::repo::account::AccountRecord;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
 use golem_registry_service::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};

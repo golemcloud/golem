@@ -62,8 +62,8 @@ use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 pub use durability::*;
 use futures::future::try_join_all;
-use futures_util::TryFutureExt;
-use futures_util::TryStreamExt;
+use futures::TryFutureExt;
+use futures::TryStreamExt;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };

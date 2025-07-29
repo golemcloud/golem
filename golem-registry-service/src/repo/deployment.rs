@@ -25,8 +25,8 @@ use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRe
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use futures_util::future::BoxFuture;
-use futures_util::FutureExt;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{
@@ -370,12 +370,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     ) -> Result<Vec<ComponentRevisionIdentityRecord>, RepoError> {
         tx.fetch_all_as(
             sqlx::query_as(indoc! { r#"
-                SELECT
-                    c.component_id as component_id,
-                    c.name as name, cr.revision_id as revision_id,
-                    cr.revision_id as revision_id,
-                    cr.version as version,
-                    cr.status as status, cr.hash as hash
+                SELECT c.component_id, c.name, cr.revision_id, cr.revision_id, cr.version, cr.status, cr.hash
                 FROM components c
                 INNER JOIN component_revisions cr ON
                     cr.component_id = c.component_id
@@ -393,12 +388,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     ) -> Result<Vec<HttpApiDefinitionRevisionIdentityRecord>, RepoError> {
         tx.fetch_all_as(
             sqlx::query_as(indoc! { r#"
-                SELECT
-                    d.http_api_definition_id as http_api_definition_id,
-                    d.name as name,
-                    dr.revision_id as revision_id,
-                    dr.version as version,
-                    dr.hash as hash
+                SELECT d.http_api_definition_id, d.name, dr.revision_id, dr.version, dr.hash
                 FROM http_api_definitions d
                 INNER JOIN http_api_definition_revisions dr ON
                     d.http_api_definition_id = dr.http_api_definition_id
@@ -417,11 +407,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         let mut deployments: Vec<HttpApiDeploymentRevisionIdentityRecord> = tx
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT
-                        d.http_api_deployment_id as http_api_deployment_id,
-                        d.name as name,
-                        dr.revision_id as revision_id,
-                        dr.hash as hash
+                    SELECT d.http_api_deployment_id, d.name, dr.revision_id, dr.hash
                     FROM http_api_deployments d
                     INNER JOIN http_api_deployment_revisions dr ON
                         d.http_api_deployment_id = dr.http_api_deployment_id

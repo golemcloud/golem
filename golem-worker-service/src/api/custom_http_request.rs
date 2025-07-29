@@ -26,7 +26,7 @@ use crate::gateway_execution::http_handler_binding_handler::HttpHandlerBindingHa
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_rib_interpreter::DefaultRibInterpreter;
 use crate::gateway_security::DefaultIdentityProvider;
-use futures_util::FutureExt;
+use futures::FutureExt;
 use poem::{Endpoint, Request, Response};
 
 pub struct CustomHttpRequestApi {

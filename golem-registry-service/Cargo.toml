@@ -38,7 +38,6 @@ console-subscriber = { workspace = true }
 darling = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
-futures-util = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
