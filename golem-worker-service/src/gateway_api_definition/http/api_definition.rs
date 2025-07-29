@@ -29,8 +29,6 @@ use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
 use bincode::{Decode, Encode};
-use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
-use golem_api_grpc::proto::golem::apidefinition::HttpRoute;
 use golem_common::model::auth::Namespace;
 use golem_common::model::component::VersionedComponentId;
 use golem_service_base::model::Component;
@@ -45,7 +43,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::SystemTime;
 use Iterator;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -183,64 +180,6 @@ impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
             draft: compiled_http_api_definition.draft,
             created_at: compiled_http_api_definition.created_at,
         }
-    }
-}
-
-impl TryFrom<grpc_apidefinition::ApiDefinition> for HttpApiDefinition {
-    type Error = String;
-    fn try_from(value: grpc_apidefinition::ApiDefinition) -> Result<Self, Self::Error> {
-        let routes = match value.definition.ok_or("definition is missing")? {
-            grpc_apidefinition::api_definition::Definition::Http(http) => http
-                .routes
-                .into_iter()
-                .map(crate::gateway_api_definition::http::Route::try_from)
-                .collect::<Result<Vec<crate::gateway_api_definition::http::Route>, String>>()?,
-        };
-        let id = value.id.ok_or("Api Definition ID is missing")?;
-        let created_at = value
-            .created_at
-            .ok_or("Created At is missing")
-            .and_then(|t| SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp"))?;
-        let result = crate::gateway_api_definition::http::HttpApiDefinition {
-            id: ApiDefinitionId(id.value),
-            version: ApiVersion(value.version),
-            routes,
-            draft: value.draft,
-            created_at: created_at.into(),
-        };
-        Ok(result)
-    }
-}
-
-impl TryFrom<HttpApiDefinition> for grpc_apidefinition::ApiDefinition {
-    type Error = String;
-
-    fn try_from(
-        value: crate::gateway_api_definition::http::HttpApiDefinition,
-    ) -> Result<Self, Self::Error> {
-        let routes = value
-            .routes
-            .into_iter()
-            .map(grpc_apidefinition::HttpRoute::try_from)
-            .collect::<Result<Vec<grpc_apidefinition::HttpRoute>, String>>()?;
-
-        let id = value.id.0;
-
-        let definition = grpc_apidefinition::HttpApiDefinition { routes };
-
-        let created_at = prost_types::Timestamp::from(SystemTime::from(value.created_at));
-
-        let result = grpc_apidefinition::ApiDefinition {
-            id: Some(grpc_apidefinition::ApiDefinitionId { value: id }),
-            version: value.version.0,
-            definition: Some(grpc_apidefinition::api_definition::Definition::Http(
-                definition,
-            )),
-            draft: value.draft,
-            created_at: Some(created_at),
-        };
-
-        Ok(result)
     }
 }
 
@@ -449,22 +388,6 @@ impl<'de> Deserialize<'de> for MethodPattern {
     }
 }
 
-impl From<MethodPattern> for grpc_apidefinition::HttpMethod {
-    fn from(value: MethodPattern) -> Self {
-        match value {
-            MethodPattern::Get => grpc_apidefinition::HttpMethod::Get,
-            MethodPattern::Post => grpc_apidefinition::HttpMethod::Post,
-            MethodPattern::Put => grpc_apidefinition::HttpMethod::Put,
-            MethodPattern::Delete => grpc_apidefinition::HttpMethod::Delete,
-            MethodPattern::Patch => grpc_apidefinition::HttpMethod::Patch,
-            MethodPattern::Head => grpc_apidefinition::HttpMethod::Head,
-            MethodPattern::Options => grpc_apidefinition::HttpMethod::Options,
-            MethodPattern::Trace => grpc_apidefinition::HttpMethod::Trace,
-            MethodPattern::Connect => grpc_apidefinition::HttpMethod::Connect,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct LiteralInfo(pub String);
 
@@ -611,48 +534,6 @@ impl Route {
             GatewayBinding::Static(static_binding) => static_binding.get_cors_preflight(),
             _ => None,
         }
-    }
-}
-
-impl TryFrom<HttpRoute> for Route {
-    type Error = String;
-
-    fn try_from(http_route: HttpRoute) -> Result<Self, Self::Error> {
-        let binding = http_route.binding.ok_or("Missing binding")?;
-        let middlewares = http_route
-            .middleware
-            .map(HttpMiddlewares::try_from)
-            .transpose()?;
-
-        Ok(Route {
-            method: MethodPattern::try_from(http_route.method)?,
-            path: AllPathPatterns::from_str(http_route.path.as_str())?,
-            binding: GatewayBinding::try_from(binding)?,
-            middlewares,
-        })
-    }
-}
-
-impl TryFrom<Route> for grpc_apidefinition::HttpRoute {
-    type Error = String;
-
-    fn try_from(value: crate::gateway_api_definition::http::Route) -> Result<Self, Self::Error> {
-        let path = value.path.to_string();
-        let binding = grpc_apidefinition::GatewayBinding::try_from(value.binding)?;
-        let method: grpc_apidefinition::HttpMethod = value.method.into();
-        let middlewares = value.middlewares.clone();
-        let middleware_proto = middlewares
-            .map(golem_api_grpc::proto::golem::apidefinition::Middleware::try_from)
-            .transpose()?;
-
-        let result = grpc_apidefinition::HttpRoute {
-            method: method as i32,
-            path,
-            binding: Some(binding),
-            middleware: middleware_proto,
-        };
-
-        Ok(result)
     }
 }
 
@@ -1119,18 +1000,7 @@ impl From<CompiledRoute> for Route {
 mod tests {
     use super::*;
 
-    use crate::service::gateway::{ComponentView, ConversionContext};
-    use async_trait::async_trait;
-    use golem_common::model::{AccountId, ComponentId, ProjectId};
-    use golem_service_base::model::ComponentName;
-
-    use crate::gateway_security::{
-        SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata,
-    };
-    use crate::service::gateway::security_scheme::SecuritySchemeServiceError;
-    use chrono::{DateTime, Utc};
     use test_r::test;
-    use uuid::uuid;
 
     #[test]
     fn split_path_works_with_single_value() {
@@ -1307,137 +1177,5 @@ mod tests {
     #[test]
     fn expr_worker_response() {
         test_string_expr_parse_and_encode("worker.response");
-    }
-
-    fn get_api_spec(
-        path_pattern: &str,
-        worker_id: &str,
-        response_mapping: &str,
-    ) -> serde_yaml::Value {
-        let yaml_string = format!(
-            r#"
-          id: users-api
-          version: 0.0.1
-          projectId: '15d70aa5-2e23-4ee3-b65c-4e1d702836a3'
-          createdAt: 2024-08-21T07:42:15.696Z
-          routes:
-          - method: Get
-            path: {path_pattern}
-            binding:
-              component:
-                version: 0
-                name: 'foobar'
-              workerName: '{worker_id}'
-              response: '{response_mapping}'
-
-        "#
-        );
-
-        let de = serde_yaml::Deserializer::from_str(yaml_string.as_str());
-        serde_yaml::Value::deserialize(de).unwrap()
-    }
-
-    struct TestConversionContext;
-
-    #[async_trait]
-    impl ConversionContext for TestConversionContext {
-        async fn component_by_name(&self, name: &ComponentName) -> Result<ComponentView, String> {
-            if name.0 == "foobar" {
-                Ok(ComponentView {
-                    name: ComponentName("foobar".to_string()),
-                    id: ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3")),
-                    latest_version: 0,
-                })
-            } else {
-                Err("unknown component name".to_string())
-            }
-        }
-        async fn component_by_id(
-            &self,
-            _component_id: &ComponentId,
-        ) -> Result<ComponentView, String> {
-            unimplemented!()
-        }
-    }
-
-    struct TestSecuritySchemeService;
-
-    #[async_trait]
-    impl SecuritySchemeService for TestSecuritySchemeService {
-        async fn get(
-            &self,
-            _security_scheme_name: &SecuritySchemeIdentifier,
-            _namespace: &Namespace,
-        ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
-            Err(SecuritySchemeServiceError::InternalError(
-                "Not implemented".to_string(),
-            ))
-        }
-
-        async fn create(
-            &self,
-            _namespace: &Namespace,
-            _security_scheme: &SecurityScheme,
-        ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
-            Err(SecuritySchemeServiceError::InternalError(
-                "Not implemented".to_string(),
-            ))
-        }
-    }
-
-    #[test]
-    async fn test_api_spec_proto_conversion() {
-        async fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
-            let security_scheme_service: Arc<dyn SecuritySchemeService> =
-                Arc::new(TestSecuritySchemeService);
-
-            let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
-            let api_http_definition_request: crate::api::dto::HttpApiDefinitionRequest =
-                serde_yaml::from_value(yaml.clone()).unwrap();
-
-            let core_http_definition_request: HttpApiDefinitionRequest =
-                api_http_definition_request
-                    .into_core(&TestConversionContext.boxed())
-                    .await
-                    .unwrap();
-            let timestamp: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-            let core_http_definition = HttpApiDefinition::from_http_api_definition_request(
-                &Namespace {
-                    account_id: AccountId {
-                        value: uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3").to_string(),
-                    },
-                    project_id: ProjectId(uuid!("017beaf5-43db-4acc-9c6e-8b90e35ef063")),
-                },
-                core_http_definition_request,
-                timestamp,
-                &security_scheme_service,
-            )
-            .await
-            .unwrap();
-            let proto: grpc_apidefinition::ApiDefinition =
-                core_http_definition.clone().try_into().unwrap();
-            let decoded: HttpApiDefinition = proto.try_into().unwrap();
-            assert_eq!(core_http_definition, decoded);
-        }
-        test_encode_decode(
-            "/foo/{user-id}",
-            "let x: string = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
-        ).await;
-        test_encode_decode(
-            "/foo/{user-id}",
-            "let x: string = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
-        ).await;
-        test_encode_decode(
-            "/foo/{user-id}",
-            "let x: string = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
-        ).await;
-        test_encode_decode(
-            "/foo",
-            "let x: string = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
-        ).await;
     }
 }

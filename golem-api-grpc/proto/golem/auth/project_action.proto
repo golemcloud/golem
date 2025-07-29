@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package golem.projectpolicy;
+package golem.auth;
 
 enum ProjectAction {
   VIEW_COMPONENT = 0;
