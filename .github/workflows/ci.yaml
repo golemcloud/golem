@@ -356,7 +356,7 @@ jobs:
         with:
           images: golemservices/cloud-service
       - name: Build and push cloud-service
-        uses: docker/build-push-action@v5
+        uses: useblacksmith/build-push-action@v1
         with:
           context: .
           file: ./cloud-service/docker/Dockerfile
@@ -370,7 +370,7 @@ jobs:
         with:
           images: golemservices/golem-worker-executor
       - name: Build and push worker executor image
-        uses: docker/build-push-action@v5
+        uses: useblacksmith/build-push-action@v1
         with:
           context: .
           file: ./golem-worker-executor/docker/Dockerfile
@@ -384,7 +384,7 @@ jobs:
         with:
           images: golemservices/golem-debugging-service
       - name: Build and push golem debugging service image
-        uses: docker/build-push-action@v5
+        uses: useblacksmith/build-push-action@v1
         with:
           context: .
           file: ./golem-debugging-service/docker/Dockerfile
@@ -398,7 +398,7 @@ jobs:
         with:
           images: golemservices/golem-shard-manager
       - name: Build and push shard manager image
-        uses: docker/build-push-action@v5
+        uses: useblacksmith/build-push-action@v1
         with:
           context: .
           file: ./golem-shard-manager/docker/Dockerfile
@@ -412,7 +412,7 @@ jobs:
         with:
           images: golemservices/golem-component-service
       - name: Build and push golem component service image
-        uses: docker/build-push-action@v5
+        uses: useblacksmith/build-push-action@v1
         with:
           context: .
           file: ./golem-component-service/docker/Dockerfile
@@ -426,7 +426,7 @@ jobs:
         with:
           images: golemservices/golem-worker-service
       - name: Build and push golem worker service image
-        uses: docker/build-push-action@v5
+        uses: useblacksmith/build-push-action@v1
         with:
           context: .
           file: ./golem-worker-service/docker/Dockerfile
@@ -440,7 +440,7 @@ jobs:
         with:
           images: golemservices/golem-component-compilation-service
       - name: Build and push golem component compilation service image
-        uses: docker/build-push-action@v5
+        uses: useblacksmith/build-push-action@v1
         with:
           context: .
           file: ./golem-component-compilation-service/docker/Dockerfile
@@ -454,7 +454,7 @@ jobs:
         with:
           images: golemservices/golem-router
       - name: Build and push golem router
-        uses: docker/build-push-action@v5
+        uses: useblacksmith/build-push-action@v1
         with:
           context: .
           file: ./golem-router/docker/Dockerfile
