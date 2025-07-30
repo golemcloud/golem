@@ -1,13 +1,7 @@
-import { Api } from "@/types/api";
-import {
-  Case,
-  ComponentExportFunction,
-  Export,
-  FileStructure,
-  Typ,
-} from "@/types/component";
+import { Case, FileStructure, Typ } from "@/types/component";
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { HttpApiDefinition } from "@/types/golemManifest.ts";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -48,15 +42,15 @@ export function formatTimestampInDateTimeFormat(timestamp: string) {
   // Get date components
   const month = String(date.getMonth() + 1).padStart(2, "0"); // Months are zero-indexed
   const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getFullYear();
 
   // Get time components
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
   const seconds = String(date.getSeconds()).padStart(2, "0");
-  const milliseconds = String(date.getMilliseconds()).padStart(3, "0");
 
-  // Combine into the desired format
-  return `${month}-${day} ${hours}:${minutes}:${seconds}.${milliseconds}`;
+  // Combine into MM/DD/YYYY HH:MM:SS format
+  return `${month}/${day}/${year} ${hours}:${minutes}:${seconds}`;
 }
 
 /// compare semver version
@@ -72,38 +66,43 @@ export const compareSemver = (version1: string, version2: string) => {
   const v2Parts = version2.split(".");
 
   // Compare major version
-  const major1 = parseInt(v1Parts[0]);
-  const major2 = parseInt(v2Parts[0]);
+  const major1 = parseInt(v1Parts[0] || "0", 10);
+  const major2 = parseInt(v2Parts[0] || "0", 10);
   if (major1 !== major2) return major1 > major2;
 
-  const minor1 = parseInt(v1Parts[1]);
-  const minor2 = parseInt(v2Parts[1]);
+  const minor1 = parseInt(v1Parts[1] || "0", 10);
+  const minor2 = parseInt(v2Parts[1] || "0", 10);
   if (minor1 !== minor2) return minor1 > minor2;
 
   // Compare patch version
-  const patch1 = parseInt(v1Parts[2]);
-  const patch2 = parseInt(v2Parts[2]);
+  const patch1 = parseInt(v1Parts[2] || "0", 10);
+  const patch2 = parseInt(v2Parts[2] || "0", 10);
   return patch1 > patch2;
 
   return false;
 };
 
 /// Remove the duplicate api and keep the latest one by comparing the semver version
-export const removeDuplicateApis = (data: Api[]) => {
-  const uniqueEntries = {} as Record<string, Api>;
+export const removeDuplicateApis = (data: HttpApiDefinition[]) => {
+  const uniqueEntries = {} as Record<
+    string,
+    HttpApiDefinition & { count?: number }
+  >;
 
   data.forEach(item => {
+    if (!item.id) return; // Skip items without id
+
     if (!uniqueEntries[item.id]) {
       uniqueEntries[item.id] = item;
     } else {
       // check semver for latest version
-      const uniqueEntriesVersion = uniqueEntries[item.id].version;
-      const count = (uniqueEntries[item.id].count || 1) + 1;
+      const uniqueEntriesVersion = uniqueEntries[item.id]?.version;
+      const count = (uniqueEntries[item.id]?.count || 1) + 1;
       const itemVersion = item.version;
-      if (compareSemver(itemVersion, uniqueEntriesVersion)) {
+      if (compareSemver(itemVersion, uniqueEntriesVersion!)) {
         uniqueEntries[item.id] = { ...item, count: count + 1 };
       } else {
-        uniqueEntries[item.id].count = count;
+        uniqueEntries[item.id]!.count = count;
       }
     }
   });
@@ -125,23 +124,6 @@ export const parseErrorMessage = (error: string): string => {
     }
   }
   return "An unknown error occurred.";
-};
-
-export const calculateExportFunctions = (exports: Export[]) => {
-  const functions = exports.reduce(
-    (acc: ComponentExportFunction[], curr: Export) => {
-      const updatedFunctions = curr.functions.map(
-        (func: ComponentExportFunction) => ({
-          ...func,
-          exportName: curr.name,
-        }),
-      );
-
-      return acc.concat(updatedFunctions);
-    },
-    [],
-  );
-  return functions;
 };
 
 interface FileNode {

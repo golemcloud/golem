@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Globe } from "lucide-react";
 import {
@@ -9,21 +8,9 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { ComponentExportFunction, Export } from "@/types/component";
 import ErrorBoundary from "@/components/errorBoundary";
 
-export function ExportsList({ exports }: { exports: Export[] }) {
-  const exportedFunctions = useMemo(
-    () =>
-      exports.flatMap((exp: Export) =>
-        exp.functions.map((func: ComponentExportFunction) => ({
-          ...func,
-          exportName: exp.name,
-        })),
-      ),
-    [exports],
-  );
-
+export function ExportsList({ exports }: { exports: string[] }) {
   return (
     <ErrorBoundary>
       <Card>
@@ -37,15 +24,13 @@ export function ExportsList({ exports }: { exports: Export[] }) {
             <CommandList>
               <CommandEmpty>No exports found.</CommandEmpty>
               <CommandGroup>
-                {exportedFunctions.map(endpoint => (
+                {exports.map((endpoint: string, index) => (
                   <CommandItem
-                    key={`${endpoint.exportName}-${endpoint.name}`}
+                    key={`${endpoint}-${index}`}
                     className="flex items-center justify-between"
                   >
                     <span className="font-mono text-sm">
-                      <span className="text-blue-400">
-                        {endpoint.exportName}.{endpoint.name}
-                      </span>
+                      <span className="text-blue-400">{endpoint}</span>
                     </span>
                   </CommandItem>
                 ))}

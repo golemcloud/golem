@@ -3,8 +3,13 @@ export interface Plugin {
   version: string;
   description: string;
   homepage: string;
-  icon: File[];
-  specs: {
+  scope: string;
+  type: string;
+  oplogProcessorComponentId?: string;
+  oplogProcessorComponentVersion?: number;
+  // Legacy fields for backward compatibility if needed
+  icon?: File[];
+  specs?: {
     type: string;
     componentId?: string;
     componentVersion?: number;
@@ -12,13 +17,9 @@ export interface Plugin {
     validateUrl?: string;
     transformUrl?: string;
   };
-  scope: {
-    type: string;
-    componentID?: string;
-  };
 }
 
 export interface PluginList {
   name: string;
-  version: string[];
+  versions: Plugin[];
 }

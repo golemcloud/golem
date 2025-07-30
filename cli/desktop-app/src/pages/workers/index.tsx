@@ -26,10 +26,10 @@ export default function WorkerList() {
   const [searchQuery, setSearchQuery] = useState("");
 
   const navigate = useNavigate();
-  const { componentId } = useParams();
+  const { appId, componentId } = useParams();
 
   useEffect(() => {
-    API.findWorker(componentId!).then(res => {
+    API.workerService.findWorker(appId!, componentId!).then(res => {
       const sortedData = res.workers.sort(
         (a: Worker, b: Worker) =>
           new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
@@ -42,9 +42,9 @@ export default function WorkerList() {
   useEffect(() => {
     const lowerCaseQuery = searchQuery.toLowerCase();
     const filtered = workerList.filter(
-      worker =>
-        worker.workerId.workerName.toLowerCase().includes(lowerCaseQuery) ||
-        worker.status.toLowerCase().includes(lowerCaseQuery),
+      (worker: Worker) =>
+        worker.workerName?.toLowerCase().includes(lowerCaseQuery) ||
+        worker.status?.toLowerCase().includes(lowerCaseQuery),
     );
     setFilteredWorkers(filtered);
   }, [searchQuery, workerList]);
@@ -66,7 +66,9 @@ export default function WorkerList() {
             <Button
               variant="default"
               onClick={() =>
-                navigate(`/components/${componentId}/workers/create`)
+                navigate(
+                  `/app/${appId}/components/${componentId}/workers/create`,
+                )
               }
             >
               <Plus className="h-4 w-4" />
@@ -88,19 +90,19 @@ export default function WorkerList() {
             </div>
           ) : (
             <div className="overflow-auto max-h-[70vh] space-y-4">
-              {filteredWorkers.map((worker, index) => (
+              {filteredWorkers.map((worker: Worker, index) => (
                 <Card
                   key={index}
                   className="rounded-lg border border-border bg-muted hover:bg-muted/80 hover:shadow-lg transition cursor-pointer"
                   onClick={() =>
                     navigate(
-                      `/components/${componentId}/workers/${worker.workerId.workerName}`,
+                      `/app/${appId}/components/${componentId}/workers/${worker.workerName}`,
                     )
                   }
                 >
                   <CardHeader>
                     <CardTitle className="text-foreground font-mono">
-                      {worker.workerId.workerName}
+                      {worker.workerName}
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="py-2">

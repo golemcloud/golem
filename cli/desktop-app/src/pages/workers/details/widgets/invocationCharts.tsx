@@ -55,7 +55,7 @@ export function InvocationsChart({ data = [] as Invocation[] }) {
 
   const functionList =
     chartData.length > 0
-      ? Object.keys(chartData[0]).filter(key => key !== "date")
+      ? Object.keys(chartData[0]!).filter(key => key !== "date")
       : [];
 
   return (
@@ -75,7 +75,7 @@ export function InvocationsChart({ data = [] as Invocation[] }) {
                         Date
                       </span>
                       <span className="font-bold text-foreground">
-                        {payload[0].payload.date}
+                        {payload[0]!.payload.date}
                       </span>
                     </div>
                     {payload.map(entry => (

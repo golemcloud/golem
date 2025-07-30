@@ -64,7 +64,19 @@ jobs:
         sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
     - name: Install frontend dependencies
-      run: npm install --force
+      run: npm install
+      working-directory: ./desktop-app
+
+    - name: Run frontend tests
+      run: npm test
+      working-directory: ./desktop-app
+
+    - name: Check Code Format
+      run: npm run format:check
+      working-directory: ./desktop-app
+
+    - name: Lint Check
+      run: npm run lint
       working-directory: ./desktop-app
 
     - name: Build Tauri apps

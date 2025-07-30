@@ -56,7 +56,11 @@ export function WorkerStatus({
   );
 
   // Extracted render function for the chart label for clarity
-  const renderChartLabel = ({ viewBox }: { viewBox?: any }) => {
+  const renderChartLabel = ({
+    viewBox,
+  }: {
+    viewBox?: { cx?: number; cy?: number };
+  }) => {
     if (viewBox && "cx" in viewBox && "cy" in viewBox) {
       return (
         <text
@@ -119,6 +123,7 @@ export function WorkerStatus({
                   innerRadius={60}
                   strokeWidth={5}
                 >
+                  {/* @ts-ignore */}
                   <Label content={renderChartLabel} />
                 </Pie>
               </PieChart>

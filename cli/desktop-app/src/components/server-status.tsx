@@ -16,6 +16,10 @@ interface HealthStatus {
   error?: string;
 }
 
+const capitalizeFirstLetter = (str: string) => {
+  return str.charAt(0).toUpperCase() + str.slice(1);
+};
+
 export function ServerStatus() {
   const [status, setStatus] = useState<HealthStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -23,13 +27,13 @@ export function ServerStatus() {
   useEffect(() => {
     const checkHealth = async () => {
       try {
-        await API.checkHealth();
+        await API.appService.checkHealth();
         setStatus({
           status: "healthy",
           timestamp: new Date().toISOString(),
           uptime: 0,
         });
-      } catch (error) {
+      } catch {
         setStatus({
           status: "unhealthy",
           timestamp: new Date().toISOString(),
@@ -57,7 +61,7 @@ export function ServerStatus() {
   }
 
   const statusContent =
-    status && status?.status[0].toUpperCase() + status?.status.slice(1);
+    status?.status !== undefined ? capitalizeFirstLetter(status.status) : "";
 
   return (
     <TooltipProvider>

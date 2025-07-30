@@ -1,4 +1,3 @@
-import { Api, RouteRequestData } from "@/types/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Globe, LayoutGrid, Plus, Route } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -10,23 +9,29 @@ import { Button } from "@/components/ui/button";
 import { Deployment } from "@/types/deployments.ts";
 import ErrorBoundary from "@/components/errorBoundary.tsx";
 import { HTTP_METHOD_COLOR } from "@/components/nav-route.tsx";
+import {
+  HttpApiDefinition,
+  HttpApiDefinitionRoute,
+} from "@/types/golemManifest";
 
 const APIDetails = () => {
-  const { apiName, version } = useParams();
+  const { apiName, version, appId } = useParams();
   const [queryParams] = useSearchParams();
   const reload = queryParams.get("reload");
   const navigate = useNavigate();
-  const [activeApiDetails, setActiveApiDetails] = useState({} as Api);
+  const [activeApiDetails, setActiveApiDetails] = useState(
+    {} as HttpApiDefinition,
+  );
 
   const [deployments, setDeployments] = useState([] as Deployment[]);
 
   useEffect(() => {
     if (apiName) {
-      API.getApi(apiName).then(response => {
-        const selectedApi = response.find(api => api.version === version);
+      API.apiService.getApi(appId!, apiName).then(response => {
+        const selectedApi = response.find(r => r.version == version);
         setActiveApiDetails(selectedApi!);
       });
-      API.getDeploymentApi(apiName).then(response => {
+      API.deploymentService.getDeploymentApi(appId!).then(response => {
         const result = [] as Deployment[];
         response.forEach((deployment: Deployment) => {
           if (deployment.apiDefinitions.length > 0) {
@@ -42,9 +47,9 @@ const APIDetails = () => {
     }
   }, [apiName, version, reload]);
 
-  const routeToQuery = (route: RouteRequestData) => {
+  const routeToQuery = (route: HttpApiDefinitionRoute) => {
     navigate(
-      `/apis/${apiName}/version/${version}/routes/?path=${route.path}&method=${route.method}`,
+      `/app/${appId}/apis/${apiName}/version/${version}/routes/?path=${route.path}&method=${route.method}`,
     );
   };
   return (
@@ -58,7 +63,9 @@ const APIDetails = () => {
                 <Button
                   variant="outline"
                   onClick={() =>
-                    navigate(`/apis/${apiName}/version/${version}/routes/add?`)
+                    navigate(
+                      `/app/${appId}/apis/${apiName}/version/${version}/routes/add?`,
+                    )
                   }
                   className="flex items-center gap-2"
                 >
@@ -94,7 +101,7 @@ const APIDetails = () => {
                             variant="secondary"
                             className={
                               HTTP_METHOD_COLOR[
-                              route.method as keyof typeof HTTP_METHOD_COLOR
+                                route.method as keyof typeof HTTP_METHOD_COLOR
                               ]
                             }
                           >
@@ -118,7 +125,7 @@ const APIDetails = () => {
                 <Button
                   variant="ghost"
                   className="text-primary"
-                  onClick={() => navigate(`/deployments`)}
+                  onClick={() => navigate(`/app/${appId}/deployments`)}
                 >
                   View All
                 </Button>
@@ -131,7 +138,7 @@ const APIDetails = () => {
                     <div
                       key={deployment.createdAt + deployment.site.host}
                       className="flex items-center justify-between rounded-lg border p-4 cursor-pointer"
-                      onClick={() => navigate(`/deployments/`)}
+                      onClick={() => navigate(`/app/${appId}/deployments`)}
                     >
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">

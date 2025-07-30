@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import type { ToastActionElement, ToastProps } from "@/components/ui/toast";
+import type { useLogViewer } from "@/contexts/log-viewer-context";
 
 const TOAST_LIMIT = 1;
 const TOAST_REMOVE_DELAY = 1000000;
@@ -134,8 +135,50 @@ function dispatch(action: Action) {
 
 type Toast = Omit<ToasterToast, "id">;
 
+// Character limit for determining if toast should use GlobalLogViewer
+const TOAST_LARGE_MESSAGE_LIMIT = 200;
+
+// Global log viewer reference for use in toast function
+let globalLogViewer: ReturnType<typeof useLogViewer> | null = null;
+
+// Function to set up global log viewer reference
+export function setupGlobalLogViewer(
+  logViewer: ReturnType<typeof useLogViewer>,
+) {
+  globalLogViewer = logViewer;
+}
+
 function toast({ ...props }: Toast) {
   const id = genId();
+
+  // Check if message is too large for toast
+  const messageText =
+    String(props.title || "") + String(props.description || "");
+  const isLargeMessage = messageText.length > TOAST_LARGE_MESSAGE_LIMIT;
+
+  // If message is large and we have access to global log viewer, use it instead
+  if (isLargeMessage && globalLogViewer) {
+    const status =
+      props.variant === "destructive"
+        ? "error"
+        : props.variant === "success"
+          ? "success"
+          : "info";
+
+    globalLogViewer.showLog({
+      title: String(props.title || "Message"),
+      logs: String(props.description || ""),
+      status,
+      operation: "Toast Message",
+    });
+
+    // Return a dummy object to maintain compatibility
+    return {
+      id: id,
+      dismiss: () => {},
+      update: () => {},
+    };
+  }
 
   const update = (props: ToasterToast) =>
     dispatch({
@@ -180,6 +223,12 @@ function useToast() {
     ...state,
     toast,
     dismiss: (toastId?: string) => dispatch({ type: "DISMISS_TOAST", toastId }),
+    success: (props: Omit<Toast, "variant">) =>
+      toast({ ...props, variant: "success" }),
+    error: (props: Omit<Toast, "variant">) =>
+      toast({ ...props, variant: "destructive" }),
+    info: (props: Omit<Toast, "variant">) =>
+      toast({ ...props, variant: "default" }),
   };
 }
 

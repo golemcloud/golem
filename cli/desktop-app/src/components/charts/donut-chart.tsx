@@ -106,6 +106,7 @@ export function Component() {
                       </text>
                     );
                   }
+                  return null;
                 }}
               />
             </Pie>

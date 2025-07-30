@@ -21,11 +21,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 import { useEffect, useState } from "react";
 
 import { API } from "@/service";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, FileIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ComponentList } from "@/types/component";
 import { Input } from "@/components/ui/input";
@@ -33,16 +33,23 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { open } from "@tauri-apps/plugin-dialog";
 
 const formSchema = z.object({
-  name: z.string().min(2, {
-    message: "Plugin name must be at least 2 characters.",
-  }),
-  version: z.string().regex(/^v\d+$/, {
-    message: "Version must be in the format v{0-9}",
+  name: z
+    .string()
+    .min(2, {
+      message: "Plugin name must be at least 2 characters.",
+    })
+    .regex(/^[a-z][a-z0-9-]*$/, {
+      message:
+        "Plugin name must be lowercase, start with a letter, and contain only letters, numbers, and hyphens.",
+    }),
+  version: z.string().regex(/^\d+\.\d+\.\d+$/, {
+    message: "Version must be in the format 0.0.1",
   }),
   description: z.string().min(10, {
     message: "Description must be at least 10 characters.",
@@ -50,71 +57,79 @@ const formSchema = z.object({
   homepage: z.string().url({
     message: "Please enter a valid URL.",
   }),
-  icon: z.instanceof(File),
-  specs: z.discriminatedUnion("type", [
-    z.object({
-      type: z.literal("OplogProcessor"),
-      componentId: z
-        .string()
-        .uuid({ message: "Component ID must be a valid UUID." }),
-      componentVersion: z.number().min(0, {
-        message: "Component version is mandatory",
-      }),
-    }),
-    z.object({
-      type: z.literal("ComponentTransformer"),
-      validateUrl: z.string().url({ message: "Please enter a valid URL." }),
-      transformUrl: z.string().url({ message: "Please enter a valid URL." }),
+  icon: z.string().min(1, {
+    message: "Icon path is required.",
+  }),
+  specs: z
+    .object({
+      type: z.enum([
+        "ComponentTransformer",
+        "OplogProcessor",
+        "App",
+        "Library",
+      ]),
+      // ComponentTransformer specific fields
+      validateUrl: z.string().url().optional(),
+      transformUrl: z.string().url().optional(),
+      providedWitPackage: z.string().optional(),
       jsonSchema: z.string().optional(),
-    }),
-  ]),
-  scope: z.discriminatedUnion("type", [
-    z.object({
-      type: z.literal("Global"),
-    }),
-    z.object({
-      type: z.literal("Component"),
-      componentId: z
-        .string()
-        .uuid({ message: "Component ID must be a valid UUID." }),
-    }),
-  ]),
+      // OplogProcessor, App, Library specific field
+      component: z.string().optional(),
+    })
+    .refine(
+      data => {
+        if (data.type === "ComponentTransformer") {
+          return data.validateUrl && data.transformUrl;
+        }
+        if (
+          data.type === "OplogProcessor" ||
+          data.type === "App" ||
+          data.type === "Library"
+        ) {
+          return data.component;
+        }
+        return true;
+      },
+      {
+        message: "Required fields for selected type are missing",
+      },
+    ),
 });
+
+export type CreatePluginFormData = z.infer<typeof formSchema>;
 
 export default function CreatePlugin() {
   const navigate = useNavigate();
-  const [componentApiList, setComponentApiList] = useState<{
+  const { appId } = useParams<{ appId: string }>();
+  const [_componentApiList, setComponentApiList] = useState<{
     [key: string]: ComponentList;
   }>({});
-  const [activeSpecTab, setActiveSpecTab] = useState("OplogProcessor");
+  const [activeSpecTab, setActiveSpecTab] = useState<
+    "ComponentTransformer" | "OplogProcessor" | "App" | "Library"
+  >("ComponentTransformer");
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      name: "",
-      version: "",
+      name: "my-plugin",
+      version: "0.0.1",
       description: "",
       homepage: "",
+      icon: "",
       specs: {
-        type: "OplogProcessor",
-        componentId: "",
-      },
-      scope: {
-        type: "Global",
+        type: "ComponentTransformer",
+        component: "",
       },
     },
   });
 
   useEffect(() => {
-    API.getComponentByIdAsKey().then(async response => {
+    API.componentService.getComponentByIdAsKey(appId!).then(async response => {
       setComponentApiList(response);
     });
   }, []);
 
   useEffect(() => {
-    form.setValue(
-      "specs.type",
-      activeSpecTab as "OplogProcessor" | "ComponentTransformer",
-    );
+    form.setValue("specs.type", activeSpecTab);
   }, [activeSpecTab, form]);
 
   return (
@@ -131,15 +146,29 @@ export default function CreatePlugin() {
         <CardContent>
           <Form {...form}>
             <form
-              onSubmit={form.handleSubmit(async data => {
-                const values = { ...data, icon: [] };
-                await API.createPlugin(values);
-                navigate(`/plugins`);
-                toast({
-                  title: "Plugin created successfully",
-                  duration: 3000,
-                });
-              })}
+              onSubmit={form.handleSubmit(
+                async (data: CreatePluginFormData) => {
+                  try {
+                    await API.pluginService.createPlugin(appId!, data);
+
+                    navigate(`/app/${appId}/plugins`);
+                    toast({
+                      title: "Plugin created successfully",
+                      description:
+                        "Plugin has been registered and is now available.",
+                      duration: 3000,
+                    });
+                  } catch (error: unknown) {
+                    toast({
+                      title: "Failed to create plugin",
+                      description:
+                        error instanceof Error ? error.message : String(error),
+                      variant: "destructive",
+                      duration: 5000,
+                    });
+                  }
+                },
+              )}
               className="space-y-8 max-h-[calc(100vh-300px)] overflow-y-auto px-1"
             >
               <div className="grid gap-6 sm:grid-cols-2">
@@ -153,7 +182,7 @@ export default function CreatePlugin() {
                       </FormLabel>
                       <FormControl>
                         <Input
-                          placeholder="Plugin name"
+                          placeholder="my-plugin-name"
                           {...field}
                           className={cn(
                             form.formState.errors.name &&
@@ -162,7 +191,8 @@ export default function CreatePlugin() {
                         />
                       </FormControl>
                       <FormDescription>
-                        Enter the name of your plugin.
+                        Plugin name must be lowercase with no spaces (use
+                        hyphens instead).
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
@@ -178,7 +208,7 @@ export default function CreatePlugin() {
                       </FormLabel>
                       <FormControl>
                         <Input
-                          placeholder="v0"
+                          placeholder="0.0.1"
                           {...field}
                           className={cn(
                             form.formState.errors.version &&
@@ -187,7 +217,7 @@ export default function CreatePlugin() {
                         />
                       </FormControl>
                       <FormDescription>
-                        Enter the version in the format v0.
+                        Enter the version in the format 0.0.1.
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
@@ -222,37 +252,6 @@ export default function CreatePlugin() {
               <div className="grid gap-6 sm:grid-cols-2">
                 <FormField
                   control={form.control}
-                  name="icon"
-                  render={() => (
-                    <FormItem>
-                      <FormLabel>
-                        Icon<span className="text-red-500">*</span>
-                      </FormLabel>
-                      <FormControl>
-                        <Input
-                          type="file"
-                          accept="image/*"
-                          onChange={e => {
-                            const file = e.target.files?.[0];
-                            if (file) {
-                              form.setValue("icon", file); // Update the form value manually
-                            }
-                          }}
-                          className={cn(
-                            form.formState.errors.icon &&
-                              "border-red-500 focus-visible:ring-red-500",
-                          )}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        Upload an icon for your plugin.
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
                   name="homepage"
                   render={({ field }) => (
                     <FormItem>
@@ -276,297 +275,279 @@ export default function CreatePlugin() {
                     </FormItem>
                   )}
                 />
+                <FormField
+                  control={form.control}
+                  name="icon"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        Icon Path<span className="text-red-500">*</span>
+                      </FormLabel>
+                      <FormControl>
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="path/to/icon.png"
+                            {...field}
+                            readOnly
+                            className={cn(
+                              form.formState.errors.icon &&
+                                "border-red-500 focus-visible:ring-red-500",
+                            )}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            onClick={async () => {
+                              try {
+                                const selected = await open({
+                                  multiple: false,
+                                  filters: [
+                                    {
+                                      name: "Image",
+                                      extensions: [
+                                        "png",
+                                        "jpg",
+                                        "jpeg",
+                                        "gif",
+                                        "svg",
+                                        "ico",
+                                        "webp",
+                                      ],
+                                    },
+                                  ],
+                                });
+                                if (selected) {
+                                  field.onChange(selected);
+                                }
+                              } catch (error) {
+                                console.error("Error selecting file:", error);
+                              }
+                            }}
+                          >
+                            <FileIcon className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </FormControl>
+                      <FormDescription>
+                        Select an icon file for your plugin.
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
               </div>
 
-              <div className="grid gap-6 sm:grid-cols-2">
-                <div className="space-y-6">
-                  <h3 className="text-lg font-semibold">Specs</h3>
-                  <Tabs
-                    value={activeSpecTab}
-                    onValueChange={setActiveSpecTab}
-                    className="w-full"
-                  >
-                    <TabsList className="grid w-full grid-cols-2 mb-6">
-                      <TabsTrigger value="OplogProcessor">
-                        OplogProcessor
-                      </TabsTrigger>
-                      <TabsTrigger value="ComponentTransformer">
-                        ComponentTransformer
-                      </TabsTrigger>
-                    </TabsList>
-                    <TabsContent value="OplogProcessor">
-                      <div className="space-y-4">
-                        <FormField
-                          control={form.control}
-                          name="specs.componentId"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>
-                                Component ID
-                                <span className="text-red-500">*</span>
-                              </FormLabel>
-                              <Select
-                                value={field.value}
-                                name={field.name}
-                                onValueChange={field.onChange}
-                              >
-                                <FormControl>
-                                  <SelectTrigger
-                                    className={cn(
-                                      (
-                                        form.formState.errors.specs as {
-                                          componentId: string;
-                                        }
-                                      )?.componentId &&
-                                        "border-red-500 focus-visible:ring-red-500",
-                                    )}
-                                  >
-                                    <SelectValue placeholder="Select a Component" />
-                                  </SelectTrigger>
-                                </FormControl>
-                                <SelectContent>
-                                  {componentApiList &&
-                                    Object.values(componentApiList).map(
-                                      data => (
-                                        <SelectItem
-                                          value={data.componentId!}
-                                          key={data.componentName}
-                                        >
-                                          {data.componentName}
-                                        </SelectItem>
-                                      ),
-                                    )}
-                                </SelectContent>
-                              </Select>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="specs.componentVersion"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>
-                                Component Version
-                                <span className="text-red-500">*</span>
-                              </FormLabel>
-                              <Select
-                                value={field.value?.toString()}
-                                name={field.name}
-                                onValueChange={e => field.onChange(Number(e))}
-                              >
-                                <FormControl>
-                                  <SelectTrigger
-                                    className={cn(
-                                      (
-                                        form.formState.errors.specs as {
-                                          componentVersion: string;
-                                        }
-                                      )?.componentVersion &&
-                                        "border-red-500 focus-visible:ring-red-500",
-                                    )}
-                                  >
-                                    <SelectValue placeholder="Select a version">
-                                      V{field.value}
-                                    </SelectValue>
-                                  </SelectTrigger>
-                                </FormControl>
-                                <SelectContent>
-                                  {componentApiList[
-                                    form.watch("specs.componentId")
-                                  ]?.versionList?.map((v: number) => (
-                                    <SelectItem key={v} value={v.toString()}>
-                                      V{v}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </div>
-                    </TabsContent>
-                    <TabsContent value="ComponentTransformer">
-                      <div className="space-y-4">
-                        <FormField
-                          control={form.control}
-                          name="specs.validateUrl"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>
-                                Validate URL
-                                <span className="text-red-500">*</span>
-                              </FormLabel>
-                              <FormControl>
-                                <Input
-                                  placeholder="https://api.example.com/validate"
-                                  {...field}
-                                  className={cn(
-                                    (
-                                      form.formState.errors.specs as {
-                                        validateUrl: string;
-                                      }
-                                    )?.validateUrl &&
-                                      "border-red-500 focus-visible:ring-red-500",
-                                  )}
-                                />
-                              </FormControl>
-                              <FormDescription>
-                                Enter the URL for validating your plugin.
-                              </FormDescription>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="specs.transformUrl"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>
-                                Transform URL
-                                <span className="text-red-500">*</span>
-                              </FormLabel>
-                              <FormControl>
-                                <Input
-                                  placeholder="https://api.example.com/transform"
-                                  {...field}
-                                  className={cn(
-                                    (
-                                      form.formState.errors.specs as {
-                                        transformUrl: string;
-                                      }
-                                    )?.transformUrl &&
-                                      "border-red-500 focus-visible:ring-red-500",
-                                  )}
-                                />
-                              </FormControl>
-                              <FormDescription>
-                                Enter the URL for transforming your plugin.
-                              </FormDescription>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="specs.jsonSchema"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>JSON Schema</FormLabel>
-                              <FormControl>
-                                <Textarea
-                                  {...field}
-                                  placeholder="Enter your JSON schema here..."
-                                  className={cn(
-                                    (
-                                      form.formState.errors.specs as {
-                                        jsonSchema: string;
-                                      }
-                                    )?.jsonSchema &&
-                                      "border-red-500 focus-visible:ring-red-500",
-                                  )}
-                                />
-                              </FormControl>
-                              <FormDescription>
-                                Enter a valid JSON schema (optional).
-                              </FormDescription>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </div>
-                    </TabsContent>
-                  </Tabs>
-                </div>
-
-                <div className="space-y-6">
-                  <h3 className="text-lg font-semibold">Scope</h3>
-                  <FormField
-                    control={form.control}
-                    name="scope.type"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>
-                          Scope Type<span className="text-red-500">*</span>
-                        </FormLabel>
+              {/* Plugin Type Selection */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Plugin Type</h3>
+                <FormField
+                  control={form.control}
+                  name="specs.type"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        Type<span className="text-red-500">*</span>
+                      </FormLabel>
+                      <Select
+                        value={field.value}
+                        onValueChange={value => {
+                          field.onChange(value);
+                          setActiveSpecTab(value as typeof activeSpecTab);
+                        }}
+                      >
                         <FormControl>
-                          <Select
-                            value={field.value}
-                            name={field.name}
-                            onValueChange={field.onChange}
-                          >
-                            <FormControl>
-                              <SelectTrigger
-                                className={cn(
-                                  form.formState.errors.scope?.type &&
-                                    "border-red-500 focus-visible:ring-red-500",
-                                )}
-                              >
-                                <SelectValue placeholder="Select a scope type" />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              <SelectItem value="Global">Global</SelectItem>
-                              <SelectItem value="Component">
-                                Component
-                              </SelectItem>
-                            </SelectContent>
-                          </Select>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select plugin type" />
+                          </SelectTrigger>
                         </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  {form.watch("scope.type") === "Component" && (
+                        <SelectContent>
+                          <SelectItem value="ComponentTransformer">
+                            Component Transformer
+                          </SelectItem>
+                          <SelectItem value="OplogProcessor">
+                            Oplog Processor
+                          </SelectItem>
+                          <SelectItem value="App">App</SelectItem>
+                          <SelectItem value="Library">Library</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        Choose the type of plugin you want to create.
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              {/* Type-specific fields */}
+              {form.watch("specs.type") === "ComponentTransformer" && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold">
+                    Component Transformer Configuration
+                  </h3>
+                  <div className="grid gap-4 sm:grid-cols-2">
                     <FormField
                       control={form.control}
-                      name="scope.componentId"
+                      name="specs.validateUrl"
                       render={({ field }) => (
-                        <FormItem className="mt-4">
+                        <FormItem>
                           <FormLabel>
-                            Component ID<span className="text-red-500">*</span>
+                            Validate URL<span className="text-red-500">*</span>
                           </FormLabel>
-                          <Select
-                            value={field.value}
-                            name={field.name}
-                            onValueChange={field.onChange}
-                          >
-                            <FormControl>
-                              <SelectTrigger
-                                className={cn(
-                                  (
-                                    form.formState.errors.scope as {
-                                      componentId: string;
-                                    }
-                                  )?.componentId &&
-                                    "border-red-500 focus-visible:ring-red-500",
-                                )}
-                              >
-                                <SelectValue placeholder="Select a Component" />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {componentApiList &&
-                                Object.values(componentApiList).map(data => (
-                                  <SelectItem
-                                    value={data.componentId!}
-                                    key={data.componentName}
-                                  >
-                                    {data.componentName}
-                                  </SelectItem>
-                                ))}
-                            </SelectContent>
-                          </Select>
+                          <FormControl>
+                            <Input
+                              placeholder="https://api.example.com/validate"
+                              {...field}
+                              className={cn(
+                                form.formState.errors.specs?.validateUrl &&
+                                  "border-red-500 focus-visible:ring-red-500",
+                              )}
+                            />
+                          </FormControl>
                           <FormMessage />
                         </FormItem>
                       )}
                     />
-                  )}
+                    <FormField
+                      control={form.control}
+                      name="specs.transformUrl"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            Transform URL<span className="text-red-500">*</span>
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="https://api.example.com/transform"
+                              {...field}
+                              className={cn(
+                                form.formState.errors.specs?.transformUrl &&
+                                  "border-red-500 focus-visible:ring-red-500",
+                              )}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <FormField
+                      control={form.control}
+                      name="specs.providedWitPackage"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>WIT Package Path</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="path/to/wit/file.wit"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            Optional WIT file path
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="specs.jsonSchema"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>JSON Schema Path</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="path/to/schema.json"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            Optional JSON schema file path
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {(form.watch("specs.type") === "OplogProcessor" ||
+                form.watch("specs.type") === "App" ||
+                form.watch("specs.type") === "Library") && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold">
+                    {form.watch("specs.type") === "OplogProcessor" &&
+                      "Oplog Processor Configuration"}
+                    {form.watch("specs.type") === "App" && "App Configuration"}
+                    {form.watch("specs.type") === "Library" &&
+                      "Library Configuration"}
+                  </h3>
+                  <FormField
+                    control={form.control}
+                    name="specs.component"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          Component Path<span className="text-red-500">*</span>
+                        </FormLabel>
+                        <FormControl>
+                          <div className="flex gap-2">
+                            <Input
+                              placeholder={
+                                form.watch("specs.type") === "OplogProcessor"
+                                  ? "path/to/oplog-processor.wasm"
+                                  : form.watch("specs.type") === "App"
+                                    ? "path/to/app.wasm"
+                                    : "path/to/library.wasm"
+                              }
+                              {...field}
+                              readOnly
+                              className={cn(
+                                form.formState.errors.specs?.component &&
+                                  "border-red-500 focus-visible:ring-red-500",
+                              )}
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              onClick={async () => {
+                                try {
+                                  const selected = await open({
+                                    multiple: false,
+                                    filters: [
+                                      {
+                                        name: "WASM Component",
+                                        extensions: ["wasm"],
+                                      },
+                                    ],
+                                  });
+                                  if (selected) {
+                                    field.onChange(selected);
+                                  }
+                                } catch (error) {
+                                  console.error("Error selecting file:", error);
+                                }
+                              }}
+                            >
+                              <FileIcon className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </FormControl>
+                        <FormDescription>
+                          Select the WASM component file
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              )}
 
               <div className="flex justify-between pt-6">
                 <Button

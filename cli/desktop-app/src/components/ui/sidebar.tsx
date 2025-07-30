@@ -63,7 +63,6 @@ const SidebarProvider = React.forwardRef<
       className,
       style,
       children,
-      ...props
     },
     ref,
   ) => {
@@ -151,7 +150,6 @@ const SidebarProvider = React.forwardRef<
               className,
             )}
             ref={ref}
-            {...props}
           >
             {children}
           </div>
@@ -191,7 +189,6 @@ const Sidebar = React.forwardRef<
             className,
           )}
           ref={ref}
-          {...props}
         >
           {children}
         </div>
@@ -250,7 +247,6 @@ const Sidebar = React.forwardRef<
               : "group-data-[collapsible=icon]:w-[--sidebar-width-icon] group-data-[side=left]:border-r group-data-[side=right]:border-l",
             className,
           )}
-          {...props}
         >
           <div
             data-sidebar="sidebar"
@@ -268,7 +264,7 @@ Sidebar.displayName = "Sidebar";
 const SidebarTrigger = React.forwardRef<
   React.ElementRef<typeof Button>,
   React.ComponentProps<typeof Button>
->(({ className, onClick, ...props }, ref) => {
+>(({ className, onClick }, ref) => {
   const { toggleSidebar } = useSidebar();
 
   return (
@@ -282,7 +278,6 @@ const SidebarTrigger = React.forwardRef<
         onClick?.(event);
         toggleSidebar();
       }}
-      {...props}
     >
       <PanelLeft />
       <span className="sr-only">Toggle Sidebar</span>
@@ -294,7 +289,7 @@ SidebarTrigger.displayName = "SidebarTrigger";
 const SidebarRail = React.forwardRef<
   HTMLButtonElement,
   React.ComponentProps<"button">
->(({ className, ...props }, ref) => {
+>(({ className }, ref) => {
   const { toggleSidebar } = useSidebar();
 
   return (
@@ -314,7 +309,6 @@ const SidebarRail = React.forwardRef<
         "[[data-side=right][data-collapsible=offcanvas]_&]:-left-2",
         className,
       )}
-      {...props}
     />
   );
 });

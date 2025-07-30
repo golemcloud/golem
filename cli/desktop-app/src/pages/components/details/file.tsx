@@ -12,7 +12,7 @@ import {
 import { ComponentList } from "@/types/component.ts";
 
 export default function FileManager() {
-  const { componentId = "" } = useParams();
+  const { componentId = "", appId } = useParams();
   const [componentList, setComponentList] = useState<{
     [key: string]: ComponentList;
   }>({});
@@ -21,13 +21,13 @@ export default function FileManager() {
 
   useEffect(() => {
     if (componentId) {
-      API.getComponentByIdAsKey().then(response => {
+      API.componentService.getComponentByIdAsKey(appId!).then(response => {
         const componentData = response[componentId];
         const versionList = componentData?.versionList || [];
         setVersionList(versionList);
         setComponentList(response);
         if (versionList.length > 0) {
-          setVersionChange(versionList[versionList.length - 1]);
+          setVersionChange(versionList[versionList.length - 1]!);
         }
       });
     }

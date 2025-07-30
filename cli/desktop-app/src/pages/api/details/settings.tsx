@@ -18,14 +18,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { API } from "@/service";
-import { Api } from "@/types/api";
 import ErrorBoundary from "@/components/errorBoundary";
 import { Trash2 } from "lucide-react";
+import { HttpApiDefinition } from "@/types/golemManifest";
 
 export default function APISettings() {
   const { toast } = useToast();
   const navigate = useNavigate();
-  const { apiName, version } = useParams();
+  const { apiName, version, appId } = useParams();
   const [queryParams] = useSearchParams();
   const reload = queryParams.get("reload");
 
@@ -33,12 +33,14 @@ export default function APISettings() {
   const [showConfirmAllDialog, setShowConfirmAllDialog] = useState(false);
   const [showConfirmAllRoutes, setShowConfirmAllRoutes] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [apiDetails, setApiDetails] = useState<Api[]>([]);
-  const [activeApiDetails, setActiveApiDetails] = useState<Api>({} as Api);
+  const [apiDetails, setApiDetails] = useState<HttpApiDefinition[]>([]);
+  const [activeApiDetails, setActiveApiDetails] = useState<HttpApiDefinition>(
+    {} as HttpApiDefinition,
+  );
 
   useEffect(() => {
     if (apiName) {
-      API.getApi(apiName).then(response => {
+      API.apiService.getApi(appId!, apiName).then(response => {
         setApiDetails(response);
         const selectedApi = response.find(api => api.version === version);
         setActiveApiDetails(selectedApi!);
@@ -50,7 +52,11 @@ export default function APISettings() {
     setIsDeleting(true);
     try {
       if (type === "version") {
-        await API.deleteApi(activeApiDetails.id, activeApiDetails.version);
+        await API.apiService.deleteApi(
+          appId!,
+          activeApiDetails.id!,
+          activeApiDetails.version,
+        );
         toast({
           title: "Version deleted",
           description: `API version ${activeApiDetails.version} has been deleted successfully.`,
@@ -61,32 +67,40 @@ export default function APISettings() {
         );
         navigate(
           newVersion
-            ? `/apis/${apiName}/version/${newVersion.version}`
-            : `/apis`,
+            ? `/app/${appId}/apis/${apiName}/version/${newVersion.version}`
+            : `/app/${appId}/apis`,
         );
         setShowConfirmDialog(false);
       } else if (type === "all") {
         await Promise.all(
-          apiDetails.map(api => API.deleteApi(api.id, api.version)),
+          apiDetails.map(api =>
+            API.apiService.deleteApi(appId!, api.id!, api.version),
+          ),
         );
         toast({
           title: "All versions deleted",
           description: "All API versions have been deleted successfully.",
           duration: 3000,
         });
-        navigate(`/apis`);
+        navigate(`/app/${appId}/apis`);
         setShowConfirmAllDialog(false);
       } else {
-        await API.putApi(activeApiDetails.id, activeApiDetails.version, {
-          ...activeApiDetails,
-          routes: [],
-        });
+        await API.apiService.putApi(
+          activeApiDetails.id!,
+          activeApiDetails.version,
+          {
+            ...activeApiDetails,
+            routes: [],
+          },
+        );
         toast({
           title: "All routes deleted",
           description: "All routes have been deleted successfully.",
           duration: 3000,
         });
-        navigate(`/apis/${apiName}/version/${version}?reload=${!reload}`);
+        navigate(
+          `/app/${appId}/apis/${apiName}/version/${version}?reload=${!reload}`,
+        );
         setShowConfirmAllRoutes(false);
       }
     } finally {

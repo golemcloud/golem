@@ -24,7 +24,6 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb.tsx";
-import { Api } from "@/types/api.ts";
 import {
   Select,
   SelectContent,
@@ -33,35 +32,37 @@ import {
 } from "@/components/ui/select.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
 import { SelectValue } from "@radix-ui/react-select";
-import YamlUploader from "@/components/yaml-uploader.tsx";
 import { NavRoutes } from "@/components/nav-route.tsx";
 import { Button } from "@/components/ui/button.tsx";
+import { HttpApiDefinition } from "@/types/golemManifest.ts";
 
-const MenuItems = (apiName: string, version: string) => [
+const MenuItems = (appId: string, apiName: string, version: string) => [
   {
     title: "Overview",
-    url: `/apis/${apiName}/version/${version}`,
+    url: `/app/${appId}/apis/${apiName}/version/${version}`,
     icon: Home,
   },
   {
     title: "Settings",
-    url: `/apis/${apiName}/version/${version}/settings`,
+    url: `/app/${appId}/apis/${apiName}/version/${version}/settings`,
     icon: Settings,
   },
   {
     title: "New Version",
-    url: `/apis/${apiName}/version/${version}/newversion`,
+    url: `/app/${appId}/apis/${apiName}/version/${version}/newversion`,
     icon: CircleFadingPlusIcon,
   },
 ];
 
 export const ApiLayout = () => {
-  const { apiName, version } = useParams();
+  const { apiName, version, appId } = useParams();
   const [queryParams] = useSearchParams();
   const navigate = useNavigate();
-  const [apiDetails, setApiDetails] = useState([] as Api[]);
+  const [apiDetails, setApiDetails] = useState<HttpApiDefinition>();
 
-  const [currentApiDetails, setCurrentApiDetails] = useState({} as Api);
+  const [currentApiDetails, setCurrentApiDetails] = useState(
+    {} as HttpApiDefinition,
+  );
   const [currentMenu, setCurrentMenu] = useState("Overview");
 
   const basePath = useLocation().pathname.replace(
@@ -72,17 +73,18 @@ export const ApiLayout = () => {
   const method = queryParams.get("method");
   const reload = queryParams.get("reload");
   const sortedVersions = useMemo(() => {
-    return [...apiDetails].sort((a, b) =>
-      b.version.localeCompare(a.version, undefined, { numeric: true }),
-    );
+    if (apiDetails) {
+      return [apiDetails];
+    }
+    return [];
   }, [apiDetails]);
 
   useEffect(() => {
-    API.getApi(apiName!).then(async response => {
-      setApiDetails(response);
-      const selectedApi = response.find(api => api.version === version);
-      if (selectedApi) {
-        setCurrentApiDetails(selectedApi);
+    API.apiService.getApi(appId!, apiName!).then(async response => {
+      let detail = response.find(r => r.version == version);
+      setApiDetails(detail);
+      if (response) {
+        setCurrentApiDetails(detail!);
       }
     });
     if (location.pathname.includes("settings")) setCurrentMenu("Settings");
@@ -95,7 +97,7 @@ export const ApiLayout = () => {
   }, [apiName, version, path, method, reload]);
 
   const handleNavigateHome = useCallback(() => {
-    navigate(`/apis/${apiName}/version/${version}`);
+    navigate(`/app/${appId}/apis/${apiName}/version/${version}`);
     setCurrentMenu("Overview");
   }, [navigate, apiName, version]);
 
@@ -103,18 +105,18 @@ export const ApiLayout = () => {
     <ErrorBoundary>
       <SidebarProvider>
         <SidebarMenu
-          menus={MenuItems(apiName!, version!)}
+          menus={MenuItems(appId!, apiName!, version!)}
           activeItem={currentMenu}
           setActiveItem={setCurrentMenu}
           title={"Worker"}
         >
-          {currentApiDetails?.routes?.length > 0 && (
+          {(currentApiDetails?.routes?.length || 0) > 0 && (
             <NavRoutes
               routes={(currentApiDetails?.routes || []).map(route => {
                 return {
                   method: route.method,
                   name: route.path,
-                  url: `/apis/${apiName}/version/${version}/routes/?path=${route.path}&method=${route.method}`,
+                  url: `/app/${appId}/apis/${apiName}/version/${version}/routes/?path=${route.path}&method=${route.method}`,
                 };
               })}
               setActiveItem={value => setCurrentMenu(value)}
@@ -148,12 +150,12 @@ export const ApiLayout = () => {
                 <Select
                   defaultValue={version}
                   onValueChange={version => {
-                    const selectedApi = apiDetails.find(
-                      api => api.version === version,
+                    const selectedApi = sortedVersions.find(
+                      (api: HttpApiDefinition) => api.version === version,
                     );
                     if (selectedApi) {
                       navigate(
-                        `/apis/${apiName}/version/${version}${basePath}`,
+                        `/app/${appId}/apis/${apiName}/version/${version}${basePath}`,
                       );
                     }
                   }}
@@ -168,21 +170,12 @@ export const ApiLayout = () => {
                       <SelectItem value={api.version} key={api.version}>
                         <div className="flex items-center gap-2">
                           <span className="text-sm">{api.version}</span>
-                          {api.draft ? (
-                            <Badge
-                              variant="warning"
-                              className="p-0.5 m-0 rounded"
-                            >
-                              Draft
-                            </Badge>
-                          ) : (
-                            <Badge
-                              variant="success"
-                              className="p-0.5 m-0 rounded"
-                            >
-                              Published
-                            </Badge>
-                          )}
+                          <Badge
+                            variant="success"
+                            className="p-0.5 m-0 rounded"
+                          >
+                            Published
+                          </Badge>
                         </div>
                         {/*{api.version} {api.draft ? "(Draft)" : "(Published)"}*/}
                       </SelectItem>
@@ -192,11 +185,13 @@ export const ApiLayout = () => {
               </div>
             </div>
             <div className="flex items-center gap-2 ml-auto px-4">
-              <YamlUploader />
+              {/* <YamlUploader /> */}
               <Button
                 variant="default"
                 onClick={() => {
-                  navigate(`/apis/${apiName}/version/${version}/routes/add?`);
+                  navigate(
+                    `/app/${appId}/apis/${apiName}/version/${version}/routes/add?`,
+                  );
                   setCurrentMenu("Add New Route");
                 }}
               >

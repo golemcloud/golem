@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/form";
 import ErrorBoundary from "@/components/errorBoundary";
 import { API } from "@/service";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 
 // Define API definition type
@@ -44,7 +44,7 @@ const formSchema = z.object({
     .refine(
       value => {
         if (value.includes(":")) {
-          const port = parseInt(value.split(":")[1]);
+          const port = parseInt(value.split(":")[1]!, 10);
           return port >= 1 && port <= 65535;
         }
         return true;
@@ -91,6 +91,7 @@ export default function CreateDeployment() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { appId } = useParams<{ appId: string }>();
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -111,17 +112,19 @@ export default function CreateDeployment() {
       try {
         setIsLoading(true);
         setFetchError(null);
-        const response = await API.getApiList();
+        const response = await API.apiService.getApiList(appId!);
         const transformedData = Object.values(
           response.reduce(
             (acc, api) => {
-              if (!acc[api.id]) {
+              if (api.id && !acc[api.id]) {
                 acc[api.id] = { id: api.id, versions: [] };
               }
-              acc[api.id].versions.push(api.version);
-              acc[api.id].versions.sort((a, b) =>
-                b.localeCompare(a, undefined, { numeric: true }),
-              );
+              if (api.id) {
+                acc[api.id]!.versions.push(api.version);
+                acc[api.id]!.versions.sort((a, b) =>
+                  b.localeCompare(a, undefined, { numeric: true }),
+                );
+              }
               return acc;
             },
             {} as Record<string, ApiDefinition>,
@@ -162,12 +165,12 @@ export default function CreateDeployment() {
         },
         apiDefinitions: data.definitions,
       };
-      await API.createDeployment(payload);
+      await API.deploymentService.createDeployment(appId!, payload.site.host);
       toast({
         title: "Deployment was successful",
         duration: 3000,
       });
-      navigate("/deployments");
+      navigate(`/app/${appId}/deployments`);
     } catch (error) {
       console.error("Failed to create deployment:", error);
       form.setError("root", {

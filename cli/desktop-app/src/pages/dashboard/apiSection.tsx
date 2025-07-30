@@ -4,17 +4,20 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { removeDuplicateApis } from "@/lib/utils";
 import { API } from "@/service";
-import { Api } from "@/types/api.ts";
+import { HttpApiDefinition } from "@/types/golemManifest";
 import { ArrowRight, Layers, PlusCircle, Server } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 export function APISection() {
   const navigate = useNavigate();
-  const [apis, setApis] = useState([] as Api[]);
+  const { appId } = useParams<{ appId: string }>();
+  const [apis, setApis] = useState(
+    [] as (HttpApiDefinition & { count?: number })[],
+  );
 
   useEffect(() => {
-    API.getApiList().then(response => {
+    API.apiService.getApiList(appId!).then(response => {
       const newData = removeDuplicateApis(response);
       setApis(newData);
     });
@@ -28,7 +31,10 @@ export function APISection() {
             <Server className="w-5 h-5 text-muted-foreground" />
             APIs
           </CardTitle>
-          <Button variant="ghost" onClick={() => navigate("/apis")}>
+          <Button
+            variant="ghost"
+            onClick={() => navigate(`/app/${appId}/apis`)}
+          >
             View All
             <ArrowRight className="w-4 h-4 ml-1" />
           </Button>
@@ -38,9 +44,11 @@ export function APISection() {
             apis.map(api => (
               <div
                 key={api.id}
-                className="flex items-center justify-between border rounded-lg p-3 hover:bg-muted/50 transition-colors cursor-pointer bg-gradient-to-br from-background to-muted hover:shadow-lg transition-all"
+                className="flex items-center justify-between border rounded-lg p-3 hover:bg-muted/50 cursor-pointer bg-gradient-to-br from-background to-muted hover:shadow-lg transition-all"
                 onClick={() => {
-                  navigate(`/apis/${api.id}/version/${api.version}`);
+                  navigate(
+                    `/app/${appId}/apis/${api.id}/version/${api.version}`,
+                  );
                 }}
               >
                 <p className="text-sm font-medium">{api.id}</p>
@@ -58,7 +66,7 @@ export function APISection() {
               <p className="text-gray-500 mb-6 text-center">
                 Create your first API to get started.
               </p>
-              <Button onClick={() => navigate("/apis/create")}>
+              <Button onClick={() => navigate(`/app/${appId}/apis/create`)}>
                 <PlusCircle className="mr-2 size-4" />
                 Create API
               </Button>

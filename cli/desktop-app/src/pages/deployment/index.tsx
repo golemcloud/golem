@@ -13,13 +13,13 @@ import { cn, removeDuplicateApis } from "@/lib/utils";
 import { useEffect, useState } from "react";
 
 import { API } from "@/service";
-import { Api } from "@/types/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Deployment } from "@/types/deployments";
 import ErrorBoundary from "@/components/errorBoundary";
 import { HTTP_METHOD_COLOR } from "@/components/nav-route";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
+import { HttpApiDefinition } from "@/types/golemManifest";
 
 const RoutesCard = ({
   apiId,
@@ -30,7 +30,7 @@ const RoutesCard = ({
   apiId: string;
   version: string;
   host: string;
-  apiList: Api[];
+  apiList: HttpApiDefinition[];
 }) => {
   const routes = apiList.find(
     api => api.id === apiId && api.version === version,
@@ -46,7 +46,7 @@ const RoutesCard = ({
   --header "Content-Type: application/json" \
   --header "Accept: application/json" \
   --data '{}'`;
-    
+
     navigator.clipboard
       .writeText(curlCommand)
       .then(() => {
@@ -77,7 +77,7 @@ const RoutesCard = ({
                   variant="secondary"
                   className={cn(
                     HTTP_METHOD_COLOR[
-                    endpoint.method as keyof typeof HTTP_METHOD_COLOR
+                      endpoint.method as keyof typeof HTTP_METHOD_COLOR
                     ],
                     "w-16 text-center justify-center",
                   )}
@@ -113,9 +113,12 @@ const RoutesCard = ({
 export default function Deployments() {
   const navigate = useNavigate();
   const [expandedDeployment, setExpandedDeployment] = useState<string[]>([]);
-  const [apiList, setApiList] = useState<Api[]>([]);
+  const [apiList, setApiList] = useState<HttpApiDefinition[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [dialogOpenForHost, setDialogOpenForHost] = useState<string | null>(
+    null,
+  );
+  const { appId } = useParams<{ appId: string }>();
   const [selectedDeploymentHost, setSelectedDeploymentHost] = useState<
     string | null
   >(null);
@@ -123,15 +126,30 @@ export default function Deployments() {
   useEffect(() => {
     const fetchDeployments = async () => {
       try {
-        const response = await API.getApiList();
+        const response = await API.apiService.getApiList(appId!);
         setApiList(response);
 
         const uniqueApis = removeDuplicateApis(response);
         const allDeployments = await Promise.all(
-          uniqueApis.map(api => API.getDeploymentApi(api.id)),
+          uniqueApis.map(() => API.deploymentService.getDeploymentApi(appId!)),
         );
 
-        setDeployments(allDeployments.flat().filter(Boolean));
+        const flattenedDeployments = allDeployments.flat().filter(Boolean);
+        const uniqueDeployments = flattenedDeployments.reduce(
+          (acc: Deployment[], current) => {
+            if (
+              !acc.find(
+                (item: Deployment) => item.site.host === current.site.host,
+              )
+            ) {
+              acc.push(current);
+            }
+            return acc;
+          },
+          [],
+        );
+
+        setDeployments(uniqueDeployments);
       } catch (error) {
         console.error("Error fetching deployments:", error);
       }
@@ -144,14 +162,17 @@ export default function Deployments() {
     if (!selectedDeploymentHost) return;
 
     try {
-      await API.deleteDeployment(selectedDeploymentHost);
+      await API.deploymentService.deleteDeployment(
+        appId!,
+        selectedDeploymentHost,
+      );
       setDeployments(prev =>
         prev.filter(d => d.site.host !== selectedDeploymentHost),
       );
     } catch (error) {
       console.error("Error deleting deployment:", error);
     } finally {
-      setIsDialogOpen(false);
+      setDialogOpenForHost(null);
       setSelectedDeploymentHost(null);
     }
   };
@@ -169,7 +190,11 @@ export default function Deployments() {
       <div className="p-6 mx-auto max-w-7xl">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-xl font-semibold">API Deployments</h1>
-          <Button size="sm" onClick={() => navigate("/deployments/create")}>
+          <Button
+            size="sm"
+            onClick={() => navigate(`/app/${appId}/deployments/create`)}
+            type="button"
+          >
             <Plus className="w-4 h-4 mr-2" />
             New
           </Button>
@@ -190,22 +215,27 @@ export default function Deployments() {
                       </h2>
 
                       <Dialog
-                        open={isDialogOpen}
-                        onOpenChange={setIsDialogOpen}
+                        open={dialogOpenForHost === deployment.site.host}
+                        onOpenChange={isOpen => {
+                          if (isOpen) {
+                            setSelectedDeploymentHost(deployment.site.host);
+                            setDialogOpenForHost(deployment.site.host);
+                          } else {
+                            setDialogOpenForHost(null);
+                          }
+                        }}
                       >
                         <DialogTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
+                          <div
                             className="text-destructive hover:text-destructive"
                             onClick={e => {
                               e.stopPropagation();
                               setSelectedDeploymentHost(deployment.site.host);
-                              setIsDialogOpen(true);
+                              setDialogOpenForHost(deployment.site.host);
                             }}
                           >
                             <Trash className="h-4 w-4" />
-                          </Button>
+                          </div>
                         </DialogTrigger>
                         <DialogContent>
                           <DialogHeader>
@@ -233,14 +263,7 @@ export default function Deployments() {
                         <div key={api.id} className="grid space-y-2">
                           <div className="flex justify-between">
                             <div className="flex items-center gap-4">
-                              <span
-                                className="relative rounded bg-muted p-1 font-mono text-sm cursor-pointer"
-                                onClick={() =>
-                                  navigate(
-                                    `/apis/${api.id}/version/${api.version}`,
-                                  )
-                                }
-                              >
+                              <span className="relative rounded bg-muted p-1 font-mono text-sm">
                                 {api.id} (v{api.version})
                               </span>
 
@@ -248,39 +271,40 @@ export default function Deployments() {
                                 a =>
                                   a.id === api.id && a.version === api.version,
                               )?.routes?.length || 0) > 0 && (
-                                  <button
-                                    onClick={() =>
-                                      toggleExpanded(
-                                        deployment.site.host,
-                                        api.id,
-                                        api.version,
-                                      )
-                                    }
-                                    className="p-1 hover:bg-accent rounded-md"
-                                  >
-                                    <ChevronRight
-                                      className={`w-4 h-4 text-muted-foreground transition-transform ${expandedDeployment.includes(
+                                <button
+                                  onClick={() =>
+                                    toggleExpanded(
+                                      deployment.site.host,
+                                      api.id,
+                                      api.version,
+                                    )
+                                  }
+                                  className="p-1 hover:bg-accent rounded-md"
+                                >
+                                  <ChevronRight
+                                    className={`w-4 h-4 text-muted-foreground transition-transform ${
+                                      expandedDeployment.includes(
                                         `${deployment.site.host}.${api.id}.${api.version}`,
                                       )
-                                          ? "rotate-90"
-                                          : ""
-                                        }`}
-                                    />
-                                  </button>
-                                )}
+                                        ? "rotate-90"
+                                        : ""
+                                    }`}
+                                  />
+                                </button>
+                              )}
                             </div>
                           </div>
 
                           {expandedDeployment.includes(
                             `${deployment.site.host}.${api.id}.${api.version}`,
                           ) && (
-                              <RoutesCard
-                                apiId={api.id}
-                                version={api.version}
-                                apiList={apiList}
-                                host={deployment.site.host}
-                              />
-                            )}
+                            <RoutesCard
+                              apiId={api.id}
+                              version={api.version}
+                              apiList={apiList}
+                              host={deployment.site.host}
+                            />
+                          )}
                         </div>
                       ))}
                     </div>

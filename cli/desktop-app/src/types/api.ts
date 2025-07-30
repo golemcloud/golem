@@ -8,15 +8,15 @@ export interface Api {
 }
 
 export type MethodPattern =
-  | "Get"
-  | "Post"
-  | "Put"
-  | "Delete"
-  | "Patch"
-  | "Head"
-  | "Options"
-  | "Trace"
-  | "Connect";
+  | "GET"
+  | "CONNECT"
+  | "POST"
+  | "DELETE"
+  | "PUT"
+  | "PATCH"
+  | "OPTIONS"
+  | "TRACE"
+  | "HEAD";
 export type GatewayBindingType = "default" | "file-server" | "cors-preflight";
 
 export interface RouteRequestData {

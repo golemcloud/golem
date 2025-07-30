@@ -6,8 +6,8 @@ import {
   Plus,
   Search,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
-import { Api } from "@/types/api";
+import { useNavigate, useParams } from "react-router-dom";
+import { HttpApiDefinition } from "@/types/golemManifest";
 import { API } from "@/service";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,11 +18,16 @@ import { removeDuplicateApis } from "@/lib/utils";
 
 export const APIs = () => {
   const navigate = useNavigate();
-  const [apis, setApis] = useState([] as Api[]);
-  const [searchedApi, setSearchedApi] = useState([] as Api[]);
+  const [apis, setApis] = useState(
+    [] as (HttpApiDefinition & { count?: number })[],
+  );
+  const [searchedApi, setSearchedApi] = useState(
+    [] as (HttpApiDefinition & { count?: number })[],
+  );
+  const { appId } = useParams<{ appId: string }>();
 
   useEffect(() => {
-    API.getApiList().then(response => {
+    API.apiService.getApiList(appId!).then(response => {
       const newData = removeDuplicateApis(response);
       setApis(newData);
       setSearchedApi(newData);
@@ -42,7 +47,7 @@ export const APIs = () => {
                 setSearchedApi(
                   apis.filter(api =>
                     api.id
-                      .toLocaleLowerCase()
+                      ?.toLocaleLowerCase()
                       .includes(e.target.value.toLocaleLowerCase()),
                   ),
                 )
@@ -50,7 +55,10 @@ export const APIs = () => {
               className="pl-10 text-white"
             />
           </div>
-          <Button onClick={() => navigate("/apis/create")} variant="default">
+          <Button
+            onClick={() => navigate(`/app/${appId}/apis/create`)}
+            variant="default"
+          >
             <Plus className="h-5 w-5" />
             <span>New</span>
           </Button>
@@ -61,9 +69,9 @@ export const APIs = () => {
             {searchedApi.map(api => (
               <APICard
                 key={api.id}
-                name={api.id}
+                name={api.id || ""}
                 version={api.version}
-                routes={api.routes.length}
+                routes={api.routes?.length || 0}
                 count={api.count || 0}
               />
             ))}
@@ -91,10 +99,11 @@ interface APICardProps {
 
 const APICard = ({ name, version, routes, count }: APICardProps) => {
   const navigate = useNavigate();
+  const { appId } = useParams<{ appId: string }>();
   return (
     <Card
       className="from-background to-muted bg-gradient-to-br border-border w-full cursor-pointer hover:shadow-lg"
-      onClick={() => navigate(`/apis/${name}/version/${version}`)}
+      onClick={() => navigate(`/app/${appId}/apis/${name}/version/${version}`)}
     >
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="text-base font-semibold text-emerald-400">

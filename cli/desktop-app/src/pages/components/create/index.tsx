@@ -6,9 +6,6 @@ import {
 } from "@/components/ui/card.tsx";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
-import { DndProvider } from "react-dnd";
-import JSZip from "jszip";
-import { HTML5Backend } from "react-dnd-html5-backend";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Form,
@@ -19,113 +16,109 @@ import {
   FormLabel,
 } from "@/components/ui/form.tsx";
 import { Input } from "@/components/ui/input.tsx";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ArrowLeft, Database, FileUp, Zap } from "lucide-react";
-import { useRef, useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button.tsx";
 import { API } from "@/service";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import ErrorBoundary from "@/components/errorBoundary";
-import { FileManager, FileItem } from "./fileManager";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select.tsx";
+import { toast } from "@/hooks/use-toast.ts";
 
-const COMPONENT_TYPES = [
+// Language template options
+const LANGUAGE_TEMPLATES = [
+  // C
+  { value: "c", label: "C: Default component template" },
+  { value: "c/example-http", label: "C: Example - Stateful with WASI HTTP" },
+  // Go
+  { value: "go", label: "Go: Default component template" },
+  { value: "go/wasi-http", label: "Go: WASI HTTP handler" },
+  // JavaScript
+  { value: "js", label: "JavaScript: Default component template" },
+  { value: "js/example-fetch", label: "JavaScript: Example with fetch" },
+  { value: "js/wasi-http", label: "JavaScript: WASI HTTP handler" },
+  // Python
+  { value: "python", label: "Python: Default component template" },
+  { value: "python/wasi-http", label: "Python: WASI HTTP handler" },
+  // Rust
+  { value: "rust/async", label: "Rust: Async with tokio support" },
+  { value: "rust", label: "Rust: Default component template" },
   {
-    value: "Durable",
-    label: "Durable",
-    icon: <Database className="h-5 w-5 text-gray-600" />,
-    description:
-      "Workers are persistent and executed with transactional guarantees. Ideal for stateful and high-reliability use cases.",
+    value: "rust/example-shopping-cart",
+    label: "Rust: Example - Stateful shopping cart",
   },
   {
-    value: "Ephemeral",
-    label: "Ephemeral",
-    icon: <Zap className="h-5 w-5 text-gray-600" />,
-    description:
-      "Workers are transient and executed normally. Ideal for stateless and low-reliability use cases.",
+    value: "rust/example-todo-list",
+    label: "Rust: Example - Stateful todo list",
   },
+  { value: "rust/minimal", label: "Rust: Minimal with no dependencies" },
+  { value: "rust/wasi-http", label: "Rust: WASI HTTP handler" },
+  // TypeScript
+  { value: "ts", label: "TypeScript: Default component template" },
+  { value: "ts/example-fetch", label: "TypeScript: Example using fetch" },
+  // Zig
+  { value: "zig", label: "Zig: Default component template" },
+  // Scala.js
+  { value: "scala", label: "Scala.js: Default component template" },
+  // MoonBit
+  { value: "moonbit", label: "MoonBit: Default component template" },
 ];
 
+// Group templates by language
+const GROUPED_TEMPLATES = {
+  C: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("c")),
+  Go: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("go")),
+  JavaScript: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("js")),
+  Python: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("python")),
+  Rust: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("rust")),
+  TypeScript: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("ts")),
+  Zig: LANGUAGE_TEMPLATES.filter(t => t.value === "zig"),
+  "Scala.js": LANGUAGE_TEMPLATES.filter(t => t.value === "scala"),
+  MoonBit: LANGUAGE_TEMPLATES.filter(t => t.value === "moonbit"),
+};
+
+// Form schema using zod for validation
 const formSchema = z.object({
   name: z
     .string()
     .min(4, { message: "Component name must be at least 4 characters" })
-    .optional(),
-  type: z.enum(["Durable", "Ephemeral"]),
-  component: z.instanceof(File).refine(file => file.size < 50000000, {
-    message: "Component file must be less than 50MB.",
+    .regex(/^[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+$/, {
+      message: "Name must be in package:componentName format",
+    }),
+  template: z.string({
+    required_error: "Please select a template",
   }),
 });
 
 const CreateComponent = () => {
-  const [file, setFile] = useState<File | null>(null);
-  const [fileSystem, setFileSystem] = useState<FileItem[] | []>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       name: "",
-      type: undefined,
-      component: undefined,
+      template: "",
     },
   });
-
-  async function addFilesToZip(zipFolder: JSZip, parentId: string | null) {
-    const children = fileSystem.filter(file => file.parentId === parentId);
-    for (const child of children) {
-      if (child.type === "folder") {
-        const folder = zipFolder.folder(child.name);
-        if (folder) {
-          await addFilesToZip(folder, child.id);
-        }
-      } else if (child.type === "file") {
-        if (child.fileObject) {
-          zipFolder.file(child.name, child.fileObject);
-        }
-      }
-    }
-  }
-
-  // Recursive helper function to compute full path of a file item.
-  function getFullPath(file: FileItem, allFiles: FileItem[]): string {
-    if (!file.parentId) return `/${file.name}`;
-    const parent = allFiles.find(f => f.id === file.parentId);
-    if (!parent) return file.name;
-    return `${getFullPath(parent, allFiles)}/${file.name}`;
-  }
-
-  function captureFileMetadata(allFiles: FileItem[]) {
-    const filesPath: { path: string; permissions: string }[] = [];
-    allFiles.forEach(file => {
-      if (file.type != "folder") {
-        filesPath.push({
-          path: getFullPath(file, allFiles),
-          permissions: file.isLocked ? "read-only" : "read-write",
-        });
-      }
-    });
-    return { values: filesPath };
-  }
+  const { appId } = useParams();
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    const formData = new FormData();
-    formData.append("name", values.name!);
-    formData.append("component", file!);
-    formData.append("componentType", values.type!);
-    // file system to zip
-    const zip = new JSZip();
-    await addFilesToZip(zip, null);
-    const blob = await zip.generateAsync({ type: "blob" });
-    formData.append(
-      "filesPermissions",
-      JSON.stringify(captureFileMetadata(fileSystem)),
-    );
-    formData.append("files", blob, "temp.zip");
-    API.createComponent(formData).then(res => {
-      if (res?.versionedComponentId?.componentId) {
-        navigate(`/components/${res.versionedComponentId.componentId}`);
-      }
-    });
+    API.componentService
+      .createComponent(appId!, values.name, values.template)
+      .then(() => {
+        toast({
+          title: `Component ${values.name} created successfully!`,
+          description:
+            "Please deploy your component to see it on the dashboard",
+          duration: 8000,
+          variant: "default",
+        });
+        navigate(`/app/${appId}/components`);
+      });
   }
 
   return (
@@ -136,7 +129,7 @@ const CreateComponent = () => {
             Create a New Component
           </CardTitle>
           <CardDescription className="text-gray-500">
-            Components are the building blocks
+            Select a template to create your component
           </CardDescription>
           <CardContent className="pt-6">
             <Form {...form}>
@@ -151,10 +144,10 @@ const CreateComponent = () => {
                     <FormItem>
                       <FormLabel>Component Name</FormLabel>
                       <FormControl>
-                        <Input {...field} placeholder="Enter component name" />
+                        <Input {...field} placeholder="package:componentName" />
                       </FormControl>
                       <FormDescription>
-                        The name must be unique for this component.
+                        Enter name in package:componentName format
                       </FormDescription>
                     </FormItem>
                   )}
@@ -162,87 +155,45 @@ const CreateComponent = () => {
 
                 <FormField
                   control={form.control}
-                  name="type"
+                  name="template"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Component Type</FormLabel>
+                      <FormLabel>Template</FormLabel>
                       <FormControl>
-                        <RadioGroup
-                          value={field.value} // Controlled value
-                          onValueChange={field.onChange} // Update value on change
+                        <Select
+                          onValueChange={field.onChange}
+                          value={field.value}
                         >
-                          {COMPONENT_TYPES.map(type => (
-                            <FormItem
-                              key={type.value}
-                              className="flex items-center space-x-3 p-3 border rounded-lg cursor-pointer hover:bg-accent"
-                            >
-                              <FormControl>
-                                <label className="flex items-center space-x-2 cursor-pointer w-full">
-                                  <RadioGroupItem
-                                    value={type.value}
-                                    checked={field.value === type.value} // Ensure the correct item is checked
-                                  />
-                                  <div className="flex flex-col">
-                                    <div className="flex items-center space-x-2">
-                                      {type.icon}
-                                      <span className="font-medium">
-                                        {type.label}
-                                      </span>
-                                    </div>
-                                    <p className="text-sm text-gray-600">
-                                      {type.description}
-                                    </p>
-                                  </div>
-                                </label>
-                              </FormControl>
-                            </FormItem>
-                          ))}
-                        </RadioGroup>
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Select a template" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.entries(GROUPED_TEMPLATES).map(
+                              ([language, templates]) => (
+                                <div key={language} className="mb-2">
+                                  <h3 className="font-semibold px-2 py-1 bg-muted text-muted-foreground text-sm">
+                                    {language}
+                                  </h3>
+                                  {templates.map(template => (
+                                    <SelectItem
+                                      key={template.value}
+                                      value={template.value}
+                                    >
+                                      {template.label}
+                                    </SelectItem>
+                                  ))}
+                                </div>
+                              ),
+                            )}
+                          </SelectContent>
+                        </Select>
                       </FormControl>
+                      <FormDescription>
+                        Choose a template for your component
+                      </FormDescription>
                     </FormItem>
                   )}
                 />
-
-                <FormField
-                  control={form.control}
-                  name="component"
-                  render={({ field: { onChange } }) => (
-                    <FormItem>
-                      <FormLabel>Component File</FormLabel>
-                      <FormControl>
-                        <div
-                          className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-gray-400"
-                          onClick={() => fileInputRef?.current?.click()}
-                        >
-                          <FileUp className="h-8 w-8 text-gray-500 mb-2 mx-auto" />
-                          <Input
-                            type="file"
-                            accept=".wasm,application/wasm"
-                            className="hidden"
-                            ref={fileInputRef}
-                            onChange={event => {
-                              const file = event.target.files?.[0];
-                              if (file) {
-                                setFile(file);
-                                onChange(file);
-                              }
-                            }}
-                          />
-                          <p className="text-sm text-gray-500">
-                            File up to 50MB
-                          </p>
-                          <p className="font-medium mt-2">
-                            {file ? file.name : "Upload WASM File"}
-                          </p>
-                        </div>
-                      </FormControl>
-                    </FormItem>
-                  )}
-                />
-
-                <DndProvider backend={HTML5Backend}>
-                  <FileManager files={fileSystem} setFiles={setFileSystem} />
-                </DndProvider>
 
                 <div className="flex justify-between mt-6">
                   <Button

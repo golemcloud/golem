@@ -1,6 +1,5 @@
 import { useParams } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -15,16 +14,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Download } from "lucide-react";
+// import { Download } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ComponentList } from "@/types/component";
-import { saveFile } from "@/lib/tauri&web.ts";
+// import { saveFile } from "@/lib/tauri&web.ts";
 import { API } from "@/service";
 import { formatRelativeTime } from "@/lib/utils";
-import { toast } from "@/hooks/use-toast";
+// import { toast } from "@/hooks/use-toast";
 
 export default function ComponentInfo() {
-  const { componentId = "" } = useParams();
+  const { componentId = "", appId } = useParams();
   const [componentList, setComponentList] = useState<{
     [key: string]: ComponentList;
   }>({});
@@ -33,13 +32,13 @@ export default function ComponentInfo() {
 
   useEffect(() => {
     if (componentId) {
-      API.getComponentByIdAsKey().then(response => {
+      API.componentService.getComponentByIdAsKey(appId!).then(response => {
         const componentData = response[componentId];
         const versionList = componentData?.versionList || [];
         setVersionList(versionList);
         setComponentList(response);
         if (versionList.length > 0) {
-          setVersionChange(versionList[versionList.length - 1]);
+          setVersionChange(versionList[versionList.length - 1]!);
         }
       });
     }
@@ -49,25 +48,25 @@ export default function ComponentInfo() {
     setVersionChange(version);
   };
 
-  async function downloadFile() {
-    try {
-      API.downloadComponent(componentId!, versionChange).then(
-        async response => {
-          const blob = await response.blob();
-          const arrayBuffer = await blob.arrayBuffer();
+  // async function downloadFile() {
+  //   try {
+  //     API.downloadComponent(componentId!, versionChange).then(
+  //       async response => {
+  //         const blob = await response.blob();
+  //         const arrayBuffer = await blob.arrayBuffer();
 
-          const fileName = `${componentId}.wasm`;
-          await saveFile(fileName, new Uint8Array(arrayBuffer));
-          toast({
-            title: "File downloaded successfully",
-            duration: 3000,
-          });
-        },
-      );
-    } catch (error) {
-      console.error("Error downloading the file:", error);
-    }
-  }
+  //         const fileName = `${componentId}.wasm`;
+  //         await saveFile(fileName, new Uint8Array(arrayBuffer));
+  //         toast({
+  //           title: "File downloaded successfully",
+  //           duration: 3000,
+  //         });
+  //       },
+  //     );
+  //   } catch (error) {
+  //     console.error("Error downloading the file:", error);
+  //   }
+  // }
 
   const componentDetails =
     componentList[componentId]?.versions?.[versionChange] || {};
@@ -102,23 +101,20 @@ export default function ComponentInfo() {
                 </SelectContent>
               </Select>
             )}
-            <Button
+            {/* <Button
               variant="outline"
               size="icon"
               className="border rounded-md"
               onClick={downloadFile}
             >
               <Download className="h-5 w-5" />
-            </Button>
+            </Button> */}
           </div>
         </CardHeader>
         <CardContent>
           <div className="space-y-4 text-sm">
             {[
-              [
-                "Component ID",
-                componentDetails.versionedComponentId?.componentId,
-              ],
+              ["Component ID", componentDetails.componentId],
               ["Version", versionChange],
               ["Name", componentDetails.componentName],
               [

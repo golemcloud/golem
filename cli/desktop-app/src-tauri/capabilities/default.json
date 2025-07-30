@@ -7,6 +7,20 @@
     "core:default",
     "opener:default",
     "store:default",
+    "fs:read-all",
+    "fs:read-files",
+    "fs:allow-write-file",
+    "fs:allow-open",
+    "fs:allow-home-read",
+    "fs:allow-home-read-recursive",
+    "fs:allow-desktop-read",
+    "fs:allow-desktop-read-recursive",
+    "fs:allow-document-read",
+    "fs:allow-document-read-recursive",
+    "fs:allow-download-read",
+    "fs:allow-download-read-recursive",
+    "fs:allow-home-write",
+    "fs:allow-home-write-recursive",
     {
       "identifier": "http:default",
       "allow": [
@@ -51,6 +65,7 @@
         }
       ],
       "deny": []
-    }
+    },
+    "dialog:default"
   ]
 }

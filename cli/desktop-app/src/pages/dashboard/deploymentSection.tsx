@@ -1,26 +1,23 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { ArrowRight, Globe, Layers, PlusCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { API } from "@/service";
 import ErrorBoundary from "@/components/errorBoundary";
-import { removeDuplicateApis } from "@/lib/utils";
 import { Deployment } from "@/types/deployments";
 
 export function DeploymentSection() {
   const navigate = useNavigate();
+  const { appId } = useParams<{ appId: string }>();
   const [deployments, setDeployments] = useState([] as Deployment[]);
 
   useEffect(() => {
     const fetchDeployments = async () => {
       try {
-        const response = await API.getApiList();
-        const newData = removeDuplicateApis(response);
-        const deploymentPromises = newData.map(api =>
-          API.getDeploymentApi(api.id),
-        );
-        const allDeployments = await Promise.all(deploymentPromises);
+        const [allDeployments] = await Promise.all([
+          API.deploymentService.getDeploymentApi(appId!),
+        ]);
         const combinedDeployments = allDeployments.flat().filter(Boolean);
         setDeployments(combinedDeployments);
       } catch (error) {
@@ -43,7 +40,7 @@ export function DeploymentSection() {
             variant="ghost"
             className="text-sm font-medium"
             size="sm"
-            onClick={() => navigate("/deployments")}
+            onClick={() => navigate(`/app/${appId}/deployments`)}
           >
             View All
             <ArrowRight className="w-4 h-4 ml-1" />
@@ -54,9 +51,9 @@ export function DeploymentSection() {
             deployments.map((deployment, index) => (
               <div
                 key={index}
-                className="border rounded-lg p-3 hover:bg-muted/50 transition-colors cursor-pointer bg-gradient-to-br from-background to-muted hover:shadow-lg transition-all"
+                className="border rounded-lg p-3 hover:bg-muted/50 cursor-pointer bg-gradient-to-br from-background to-muted hover:shadow-lg transition-all"
                 onClick={() => {
-                  navigate(`/deployments`);
+                  navigate(`/app/${appId}/deployments`);
                 }}
               >
                 <p className="text-sm font-medium">{deployment.site.host}</p>
@@ -73,7 +70,9 @@ export function DeploymentSection() {
               <p className="text-gray-500 mb-6 text-center">
                 Create your first deployment to get started.
               </p>
-              <Button onClick={() => navigate("/deployments/create")}>
+              <Button
+                onClick={() => navigate(`/app/${appId}/deployments/create`)}
+              >
                 <PlusCircle className="mr-2 size-4" />
                 Create Deployment
               </Button>

@@ -1,5 +1,4 @@
 import { useNavigate, useParams } from "react-router-dom";
-import { Plugin } from "@/types/plugin";
 import { useEffect, useState } from "react";
 import { API } from "@/service";
 import { ArrowLeft, Component, Globe, Trash2 } from "lucide-react";
@@ -32,44 +31,53 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Plugin } from "@/types/plugin";
 
 export function PluginView() {
-  const { pluginId, version } = useParams();
+  const { pluginId, version, appId } = useParams();
   const navigate = useNavigate();
-  const [plugin, setPlugin] = useState<Plugin[]>([]);
+  const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [ver, setVer] = useState(version || "");
   const [currentVersion, setCurrentVersion] = useState<Plugin | null>(null);
 
   useEffect(() => {
-    API.getPluginByName(pluginId!).then(res => {
-      setPlugin(res);
-      const selectedVersion = version
-        ? res.find(p => p.version === version)
-        : res[0];
-      if (selectedVersion) {
-        setCurrentVersion(selectedVersion);
-        setVer(selectedVersion.version);
-      }
-    });
-  }, [pluginId, version]);
+    if (pluginId) {
+      API.pluginService.getPluginByName(appId!, pluginId!).then(res => {
+        setPlugins(res);
+        const selectedVersion = version
+          ? res.find(p => p.version === version)
+          : res[0];
+        if (selectedVersion) {
+          setCurrentVersion(selectedVersion);
+          setVer(selectedVersion.version);
+        }
+      });
+    }
+  }, [pluginId, version, appId]);
 
-  const handleVersionChange = (version: string) => {
-    const selectedVersion = plugin.find(p => p.version === version) || null;
+  const handleVersionChange = (newVersion: string) => {
+    const selectedVersion = plugins.find(p => p.version === newVersion) || null;
     if (selectedVersion) {
       setCurrentVersion(selectedVersion);
-      setVer(version);
-      navigate(`/plugins/${pluginId}/${version}`);
+      setVer(newVersion);
+      navigate(`/app/${appId}/plugins/${pluginId}/${newVersion}`);
     }
   };
 
   const handleDelete = () => {
     if (!currentVersion) return;
-    API.deletePlugin(currentVersion.name, currentVersion.version)
+    API.pluginService
+      .deletePlugin(appId!, currentVersion.name, currentVersion.version)
       .then(() => {
-        if (plugin.length > 1) {
-          navigate(`/plugins/${plugin[0].name}`);
+        if (plugins.length > 1) {
+          const nextPlugin = plugins[0];
+          if (nextPlugin) {
+            navigate(
+              `/app/${appId}/plugins/${nextPlugin.name}/${nextPlugin.version}`,
+            );
+          }
         } else {
-          navigate("/plugins");
+          navigate(`/app/${appId}/plugins`);
         }
       })
       .catch(console.error);
@@ -82,7 +90,10 @@ export function PluginView() {
           <CardHeader className="p-4">
             <div className="flex justify-between items-center">
               <div className="flex items-center">
-                <Button variant="link" onClick={() => navigate("/plugins")}>
+                <Button
+                  variant="link"
+                  onClick={() => navigate(`/app/${appId}/plugins`)}
+                >
                   <ArrowLeft className="w-5 h-5 mr-2" />
                 </Button>
                 <CardTitle className="text-2xl font-bold">
@@ -95,9 +106,9 @@ export function PluginView() {
                     <SelectValue placeholder="Select version" />
                   </SelectTrigger>
                   <SelectContent>
-                    {plugin.map(v => (
-                      <SelectItem key={v.version} value={v.version}>
-                        {v.version}
+                    {plugins.map(p => (
+                      <SelectItem key={p.version} value={p.version}>
+                        {p.version}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -150,25 +161,31 @@ export function PluginView() {
                 )}
               </div>
             </div>
-            {currentVersion.specs?.type && (
+            {currentVersion.type && (
               <div>
-                <h3 className="font-semibold mb-2">Specs</h3>
+                <h3 className="font-semibold mb-2">Type</h3>
                 <div className="space-y-2">
                   <Badge variant="outline" className="mr-2">
-                    {currentVersion.specs.type}
+                    {currentVersion.type}
                   </Badge>
-                  {currentVersion.specs.type === "OplogProcessor" && (
+                  {currentVersion.type === "Oplog Processor" && (
                     <>
-                      <Badge variant="outline">
-                        Component ID: {currentVersion.specs.componentId}
-                      </Badge>
-                      <Badge variant="outline">
-                        Component Version:{" "}
-                        {currentVersion.specs.componentVersion}
-                      </Badge>
+                      {currentVersion.oplogProcessorComponentId && (
+                        <Badge variant="outline">
+                          Component ID:{" "}
+                          {currentVersion.oplogProcessorComponentId}
+                        </Badge>
+                      )}
+                      {currentVersion.oplogProcessorComponentVersion !==
+                        undefined && (
+                        <Badge variant="outline">
+                          Component Version:{" "}
+                          {currentVersion.oplogProcessorComponentVersion}
+                        </Badge>
+                      )}
                     </>
                   )}
-                  {currentVersion.specs.type === "ComponentTransformer" &&
+                  {currentVersion.specs?.type === "ComponentTransformer" &&
                     currentVersion.specs.jsonSchema && (
                       <div>
                         <h4 className="text-sm font-medium mt-2">
@@ -189,19 +206,13 @@ export function PluginView() {
                   variant="outline"
                   className="flex items-center text-sm w-fit"
                 >
-                  {currentVersion.scope.type === "Global" ? (
+                  {currentVersion.scope.toLowerCase() === "global" ? (
                     <Globe className="w-4 h-4 mr-2" />
                   ) : (
                     <Component className="w-4 h-4 mr-2" />
                   )}
-                  {currentVersion.scope.type}
+                  {currentVersion.scope}
                 </Badge>
-                {currentVersion.scope.type === "Component" && (
-                  <div className="mt-2">
-                    <h4 className="text-sm font-medium">Component ID:</h4>
-                    <p>{currentVersion.scope.componentID}</p>
-                  </div>
-                )}
               </div>
             )}
           </CardContent>

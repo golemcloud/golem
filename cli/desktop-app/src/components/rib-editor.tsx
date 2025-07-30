@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment */
-/* eslint-disable @typescript-eslint/no-explicit-any */
 // @ts-nocheck
 import { useTheme } from "@/components/theme-provider.tsx";
 import { cn } from "@/lib/utils";
@@ -11,7 +9,7 @@ interface MonacoEditorProps extends EditorProps {
   language?: string;
   height?: string;
   scriptKeys?: string[];
-  suggestVariable?: Record<string, any>;
+  suggestVariable?: Record<string, unknown>;
   disabled?: boolean;
   allowExpand?: boolean;
   allowCopy?: boolean;
@@ -27,12 +25,12 @@ export const RibEditor = forwardRef<HTMLDivElement, MonacoEditorProps>(
       suggestVariable,
       disabled = false,
       allowExpand = true,
-      allowCopy = false,
+      _allowCopy = false,
       ...props
     },
     ref,
   ) => {
-    const { theme } = useTheme();
+    const { resolvedTheme } = useTheme();
     const [isFocused, setIsFocused] = useState(false);
     const monacoInstance = useMonaco();
     const monoRef = useRef(null);
@@ -222,7 +220,7 @@ export const RibEditor = forwardRef<HTMLDivElement, MonacoEditorProps>(
                 // Extract local variables
                 const variableRegex =
                   /let\s+(\w+)\s*=\s*(\{[\s\S]*?\}|\[[\s\S]*?\]|"[^"]*"|'[^']*'|\d+)/g;
-                let localVariables: Record<string, any> = {};
+                let localVariables: Record<string, unknown> = {};
 
                 let match;
                 while ((match = variableRegex.exec(code)) !== null) {
@@ -234,7 +232,7 @@ export const RibEditor = forwardRef<HTMLDivElement, MonacoEditorProps>(
                         ? JSON.parse(varValue.replace(/(\w+):/g, '"$1":'))
                         : varValue.replace(/['"]/g, "");
                     localVariables[varName] = value;
-                  } catch (e) {
+                  } catch {
                     localVariables[varName] = varValue; // Store as string if parsing fails
                   }
                 }
@@ -248,13 +246,13 @@ export const RibEditor = forwardRef<HTMLDivElement, MonacoEditorProps>(
                 };
 
                 const getObjectKeys = (
-                  obj: any,
+                  obj: unknown,
                   prefix = "",
                 ): Array<{
                   label: string;
                   insertText: string;
-                  kind: any;
-                  range: any;
+                  kind: typeof monacoInstance.languages.CompletionItemKind.Property;
+                  range: typeof range;
                 }> =>
                   Object.entries(obj).flatMap(([key, value]) =>
                     typeof value === "object"
@@ -317,7 +315,7 @@ export const RibEditor = forwardRef<HTMLDivElement, MonacoEditorProps>(
                   ).values(),
                 );
                 // Ensure scriptKeys is always an array and filter out invalid values
-                const validScriptKeys = (scriptKeys || []).filter(key => true);
+                const validScriptKeys = (scriptKeys || []).filter(_key => true);
 
                 const functionSuggestions = validScriptKeys.map(fn => ({
                   label: fn,
@@ -392,8 +390,8 @@ export const RibEditor = forwardRef<HTMLDivElement, MonacoEditorProps>(
           "editorCursor.foreground": "#000000",
         },
       });
-      setRigEditorTheme(theme === "dark");
-    }, [theme, monacoInstance]);
+      setRigEditorTheme(resolvedTheme === "dark");
+    }, [resolvedTheme, monacoInstance]);
 
     function setRigEditorTheme(isDarkMode: boolean) {
       if (!monacoInstance) return;
@@ -415,7 +413,7 @@ export const RibEditor = forwardRef<HTMLDivElement, MonacoEditorProps>(
           value={value}
           onChange={onChange}
           language={"rib"}
-          theme={theme === "dark" ? "rigDarkTheme" : "rigLightTheme"}
+          theme={resolvedTheme === "dark" ? "rigDarkTheme" : "rigLightTheme"}
           options={{
             minimap: { enabled: false },
             scrollBeyondLastLine: false,
@@ -436,7 +434,7 @@ export const RibEditor = forwardRef<HTMLDivElement, MonacoEditorProps>(
               top: 5,
             },
           }}
-          onMount={(editor, monaco) => {
+          onMount={(editor, _monaco) => {
             editor.onDidFocusEditorWidget(() => setIsFocused(true));
             editor.onDidBlurEditorWidget(() => setIsFocused(false));
 

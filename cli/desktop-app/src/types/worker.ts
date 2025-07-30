@@ -11,10 +11,9 @@ export interface Worker {
   retryCount: number;
   status: string;
   totalLinearMemorySize: number;
-  workerId: {
-    componentId: string;
-    workerName: string;
-  };
+
+  workerName: string;
+  componentName: string;
   activePlugins: string[];
   updates: Update[];
 }
@@ -49,11 +48,76 @@ export interface WsMessage {
   StdOut: Terminal;
 }
 
-export interface OplogEntry {
-  entry: {
-    timestamp: string;
-    message: string;
-    function_name: string;
-    type: "Log" | "ExportedFunctionInvoked";
-  };
+interface BaseLogEntry {
+  type: string;
+  timestamp: string;
 }
+
+interface WorkerId {
+  componentId: string;
+  workerName: string;
+}
+
+interface AttributeValue {
+  type: string;
+  value: string;
+}
+
+interface Attribute {
+  key: string;
+  value: AttributeValue;
+}
+
+interface LocalSpan {
+  type: string;
+  spanId: string;
+  start: string;
+  parentId: string | null;
+  linkedContext: unknown | null;
+  attributes: Attribute[];
+  inherited: boolean;
+}
+
+interface CreateEntry extends BaseLogEntry {
+  type: "Create";
+  workerId: WorkerId;
+  componentVersion: number;
+  args: unknown[];
+  env: Record<string, unknown>;
+  accountId: string;
+  parent: string | null;
+  componentSize: number;
+  initialTotalLinearMemorySize: number;
+  initialActivePlugins: unknown[];
+}
+
+interface ExportedFunctionInvokedEntry extends BaseLogEntry {
+  type: "ExportedFunctionInvoked";
+  functionName: string;
+  request: unknown[];
+  idempotencyKey: string;
+  traceId: string;
+  traceStates: unknown[];
+  invocationContext: LocalSpan[][];
+}
+
+interface ResponseType {
+  typ: {
+    type: string;
+    items?: { type: string }[];
+  };
+  value: unknown;
+}
+
+interface ExportedFunctionCompletedEntry extends BaseLogEntry {
+  type: "ExportedFunctionCompleted";
+  response: ResponseType;
+  consumedFuel: number;
+}
+
+type OplogEntry =
+  | CreateEntry
+  | ExportedFunctionInvokedEntry
+  | ExportedFunctionCompletedEntry;
+
+export type OplogWithIndex = [number, OplogEntry];

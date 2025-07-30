@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { PlusCircle, ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +22,7 @@ const createApiSchema = z.object({
     .string()
     .min(3, "API Name must be at least 3 characters")
     .regex(
-      /^[a-zA-Z][a-zA-Z_]*$/,
+      /^[a-zA-Z][a-zA-Z_-]*$/,
       "API name must contain only letters and underscores",
     ),
   version: z
@@ -39,6 +39,7 @@ type CreateApiFormValues = z.infer<typeof createApiSchema>;
 const CreateAPI = () => {
   const navigate = useNavigate();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { appId } = useParams<{ appId: string }>();
 
   const form = useForm<CreateApiFormValues>({
     resolver: zodResolver(createApiSchema),
@@ -51,13 +52,14 @@ const CreateAPI = () => {
   const onSubmit = async (values: CreateApiFormValues) => {
     try {
       setIsSubmitting(true);
-      await API.createApi({
+      await API.apiService.createApi(appId!, {
         id: values.apiName,
         version: values.version,
         routes: [],
-        draft: true,
       });
-      navigate(`/apis/${values.apiName}/version/${values.version}`);
+      navigate(
+        `/app/${appId}/apis/${values.apiName}/version/${values.version}`,
+      );
     } catch (error) {
       console.error("Failed to create API:", error);
       form.setError("apiName", {

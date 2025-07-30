@@ -1,17 +1,21 @@
-import { Api, RouteRequestData } from "@/types/api";
+// import { Api, RouteRequestData } from "@/types/api";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { CheckIcon, CopyIcon, Edit2Icon, Trash2Icon } from "lucide-react";
+import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { API } from "@/service";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CorsDisplay } from "@/components/cors-display";
+// import { CorsDisplay } from "@/components/cors-display";
 import ErrorBoundary from "@/components/errorBoundary.tsx";
 import { HTTP_METHOD_COLOR } from "@/components/nav-route";
 import { RibEditor } from "@/components/rib-editor";
 import { useToast } from "@/hooks/use-toast";
+import {
+  HttpApiDefinition,
+  HttpApiDefinitionRoute,
+} from "@/types/golemManifest";
 
 interface CodeBlockProps {
   code: string | string[];
@@ -33,7 +37,7 @@ function CodeBlock({ code, label, allowCopy = false }: CodeBlockProps) {
         duration: 2000,
       });
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
+    } catch {
       toast({
         variant: "destructive",
         description: "Failed to copy code",
@@ -89,12 +93,12 @@ function PathParameters({ url }: { url: string }) {
 
     // Extract path parameters
     while ((match = pathParamRegex.exec(path)) !== null) {
-      params.push({ name: match[1], type: "path" });
+      params.push({ name: match[1]!, type: "path" });
     }
 
     // Extract query parameters (key-value pair)
     while ((match = queryParamRegex.exec(path)) !== null) {
-      params.push({ name: match[1], type: "query" });
+      params.push({ name: match[1]!, type: "query" });
     }
     setParameters(params);
   };
@@ -131,9 +135,11 @@ function PathParameters({ url }: { url: string }) {
 
 export const ApiRoute = () => {
   const navigate = useNavigate();
-  const { apiName, version } = useParams();
-  const [currentRoute, setCurrentRoute] = useState({} as RouteRequestData);
-  const [apiResponse, setApiResponse] = useState({} as Api);
+  const { apiName, version, appId } = useParams();
+  const [currentRoute, setCurrentRoute] = useState(
+    {} as HttpApiDefinitionRoute,
+  );
+  const [_apiResponse, setApiResponse] = useState({} as HttpApiDefinition);
   const [queryParams] = useSearchParams();
   const path = queryParams.get("path");
   const method = queryParams.get("method");
@@ -141,46 +147,46 @@ export const ApiRoute = () => {
 
   useEffect(() => {
     const fetchData = async () => {
-      if (apiName && version && method && path!== null) {
-        const apiResponse= await API.getApi(apiName);
+      if (apiName && version && method && path !== null) {
+        const apiResponse = await API.apiService.getApi(appId!, apiName);
         const selectedApi = apiResponse.find(api => api.version === version);
         if (selectedApi) {
           setApiResponse(selectedApi);
-          const route = selectedApi.routes.find(
+          const route = selectedApi.routes?.find(
             route => route.path === path && route.method === method,
           );
-          setCurrentRoute(route || ({} as RouteRequestData));
+          setCurrentRoute(route || ({} as HttpApiDefinitionRoute));
         } else {
-          navigate(`/apis/${apiName}/version/${version}`);
+          navigate(`/app/${appId}/apis/${apiName}/version/${version}`);
         }
       } else {
-        navigate(`/apis/${apiName}/version/${version}`);
+        navigate(`/app/${appId}/apis/${apiName}/version/${version}`);
       }
     };
     fetchData();
   }, [apiName, version, path, method, reload]);
 
-  const routeToQuery = () => {
-    navigate(
-      `/apis/${apiName}/version/${version}/routes/edit?path=${path}&method=${method}`,
-    );
-  };
+  // const routeToQuery = () => {
+  //   navigate(
+  //     `/app/${appId}/apis/${apiName}/version/${version}/routes/edit?path=${path}&method=${method}`,
+  //   );
+  // };
 
-  const handleDelete = () => {
-    if (apiName) {
-      API.getApi(apiName).then(async response => {
-        const currentApi = response.find(api => api.version === version);
-        if (currentApi) {
-          currentApi.routes = currentApi.routes.filter(
-            route => !(route.path === path && route.method === method),
-          );
-          API.putApi(apiName, version!, currentApi).then(() => {
-            navigate(`/apis/${apiName}/version/${version}`);
-          });
-        }
-      });
-    }
-  };
+  // const handleDelete = () => {
+  //   if (apiName) {
+  //     API.getApi(appId!, apiName).then(async response => {
+  //       const currentApi = response.find(api => api.version === version);
+  //       if (currentApi) {
+  //         currentApi.routes = currentApi.routes?.filter(
+  //           route => !(route.path === path && route.method === method),
+  //         );
+  //         API.putApi(apiName, version!, currentApi).then(() => {
+  //           navigate(`/app/${appId}/apis/${apiName}/version/${version}`);
+  //         });
+  //       }
+  //     });
+  //   }
+  // };
 
   return (
     <ErrorBoundary>
@@ -203,7 +209,7 @@ export const ApiRoute = () => {
                   {currentRoute.path || "/"}
                 </span>
               </div>
-              {apiResponse?.draft && (
+              {/* {apiResponse?.draft && (
                 <div className="flex gap-2 items-center">
                   <Button
                     variant="ghost"
@@ -224,19 +230,19 @@ export const ApiRoute = () => {
                     Delete
                   </Button>
                 </div>
-              )}
+              )} */}
             </div>
           </CardHeader>
           <CardContent className="space-y-6 pt-6">
-            {currentRoute?.binding?.component?.name && (
+            {currentRoute?.binding?.componentName && (
               <div className="mb-6">
                 <h2 className="text-gray-800 dark:text-gray-200 mb-2">
                   Component
                 </h2>
                 <CodeBlock
                   code={`${
-                      currentRoute?.binding?.component?.name
-                  } / v${currentRoute?.binding?.component?.version}`}
+                    currentRoute?.binding?.componentName
+                  } / v${currentRoute?.binding?.componentVersion}`}
                   label="component name"
                   allowCopy={false}
                 />
@@ -256,7 +262,7 @@ export const ApiRoute = () => {
             )}
 
             {/* Worker Name Section */}
-            {currentRoute?.binding?.workerName && (
+            {/* {currentRoute?.binding?.workerName && (
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <h2 className="text-gray-800 dark:text-gray-200">
@@ -274,9 +280,8 @@ export const ApiRoute = () => {
                   code={currentRoute?.binding?.workerName || "No worker name"}
                   label="worker name RIB script"
                   allowCopy={true}
-                /> */}
-              </div>
-            )}
+                /> 
+                </div> */}
 
             {/* Response Section */}
             {currentRoute?.binding?.response && (
@@ -295,8 +300,8 @@ export const ApiRoute = () => {
             )}
 
             {/* Cors Section */}
-            {currentRoute?.binding?.corsPreflight && (
-              <CorsDisplay cors={currentRoute?.binding?.corsPreflight} />
+            {currentRoute?.binding?.type == "cors-preflight" &&
+              // <CorsDisplay cors={currentRoute?.binding?.corsPreflight} />
               // <div className="mb-6">
               //   <div className="flex items-center gap-2 mb-2">
               //     <h2 className="text-gray-800 dark:text-gray-200">Response</h2>
@@ -309,7 +314,7 @@ export const ApiRoute = () => {
               //     disabled={true}
               //   />
               // </div>
-            )}
+              ""}
           </CardContent>
         </Card>
       </main>

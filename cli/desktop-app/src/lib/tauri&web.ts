@@ -1,29 +1,33 @@
 import { BaseDirectory } from "@tauri-apps/api/path";
 import TauriWebSocket from "@tauri-apps/plugin-websocket";
-import { invoke } from "@tauri-apps/api/core";
+// import { invoke } from "@tauri-apps/api/core";
 import { listen, TauriEvent as TauriEventEnum } from "@tauri-apps/api/event";
 import type { Event } from "@tauri-apps/api/event";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { writeFile } from "@tauri-apps/plugin-fs";
 
-const isTauri = typeof window !== "undefined";
+const isTauri =
+  typeof window !== "undefined" &&
+  (window as { __TAURI__?: unknown }).__TAURI__;
 
 export type Theme = "dark" | "light" | "system";
 
-export function listenThemeChange(cb: (event: Event<Exclude<Theme, "system">>) => void) {
+export function listenThemeChange(
+  cb: (event: Event<Exclude<Theme, "system">>) => void,
+) {
   if (isTauri) {
-
     // To cancel Tauri listener we have to wait for promise resolution,
     // since this function is only expected to be used in useEffect we
     // cannot expose async nature of Tauri outside of it.
     const unlistenPromise = listen(TauriEventEnum.WINDOW_THEME_CHANGED, cb);
-    const unlistenCallback = () => unlistenPromise.then(unlisten => unlisten())
+    const unlistenCallback = () => unlistenPromise.then(unlisten => unlisten());
 
     return unlistenCallback;
   } else {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = (event: MediaQueryListEvent) => event.matches ? "dark" : "light";
-    media.addEventListener("change", handler)
+    const handler = (event: MediaQueryListEvent) =>
+      event.matches ? "dark" : "light";
+    media.addEventListener("change", handler);
     return () => media.removeEventListener("change", handler);
   }
 }
@@ -41,27 +45,6 @@ export async function saveFile(fileName: string, data: Uint8Array) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  }
-}
-
-export async function updateIP(newIP: string) {
-  try {
-    await invoke("update_backend_ip", { newIp: newIP });
-    console.log("Backend IP updated!");
-  } catch (error) {
-    console.error("Failed to update IP:", error);
-  }
-}
-
-// Retrieve the backend IP (for example, on app startup)
-export async function fetchCurrentIP() {
-  try {
-    const ip: string = await invoke("get_backend_ip");
-    console.log("Current backend IP:", ip);
-    return ip;
-  } catch (error) {
-    return "http://localhost:9881"
-    console.error("Failed to get current IP:", error);
   }
 }
 

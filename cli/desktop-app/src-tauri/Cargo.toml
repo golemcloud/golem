@@ -1,6 +1,6 @@
 [package]
 name = "golem-desktop-app"
-version = "0.1.0"
+version = "0.2.0"
 description = "Golem Desktop Application"
 edition = "2021"
 
@@ -24,4 +24,5 @@ serde_json = "1"
 tauri-plugin-http = { version = "2.2.0", features = ["multipart"] }
 tauri-plugin-websocket = { version = "2.2.0" }
 tauri-plugin-fs = "2.0.0"
-tauri-plugin-store = { version = "2.2.0" }
+tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"

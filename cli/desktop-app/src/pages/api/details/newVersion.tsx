@@ -16,8 +16,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { API } from "@/service";
-import { Api } from "@/types/api";
 import ErrorBoundary from "@/components/errorBoundary";
+import { HttpApiDefinition } from "@/types/golemManifest.ts";
 
 const newVersionSchema = z.object({
   version: z
@@ -35,9 +35,9 @@ const newVersionSchema = z.object({
           Number.isInteger(major) &&
           Number.isInteger(minor) &&
           Number.isInteger(patch) &&
-          major >= 0 &&
-          minor >= 0 &&
-          patch >= 0
+          (major || 0) >= 0 &&
+          (minor || 0) >= 0 &&
+          (patch || 0) >= 0
         );
       },
       {
@@ -50,11 +50,12 @@ type NewVersionFormValues = z.infer<typeof newVersionSchema>;
 
 export default function APINewVersion() {
   const navigate = useNavigate();
-  const { apiName, version } = useParams();
+  const { apiName, version, appId } = useParams();
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [apiDetails, setApiDetails] = useState<Api[]>([]);
-  const [activeApiDetails, setActiveApiDetails] = useState<Api | null>(null);
+  const [apiDetails, setApiDetails] = useState<HttpApiDefinition[]>([]);
+  const [activeApiDetails, setActiveApiDetails] =
+    useState<HttpApiDefinition | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   const form = useForm<NewVersionFormValues>({
@@ -91,9 +92,9 @@ export default function APINewVersion() {
       try {
         setIsLoading(true);
         setFetchError(null);
-        const response = await API.getApi(apiName);
+        const response = await API.apiService.getApi(appId!, apiName);
         setApiDetails(response);
-        setActiveApiDetails(response[response.length - 1]);
+        setActiveApiDetails(response[response.length - 1]!);
       } catch (error) {
         console.error("Failed to fetch API details:", error);
         setFetchError("Failed to load API details. Please try again.");
@@ -116,7 +117,7 @@ export default function APINewVersion() {
 
   const autoIncrementVersion = () => {
     const [major, minor, patch] = version!.split(".").map(Number);
-    return `${major}.${minor}.${patch + 1}`;
+    return `${major}.${minor}.${(patch || 0) + 1}`;
   };
 
   const onSubmit = async (values: NewVersionFormValues) => {
@@ -148,9 +149,11 @@ export default function APINewVersion() {
         draft: true,
         createdAt: new Date().toISOString(),
       };
-      await API.postApi(payload).then(() => {
-        navigate(`/apis/${apiName}/version/${values.version}`);
-      });
+      await API.apiService.createApiVersion(appId!, payload);
+      // .then(() => {
+      navigate(`/app/${appId}/apis/${apiName}/version/${values.version}`);
+      // });
+      // throw new Error("yes o");
     } catch (error) {
       console.error("Failed to create new version:", error);
       form.setError("version", {

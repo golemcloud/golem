@@ -9,19 +9,35 @@ import {
 import { API } from "@/service";
 import { ComponentList } from "@/types/component.ts";
 import { ArrowRight, LayoutGrid, PlusCircle } from "lucide-react";
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState, useImperativeHandle, forwardRef } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { ComponentCard } from "../components";
 
-export const ComponentsSection = () => {
+export interface ComponentsSectionRef {
+  refreshComponents: () => Promise<void>;
+}
+
+export const ComponentsSection = forwardRef<ComponentsSectionRef>((_, ref) => {
   const navigate = useNavigate();
+  const { appId } = useParams<{ appId: string }>();
   const [components, setComponents] = useState<{
     [key: string]: ComponentList;
   }>({});
 
+  const fetchComponents = async () => {
+    if (appId) {
+      let response = await API.componentService.getComponentByIdAsKey(appId);
+      setComponents(response);
+    }
+  };
+
+  useImperativeHandle(ref, () => ({
+    refreshComponents: fetchComponents,
+  }));
+
   useEffect(() => {
-    API.getComponentByIdAsKey().then(response => setComponents(response));
-  }, []);
+    fetchComponents();
+  }, [appId]);
   return (
     <ErrorBoundary>
       <Card className="rounded-lg lg:col-span-2">
@@ -30,7 +46,10 @@ export const ComponentsSection = () => {
             <CardTitle className="text-2xl font-bold text-primary">
               Components
             </CardTitle>
-            <Button variant="ghost" onClick={() => navigate("/components")}>
+            <Button
+              variant="ghost"
+              onClick={() => navigate(`/app/${appId}/components`)}
+            >
               View All
               <ArrowRight className="w-4 h-4 ml-1" />
             </Button>
@@ -44,7 +63,7 @@ export const ComponentsSection = () => {
                   key={data.componentId}
                   data={data}
                   onCardClick={() =>
-                    navigate(`/components/${data.componentId}`)
+                    navigate(`/app/${appId}/components/${data.componentId}`)
                   }
                 />
               ))}
@@ -60,7 +79,9 @@ export const ComponentsSection = () => {
               <p className="text-gray-500 mb-6 text-center">
                 Create your first component to get started.
               </p>
-              <Button onClick={() => navigate("/components/create")}>
+              <Button
+                onClick={() => navigate(`/app/${appId}/components/create`)}
+              >
                 <PlusCircle className="mr-2 size-4" />
                 Create Component
               </Button>
@@ -70,4 +91,6 @@ export const ComponentsSection = () => {
       </Card>
     </ErrorBoundary>
   );
-};
+});
+
+ComponentsSection.displayName = "ComponentsSection";

@@ -34,7 +34,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 export default function WorkerManage() {
-  const { componentId = "", workerName = "" } = useParams();
+  const { appId, componentId = "", workerName = "" } = useParams();
   const navigate = useNavigate();
   const [workerDetails, setWorkerDetails] = useState({} as Worker);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -45,43 +45,57 @@ export default function WorkerManage() {
 
   useEffect(() => {
     if (componentId && workerName) {
-      API.getComponentByIdAsKey().then(response => {
-        setComponentList(response[componentId]);
+      API.componentService.getComponentByIdAsKey(appId!).then(response => {
+        const componentListArray = Object.values(
+          response as Record<string, ComponentList>,
+        );
+        const foundComponent = componentListArray.find(
+          (x: ComponentList) => x.componentId === componentId,
+        );
+        if (foundComponent) {
+          setComponentList(foundComponent);
+        }
       });
-      API.getParticularWorker(componentId, workerName).then(response => {
-        setWorkerDetails(response);
-        setUpgradeTo(`${response?.componentVersion}`);
-      });
+      API.workerService
+        .getParticularWorker(appId!, componentId, workerName)
+        .then(response => {
+          const worker = response as Worker;
+          setWorkerDetails(worker);
+          setUpgradeTo(`${worker?.componentVersion}`);
+        });
     }
   }, [componentId, workerName]);
 
   const handleUpgrade = () => {
-    API.upgradeWorker(
-      workerDetails?.workerId?.componentId,
-      workerDetails?.workerId?.workerName,
-      Number(upgradeTo),
-      upgradeType,
-    ).then(() => {
-      toast({
-        title: "Worker upgraded Initiated",
-        duration: 3000,
+    API.workerService
+      .upgradeWorker(
+        appId!,
+        componentList.componentName!,
+        workerDetails?.workerName,
+        Number(upgradeTo),
+        upgradeType,
+      )
+      .then(() => {
+        toast({
+          title: "Worker upgraded Initiated",
+          duration: 3000,
+        });
       });
-    });
   };
 
   const handleDelete = () => {
-    API.deleteWorker(componentId, workerName).then(() => {
+    API.workerService.deleteWorker(appId!, componentId, workerName).then(() => {
       toast({
         title: "Worker deleted successfully",
         duration: 3000,
         variant: "destructive",
       });
-      navigate(`/components/${componentId}`);
+      navigate(`/app/${appId}/components/${componentId}`);
     });
   };
 
   const onResumeWorker = () => {
-    API.resumeWorker(componentId, workerName).then(() => {
+    API.workerService.resumeWorker(appId!, componentId, workerName).then(() => {
       toast({
         title: "Worker resumed",
         duration: 3000,
@@ -90,12 +104,14 @@ export default function WorkerManage() {
   };
 
   const onInterruptWorker = () => {
-    API.interruptWorker(componentId, workerName).then(() => {
-      toast({
-        title: "Worker interrupted",
-        duration: 3000,
+    API.workerService
+      .interruptWorker(appId!, componentId, workerName)
+      .then(() => {
+        toast({
+          title: "Worker interrupted",
+          duration: 3000,
+        });
       });
-    });
   };
 
   const versionListGreaterThan =
@@ -198,11 +214,10 @@ export default function WorkerManage() {
                 htmlFor="componentId"
                 className="text-right text-sm font-medium"
               >
-                Component ID
+                Component Name
               </Label>
               <Input
-                id="componentId"
-                defaultValue={workerDetails?.workerId?.componentId || "N/A"}
+                defaultValue={workerDetails.componentName || "N/A"}
                 className="col-span-3 bg-muted/50"
                 disabled
               />
@@ -217,8 +232,7 @@ export default function WorkerManage() {
                 Current Version
               </Label>
               <Input
-                id="componentVersion"
-                defaultValue={workerDetails?.componentVersion || "N/A"}
+                defaultValue={workerDetails?.componentVersion}
                 className="col-span-3 bg-muted/50"
                 disabled
               />
@@ -232,12 +246,12 @@ export default function WorkerManage() {
               >
                 Upgrade Type
               </Label>
-              <Select defaultValue="Automatic" onValueChange={setUpgradeType}>
-                <SelectTrigger id="upgradeType" className="col-span-3">
+              <Select defaultValue="auto" onValueChange={setUpgradeType}>
+                <SelectTrigger className="col-span-3">
                   <SelectValue>{upgradeType}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {["Automatic", "Manual"].map(version => (
+                  {["auto", "manual"].map(version => (
                     <SelectItem key={version} value={version}>
                       {version}
                     </SelectItem>
@@ -255,7 +269,7 @@ export default function WorkerManage() {
                 Upgrade To
               </Label>
               <Select defaultValue={upgradeTo} onValueChange={setUpgradeTo}>
-                <SelectTrigger id="upgradeTo" className="col-span-3">
+                <SelectTrigger className="col-span-3">
                   <SelectValue>
                     {upgradeTo ? `v${upgradeTo}` : "Select a version"}
                   </SelectValue>
