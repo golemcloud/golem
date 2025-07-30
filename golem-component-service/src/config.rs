@@ -125,6 +125,8 @@ mod tests {
 
     #[test]
     pub fn compilation_can_be_disabled() {
+        env::set_current_dir( PathBuf::from(env!("CARGO_MANIFEST_DIR")) ).expect("Failed to set current directory");
+
         std::env::set_var("GOLEM__COMPILATION__TYPE", "Disabled");
         let cfg = make_config_loader().load().expect("Failed to load config");
         std::env::remove_var("GOLEM__COMPILATION__TYPE");
