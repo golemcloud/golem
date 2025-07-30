@@ -103,6 +103,10 @@ impl<Repo: ComponentRepo> LoggedComponentRepo<Repo> {
     fn span_component_id(component_id: &Uuid) -> Span {
         info_span!(SPAN_NAME, component_id = %component_id)
     }
+
+    fn span_environment_id(environment_id: &Uuid) -> Span {
+        info_span!(SPAN_NAME, environment_id = %environment_id)
+    }
 }
 
 #[async_trait]
@@ -191,7 +195,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     ) -> repo::Result<Vec<ComponentRevisionRecord>> {
         self.repo
             .list_staged(environment_id)
-            .instrument(info_span!(SPAN_NAME, environment_id = %environment_id))
+            .instrument(Self::span_environment_id(environment_id))
             .await
     }
 
@@ -201,7 +205,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     ) -> repo::Result<Vec<ComponentRevisionRecord>> {
         self.repo
             .list_deployed(environment_id)
-            .instrument(info_span!(SPAN_NAME, environment_id = %environment_id))
+            .instrument(Self::span_environment_id(environment_id))
             .await
     }
 }

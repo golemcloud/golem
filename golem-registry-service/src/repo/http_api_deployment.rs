@@ -20,7 +20,7 @@ use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::future::BoxFuture;
-use futures::FutureExt;
+use futures::{stream, FutureExt, StreamExt, TryStreamExt};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -60,6 +60,40 @@ pub trait HttpApiDeploymentRepo: Send + Sync {
         revision_id: i64,
         http_definition_id: &Uuid,
     ) -> repo::Result<HttpApiDeploymentDefinitionRecord>;
+
+    async fn get_staged_by_id(
+        &self,
+        http_api_deployment_id: &Uuid,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>>;
+
+    async fn get_staged_by_name(
+        &self,
+        environment_id: &Uuid,
+        host: &str,
+        subdomain: Option<&str>,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>>;
+
+    async fn get_deployed_by_id(
+        &self,
+        http_api_deployment_id: &Uuid,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>>;
+
+    async fn get_deployed_by_name(
+        &self,
+        environment_id: &Uuid,
+        host: &str,
+        subdomain: Option<&str>,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>>;
+
+    async fn list_staged(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<HttpApiDeploymentRevisionRecord>>;
+
+    async fn list_deployed(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<HttpApiDeploymentRevisionRecord>>;
 }
 
 pub struct LoggedHttpApiDeploymentRepo<Repo: HttpApiDeploymentRepo> {
@@ -136,6 +170,78 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
             .instrument(Self::span_http_api_deployment_id(http_api_deployment_id))
             .await
     }
+
+    async fn get_staged_by_id(
+        &self,
+        http_api_deployment_id: &Uuid,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>> {
+        self.repo
+            .get_staged_by_id(http_api_deployment_id)
+            .instrument(Self::span_http_api_deployment_id(http_api_deployment_id))
+            .await
+    }
+
+    async fn get_staged_by_name(
+        &self,
+        environment_id: &Uuid,
+        host: &str,
+        subdomain: Option<&str>,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>> {
+        self.repo
+            .get_staged_by_name(environment_id, host, subdomain)
+            .instrument(Self::span_host_and_subdomain(
+                environment_id,
+                host,
+                subdomain,
+            ))
+            .await
+    }
+
+    async fn get_deployed_by_id(
+        &self,
+        http_api_deployment_id: &Uuid,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>> {
+        self.repo
+            .get_deployed_by_id(http_api_deployment_id)
+            .instrument(Self::span_http_api_deployment_id(http_api_deployment_id))
+            .await
+    }
+
+    async fn get_deployed_by_name(
+        &self,
+        environment_id: &Uuid,
+        host: &str,
+        subdomain: Option<&str>,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>> {
+        self.repo
+            .get_deployed_by_name(environment_id, host, subdomain)
+            .instrument(Self::span_host_and_subdomain(
+                environment_id,
+                host,
+                subdomain,
+            ))
+            .await
+    }
+
+    async fn list_staged(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<HttpApiDeploymentRevisionRecord>> {
+        self.repo
+            .list_staged(environment_id)
+            .instrument(info_span!(SPAN_NAME, environment_id = %environment_id))
+            .await
+    }
+
+    async fn list_deployed(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<HttpApiDeploymentRevisionRecord>> {
+        self.repo
+            .list_deployed(environment_id)
+            .instrument(info_span!(SPAN_NAME, environment_id = %environment_id))
+            .await
+    }
 }
 
 pub struct DbHttpApiDeploymentRepo<DBP: Pool> {
@@ -189,7 +295,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                             (http_api_deployment_id, environment_id, host, subdomain,
                                 created_at, updated_at, deleted_at, modified_by,
                                 current_revision_id)
-                            VALUES ($1, $2, $3, $4, $5, $6, NULL, $8, 0)
+                            VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, 0)
                         "# })
                         .bind(revision.http_api_deployment_id)
                         .bind(environment_id)
@@ -347,6 +453,221 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         })
         .await
     }
+
+    async fn get_staged_by_id(
+        &self,
+        http_api_deployment_id: &Uuid,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>> {
+        let revision = self.with_ro("get_staged_by_id")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT dr.http_api_deployment_id, dr.revision_id, dr.hash,
+                           dr.created_at, dr.created_by, dr.deleted
+                    FROM http_api_deployments d
+                    JOIN http_api_deployment_revisions dr
+                        ON d.http_api_deployment_id = dr.http_api_deployment_id AND d.current_revision_id = dr.revision_id
+                    WHERE d.http_api_deployment_id = $1 AND d.deleted_at IS NULL
+                "#})
+                    .bind(http_api_deployment_id),
+            )
+            .await?;
+
+        match revision {
+            Some(revision) => Ok(Some(self.with_http_api_definitions(revision).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_staged_by_name(
+        &self,
+        environment_id: &Uuid,
+        host: &str,
+        subdomain: Option<&str>,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>> {
+        let revision = self.with_ro("get_staged_by_name")
+            .fetch_optional_as(
+                match subdomain {
+                    Some(subdomain) => {
+                        sqlx::query_as(indoc! { r#"
+                            SELECT dr.http_api_deployment_id, dr.revision_id, dr.hash,
+                                   dr.created_at, dr.created_by, dr.deleted
+                            FROM http_api_deployments d
+                            JOIN http_api_deployment_revisions dr
+                                ON d.http_api_deployment_id = dr.http_api_deployment_id AND d.current_revision_id = dr.revision_id
+                            WHERE d.environment_id = $1 AND d.host = $2 AND d.subdomain = $3 AND d.deleted_at IS NULL
+                        "#})
+                            .bind(environment_id)
+                            .bind(host)
+                            .bind(subdomain)
+                    }
+                    None => {
+                        sqlx::query_as(indoc! { r#"
+                            SELECT dr.http_api_deployment_id, dr.revision_id, dr.hash,
+                                   dr.created_at, dr.created_by, dr.deleted
+                            FROM http_api_deployments d
+                            JOIN http_api_deployment_revisions dr
+                                ON d.http_api_deployment_id = dr.http_api_deployment_id AND d.current_revision_id = dr.revision_id
+                            WHERE d.environment_id = $1 AND d.host = $2 AND d.subdomain IS NULL AND d.deleted_at IS NULL
+                        "#})
+                            .bind(environment_id)
+                            .bind(host)
+                    }
+                }
+            )
+            .await?;
+
+        match revision {
+            Some(revision) => Ok(Some(self.with_http_api_definitions(revision).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_deployed_by_id(
+        &self,
+        http_api_deployment_id: &Uuid,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>> {
+        let revision = self.with_ro("get_deployed_by_id")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT hadr.http_api_deployment_id, hadr.revision_id, hadr.hash,
+                           hadr.created_at, hadr.created_by, hadr.deleted
+                    FROM http_api_deployments had
+                    JOIN http_api_deployment_revisions hadr ON had.http_api_deployment_id = hadr.http_api_deployment_id
+                    JOIN current_deployments cd ON had.environment_id = cd.environment_id
+                    JOIN deployment_revisions dr ON cd.environment_id = dr.environment_id
+                        AND cd.current_revision_id = dr.revision_id
+                    JOIN deployment_http_api_definition_revisions dhadr
+                        ON dhadr.environment_id = dr.environment_id
+                            AND dhadr.deployment_revision_id = dr.revision_id
+                            AND dhadr.http_api_definition_id = hadr.http_api_deployment_id
+                            AND dhadr.http_api_definition_revision_id = hadr.revision_id
+                    WHERE had.http_api_deployment_id = $1 AND had.deleted_at IS NULL
+                "#})
+                    .bind(http_api_deployment_id),
+            )
+            .await?;
+
+        match revision {
+            Some(revision) => Ok(Some(self.with_http_api_definitions(revision).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_deployed_by_name(
+        &self,
+        environment_id: &Uuid,
+        host: &str,
+        subdomain: Option<&str>,
+    ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>> {
+        let revision = self.with_ro("get_deployed_by_name")
+            .fetch_optional_as(
+                match subdomain {
+                    Some(subdomain) => {
+                        sqlx::query_as(indoc! { r#"
+                            SELECT hadr.http_api_deployment_id, hadr.revision_id, hadr.hash,
+                                   hadr.created_at, hadr.created_by, hadr.deleted
+                            FROM http_api_deployments had
+                            JOIN http_api_deployment_revisions hadr ON had.http_api_deployment_id = hadr.http_api_deployment_id
+                            JOIN current_deployments cd ON had.environment_id = cd.environment_id
+                            JOIN deployment_revisions dr ON cd.environment_id = dr.environment_id
+                                AND cd.current_revision_id = dr.revision_id
+                            JOIN deployment_http_api_definition_revisions dhadr
+                                ON dhadr.environment_id = dr.environment_id
+                                    AND dhadr.deployment_revision_id = dr.revision_id
+                                    AND dhadr.http_api_definition_id = hadr.http_api_deployment_id
+                                    AND dhadr.http_api_definition_revision_id = hadr.revision_id
+                            WHERE had.environment_id = $1 AND had.host = $2 AND had.subdomain = $3 AND had.deleted_at IS NULL
+                        "#})
+                            .bind(environment_id)
+                            .bind(host)
+                            .bind(subdomain)
+                    }
+
+                    None => {
+                        sqlx::query_as(indoc! { r#"
+                            SELECT hadr.http_api_deployment_id, hadr.revision_id, hadr.hash,
+                                   hadr.created_at, hadr.created_by, hadr.deleted
+                            FROM http_api_deployments had
+                            JOIN http_api_deployment_revisions hadr ON had.http_api_deployment_id = hadr.http_api_deployment_id
+                            JOIN current_deployments cd ON had.environment_id = cd.environment_id
+                            JOIN deployment_revisions dr ON cd.environment_id = dr.environment_id
+                                AND cd.current_revision_id = dr.revision_id
+                            JOIN deployment_http_api_definition_revisions dhadr
+                                ON dhadr.environment_id = dr.environment_id
+                                    AND dhadr.deployment_revision_id = dr.revision_id
+                                    AND dhadr.http_api_definition_id = hadr.http_api_deployment_id
+                                    AND dhadr.http_api_definition_revision_id = hadr.revision_id
+                            WHERE had.environment_id = $1 AND had.host = $2 AND had.subdomain IS NULL AND had.deleted_at IS NULL
+                        "#})
+                            .bind(environment_id)
+                            .bind(host)
+                            .bind(subdomain)
+                    }
+                })
+            .await?;
+
+        match revision {
+            Some(revision) => Ok(Some(self.with_http_api_definitions(revision).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_staged(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<HttpApiDeploymentRevisionRecord>> {
+        let revisions = self.with_ro("list_staged")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT dr.http_api_deployment_id, dr.revision_id, dr.hash,
+                           dr.created_at, dr.created_by, dr.deleted
+                    FROM http_api_deployments d
+                    JOIN http_api_deployment_revisions dr
+                        ON d.http_api_deployment_id = dr.http_api_deployment_id AND d.current_revision_id = dr.revision_id
+                    WHERE d.environment_id = $1 AND d.deleted_at IS NULL
+                    ORDER BY d.host, d.subdomain
+                "#})
+                    .bind(environment_id),
+            )
+            .await?;
+
+        stream::iter(revisions)
+            .then(|revision| self.with_http_api_definitions(revision))
+            .try_collect()
+            .await
+    }
+
+    async fn list_deployed(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<HttpApiDeploymentRevisionRecord>> {
+        let revisions = self.with_ro("list_deployed")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT hadr.http_api_deployment_id, hadr.revision_id, hadr.hash,
+                                   hadr.created_at, hadr.created_by, hadr.deleted
+                    FROM http_api_deployments had
+                    JOIN http_api_deployment_revisions hadr ON had.http_api_deployment_id = hadr.http_api_deployment_id
+                    JOIN current_deployments cd ON had.environment_id = cd.environment_id
+                    JOIN deployment_revisions dr ON cd.environment_id = dr.environment_id
+                        AND cd.current_revision_id = dr.revision_id
+                    JOIN deployment_http_api_definition_revisions dhadr
+                        ON dhadr.environment_id = dr.environment_id
+                            AND dhadr.deployment_revision_id = dr.revision_id
+                            AND dhadr.http_api_definition_id = hadr.http_api_deployment_id
+                            AND dhadr.http_api_definition_revision_id = hadr.revision_id
+                    WHERE had.environment_id = $1 AND had.deleted_at IS NULL
+                    ORDER BY had.host, had.subdomain
+                "#})
+                    .bind(environment_id),
+            )
+            .await?;
+
+        stream::iter(revisions)
+            .then(|revision| self.with_http_api_definitions(revision))
+            .try_collect()
+            .await
+    }
 }
 
 #[async_trait]
@@ -359,6 +680,22 @@ trait HttpApiDeploymentRepoInternal: HttpApiDeploymentRepo {
         http_api_deployment_id: &Uuid,
         current_revision_id: i64,
     ) -> repo::Result<Option<HttpApiDeploymentRecord>>;
+
+    async fn get_http_api_definitions(
+        &self,
+        http_api_deployment_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::Result<Vec<HttpApiDefinitionRevisionIdentityRecord>>;
+
+    async fn with_http_api_definitions(
+        &self,
+        mut deployment: HttpApiDeploymentRevisionRecord,
+    ) -> repo::Result<HttpApiDeploymentRevisionRecord> {
+        deployment.http_api_definitions = self
+            .get_http_api_definitions(&deployment.http_api_deployment_id, deployment.revision_id)
+            .await?;
+        Ok(deployment)
+    }
 
     async fn insert_revision(
         tx: &mut Self::Tx,
@@ -395,6 +732,28 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
                 "#})
                     .bind(http_api_deployment_id)
                     .bind(current_revision_id),
+            )
+            .await
+    }
+
+    async fn get_http_api_definitions(
+        &self,
+        http_api_deployment_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::Result<Vec<HttpApiDefinitionRevisionIdentityRecord>> {
+        self.with_ro("get_http_api_definitions")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT d.http_api_definition_id, d.name, dr.revision_id, dr.version, dr.hash
+                    FROM http_api_deployment_definitions dd
+                    JOIN http_api_definitions d ON dd.http_definition_id = d.http_api_definition_id
+                    JOIN http_api_definition_revisions dr
+                        ON d.http_api_definition_id = dr.http_api_definition_id AND d.current_revision_id = dr.revision_id
+                    WHERE dd.http_api_deployment_id = $1 AND dd.revision_id = $2
+                    ORDER BY d.name
+                "#})
+                    .bind(http_api_deployment_id)
+                    .bind(revision_id),
             )
             .await
     }
