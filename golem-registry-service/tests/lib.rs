@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+<<<<<<< HEAD
 use golem_common_next::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+||||||| parent of cd461214 (account grants)
+use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+=======
+use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
+>>>>>>> cd461214 (account grants)
 use test_r::{sequential_suite, test_dep};
 
 pub mod repo;

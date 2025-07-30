@@ -20,8 +20,8 @@ use golem_common_next::tracing::TracingConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use uuid::uuid;
 use uuid::Uuid;
+use uuid::uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegistryServiceConfig {

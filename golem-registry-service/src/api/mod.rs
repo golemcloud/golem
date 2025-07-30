@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod account;
+pub mod account_grants;
+pub mod accounts;
 pub mod model;
 
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
-use poem_openapi::payload::Json;
 use poem_openapi::ApiResponse;
+use poem_openapi::payload::Json;
 
 pub type ApiResult<T> = Result<T, ApiError>;
 

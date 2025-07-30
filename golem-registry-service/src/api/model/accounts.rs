@@ -56,6 +56,3 @@ pub struct PlanData {
 pub struct FindAccountsResponse {
     pub values: Vec<Account>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
-pub struct DeleteAccountResponse {}

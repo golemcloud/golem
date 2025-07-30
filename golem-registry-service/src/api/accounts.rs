@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::account::*;
 use super::ApiResult;
-use golem_common::model::AccountId;
+use super::model::accounts::*;
+use golem_common::model::{AccountId, Empty};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -24,10 +24,10 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::Instrument;
 
-pub struct AccountApi {}
+pub struct AccountsApi {}
 
 #[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Account)]
-impl AccountApi {
+impl AccountsApi {
     /// Find accounts
     ///
     /// Find matching accounts. Only your own account or accounts you have at least one grant from will be returned
@@ -180,7 +180,7 @@ impl AccountApi {
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<DeleteAccountResponse>> {
+    ) -> ApiResult<Json<Empty>> {
         let record =
             recorded_http_api_request!("delete_account", account_id = account_id.0.to_string());
         let response = self
@@ -195,7 +195,7 @@ impl AccountApi {
         &self,
         _account_id: AccountId,
         _token: GolemSecurityScheme,
-    ) -> ApiResult<Json<DeleteAccountResponse>> {
+    ) -> ApiResult<Json<Empty>> {
         todo!()
     }
 }

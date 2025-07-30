@@ -12,9 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::Deps;
 use crate::Tracing;
+<<<<<<< HEAD
 use golem_common_next::config::DbSqliteConfig;
+||||||| parent of cd461214 (account grants)
+use golem_common::config::DbSqliteConfig;
+=======
+use crate::repo::Deps;
+use golem_common::config::DbSqliteConfig;
+>>>>>>> cd461214 (account grants)
 use golem_registry_service::repo::account::{DbAccountRepo, LoggedAccountRepo};
 use golem_registry_service::repo::application::{DbApplicationRepo, LoggedApplicationRepo};
 use golem_registry_service::repo::environment::{DbEnvironmentRepo, LoggedEnvironmentRepo};
