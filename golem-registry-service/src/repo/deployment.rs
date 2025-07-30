@@ -47,7 +47,7 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         user_account_id: &Uuid,
         environment_id: &Uuid,
-        // TODO: current_deployment_revision_id: i64, and make it bit more easy to understand
+        current_staged_deployment_revision_id: Option<i64>,
         version: String,
         expected_deployment_hash: SqlBlake3Hash,
     ) -> repo::BusinessResult<CurrentDeploymentRevisionRecord, DeployError>;
@@ -79,6 +79,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         user_account_id: &Uuid,
         environment_id: &Uuid,
+        current_staged_deployment_revision_id: Option<i64>,
         version: String,
         expected_deployment_hash: SqlBlake3Hash,
     ) -> repo::BusinessResult<CurrentDeploymentRevisionRecord, DeployError> {
@@ -86,6 +87,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .deploy(
                 user_account_id,
                 environment_id,
+                current_staged_deployment_revision_id,
                 version,
                 expected_deployment_hash,
             )
@@ -131,12 +133,12 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         user_account_id: &Uuid,
         environment_id: &Uuid,
+        current_staged_deployment_revision_id: Option<i64>,
         version: String,
         expected_deployment_hash: SqlBlake3Hash,
     ) -> repo::BusinessResult<CurrentDeploymentRevisionRecord, DeployError> {
-        // TODO: match on provided
-        let revision_id_row = self
-            .with_ro("deploy - get latest revision")
+        let actual_current_staged_revision_id_row = self
+            .with_ro("deploy - get current staged revision")
             .fetch_optional(
                 sqlx::query(indoc! { r#"
                     SELECT revision_id FROM deployment_revisions
@@ -148,10 +150,17 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             )
             .await?;
 
-        let revision_id: i64 = match revision_id_row {
-            Some(row) => row.try_get(0)?,
-            None => 1i64,
+        let actual_current_staged_revision_id: Option<i64> =
+            match actual_current_staged_revision_id_row {
+                Some(row) => Some(row.try_get(0)?),
+                None => None,
+            };
+
+        if current_staged_deployment_revision_id != actual_current_staged_revision_id {
+            return Ok(Err(DeployError::DeploymentConcurrentRevisionCreation));
         };
+
+        let revision_id = current_staged_deployment_revision_id.unwrap_or(-1) + 1;
 
         let user_account_id = *user_account_id;
         let environment_id = *environment_id;
