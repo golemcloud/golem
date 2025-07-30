@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::agent::AgentType;
 use crate::model::base64::Base64;
 use crate::model::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
@@ -45,15 +46,19 @@ pub struct ComponentMetadata {
 
     #[serde(default)]
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+
+    #[serde(default)]
+    pub agent_types: Vec<AgentType>,
 }
 
 impl ComponentMetadata {
     pub fn analyse_component(
         data: &[u8],
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        agent_types: Vec<AgentType>,
     ) -> Result<ComponentMetadata, ComponentProcessingError> {
         let raw = RawComponentMetadata::analyse_component(data)?;
-        Ok(raw.into_metadata(dynamic_linking))
+        Ok(raw.into_metadata(dynamic_linking, agent_types))
     }
 }
 
@@ -182,30 +187,6 @@ impl From<Mem> for LinearMemory {
     }
 }
 
-impl From<RawComponentMetadata> for ComponentMetadata {
-    fn from(value: RawComponentMetadata) -> Self {
-        let producers = value
-            .producers
-            .into_iter()
-            .map(|producers| producers.into())
-            .collect::<Vec<_>>();
-
-        let exports = value.exports.into_iter().collect::<Vec<_>>();
-
-        let memories = value.memories.into_iter().map(LinearMemory::from).collect();
-
-        ComponentMetadata {
-            exports,
-            producers,
-            memories,
-            dynamic_linking: HashMap::new(),
-            binary_wit: Base64(value.binary_wit),
-            root_package_name: value.root_package_name,
-            root_package_version: value.root_package_version,
-        }
-    }
-}
-
 // Metadata of Component in terms of golem_wasm_ast types
 #[derive(Default)]
 pub struct RawComponentMetadata {
@@ -273,6 +254,7 @@ impl RawComponentMetadata {
     pub fn into_metadata(
         self,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        agent_types: Vec<AgentType>,
     ) -> ComponentMetadata {
         let producers = self
             .producers
@@ -292,6 +274,7 @@ impl RawComponentMetadata {
             binary_wit: Base64(self.binary_wit),
             root_package_name: self.root_package_name,
             root_package_version: self.root_package_version,
+            agent_types,
         }
     }
 }
@@ -544,6 +527,11 @@ mod protobuf {
                     .into_iter()
                     .map(|(k, v)| v.try_into().map(|v| (k, v)))
                     .collect::<Result<_, _>>()?,
+                agent_types: value
+                    .agent_types
+                    .into_iter()
+                    .map(|at| at.try_into())
+                    .collect::<Result<_, _>>()?,
             })
         }
     }
@@ -575,6 +563,7 @@ mod protobuf {
                 binary_wit: value.binary_wit.0,
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,
+                agent_types: value.agent_types.into_iter().map(|at| at.into()).collect(),
             }
         }
     }

@@ -666,7 +666,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .component_service
                 .resolve_component(
                     component_slug.clone(),
-                    self.state.component_metadata.component_owner.clone(),
+                    self.state.component_metadata.owner.clone(),
                 )
                 .await;
             durability.persist(self, component_slug, result).await
@@ -711,7 +711,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .component_service
                     .resolve_component(
                         component_slug.clone(),
-                        self.state.component_metadata.component_owner.clone(),
+                        self.state.component_metadata.owner.clone(),
                     )
                     .await?;
                 let worker_id = component_id.map(|component_id| WorkerId {

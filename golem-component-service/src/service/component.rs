@@ -30,6 +30,7 @@ use async_zip::ZipEntry;
 use bytes::Bytes;
 use futures::TryStreamExt;
 use futures::stream::BoxStream;
+use golem_common::model::agent::AgentType;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::FunctionConstraints;
@@ -89,6 +90,7 @@ pub trait ComponentService: Debug + Send + Sync {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError>;
 
     // Files must have been uploaded to the blob store before calling this method
@@ -103,6 +105,7 @@ pub trait ComponentService: Debug + Send + Sync {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError>;
 
     async fn update(
@@ -114,6 +117,7 @@ pub trait ComponentService: Debug + Send + Sync {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError>;
 
     // Files must have been uploaded to the blob store before calling this method
@@ -127,6 +131,7 @@ pub trait ComponentService: Debug + Send + Sync {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError>;
 
     async fn download(
@@ -286,6 +291,7 @@ impl ComponentService for LazyComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -300,6 +306,7 @@ impl ComponentService for LazyComponentService {
                 dynamic_linking,
                 owner,
                 env,
+                agent_types,
             )
             .await
     }
@@ -316,6 +323,7 @@ impl ComponentService for LazyComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -330,6 +338,7 @@ impl ComponentService for LazyComponentService {
                 dynamic_linking,
                 owner,
                 env,
+                agent_types,
             )
             .await
     }
@@ -343,6 +352,7 @@ impl ComponentService for LazyComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -355,6 +365,7 @@ impl ComponentService for LazyComponentService {
                 dynamic_linking,
                 owner,
                 env,
+                agent_types,
             )
             .await
     }
@@ -370,6 +381,7 @@ impl ComponentService for LazyComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -382,6 +394,7 @@ impl ComponentService for LazyComponentService {
                 dynamic_linking,
                 owner,
                 env,
+                agent_types,
             )
             .await
     }
@@ -846,6 +859,7 @@ impl ComponentServiceDefault {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let component_size: u64 = data.len() as u64;
 
@@ -864,6 +878,7 @@ impl ComponentServiceDefault {
             dynamic_linking,
             owner.clone(),
             env,
+            agent_types,
         )?;
 
         info!(
@@ -922,6 +937,7 @@ impl ComponentServiceDefault {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let component_size: u64 = data.len() as u64;
 
@@ -930,7 +946,7 @@ impl ComponentServiceDefault {
             .update_component_limit(&owner.account_id, component_id, 0, component_size as i64)
             .await?;
 
-        let metadata = ComponentMetadata::analyse_component(&data, dynamic_linking)
+        let metadata = ComponentMetadata::analyse_component(&data, dynamic_linking, agent_types)
             .map_err(ComponentError::ComponentProcessingError)?;
 
         let constraints = self
@@ -1103,9 +1119,12 @@ impl ComponentServiceDefault {
             }
         }
 
-        component.metadata =
-            ComponentMetadata::analyse_component(&data, component.metadata.dynamic_linking)
-                .map_err(ComponentError::ComponentProcessingError)?;
+        component.metadata = ComponentMetadata::analyse_component(
+            &data,
+            component.metadata.dynamic_linking,
+            component.metadata.agent_types,
+        )
+        .map_err(ComponentError::ComponentProcessingError)?;
 
         Ok((component, data))
     }
@@ -1238,6 +1257,7 @@ impl ComponentService for ComponentServiceDefault {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         info!(owner = %owner, "Create component");
 
@@ -1263,6 +1283,7 @@ impl ComponentService for ComponentServiceDefault {
             dynamic_linking,
             owner,
             env,
+            agent_types,
         )
         .await
     }
@@ -1278,6 +1299,7 @@ impl ComponentService for ComponentServiceDefault {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         info!(owner = %owner, "Create component");
 
@@ -1314,6 +1336,7 @@ impl ComponentService for ComponentServiceDefault {
             dynamic_linking,
             owner,
             env,
+            agent_types,
         )
         .await
     }
@@ -1327,6 +1350,7 @@ impl ComponentService for ComponentServiceDefault {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         info!(owner = %owner, "Update component");
 
@@ -1346,6 +1370,7 @@ impl ComponentService for ComponentServiceDefault {
             dynamic_linking,
             owner,
             env,
+            agent_types,
         )
         .await
     }
@@ -1359,6 +1384,7 @@ impl ComponentService for ComponentServiceDefault {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         info!(owner = %owner, "Update component");
 
@@ -1389,6 +1415,7 @@ impl ComponentService for ComponentServiceDefault {
             dynamic_linking,
             owner,
             env,
+            agent_types,
         )
         .await
     }

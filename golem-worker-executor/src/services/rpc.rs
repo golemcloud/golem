@@ -587,7 +587,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         if parsed_function_name.is_some() {
             // already valid function name, doing nothing
             function_name
-        } else if let Ok(target_component_metadata) = self
+        } else if let Ok(target_component) = self
             .component_service
             .get_metadata(
                 &target_worker_id.project_id,
@@ -598,8 +598,8 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         {
             enrich_function_name_by_target_information(
                 function_name,
-                target_component_metadata.root_package_name,
-                target_component_metadata.root_package_version,
+                target_component.metadata.root_package_name,
+                target_component.metadata.root_package_version,
             )
         } else {
             // If we cannot get the target metadata, we just go with the original function name

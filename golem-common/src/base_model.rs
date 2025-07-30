@@ -33,15 +33,9 @@ newtype_uuid!(
     golem_api_grpc::proto::golem::common::PluginInstallationId
 );
 
-newtype_uuid!(PlanId, golem_api_grpc::proto::golem::plan::PlanId);
-newtype_uuid!(
-    ProjectGrantId,
-    golem_api_grpc::proto::golem::projectgrant::ProjectGrantId
-);
-newtype_uuid!(
-    ProjectPolicyId,
-    golem_api_grpc::proto::golem::projectpolicy::ProjectPolicyId
-);
+newtype_uuid!(PlanId, golem_api_grpc::proto::golem::account::PlanId);
+newtype_uuid!(ProjectGrantId);
+newtype_uuid!(ProjectPolicyId);
 newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Encode, Decode)]

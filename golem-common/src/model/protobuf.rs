@@ -15,12 +15,11 @@
 use crate::model::oplog::OplogIndex;
 use crate::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentType, FilterComparator, GatewayBindingType,
-    IdempotencyKey, InitialComponentFile, InitialComponentFileKey, LogLevel, NumberOfShards, Pod,
-    PromiseId, RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator,
-    TargetWorkerId, Timestamp, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter,
-    WorkerId, WorkerNameFilter, WorkerNotFilter, WorkerStatus, WorkerStatusFilter,
-    WorkerVersionFilter,
+    ComponentFileSystemNodeDetails, ComponentType, FilterComparator, IdempotencyKey,
+    InitialComponentFile, InitialComponentFileKey, LogLevel, NumberOfShards, Pod, PromiseId,
+    RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, TargetWorkerId,
+    Timestamp, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId,
+    WorkerNameFilter, WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
 };
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
@@ -736,47 +735,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
                 },
             }),
             None => Err(anyhow::anyhow!("Missing value")),
-        }
-    }
-}
-
-impl From<golem_api_grpc::proto::golem::apidefinition::GatewayBindingType> for GatewayBindingType {
-    fn from(value: golem_api_grpc::proto::golem::apidefinition::GatewayBindingType) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default => {
-                GatewayBindingType::Default
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => {
-                GatewayBindingType::FileServer
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler => {
-                GatewayBindingType::HttpHandler
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
-                GatewayBindingType::CorsPreflight
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::AuthCallBack => {
-                GatewayBindingType::CorsPreflight
-            }
-        }
-    }
-}
-
-impl From<GatewayBindingType> for golem_api_grpc::proto::golem::apidefinition::GatewayBindingType {
-    fn from(value: GatewayBindingType) -> Self {
-        match value {
-            GatewayBindingType::Default => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default
-            }
-            GatewayBindingType::FileServer => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer
-            }
-            GatewayBindingType::HttpHandler => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler
-            }
-            GatewayBindingType::CorsPreflight => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight
-            }
         }
     }
 }

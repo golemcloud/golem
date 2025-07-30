@@ -19,7 +19,7 @@ use crate::model::{
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::component::ComponentService;
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
@@ -580,7 +580,7 @@ impl DynamicLinking<Context> for Context {
         engine: &Engine,
         linker: &mut Linker<Context>,
         component: &Component,
-        component_metadata: &ComponentMetadata,
+        component_metadata: &golem_service_base::model::Component,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -716,7 +716,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.owned_worker_id()
     }
 
-    fn component_metadata(&self) -> &ComponentMetadata {
+    fn component_metadata(&self) -> &golem_service_base::model::Component {
         self.durable_ctx.component_metadata()
     }
 

@@ -1558,7 +1558,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .await?;
 
                     if component_metadata
-                        .plugin_installations
+                        .installed_plugins
                         .iter()
                         .any(|installation| installation.id == plugin_installation_id)
                     {
@@ -1631,7 +1631,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .await?;
 
                     if component_metadata
-                        .plugin_installations
+                        .installed_plugins
                         .iter()
                         .any(|installation| installation.id == plugin_installation_id)
                     {

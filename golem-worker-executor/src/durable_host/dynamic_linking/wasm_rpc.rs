@@ -814,7 +814,7 @@ async fn create_default_durable_rpc_target<Ctx: WorkerCtx>(
         .component_service()
         .resolve_component(
             component_name.clone(),
-            store.data().component_metadata().component_owner.clone(),
+            store.data().component_metadata().owner.clone(),
         )
         .await?;
 
@@ -892,7 +892,7 @@ async fn create_default_ephemeral_rpc_target<Ctx: WorkerCtx>(
         .component_service()
         .resolve_component(
             component_name.clone(),
-            store.data().component_metadata().component_owner.clone(),
+            store.data().component_metadata().owner.clone(),
         )
         .await?;
 

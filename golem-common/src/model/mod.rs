@@ -38,6 +38,8 @@ use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
+#[cfg(feature = "model")]
+pub mod agent;
 pub mod auth;
 pub mod base64;
 pub mod component;

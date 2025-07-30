@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod cloud;
+pub mod default;
 
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::component::ComponentService;
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
@@ -156,7 +156,7 @@ pub trait WorkerCtx:
     /// Get the owned worker ID associated with this worker context
     fn owned_worker_id(&self) -> &OwnedWorkerId;
 
-    fn component_metadata(&self) -> &ComponentMetadata;
+    fn component_metadata(&self) -> &golem_service_base::model::Component;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -485,6 +485,6 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         engine: &Engine,
         linker: &mut Linker<Ctx>,
         component: &Component,
-        component_metadata: &ComponentMetadata,
+        component_metadata: &golem_service_base::model::Component,
     ) -> anyhow::Result<()>;
 }

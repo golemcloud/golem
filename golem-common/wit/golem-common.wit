@@ -1,0 +1,5 @@
+package golem:common;
+
+world golem-common {
+  import golem:agent/guest;
+}

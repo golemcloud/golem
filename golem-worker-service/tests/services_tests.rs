@@ -417,6 +417,7 @@ impl TestComponentService {
                 root_package_name: Some("golem:it".to_string()),
                 root_package_version: None,
                 dynamic_linking: HashMap::new(),
+                agent_types: Vec::new(),
             },
             created_at: Utc::now(),
             component_type: ComponentType::Durable,

@@ -338,6 +338,7 @@ impl ComponentRevisionRecord {
                 root_package_name: None,
                 root_package_version: None,
                 dynamic_linking: Default::default(),
+                agent_types: Default::default(),
             }
             .into(),
             env: Default::default(),

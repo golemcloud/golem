@@ -26,7 +26,7 @@ use crate::model::{
     WorkerConfig,
 };
 use crate::services::blob_store::BlobStoreService;
-use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::component::ComponentService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
@@ -320,7 +320,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.state.created_by
     }
 
-    pub fn component_metadata(&self) -> &ComponentMetadata {
+    pub fn component_metadata(&self) -> &golem_service_base::model::Component {
         &self.state.component_metadata
     }
 
@@ -661,10 +661,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 .data_mut()
                                 .on_worker_update_succeeded(
                                     &description,
-                                    component_metadata.size,
+                                    component_metadata.component_size,
                                     HashSet::from_iter(
                                         component_metadata
-                                            .plugin_installations
+                                            .installed_plugins
                                             .into_iter()
                                             .map(|installation| installation.id),
                                     ),
@@ -749,10 +749,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                             self.on_worker_update_succeeded(
                                 &pending_update.description,
-                                component_metadata.size,
+                                component_metadata.component_size,
                                 HashSet::from_iter(
                                     component_metadata
-                                        .plugin_installations
+                                        .installed_plugins
                                         .into_iter()
                                         .map(|installation| installation.id),
                                 ),
@@ -778,7 +778,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         let current_metadata = &self.state.component_metadata;
 
-        if new_version <= current_metadata.version {
+        if new_version <= current_metadata.versioned_component_id.version {
             debug!("Update {new_version} was already applied, skipping");
             return Ok(());
         };
@@ -1613,7 +1613,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                     store.as_context().data().component_metadata();
 
                                 match exports::function_by_name(
-                                    &component_metadata.exports,
+                                    &component_metadata.metadata.exports,
                                     &full_function_name,
                                 ) {
                                     Ok(value) => {
@@ -2315,7 +2315,7 @@ struct PrivateDurableWorkerState {
     snapshotting_mode: Option<PersistenceLevel>,
 
     indexed_resources: HashMap<IndexedResourceKey, WorkerResourceId>,
-    component_metadata: ComponentMetadata,
+    component_metadata: golem_service_base::model::Component,
 
     total_linear_memory_size: u64,
 
@@ -2353,7 +2353,7 @@ impl PrivateDurableWorkerState {
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
-        component_metadata: ComponentMetadata,
+        component_metadata: golem_service_base::model::Component,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
