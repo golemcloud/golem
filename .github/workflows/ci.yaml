@@ -100,6 +100,7 @@ jobs:
       matrix:
         group:
           - name: untagged
+          - name: rdbms-service
           - name: group1
           - name: group2
           - name: group3
