@@ -102,10 +102,20 @@ pub struct DeploymentHttpApiDeploymentRevisionRecord {
     pub http_api_deployment_revision_id: i64,
 }
 
+pub struct DeploymentHashes {
+    pub env_hash: SqlBlake3Hash,
+    pub deployment_hash: SqlBlake3Hash,
+}
+
 pub struct DeploymentIdentity {
     pub components: Vec<ComponentRevisionIdentityRecord>,
     pub http_api_definitions: Vec<HttpApiDefinitionRevisionIdentityRecord>,
     pub http_api_deployments: Vec<HttpApiDeploymentRevisionIdentityRecord>,
+}
+
+pub struct DeployedDeploymentIdentity {
+    pub deployment_revision: DeploymentRevisionRecord,
+    pub identity: DeploymentIdentity,
 }
 
 impl DeploymentIdentity {
