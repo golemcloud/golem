@@ -15,7 +15,7 @@
 pub mod container;
 pub mod types;
 
-use futures_util::TryFutureExt;
+use futures::TryFutureExt;
 use golem_common::model::oplog::DurableFunctionType;
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;

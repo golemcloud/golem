@@ -107,6 +107,7 @@ impl SqliteDb {
         let db_config = DbSqliteConfig {
             database: db_path.clone(),
             max_connections: 10,
+            foreign_keys: false,
         };
 
         db::sqlite::migrate(

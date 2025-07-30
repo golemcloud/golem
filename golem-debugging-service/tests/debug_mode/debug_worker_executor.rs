@@ -1,7 +1,7 @@
 use anyhow::Context;
 use axum_jrpc::{Id, JsonRpcAnswer, JsonRpcRequest, JsonRpcResponse};
-use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt};
+use futures::stream::{SplitSink, SplitStream};
+use futures::{SinkExt, StreamExt};
 use golem_common::model::auth::TokenSecret;
 use serde::de::DeserializeOwned;
 use serde::Serialize;

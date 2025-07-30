@@ -26,7 +26,7 @@ use crate::services::rdbms::{
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
-use futures_util::stream::BoxStream;
+use futures::stream::BoxStream;
 use sqlx::mysql::MySqlDatabaseError;
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::str::FromStr;

@@ -17,7 +17,7 @@ mod conversions;
 #[cfg(feature = "protobuf")]
 mod protobuf;
 
-mod bindings {
+pub mod bindings {
     wasmtime::component::bindgen!({
           path: "wit",
           world: "golem-common",

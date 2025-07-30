@@ -15,7 +15,7 @@
 use crate::metrics::events::{record_broadcast_event, record_event};
 use crate::model::event::InternalWorkerEvent;
 use applying::Apply;
-use futures_util::{stream, StreamExt};
+use futures::{stream, StreamExt};
 use golem_common::model::{IdempotencyKey, LogLevel};
 use ringbuf::storage::Heap;
 use ringbuf::traits::{Consumer, Producer, Split};
@@ -187,7 +187,7 @@ fn label(event: &InternalWorkerEvent) -> &'static str {
 mod tests {
     use crate::model::event::InternalWorkerEvent;
     use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
-    use futures_util::StreamExt;
+    use futures::StreamExt;
     use std::sync::Arc;
     use std::time::Duration;
     use test_r::{test, timeout};
