@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::model::agent::wit::AgentWrapperGeneratorContext;
-use crate::model::agent::{DataSchema, ElementSchema};
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use golem_client::model::AnalysedType;
+use golem_common::model::agent::{DataSchema, ElementSchema, NamedElementSchemas};
 use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use moonbit_component_generator::{MoonBitComponent, MoonBitPackage, Warning, WarningControl};
 use std::fmt::Write;
@@ -520,7 +520,7 @@ fn to_moonbit_parameter_list(
     match schema {
         DataSchema::Tuple(parameters) => {
             // tuple input is represented by a parameter list
-            for (idx, parameter) in parameters.iter().enumerate() {
+            for (idx, parameter) in parameters.elements.iter().enumerate() {
                 if idx > 0 || add_initial_comma {
                     write!(result, ", ")?;
                 }
@@ -566,7 +566,7 @@ fn to_moonbit_return_type(
     let mut result = String::new();
 
     match schema {
-        DataSchema::Tuple(elements) => {
+        DataSchema::Tuple(NamedElementSchemas { elements }) => {
             // tuple output is represented by either Unit, a single type, or a tuple of types
             if elements.is_empty() {
                 write!(result, "Unit")?;
@@ -738,7 +738,7 @@ fn build_data_value(
     context: &str,
 ) -> anyhow::Result<()> {
     match schema {
-        DataSchema::Tuple(elements) => {
+        DataSchema::Tuple(NamedElementSchemas { elements }) => {
             writeln!(result, "    @common.DataValue::Tuple([")?;
 
             for element in elements {
@@ -749,7 +749,7 @@ fn build_data_value(
 
             writeln!(result, "     ])")?;
         }
-        DataSchema::Multimodal(elements) => {
+        DataSchema::Multimodal(NamedElementSchemas { elements }) => {
             let name = format!("{context}-input");
             let type_name = ctx
                 .multimodal_variants
@@ -1031,7 +1031,7 @@ fn extract_data_value(
     context: &str,
 ) -> anyhow::Result<()> {
     match schema {
-        DataSchema::Tuple(elements) => {
+        DataSchema::Tuple(NamedElementSchemas { elements }) => {
             if elements.is_empty() {
                 writeln!(result, "{indent}Ok(())")?;
             } else if elements.len() == 1 {
@@ -1103,7 +1103,7 @@ fn extract_data_value(
                 writeln!(result, "{indent}))")?;
             }
         }
-        DataSchema::Multimodal(elements) => {
+        DataSchema::Multimodal(NamedElementSchemas { elements }) => {
             let name = format!("{context}-output");
             let variant_name = ctx
                 .multimodal_variants

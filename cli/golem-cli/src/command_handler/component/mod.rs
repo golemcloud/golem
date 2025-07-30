@@ -30,7 +30,6 @@ use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::log::{
     log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
 };
-use crate::model::agent::AgentType;
 use crate::model::app::{
     AppComponentName, ApplicationComponentSelectMode, BuildProfileName, DynamicHelpSections,
 };
@@ -47,13 +46,14 @@ use crate::model::{
 };
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use golem_client::api::ComponentClient;
-use golem_client::model::ComponentEnv as ComponentEnvCloud;
 use golem_client::model::ComponentQuery;
 use golem_client::model::ComponentSearch as ComponentSearchCloud;
 use golem_client::model::ComponentSearchParameters as ComponentSearchParametersCloud;
 use golem_client::model::DynamicLinkedInstance as DynamicLinkedInstanceOss;
 use golem_client::model::DynamicLinkedWasmRpc as DynamicLinkedWasmRpcOss;
 use golem_client::model::DynamicLinking as DynamicLinkingOss;
+use golem_client::model::{AgentTypes, ComponentEnv as ComponentEnvCloud};
+use golem_common::model::agent::AgentType;
 use golem_common::model::component_metadata::WasmRpcTarget;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_templates::add_component_by_template;
@@ -750,7 +750,7 @@ impl ComponentCommandHandler {
         };
 
         // TODO: to be sent to component service
-        let _agent_types: Option<Vec<AgentType>> = {
+        let agent_types: Option<Vec<AgentType>> = {
             let mut app_ctx = self.ctx.app_context_lock_mut().await?;
             let app_ctx = app_ctx.some_or_err_mut()?;
             if app_ctx.wit.is_agent(component_name) {
@@ -793,6 +793,7 @@ impl ComponentCommandHandler {
                                 .env
                                 .map(|env| ComponentEnvCloud { key_values: env })
                                 .as_ref(),
+                            agent_types.map(|types| AgentTypes { types }).as_ref(),
                         )
                         .await
                         .map_service_error()?;
@@ -835,6 +836,7 @@ impl ComponentCommandHandler {
                                 .env
                                 .map(|env| ComponentEnvCloud { key_values: env })
                                 .as_ref(),
+                            agent_types.map(|types| AgentTypes { types }).as_ref(),
                         )
                         .await
                         .map_service_error()?;

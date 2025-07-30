@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::AgentType;
 use anyhow::anyhow;
+use golem_common::model::agent::AgentType;
 use rib::ParsedFunctionName;
 use std::collections::HashMap;
 use std::path::Path;
@@ -75,8 +75,9 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
     let instance = linker.instantiate_async(&mut store, &component).await?;
 
     let func = find_discover_function(&mut store, &instance)?;
-    let typed_func =
-        func.typed::<(), (Vec<super::bindings::golem::agent::common::AgentType>,)>(&mut store)?;
+    let typed_func = func.typed::<(), (
+        Vec<golem_common::model::agent::bindings::golem::agent::common::AgentType>,
+    )>(&mut store)?;
     let results = typed_func.call_async(&mut store, ()).await?;
     typed_func.post_return_async(&mut store).await?;
 

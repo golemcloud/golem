@@ -156,6 +156,7 @@ impl PluginCommandHandler {
                             None::<File>,
                             None,
                             None, // TODO: component env
+                            None,
                         )
                         .await
                         .map(Component::from)

@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchema};
 use crate::model::app::AppComponentName;
 use anyhow::{anyhow, bail};
+use golem_common::model::agent::{
+    AgentType, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
+};
 use golem_wasm_ast::analysis::analysed_type::{case, variant};
 use golem_wasm_ast::analysis::AnalysedType;
 use heck::ToKebabCase;
@@ -320,7 +322,7 @@ impl AgentWrapperGeneratorContextState {
         context: &str,
     ) -> anyhow::Result<()> {
         match input {
-            DataSchema::Tuple(elements) => {
+            DataSchema::Tuple(NamedElementSchemas { elements }) => {
                 for (n, element) in elements.iter().enumerate() {
                     if n > 0 {
                         write!(result, ", ")?;
@@ -331,7 +333,7 @@ impl AgentWrapperGeneratorContextState {
                     self.write_element_schema_type_ref(result, &element.schema)?;
                 }
             }
-            DataSchema::Multimodal(cases) => {
+            DataSchema::Multimodal(NamedElementSchemas { elements: cases }) => {
                 let variant = Self::multimodal_variant(cases).named(format!("{context}-input"));
                 let name = self.register_multimodal_variant(&variant);
                 write!(result, "input: list<{name}>")?;
@@ -347,16 +349,16 @@ impl AgentWrapperGeneratorContextState {
         context: &str,
     ) -> anyhow::Result<()> {
         match schema {
-            DataSchema::Tuple(elements) if elements.is_empty() => {
+            DataSchema::Tuple(NamedElementSchemas { elements }) if elements.is_empty() => {
                 write!(result, "_")?;
             }
-            DataSchema::Tuple(elements) if elements.len() == 1 => {
+            DataSchema::Tuple(NamedElementSchemas { elements }) if elements.len() == 1 => {
                 self.write_element_schema_type_ref(
                     result,
                     &elements.iter().next().as_ref().unwrap().schema,
                 )?;
             }
-            DataSchema::Tuple(elements) => {
+            DataSchema::Tuple(NamedElementSchemas { elements }) => {
                 write!(result, "tuple<")?;
                 for (n, element) in elements.iter().enumerate() {
                     if n > 0 {
@@ -367,7 +369,7 @@ impl AgentWrapperGeneratorContextState {
                 }
                 write!(result, ">")?;
             }
-            DataSchema::Multimodal(cases) => {
+            DataSchema::Multimodal(NamedElementSchemas { elements: cases }) => {
                 let variant = Self::multimodal_variant(cases).named(format!("{context}-output"));
                 let name = self.register_multimodal_variant(&variant);
                 write!(result, "list<{name}>")?;
@@ -656,9 +658,10 @@ fn add_golem_agent(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::agent::{
-        test, AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, DataSchema,
-        ElementSchema, NamedElementSchema, TextDescriptor,
+    use crate::model::agent::test;
+    use golem_common::model::agent::{
+        AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, DataSchema, ElementSchema,
+        NamedElementSchema, NamedElementSchemas, TextDescriptor,
     };
     use golem_wasm_ast::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
@@ -705,46 +708,54 @@ mod tests {
                 name: None,
                 description: "Creates an example agent instance".into(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(vec![
-                    NamedElementSchema {
-                        name: "a".to_string(),
-                        schema: ElementSchema::ComponentModel(u32()),
-                    },
-                    NamedElementSchema {
-                        name: "b".to_string(),
-                        schema: ElementSchema::ComponentModel(option(str())),
-                    },
-                ]),
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![
+                        NamedElementSchema {
+                            name: "a".to_string(),
+                            schema: ElementSchema::ComponentModel(u32()),
+                        },
+                        NamedElementSchema {
+                            name: "b".to_string(),
+                            schema: ElementSchema::ComponentModel(option(str())),
+                        },
+                    ],
+                }),
             },
             methods: vec![
                 AgentMethod {
                     name: "f1".to_string(),
                     description: "returns a random string".to_string(),
                     prompt_hint: None,
-                    input_schema: DataSchema::Tuple(vec![]),
-                    output_schema: DataSchema::Tuple(vec![NamedElementSchema {
-                        name: "a".to_string(),
-                        schema: ElementSchema::ComponentModel(str()),
-                    }]),
+                    input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "a".to_string(),
+                            schema: ElementSchema::ComponentModel(str()),
+                        }],
+                    }),
                 },
                 AgentMethod {
                     name: "f2".to_string(),
                     description: "adds two numbers".to_string(),
                     prompt_hint: None,
-                    input_schema: DataSchema::Tuple(vec![
-                        NamedElementSchema {
-                            name: "x".to_string(),
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "x".to_string(),
+                                schema: ElementSchema::ComponentModel(u32()),
+                            },
+                            NamedElementSchema {
+                                name: "y".to_string(),
+                                schema: ElementSchema::ComponentModel(u32()),
+                            },
+                        ],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(u32()),
-                        },
-                        NamedElementSchema {
-                            name: "y".to_string(),
-                            schema: ElementSchema::ComponentModel(u32()),
-                        },
-                    ]),
-                    output_schema: DataSchema::Tuple(vec![NamedElementSchema {
-                        name: "return".to_string(),
-                        schema: ElementSchema::ComponentModel(u32()),
-                    }]),
+                        }],
+                    }),
                 },
             ],
             dependencies: vec![],
@@ -815,48 +826,56 @@ mod tests {
                 name: None,
                 description: "Creates an example agent instance".into(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(vec![
-                    NamedElementSchema {
-                        name: "person".to_string(),
-                        schema: ElementSchema::ComponentModel(person),
-                    },
-                    NamedElementSchema {
-                        name: "description".to_string(),
-                        schema: ElementSchema::UnstructuredText(TextDescriptor {
-                            restrictions: None,
-                        }),
-                    },
-                    NamedElementSchema {
-                        name: "photo".to_string(),
-                        schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                            restrictions: None,
-                        }),
-                    },
-                ]),
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![
+                        NamedElementSchema {
+                            name: "person".to_string(),
+                            schema: ElementSchema::ComponentModel(person),
+                        },
+                        NamedElementSchema {
+                            name: "description".to_string(),
+                            schema: ElementSchema::UnstructuredText(TextDescriptor {
+                                restrictions: None,
+                            }),
+                        },
+                        NamedElementSchema {
+                            name: "photo".to_string(),
+                            schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                                restrictions: None,
+                            }),
+                        },
+                    ],
+                }),
             },
             methods: vec![
                 AgentMethod {
                     name: "f1".to_string(),
                     description: "returns a location".to_string(),
                     prompt_hint: None,
-                    input_schema: DataSchema::Tuple(vec![]),
-                    output_schema: DataSchema::Tuple(vec![NamedElementSchema {
-                        name: "return".to_string(),
-                        schema: ElementSchema::ComponentModel(location.clone()),
-                    }]),
+                    input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(location.clone()),
+                        }],
+                    }),
                 },
                 AgentMethod {
                     name: "f2".to_string(),
                     description: "takes a location and returns a color".to_string(),
                     prompt_hint: None,
-                    input_schema: DataSchema::Tuple(vec![NamedElementSchema {
-                        name: "location".to_string(),
-                        schema: ElementSchema::ComponentModel(location),
-                    }]),
-                    output_schema: DataSchema::Tuple(vec![NamedElementSchema {
-                        name: "return".to_string(),
-                        schema: ElementSchema::ComponentModel(color),
-                    }]),
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "location".to_string(),
+                            schema: ElementSchema::ComponentModel(location),
+                        }],
+                    }),
+                    output_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "return".to_string(),
+                            schema: ElementSchema::ComponentModel(color),
+                        }],
+                    }),
                 },
             ],
             dependencies: vec![],

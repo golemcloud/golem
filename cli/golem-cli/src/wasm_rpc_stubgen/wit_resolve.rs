@@ -1,11 +1,11 @@
 use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
-use crate::model::agent::AgentType;
 use crate::model::app::{AppComponentName, Application, BuildProfileName};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
 use anyhow::{anyhow, bail, Context, Error};
+use golem_common::model::agent::AgentType;
 use indexmap::IndexMap;
 use indoc::formatdoc;
 use itertools::Itertools;
