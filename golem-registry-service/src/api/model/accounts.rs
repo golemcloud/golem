@@ -14,10 +14,8 @@
 
 use golem_common::model::{AccountId, PlanId};
 use poem_openapi_derive::Object;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]
 pub struct Account {
     pub id: AccountId,
@@ -26,22 +24,20 @@ pub struct Account {
     pub plan_id: PlanId,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, Object)]
 pub struct AccountData {
     pub name: String,
     pub email: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]
 pub struct Plan {
     pub plan_id: PlanId,
     pub plan_data: PlanData,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]
 pub struct PlanData {
     pub project_limit: i32,
@@ -52,7 +48,7 @@ pub struct PlanData {
     pub monthly_upload_limit: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, Object)]
 pub struct FindAccountsResponse {
     pub values: Vec<Account>,
 }

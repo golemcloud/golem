@@ -49,8 +49,8 @@ impl GrantsApi {
 
     async fn get_grants_internal(
         &self,
-        account_id: AccountId,
-        token: GolemSecurityScheme,
+        _account_id: AccountId,
+        _token: GolemSecurityScheme,
     ) -> ApiResult<Json<Vec<Role>>> {
         todo!()
     }

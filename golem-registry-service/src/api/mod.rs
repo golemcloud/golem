@@ -14,6 +14,7 @@
 
 pub mod account_grants;
 pub mod accounts;
+pub mod login;
 pub mod model;
 
 use golem_common::metrics::api::TraceErrorKind;
