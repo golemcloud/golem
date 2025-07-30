@@ -25,7 +25,7 @@ use crate::services::rdbms::{DbResult, DbResultStream, DbRow, Error, Rdbms, Rdbm
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
-use futures_util::stream::BoxStream;
+use futures::stream::BoxStream;
 use mac_address::MacAddress;
 use serde_json::json;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
