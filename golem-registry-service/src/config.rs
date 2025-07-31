@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::config::ConfigLoader;
-use golem_common::config::DbConfig;
-use golem_common::model::auth::Role;
-use golem_common::model::Empty;
-use golem_common::tracing::TracingConfig;
+use golem_common_next::config::ConfigLoader;
+use golem_common_next::config::DbConfig;
+use golem_common_next::model::auth::Role;
+use golem_common_next::model::Empty;
+use golem_common_next::tracing::TracingConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;

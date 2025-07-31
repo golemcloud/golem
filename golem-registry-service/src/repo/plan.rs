@@ -15,11 +15,11 @@
 use crate::repo::model::plan::PlanRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use golem_service_base::db::postgres::PostgresPool;
-use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo;
-use golem_service_base::repo::RepoError;
+use golem_service_base_next::db::postgres::PostgresPool;
+use golem_service_base_next::db::sqlite::SqlitePool;
+use golem_service_base_next::db::{Pool, PoolApi};
+use golem_service_base_next::repo;
+use golem_service_base_next::repo::RepoError;
 use indoc::indoc;
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;

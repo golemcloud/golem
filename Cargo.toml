@@ -9,6 +9,7 @@ members = [
     "golem-common-next",
     "golem-debugging-service",
     "golem-service-base",
+    "golem-service-base-next",
     "golem-component-service",
     "golem-component-compilation-service",
     "golem-registry-service",

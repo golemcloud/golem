@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::golem_version;
+use golem_common_next::golem_version;
 use lazy_static::lazy_static;
 use prometheus::*;
 
