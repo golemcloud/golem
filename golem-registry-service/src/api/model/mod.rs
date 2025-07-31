@@ -20,6 +20,7 @@ pub mod plugins;
 use poem_openapi::{Object, Enum};
 use golem_common::model::{AccountId, ProjectId};
 use poem_openapi::types::{ParseFromJSON, ToJSON};
+use golem_common::newtype_uuid;
 
 #[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]
@@ -60,4 +61,35 @@ pub struct CreateProjectRequest {
 #[derive(Debug, Clone, Object)]
 pub struct Page<T: poem_openapi::types::Type + ParseFromJSON + ToJSON> {
     pub values: Vec<T>,
+}
+
+newtype_uuid!(ApplicationId);
+newtype_uuid!(EnvironmentId);
+
+#[derive(Debug, Clone, Object)]
+#[oai(rename_all = "camelCase")]
+pub struct Application {
+    pub id: ApplicationId,
+    pub account_id: AccountId,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Object)]
+#[oai(rename_all = "camelCase")]
+pub struct ApplicationData {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Object)]
+#[oai(rename_all = "camelCase")]
+pub struct Environment {
+    pub id: EnvironmentId,
+    pub application_id: ApplicationId,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Object)]
+#[oai(rename_all = "camelCase")]
+pub struct EnvironmentData {
+    pub name: String,
 }

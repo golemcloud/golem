@@ -18,6 +18,7 @@ pub mod accounts;
 pub mod login;
 pub mod model;
 pub mod plugins;
+pub mod account_applications;
 // pub mod project;
 
 use golem_common::metrics::api::TraceErrorKind;

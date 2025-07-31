@@ -27,10 +27,10 @@ use super::ApiResult;
 use super::model::Page;
 use super::model::plugins::*;
 
-pub struct PluginApi { }
+pub struct PluginsApi { }
 
 #[OpenApi(prefix_path = "/v1", tag = ApiTags::Plugin)]
-impl PluginApi {
+impl PluginsApi {
 
     /// Lists all the registered plugins (including all versions of each).
     #[oai(path = "/plugins", method = "get", operation_id = "list_plugins")]
