@@ -15,3 +15,42 @@
 pub mod accounts;
 pub mod login;
 pub mod token;
+
+use poem_openapi::{Object, Enum};
+use golem_common::model::{AccountId, ProjectId};
+
+#[derive(Debug, Clone, Object)]
+#[oai(rename_all = "camelCase")]
+pub struct Project {
+    pub project_id: ProjectId,
+    pub project_data: ProjectData,
+}
+
+#[derive(Debug, Clone, Object)]
+#[oai(rename_all = "camelCase")]
+pub struct ProjectData {
+    pub name: String,
+    pub owner_account_id: AccountId,
+    pub description: String,
+    pub default_environment_id: String,
+    pub project_type: ProjectType,
+}
+
+#[derive(Debug, Clone, Enum)]
+pub enum ProjectType {
+    Default,
+    NonDefault,
+}
+
+#[derive(Debug, Clone, Object)]
+pub struct GetProjectsResponse {
+    pub values: Vec<Project>
+}
+
+#[derive(Debug, Clone, Object)]
+#[oai(rename_all = "camelCase")]
+pub struct CreateProjectRequest {
+    pub name: String,
+    pub owner_account_id: AccountId,
+    pub description: String,
+}
