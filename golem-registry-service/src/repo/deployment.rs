@@ -27,13 +27,13 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use golem_service_base::db::postgres::PostgresPool;
-use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{
+use golem_service_base_next::db::postgres::PostgresPool;
+use golem_service_base_next::db::sqlite::SqlitePool;
+use golem_service_base_next::db::{
     LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi, ToBusiness, TxError,
 };
-use golem_service_base::repo;
-use golem_service_base::repo::RepoError;
+use golem_service_base_next::repo;
+use golem_service_base_next::repo::RepoError;
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::collections::HashSet;

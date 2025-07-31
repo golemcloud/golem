@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::PlanId;
-use golem_common::model::AccountId;
+use golem_common_next::base_model::PlanId;
+use golem_common_next::model::AccountId;
 use poem_openapi_derive::Object;
 use serde::{Deserialize, Serialize};
 
