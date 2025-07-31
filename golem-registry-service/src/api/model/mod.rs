@@ -15,9 +15,11 @@
 pub mod accounts;
 pub mod login;
 pub mod token;
+pub mod plugins;
 
 use poem_openapi::{Object, Enum};
 use golem_common::model::{AccountId, ProjectId};
+use poem_openapi::types::{ParseFromJSON, ToJSON};
 
 #[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]
@@ -53,4 +55,9 @@ pub struct CreateProjectRequest {
     pub name: String,
     pub owner_account_id: AccountId,
     pub description: String,
+}
+
+#[derive(Debug, Clone, Object)]
+pub struct Page<T: poem_openapi::types::Type + ParseFromJSON + ToJSON> {
+    pub values: Vec<T>,
 }

@@ -17,7 +17,8 @@ pub mod account_tokens;
 pub mod accounts;
 pub mod login;
 pub mod model;
-pub mod project;
+pub mod plugins;
+// pub mod project;
 
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
