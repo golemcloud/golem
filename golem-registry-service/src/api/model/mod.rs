@@ -16,6 +16,7 @@ pub mod accounts;
 pub mod login;
 pub mod token;
 pub mod plugins;
+pub mod components;
 
 use poem_openapi::{Object, Enum};
 use golem_common::model::{AccountId, ProjectId};
