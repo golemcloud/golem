@@ -83,7 +83,7 @@ impl DebugConfig {
             resource_limits: self.resource_limits,
             component_service: ComponentServiceConfig::Grpc(self.component_service),
             component_cache: self.component_cache,
-            project_service: Default::default(),
+            project_service: self.project_service,
             // unused
             grpc_address: default_golem_config.grpc_address,
             // unused

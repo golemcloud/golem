@@ -28,7 +28,6 @@ pub struct PlaybackParams {
     pub target_index: OplogIndex,
     pub overrides: Option<Vec<PlaybackOverride>>,
     pub ensure_invocation_boundary: Option<bool>,
-    pub time_out_in_seconds: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -41,7 +40,6 @@ pub struct PlaybackOverride {
 pub struct RewindParams {
     pub target_index: OplogIndex,
     pub ensure_invocation_boundary: Option<bool>,
-    pub time_out_in_seconds: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -53,7 +51,6 @@ pub struct ForkParams {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ConnectResult {
     pub worker_id: WorkerId,
-    pub success: bool,
     pub message: String,
 }
 
@@ -61,15 +58,14 @@ pub struct ConnectResult {
 pub struct PlaybackResult {
     pub worker_id: WorkerId,
     pub current_index: OplogIndex,
-    pub success: bool,
     pub message: String,
+    pub incremental_playback: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RewindResult {
     pub worker_id: WorkerId,
     pub current_index: OplogIndex,
-    pub success: bool,
     pub message: String,
 }
 
@@ -77,7 +73,6 @@ pub struct RewindResult {
 pub struct ForkResult {
     pub source_worker_id: WorkerId,
     pub target_worker_id: WorkerId,
-    pub success: bool,
     pub message: String,
 }
 

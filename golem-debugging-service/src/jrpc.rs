@@ -25,7 +25,6 @@ use serde::Serialize;
 use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::{self, Sender, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
@@ -46,8 +45,9 @@ pub async fn run_jrpc_debug_websocket_session(
     let sender_handle = tokio::spawn(async move {
         let mut closed = false;
         while !closed {
-            let event = receiver.recv().await;
-            match event {
+            let message = receiver.recv().await;
+            debug!("Sending message on jrpc debugging websocket: {message:?}");
+            match message {
                 Some(OutgoingJsonRpcMessage::Close) => {
                     debug!("Closing connection");
 
@@ -132,6 +132,8 @@ pub async fn run_jrpc_debug_websocket_session(
                         continue;
                     }
                 };
+
+                debug!("Received request on jrpc debugging websocket: {rpc_request:?}");
 
                 let response = session.handle_request(rpc_request).await;
 
@@ -278,10 +280,6 @@ impl JrpcSession {
                             params.target_index,
                             params.overrides,
                             params.ensure_invocation_boundary.unwrap_or(true),
-                            params
-                                .time_out_in_seconds
-                                .map(Duration::from_secs)
-                                .unwrap_or(Duration::from_secs(5)),
                         )
                         .await;
 
@@ -305,10 +303,6 @@ impl JrpcSession {
                             &active_session_data.namespace.account_id,
                             params.target_index,
                             params.ensure_invocation_boundary.unwrap_or(true),
-                            params
-                                .time_out_in_seconds
-                                .map(Duration::from_secs)
-                                .unwrap_or(Duration::from_secs(5)),
                         )
                         .await;
 
@@ -560,7 +554,7 @@ fn method_not_found_error(id: &Id, method: &str) -> JrpcHandlerError {
     JrpcHandlerError::method_not_found(id.clone(), method)
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct JsonRpcNotification {
     pub method: String,
     pub params: Value,
@@ -587,6 +581,7 @@ impl Serialize for JsonRpcNotification {
     }
 }
 
+#[derive(Debug)]
 enum OutgoingJsonRpcMessage {
     Response(JsonRpcResponse),
     Notification(JsonRpcNotification),
