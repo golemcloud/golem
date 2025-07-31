@@ -14,7 +14,7 @@
 
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::error::ErrorBody;
-use golem_common::model::{AccountId, Empty};
+use golem_common::model::{AccountId, Empty, PluginId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -29,11 +29,11 @@ use super::model::plugins::*;
 
 pub struct PluginApi { }
 
-#[OpenApi(prefix_path = "/v1/plugins", tag = ApiTags::Plugin)]
+#[OpenApi(prefix_path = "/v1", tag = ApiTags::Plugin)]
 impl PluginApi {
 
     /// Lists all the registered plugins (including all versions of each).
-    #[oai(path = "/", method = "get", operation_id = "list_plugins")]
+    #[oai(path = "/plugins", method = "get", operation_id = "list_plugins")]
     pub async fn list_plugins(
         &self,
         scope: Query<PluginScope>,
@@ -57,27 +57,24 @@ impl PluginApi {
         todo!()
     }
 
-    /// Gets a registered plugin by its name and version
+    /// Gets a registered plugin by its id
     #[oai(
-        path = "/:account_id/:name/:version",
+        path = "/plugins/:plugin_id",
         method = "get",
         operation_id = "get_plugin"
     )]
     pub async fn get_plugin(
         &self,
-        account_id: Path<AccountId>,
-        name: Path<String>,
-        version: Path<String>,
+        plugin_id: Path<PluginId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<PluginDefinition>> {
         let record = recorded_http_api_request!(
             "get_plugin",
-            plugin_name = name.0,
-            plugin_version = version.0
+            plugin_id = plugin_id.0
         );
 
         let response = self
-            .get_plugin_internal(account_id.0, name.0, version.0, token)
+            .get_plugin_internal(plugin_id.0, token)
             .instrument(record.span.clone())
             .await;
 
@@ -86,35 +83,30 @@ impl PluginApi {
 
     async fn get_plugin_internal(
         &self,
-        _account_id: AccountId,
-        _name: String,
-        _version: String,
+        _plugin_id: PluginId,
         _token: GolemSecurityScheme,
     ) -> ApiResult<Json<PluginDefinition>> {
         todo!()
     }
 
-    /// Deletes a registered plugin by its name and version
+    /// Deletes a registered plugin by its id
     #[oai(
-        path = "/:account_id/:name/:version",
+        path = "/plugins/:plugin_id",
         method = "delete",
         operation_id = "delete_plugin"
     )]
     pub async fn delete_plugin(
         &self,
-        account_id: Path<AccountId>,
-        name: Path<String>,
-        version: Path<String>,
+        plugin_id: Path<PluginId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Empty>> {
         let record = recorded_http_api_request!(
             "delete_plugin",
-            plugin_name = name.0,
-            plugin_version = version.0
+            plugin_id = plugin_id.0
         );
 
         let response = self
-            .delete_plugin_internal(account_id.0, name.0, version.0, token)
+            .delete_plugin_internal(plugin_id.0, token)
             .instrument(record.span.clone())
             .await;
 
@@ -123,16 +115,14 @@ impl PluginApi {
 
     async fn delete_plugin_internal(
         &self,
-        _account_id: AccountId,
-        _name: String,
-        _version: String,
+        _plugin_id: PluginId,
         _token: GolemSecurityScheme,
     ) -> ApiResult<Json<Empty>> {
         todo!()
     }
 
     /// Registers a new plugin
-    #[oai(path = "/", method = "post", operation_id = "create_plugin")]
+    #[oai(path = "/plugins", method = "post", operation_id = "create_plugin")]
     pub async fn create_plugin(
         &self,
         plugin: Json<CreatePluginRequest>,
@@ -162,7 +152,7 @@ impl PluginApi {
 
     /// Registers a new library plugin
     #[oai(
-        path = "/library-plugins/",
+        path = "/library-plugins",
         method = "post",
         operation_id = "create_library_plugin"
     )]
@@ -196,7 +186,7 @@ impl PluginApi {
 
     /// Registers a new app plugin
     #[oai(
-        path = "/app-plugins/",
+        path = "/app-plugins",
         method = "post",
         operation_id = "create_app_plugin"
     )]
