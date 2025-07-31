@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::{AccountId, PlanId};
+use golem_common_next::model::{AccountId, PlanId};
 use poem_openapi_derive::Object;
 
 #[derive(Debug, Clone, Object)]

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::auth::AuthCtx;
-use golem_common::model::error::ErrorBody;
-use golem_common::model::{AccountId, Empty, PluginId};
-use golem_common::recorded_http_api_request;
-use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::auth::GolemSecurityScheme;
+use golem_common_next::model::auth::AuthCtx;
+use golem_common_next::model::error::ErrorBody;
+use golem_common_next::model::{AccountId, Empty, PluginId};
+use golem_common_next::recorded_http_api_request;
+use golem_service_base_next::api_tags::ApiTags;
+use golem_service_base_next::model::auth::GolemSecurityScheme;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::OpenApi;

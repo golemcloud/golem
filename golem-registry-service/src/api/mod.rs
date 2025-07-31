@@ -22,8 +22,8 @@ pub mod account_applications;
 pub mod environment_components;
 // pub mod project;
 
-use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::error::{ErrorBody, ErrorsBody};
+use golem_common_next::metrics::api::TraceErrorKind;
+use golem_common_next::model::error::{ErrorBody, ErrorsBody};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
 

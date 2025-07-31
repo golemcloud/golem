@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use poem_openapi::{Multipart, NewType, Object, Union};
-use golem_common::model::{ComponentId, ComponentVersion, Empty, PluginId, ProjectId};
+use golem_common_next::model::{ComponentId, ComponentVersion, Empty, PluginId, ProjectId};
 use poem_openapi::types::{Binary, ParseError, ParseFromMultipartField, ParseFromParameter, ParseResult};
 use poem::web::Field;
-use golem_service_base::poem::TempFileUpload;
+use golem_service_base_next::poem::TempFileUpload;
 
 #[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]

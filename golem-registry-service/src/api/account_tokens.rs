@@ -14,13 +14,13 @@
 
 use super::ApiError;
 use crate::api::ApiResult;
-use golem_common::model::auth::AccountAction;
-use golem_common::model::error::ErrorBody;
-use golem_common::model::{AccountId, Empty};
-use golem_common::model::TokenId;
-use golem_common::recorded_http_api_request;
-use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::auth::GolemSecurityScheme;
+use golem_common_next::model::auth::AccountAction;
+use golem_common_next::model::error::ErrorBody;
+use golem_common_next::model::{AccountId, Empty};
+use golem_common_next::model::TokenId;
+use golem_common_next::recorded_http_api_request;
+use golem_service_base_next::api_tags::ApiTags;
+use golem_service_base_next::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;

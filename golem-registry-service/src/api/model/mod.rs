@@ -19,9 +19,9 @@ pub mod plugins;
 pub mod components;
 
 use poem_openapi::{Object, Enum};
-use golem_common::model::{AccountId, ProjectId};
+use golem_common_next::model::{AccountId, ProjectId};
 use poem_openapi::types::{ParseFromJSON, ToJSON};
-use golem_common::newtype_uuid;
+use golem_common_next::newtype_uuid;
 
 #[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]

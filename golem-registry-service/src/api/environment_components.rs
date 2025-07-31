@@ -13,20 +13,20 @@
 // limitations under the License.
 
 use futures::{stream, StreamExt, TryStreamExt};
-use golem_common::model::agent::AgentTypes;
-use golem_common::model::auth::AuthCtx;
-use golem_common::model::component::VersionedComponentId;
-use golem_common::model::error::{ErrorBody, ErrorsBody};
-use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
-use golem_common::model::{
+use golem_common_next::model::agent::AgentTypes;
+use golem_common_next::model::auth::AuthCtx;
+use golem_common_next::model::component::VersionedComponentId;
+use golem_common_next::model::error::{ErrorBody, ErrorsBody};
+use golem_common_next::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
+use golem_common_next::model::{
     ComponentFilePathWithPermissionsList, Empty, PluginInstallationId, ProjectId,
 };
-use golem_common::model::{ComponentId, ComponentType};
-use golem_common::recorded_http_api_request;
-use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::auth::GolemSecurityScheme;
-use golem_service_base::model::{BatchPluginInstallationUpdates, ComponentName};
-use golem_service_base::poem::TempFileUpload;
+use golem_common_next::model::{ComponentId, ComponentType};
+use golem_common_next::recorded_http_api_request;
+use golem_service_base_next::api_tags::ApiTags;
+use golem_service_base_next::model::auth::GolemSecurityScheme;
+use golem_service_base_next::model::{BatchPluginInstallationUpdates, ComponentName};
+use golem_service_base_next::poem::TempFileUpload;
 use poem::Body;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};

@@ -14,10 +14,10 @@
 
 use super::ApiResult;
 use super::model::accounts::*;
-use golem_common::model::{AccountId, Empty};
-use golem_common::recorded_http_api_request;
-use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::auth::GolemSecurityScheme;
+use golem_common_next::model::{AccountId, Empty};
+use golem_common_next::recorded_http_api_request;
+use golem_service_base_next::api_tags::ApiTags;
+use golem_service_base_next::model::auth::GolemSecurityScheme;
 use param::Query;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;

@@ -14,10 +14,10 @@
 
 use poem_openapi::{Enum, Multipart, Object, Union};
 use poem_openapi::types::multipart::{JsonField, Upload};
-use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
-use golem_service_base::poem::TempFileUpload;
+use golem_common_next::model::{ComponentFilePath, ComponentFilePermissions};
+use golem_service_base_next::poem::TempFileUpload;
 use std::collections::HashMap;
-use golem_common::model::agent::AgentTypes;
+use golem_common_next::model::agent::AgentTypes;
 
 #[derive(Debug, Copy, Clone, Enum)]
 pub enum ComponentType {

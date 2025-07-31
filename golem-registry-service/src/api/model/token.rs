@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 use poem_openapi::Object;
-use golem_common::model::{AccountId, TokenId};
+use golem_common_next::model::{AccountId, TokenId};
 use chrono::Utc;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]

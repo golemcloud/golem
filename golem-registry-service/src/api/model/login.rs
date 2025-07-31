@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use chrono::Utc;
-use golem_common::model::{AccountId, Empty, TokenId};
+use golem_common_next::model::{AccountId, Empty, TokenId};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
 use poem_openapi_derive::Object;
