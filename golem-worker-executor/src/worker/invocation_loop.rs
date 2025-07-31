@@ -307,7 +307,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     async fn resume_replay(&self) -> CommandOutcome {
         let mut store = self.store.lock().await;
 
-        let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance).await;
+        let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
 
         match resume_replay_result {
             Ok(RetryDecision::None) => CommandOutcome::Continue,
@@ -385,6 +385,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             QueuedWorkerInvocation::ReadFile { path, sender } => {
                 self.read_file(path, sender).await;
+                CommandOutcome::Continue
+            }
+            QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
+                let _ = sender.send(Ok(()));
                 CommandOutcome::Continue
             }
         }

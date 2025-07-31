@@ -86,6 +86,9 @@ pub trait WorkerCtx:
     /// executing worker from things like a request handler.
     type PublicState: PublicWorkerIo + HasWorker<Self> + HasOplog + Clone + Send + Sync;
 
+    /// Static log event behaviour configuration for workers
+    const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour;
+
     /// Creates a new worker context
     ///
     /// Arguments:
@@ -387,6 +390,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
+        refresh_replay_target: bool,
     ) -> Result<RetryDecision, WorkerExecutorError>;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
@@ -487,4 +491,11 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         component: &Component,
         component_metadata: &golem_service_base::model::Component,
     ) -> anyhow::Result<()>;
+}
+
+pub enum LogEventEmitBehaviour {
+    /// Always emit all log event
+    Always,
+    /// Emit log events only during live mode
+    LiveOnly,
 }

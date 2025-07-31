@@ -60,8 +60,8 @@ use golem_worker_executor::services::{worker_enumeration, HasAll, HasConfig, Has
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
@@ -129,8 +129,9 @@ impl ExternalOperations<Self> for DebugContext {
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Self> + Send),
         instance: &Instance,
+        refresh_replay_target: bool,
     ) -> Result<RetryDecision, WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::resume_replay(store, instance).await
+        DurableWorkerCtx::<Self>::resume_replay(store, instance, refresh_replay_target).await
     }
 
     async fn prepare_instance(
@@ -556,6 +557,8 @@ impl InvocationContextManagement for DebugContext {
 #[async_trait]
 impl WorkerCtx for DebugContext {
     type PublicState = PublicDurableWorkerState<Self>;
+
+    const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour = LogEventEmitBehaviour::Always;
 
     async fn create(
         _account_id: AccountId,

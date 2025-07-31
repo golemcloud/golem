@@ -53,8 +53,8 @@ use crate::worker::status::calculate_last_known_status;
 use crate::worker::{interpret_function_result, is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement,
-    WorkerCtx,
+    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -473,35 +473,54 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } = &entry
             {
-                // Stdout and stderr writes are persistent and overwritten by sending the data to the event
-                // service instead of the real output stream
+                match Ctx::LOG_EVENT_EMIT_BEHAVIOUR {
+                    LogEventEmitBehaviour::LiveOnly => {
+                        // Stdout and stderr writes are persistent and overwritten by sending the data to the event
+                        // service instead of the real output stream
 
-                if self.state.is_live()
-                // If the worker is still in replay mode we never emit events.
-                {
-                    if !self
-                        .state
-                        .replay_state
-                        .seen_log(*level, context, message)
-                        .await
-                    {
-                        // haven't seen this log before
+                        if self.state.is_live()
+                        // If the worker is in live mode we always emit events
+                        {
+                            if !self
+                                .state
+                                .replay_state
+                                .seen_log(*level, context, message)
+                                .await
+                            {
+                                // haven't seen this log before
+                                self.public_state
+                                    .event_service
+                                    .emit_event(event.clone(), true);
+                                self.state.oplog.add(entry).await;
+                            } else {
+                                // we have persisted emitting this log before, so we mark it as non-live and
+                                // remove the entry from the seen log set.
+                                // note that we still call emit_event because we need replayed log events for
+                                // improved error reporting in case of invocation failures
+                                self.public_state
+                                    .event_service
+                                    .emit_event(event.clone(), false);
+                                self.state
+                                    .replay_state
+                                    .remove_seen_log(*level, context, message)
+                                    .await;
+                            }
+                        }
+                    }
+                    LogEventEmitBehaviour::Always => {
                         self.public_state
                             .event_service
                             .emit_event(event.clone(), true);
-                        self.state.oplog.add(entry).await;
-                    } else {
-                        // we have persisted emitting this log before, so we mark it as non-live and
-                        // remove the entry from the seen log set.
-                        // note that we still call emit_event because we need replayed log events for
-                        // improved error reporting in case of invocation failures
-                        self.public_state
-                            .event_service
-                            .emit_event(event.clone(), false);
-                        self.state
-                            .replay_state
-                            .remove_seen_log(*level, context, message)
-                            .await;
+
+                        if self.state.is_live()
+                            && !self
+                                .state
+                                .replay_state
+                                .seen_log(*level, context, message)
+                                .await
+                        {
+                            self.state.oplog.add(entry).await;
+                        }
                     }
                 }
             }
@@ -1529,8 +1548,27 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
+        refresh_replay_target: bool,
     ) -> Result<RetryDecision, WorkerExecutorError> {
         let mut number_of_replayed_functions = 0;
+
+        if refresh_replay_target {
+            let new_target = store
+                .as_context()
+                .data()
+                .durable_ctx()
+                .state
+                .oplog
+                .current_oplog_index()
+                .await;
+            store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .state
+                .replay_state
+                .set_replay_target(new_target);
+        }
 
         let resume_result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay();
@@ -1809,7 +1847,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         }
                         UpdateDescription::Automatic { target_version, .. } => {
                             // snapshot update will be succeeded as part of the replay.
-                            let result = Self::resume_replay(store, instance).await;
+                            let result = Self::resume_replay(store, instance, false).await;
                             record_resume_worker(start.elapsed());
 
                             match result {
@@ -1868,7 +1906,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     }
                 }
                 None => {
-                    let result = Self::resume_replay(store, instance).await;
+                    let result = Self::resume_replay(store, instance, false).await;
                     record_resume_worker(start.elapsed());
 
                     result

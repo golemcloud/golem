@@ -367,6 +367,11 @@ impl OplogIndex {
     pub fn range_end(&self, count: u64) -> OplogIndex {
         OplogIndex(self.0 + count - 1)
     }
+
+    /// Check whether the oplog index is not None.
+    pub fn is_defined(&self) -> bool {
+        self.0 > 0
+    }
 }
 
 impl Display for OplogIndex {

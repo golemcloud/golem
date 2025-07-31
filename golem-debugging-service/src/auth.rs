@@ -112,7 +112,7 @@ impl GrpcAuthService {
         component_service_grpc_config: ComponentServiceGrpcConfig,
     ) -> Self {
         let component_service_client = GrpcClient::new(
-            "auth_service",
+            "component_service",
             |channel| {
                 ComponentServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
