@@ -13,13 +13,10 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
-
-use crate::model::{Component, ComponentName};
 use golem_common_next::model::base64::Base64;
-use golem_common_next::model::component::{ComponentOwner, VersionedComponentId};
+use golem_common_next::model::component::{Component, ComponentName, ComponentOwner, VersionedComponentId};
 use golem_common_next::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
 };
@@ -30,7 +27,6 @@ use golem_common_next::model::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalFileSystemComponentMetadata {
-    pub account_id: AccountId,
     pub project_id: ProjectId,
     pub component_id: ComponentId,
     pub version: ComponentVersion,
@@ -52,10 +48,7 @@ pub struct LocalFileSystemComponentMetadata {
 impl From<LocalFileSystemComponentMetadata> for Component {
     fn from(value: LocalFileSystemComponentMetadata) -> Self {
         Self {
-            owner: ComponentOwner {
-                account_id: value.account_id,
-                project_id: value.project_id,
-            },
+            project_id: value.project_id,
             versioned_component_id: VersionedComponentId {
                 component_id: value.component_id,
                 version: value.version,

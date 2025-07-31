@@ -64,9 +64,6 @@ pub struct Page<T: poem_openapi::types::Type + ParseFromJSON + ToJSON> {
     pub values: Vec<T>,
 }
 
-newtype_uuid!(ApplicationId);
-newtype_uuid!(EnvironmentId);
-
 #[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]
 pub struct Application {
