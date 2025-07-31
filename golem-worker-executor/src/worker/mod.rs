@@ -16,7 +16,7 @@ pub mod invocation;
 mod invocation_loop;
 pub mod status;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -120,6 +120,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -133,6 +134,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 account_id,
                 worker_args,
                 worker_env,
+                worker_wasi_config_vars,
                 component_version,
                 parent,
             )
@@ -146,6 +148,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -158,6 +161,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owned_worker_id,
             worker_args,
             worker_env,
+            worker_wasi_config_vars,
             component_version,
             parent,
         )
@@ -195,6 +199,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -205,6 +210,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_version,
             worker_args,
             worker_env,
+            worker_config,
             parent,
         )
         .await?;
@@ -1236,6 +1242,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         QueuedWorkerInvocation::ReadFile { sender, .. } => {
                             let _ = sender.send(Err(fail_pending_invocations.clone()));
                         }
+                        QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
+                            let _ = sender.send(Err(fail_pending_invocations.clone()));
+                        }
                     }
                 }
             } else {
@@ -1276,6 +1285,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_version: Option<ComponentVersion>,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         parent: Option<WorkerId>,
     ) -> Result<(WorkerMetadata, Arc<std::sync::RwLock<ExecutionStatus>>), WorkerExecutorError>
     {
@@ -1299,6 +1309,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     worker_id: owned_worker_id.worker_id(),
                     args: worker_args.unwrap_or_default(),
                     env: worker_env,
+                    wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
                     project_id: owned_worker_id.project_id(),
                     created_by: account_id.clone(),
                     created_at: Timestamp::now_utc(),
@@ -1346,6 +1357,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok((worker_metadata, execution_status))
             }
         }
+    }
+
+    pub async fn await_ready_to_process_commands(&self) -> Result<(), WorkerExecutorError> {
+        let (sender, receiver) = oneshot::channel();
+
+        let mutex = self.instance.lock().await;
+
+        self.queue
+            .write()
+            .await
+            .push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
+
+        if let WorkerInstance::Running(running) = &*mutex {
+            running.sender.send(WorkerCommand::Invocation).unwrap();
+        };
+
+        drop(mutex);
+
+        receiver.await.unwrap()
     }
 }
 
@@ -1679,6 +1709,7 @@ impl RunningWorker {
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
                 parent.initial_worker_metadata.created_by.clone(),
+                worker_metadata.wasi_config_vars,
             ),
             parent.execution_status.clone(),
             parent.file_loader(),
@@ -1868,6 +1899,12 @@ pub enum QueuedWorkerInvocation {
     ReadFile {
         path: ComponentFilePath,
         sender: oneshot::Sender<Result<ReadFileResult, WorkerExecutorError>>,
+    },
+    // Waits for the invocation loop to pick up this message, ensuring that the worker is ready to process followup commands.
+    // The sender will be called with Ok if the worker is in a running state.
+    // If the worker initializaiton fails and will not recover without manual intervention it will be called with Err.
+    AwaitReadyToProcessCommands {
+        sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
 }
 

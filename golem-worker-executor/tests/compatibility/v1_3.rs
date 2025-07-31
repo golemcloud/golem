@@ -31,7 +31,7 @@ use golem_common::model::{
 };
 use golem_common::serialization::deserialize;
 use golem_wasm_rpc::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 use test_r::test;
@@ -257,6 +257,7 @@ pub fn oplog_entry() {
             ("key1".to_string(), "value1".to_string()),
             ("key2".to_string(), "value2".to_string()),
         ],
+        wasi_config_vars: BTreeMap::new(),
         project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
         created_by: AccountId {
             value: "account_id".to_string(),
@@ -283,6 +284,10 @@ pub fn oplog_entry() {
             ("key1".to_string(), "value1".to_string()),
             ("key2".to_string(), "value2".to_string()),
         ],
+        wasi_config_vars: BTreeMap::from([
+            ("ckey1".to_string(), "cvalue1".to_string()),
+            ("ckey2".to_string(), "cvalue2".to_string()),
+        ]),
         project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
         created_by: AccountId {
             value: "account_id".to_string(),

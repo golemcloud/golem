@@ -83,7 +83,7 @@ async fn custom_durability_1(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "custom-durability-1", vec![], env)
+        .start_worker_with(&component_id, "custom-durability-1", vec![], env, vec![])
         .await;
 
     let result1 = executor
@@ -178,7 +178,7 @@ async fn lazy_pollable(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "custom-durability-1", vec![], env)
+        .start_worker_with(&component_id, "custom-durability-1", vec![], env, vec![])
         .await;
 
     signal_tx.send(()).unwrap();

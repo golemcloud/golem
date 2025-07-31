@@ -29,6 +29,7 @@ use golem_common::model::{
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, warn};
 
@@ -129,6 +130,7 @@ impl WorkerService for DefaultWorkerService {
             worker_metadata.last_known_status.component_version,
             worker_metadata.args.clone(),
             worker_metadata.env.clone(),
+            worker_metadata.wasi_config_vars.clone(),
             worker_metadata.project_id.clone(),
             worker_metadata.created_by.clone(),
             worker_metadata.parent.clone(),
@@ -214,12 +216,14 @@ impl WorkerService for DefaultWorkerService {
                     component_size,
                     initial_total_linear_memory_size,
                     initial_active_plugins,
+                    wasi_config_vars,
                 },
             )) => {
                 let mut details = WorkerMetadata {
                     worker_id,
                     args,
                     env,
+                    wasi_config_vars,
                     project_id,
                     created_by,
                     created_at: timestamp,
@@ -288,6 +292,7 @@ impl WorkerService for DefaultWorkerService {
                     worker_id: owned_worker_id.worker_id(),
                     args: vec![],
                     env: vec![],
+                    wasi_config_vars: BTreeMap::new(),
                     project_id: owned_worker_id.project_id(),
                     created_by: AccountId {
                         value: "system".to_string(),

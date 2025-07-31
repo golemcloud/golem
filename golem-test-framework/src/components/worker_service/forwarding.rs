@@ -134,6 +134,7 @@ impl WorkerService for ForwardingWorkerService {
                     component_version: latest_component_version,
                     args: request.args.clone(),
                     env: request.env.clone(),
+                    wasi_config_vars: request.wasi_config_vars.clone(),
                     account_id: Some(account_id.into()),
                     account_limits: Some(ResourceLimits {
                         available_fuel: i64::MAX,

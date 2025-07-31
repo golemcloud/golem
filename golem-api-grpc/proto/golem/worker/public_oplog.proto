@@ -11,6 +11,7 @@ import "golem/worker/invocation_context.proto";
 import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
 import "wasm/rpc/value_and_type.proto";
+import "golem/worker/wasi_config_vars.proto";
 
 message OplogEntry {
   oneof entry {
@@ -88,6 +89,7 @@ message CreateParameters {
   uint64 initial_total_linear_memory_size = 9;
   repeated PluginInstallationDescription initial_active_plugins = 10;
   golem.common.ProjectId project_id = 11;
+  WasiConfigVars wasi_config_vars = 12;
 }
 
 message ImportedFunctionInvokedParameters {

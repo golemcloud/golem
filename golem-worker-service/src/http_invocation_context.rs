@@ -69,16 +69,3 @@ pub fn invocation_context_from_request(request: &poem::Request) -> InvocationCon
         }
     }
 }
-
-pub fn grpc_invocation_context_from_request(
-    request: &poem::Request,
-) -> golem_api_grpc::proto::golem::worker::InvocationContext {
-    let invocation_context = invocation_context_from_request(request);
-    let grpc_tracing_invocation_context = invocation_context.into();
-    golem_api_grpc::proto::golem::worker::InvocationContext {
-        parent: None,
-        args: Vec::new(),
-        env: HashMap::new(),
-        tracing: Some(grpc_tracing_invocation_context),
-    }
-}

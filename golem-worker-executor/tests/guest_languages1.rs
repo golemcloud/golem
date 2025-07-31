@@ -92,6 +92,7 @@ async fn tinygo_example(
             "tinygo-wasi-1",
             vec!["arg-1".to_string(), "arg-2".to_string()],
             HashMap::from([("ENV_VAR_1".to_string(), "ENV_VAR_VALUE_1".to_string())]),
+            vec![],
         )
         .await;
 
@@ -195,7 +196,7 @@ async fn tinygo_http_client(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "tinygo-wasi-http-1", vec![], env)
+        .start_worker_with(&component_id, "tinygo-wasi-http-1", vec![], env, vec![])
         .await;
 
     let result = executor

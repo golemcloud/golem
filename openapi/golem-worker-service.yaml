@@ -3867,6 +3867,7 @@ components:
       - env
       - projectId
       - createdBy
+      - wasiConfigVars
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
@@ -3892,6 +3893,10 @@ components:
           format: uuid
         createdBy:
           type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
         parent:
           $ref: '#/components/schemas/WorkerId'
         componentSize:
@@ -6047,6 +6052,17 @@ components:
       properties:
         version:
           type: string
+    WasiConfigVarsEntry:
+      type: object
+      title: WasiConfigVarsEntry
+      required:
+      - key
+      - value
+      properties:
+        key:
+          type: string
+        value:
+          type: string
     WorkerAndFilter:
       type: object
       title: WorkerAndFilter
@@ -6087,6 +6103,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
     WorkerCreationResponse:
       type: object
       title: WorkerCreationResponse
@@ -6138,6 +6159,7 @@ components:
       - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
       discriminator:
         propertyName: type
         mapping:
@@ -6149,6 +6171,7 @@ components:
           And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
           Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
           Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+          WasiConfigVars: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
     WorkerFilter_WorkerAndFilter:
       allOf:
       - type: object
@@ -6245,6 +6268,18 @@ components:
             - Version
             example: Version
       - $ref: '#/components/schemas/WorkerVersionFilter'
+    WorkerFilter_WorkerWasiConfigVarsFilter:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - WasiConfigVars
+            example: WasiConfigVars
+      - $ref: '#/components/schemas/WorkerWasiConfigVarsFilter'
     WorkerId:
       type: object
       title: WorkerId
@@ -6266,6 +6301,7 @@ components:
       - createdBy
       - args
       - env
+      - wasiConfigVars
       - status
       - componentVersion
       - retryCount
@@ -6294,6 +6330,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
         status:
           $ref: '#/components/schemas/WorkerStatus'
         componentVersion:
@@ -6414,6 +6454,20 @@ components:
         value:
           type: integer
           format: uint64
+    WorkerWasiConfigVarsFilter:
+      type: object
+      title: WorkerWasiConfigVarsFilter
+      required:
+      - name
+      - comparator
+      - value
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
     WorkersMetadataRequest:
       type: object
       title: WorkersMetadataRequest

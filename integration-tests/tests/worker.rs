@@ -951,7 +951,13 @@ async fn auction_example_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         auction_component_id.to_string(),
     );
     let registry_worker_id = admin
-        .start_worker_with(&registry_component_id, "auction-registry-1", vec![], env)
+        .start_worker_with(
+            &registry_component_id,
+            "auction-registry-1",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let _ = admin.log_output(&registry_worker_id).await;
@@ -1157,6 +1163,7 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
                 &format!("worker-http-client-{i}"),
                 vec![],
                 env.clone(),
+                vec![],
             )
             .await;
 

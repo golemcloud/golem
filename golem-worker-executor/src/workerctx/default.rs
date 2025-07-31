@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::LogEventEmitBehaviour;
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{
@@ -329,8 +330,9 @@ impl ExternalOperations<Context> for Context {
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Context> + Send),
         instance: &Instance,
+        refresh_replay_target: bool,
     ) -> Result<RetryDecision, WorkerExecutorError> {
-        DurableWorkerCtx::<Context>::resume_replay(store, instance).await
+        DurableWorkerCtx::<Context>::resume_replay(store, instance, refresh_replay_target).await
     }
 
     async fn prepare_instance(
@@ -635,6 +637,8 @@ impl InvocationContextManagement for Context {
 #[async_trait]
 impl WorkerCtx for Context {
     type PublicState = PublicDurableWorkerState<Context>;
+
+    const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour = LogEventEmitBehaviour::LiveOnly;
 
     async fn create(
         account_id: AccountId,

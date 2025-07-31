@@ -1,10 +1,12 @@
 use anyhow::Context;
+use axum_jrpc::error::JsonRpcError;
 use axum_jrpc::{Id, JsonRpcAnswer, JsonRpcRequest, JsonRpcResponse};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use golem_common::model::auth::TokenSecret;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Utf8Payload;
@@ -20,6 +22,17 @@ pub type DebugRead = SplitStream<DebugServiceClient>;
 pub struct DebugWorkerExecutorClient {
     write_msg: DebugWrite,
     read_msg: DebugRead,
+    read_messages: Vec<UntypedJrpcMessage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct UntypedJrpcMessage {
+    pub jsonrpc: String,
+    pub method: Option<String>,
+    pub id: Option<String>,
+    pub params: Option<Value>,
+    pub error: Option<JsonRpcError>,
+    pub result: Option<Value>,
 }
 
 impl DebugWorkerExecutorClient {
@@ -47,28 +60,36 @@ impl DebugWorkerExecutorClient {
         Ok(id)
     }
 
-    pub async fn read_jrpc_msg<T: DeserializeOwned>(&mut self, id: Id) -> anyhow::Result<T> {
+    pub async fn read_jrpc_response<T: DeserializeOwned>(&mut self, id: Id) -> anyhow::Result<T> {
         let time = std::time::Instant::now();
         loop {
             if let Some(msg) = self.read_msg.next().await {
                 match msg {
                     Ok(Message::Text(text)) => {
-                        let response: JsonRpcResponse = serde_json::from_str(text.as_str())
-                            .map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))?;
+                        {
+                            let message =
+                                serde_json::from_str::<UntypedJrpcMessage>(text.as_str())?;
+                            self.read_messages.push(message);
+                        }
 
-                        if response.id == id {
-                            match response.result {
-                                JsonRpcAnswer::Result(result) => {
-                                    let result: T =
-                                        serde_json::from_value(result).map_err(|e| {
-                                            anyhow::anyhow!("Failed to parse response: {}", e)
-                                        })?;
-                                    break Ok(result); // Break out of the loop with a Result
-                                }
-                                JsonRpcAnswer::Error(_) => {
-                                    break Err(anyhow::anyhow!("Error response"))
+                        let maybe_response = serde_json::from_str::<JsonRpcResponse>(text.as_str());
+
+                        match maybe_response {
+                            Ok(response) if response.id == id => {
+                                match response.result {
+                                    JsonRpcAnswer::Result(result) => {
+                                        let result: T =
+                                            serde_json::from_value(result).map_err(|e| {
+                                                anyhow::anyhow!("Failed to parse response: {}", e)
+                                            })?;
+                                        break Ok(result); // Break out of the loop with a Result
+                                    }
+                                    JsonRpcAnswer::Error(_) => {
+                                        break Err(anyhow::anyhow!("Error response"))
+                                    }
                                 }
                             }
+                            _ => {}
                         }
                     }
                     _ => {
@@ -81,6 +102,17 @@ impl DebugWorkerExecutorClient {
                 break Err(anyhow::anyhow!("Stream ended unexpectedly")); // Handle end of stream
             }
         }
+    }
+
+    pub async fn drain_connection(&mut self) -> anyhow::Result<()> {
+        while let Some(msg) = self.read_msg.next().await {
+            if let Message::Text(text) = msg? {
+                let message = serde_json::from_str::<UntypedJrpcMessage>(text.as_str())?;
+                self.read_messages.push(message);
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn connect(port: u16, token: TokenSecret) -> Result<Self, anyhow::Error> {
@@ -107,6 +139,19 @@ impl DebugWorkerExecutorClient {
         Ok(DebugWorkerExecutorClient {
             write_msg: write,
             read_msg: read,
+            read_messages: Vec::new(),
         })
+    }
+
+    pub async fn close(&mut self) -> anyhow::Result<()> {
+        self.write_msg.send(Message::Close(None)).await?;
+
+        self.drain_connection().await?;
+
+        Ok(())
+    }
+
+    pub fn all_read_messages(&self) -> Vec<UntypedJrpcMessage> {
+        self.read_messages.clone()
     }
 }

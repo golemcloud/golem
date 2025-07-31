@@ -291,6 +291,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_worker_id,
             Some(args),
             Some(env),
+            Some(
+                request
+                    .wasi_config_vars
+                    .ok_or(WorkerExecutorError::invalid_request(
+                        "no wasi_config_vars field",
+                    ))?
+                    .into(),
+            ),
             Some(component_version),
             None,
         )
@@ -374,6 +382,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 None,
                 None,
                 None,
+                None,
             )
             .await?;
         }
@@ -408,6 +417,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self,
                     &account_id,
                     &owned_worker_id,
+                    None,
                     None,
                     None,
                     None,
@@ -519,6 +529,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    None,
                 )
                 .await?;
                 worker.revert(target).await?;
@@ -562,6 +573,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         self,
                         &account_id,
                         &owned_worker_id,
+                        None,
                         None,
                         None,
                         None,
@@ -638,6 +650,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
+                        None,
                     )
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
@@ -654,6 +667,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
+                        None,
                     )
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
@@ -665,6 +679,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         self,
                         &account_id,
                         &owned_worker_id,
+                        None,
                         None,
                         None,
                         None,
@@ -721,6 +736,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    None,
                 )
                 .await?;
                 Ok(())
@@ -734,6 +750,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &self.services,
                     &account_id,
                     &owned_worker_id,
+                    None,
                     None,
                     None,
                     None,
@@ -845,6 +862,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_worker_id,
             request.args(),
             request.env(),
+            request.wasi_config_vars()?,
             None,
             request.parent(),
         )
@@ -1109,6 +1127,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             &owned_worker_id,
                             None,
                             None,
+                            None,
                             Some(metadata.last_known_status.component_version),
                             None,
                         )
@@ -1143,6 +1162,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             self,
                             &account_id,
                             &owned_worker_id,
+                            None,
                             None,
                             None,
                             None,
@@ -1182,6 +1202,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    None,
                 )
                 .await?;
                 worker.enqueue_manual_update(request.target_version).await;
@@ -1213,6 +1234,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self,
                 &account_id,
                 &owned_worker_id,
+                None,
                 None,
                 None,
                 None,
@@ -1570,6 +1592,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             None,
+                            None,
                         )
                         .await?;
                         worker.activate_plugin(plugin_installation_id).await?;
@@ -1639,6 +1662,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             self,
                             &account_id,
                             &owned_worker_id,
+                            None,
                             None,
                             None,
                             None,
@@ -1735,6 +1759,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             args: metadata.args.clone(),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             created_by: Some(metadata.created_by.into()),
+            wasi_config_vars: Some(metadata.wasi_config_vars.into()),
             component_version: latest_status.component_version,
             status: Into::<golem::worker::WorkerStatus>::into(latest_status.status.clone()).into(),
             retry_count: last_error_and_retry_count

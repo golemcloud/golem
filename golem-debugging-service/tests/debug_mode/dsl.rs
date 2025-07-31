@@ -15,14 +15,9 @@ pub trait TestDslDebugMode {
         &mut self,
         target_index: OplogIndex,
         overrides: Option<Vec<PlaybackOverride>>,
-        wait_time_in_seconds: u64,
     ) -> anyhow::Result<PlaybackResult>;
 
-    async fn rewind(
-        &mut self,
-        target_index: OplogIndex,
-        wait_time_in_seconds: u64,
-    ) -> anyhow::Result<RewindResult>;
+    async fn rewind(&mut self, target_index: OplogIndex) -> anyhow::Result<RewindResult>;
 
     async fn fork(
         &mut self,
@@ -45,14 +40,13 @@ impl TestDslDebugMode for DebugWorkerExecutorClient {
             )
             .await?;
 
-        self.read_jrpc_msg(id).await
+        self.read_jrpc_response(id).await
     }
 
     async fn playback(
         &mut self,
         target_index: OplogIndex,
         overrides: Option<Vec<PlaybackOverride>>,
-        wait_time_in_seconds: u64,
     ) -> anyhow::Result<PlaybackResult> {
         let id = self
             .send_jrpc_msg(
@@ -61,31 +55,25 @@ impl TestDslDebugMode for DebugWorkerExecutorClient {
                     target_index,
                     overrides,
                     ensure_invocation_boundary: None,
-                    time_out_in_seconds: Some(wait_time_in_seconds),
                 },
             )
             .await?;
 
-        self.read_jrpc_msg(id).await
+        self.read_jrpc_response(id).await
     }
 
-    async fn rewind(
-        &mut self,
-        target_index: OplogIndex,
-        wait_time_in_seconds: u64,
-    ) -> anyhow::Result<RewindResult> {
+    async fn rewind(&mut self, target_index: OplogIndex) -> anyhow::Result<RewindResult> {
         let id = self
             .send_jrpc_msg(
                 "rewind",
                 RewindParams {
                     target_index,
                     ensure_invocation_boundary: None,
-                    time_out_in_seconds: Some(wait_time_in_seconds),
                 },
             )
             .await?;
 
-        self.read_jrpc_msg(id).await
+        self.read_jrpc_response(id).await
     }
 
     async fn fork(
@@ -103,13 +91,13 @@ impl TestDslDebugMode for DebugWorkerExecutorClient {
             )
             .await?;
 
-        self.read_jrpc_msg(id).await
+        self.read_jrpc_response(id).await
     }
 
     async fn current_index(&mut self) -> anyhow::Result<OplogIndex> {
         let id = self.send_jrpc_msg("current_oplog_index", ()).await?;
 
-        let result = self.read_jrpc_msg(id).await?;
+        let result = self.read_jrpc_response(id).await?;
 
         Ok(result)
     }

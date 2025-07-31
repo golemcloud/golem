@@ -19,6 +19,7 @@ mod protobuf;
 mod tests;
 
 use super::plugin::PluginDefinition;
+use super::worker::WasiConfigVars;
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{
@@ -251,6 +252,7 @@ pub struct CreateParameters {
     pub env: BTreeMap<String, String>,
     pub project_id: ProjectId,
     pub created_by: AccountId,
+    pub wasi_config_vars: WasiConfigVars,
     pub parent: Option<WorkerId>,
     pub component_size: u64,
     pub initial_total_linear_memory_size: u64,
