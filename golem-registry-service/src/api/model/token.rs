@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod accounts;
-pub mod login;
-pub mod token;
+use serde::{Deserialize, Serialize};
+use poem_openapi::Object;
+use golem_common::model::{AccountId, TokenId};
+use chrono::Utc;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+pub struct CreateTokenRequest {
+    pub expires_at: chrono::DateTime<Utc>,
+}
