@@ -70,6 +70,7 @@ run_task = [
         "wit-host",
         "wit-wasm-rpc",
         "wit-golem-common",
+        "wit-golem-common-next",
         "wit-done",
     ] },
 ]
@@ -99,6 +100,19 @@ cp wit/deps/golem-rpc golem-common/wit/deps
 cp wit/deps/golem-agent golem-common/wit/deps
 """
 
+[tasks.wit-golem-common-next]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r golem-common-next/wit/deps
+mkdir golem-common-next/wit/deps
+cp wit/deps/io golem-common-next/wit/deps
+cp wit/deps/clocks golem-common-next/wit/deps
+cp wit/deps/golem-1.x golem-common-next/wit/deps
+cp wit/deps/golem-rpc golem-common-next/wit/deps
+cp wit/deps/golem-agent golem-common-next/wit/deps
+"""
+
 [tasks.wit-host]
 private = true
 install_crate = { crate_name = "wit-deps-cli", binary = "wit-deps", test_arg = "--help" }
@@ -118,6 +132,7 @@ rm -rf wit/deps.done
 rm -rf wit/deps
 rm -rf wasm-rpc/wit/deps
 rm -rf golem-common/wit/deps
+rm -rf golem-common-next/wit/deps
 """
 
 [tasks.diff-wit]

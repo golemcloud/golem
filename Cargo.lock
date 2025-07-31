@@ -3554,6 +3554,66 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-common-next"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bincode",
+ "bytes 1.10.1",
+ "chrono",
+ "combine",
+ "console-subscriber",
+ "darling 0.20.11",
+ "dashmap",
+ "derive_more 2.0.1",
+ "figment",
+ "fred",
+ "golem-api-grpc",
+ "golem-rib",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "golem-wasm-rpc-derive",
+ "http 1.3.1",
+ "humantime-serde",
+ "iso8601-timestamp",
+ "itertools 0.14.0",
+ "lazy_static",
+ "nonempty-collections",
+ "poem",
+ "poem-derive",
+ "poem-openapi",
+ "poem-openapi-derive",
+ "prometheus 0.13.4",
+ "prost",
+ "prost-types",
+ "rand 0.9.1",
+ "range-set-blaze",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "shadow-rs",
+ "sqlx",
+ "strum",
+ "strum_macros",
+ "test-r",
+ "thiserror 2.0.12",
+ "tokio",
+ "toml",
+ "tonic",
+ "tracing",
+ "tracing-serde",
+ "tracing-subscriber",
+ "tracing-test",
+ "typed-path",
+ "url",
+ "uuid",
+ "wasmtime",
+]
+
+[[package]]
 name = "golem-component-compilation-service"
 version = "0.0.0"
 dependencies = [
