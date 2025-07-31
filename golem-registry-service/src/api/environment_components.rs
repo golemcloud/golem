@@ -12,32 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::{stream, StreamExt, TryStreamExt};
-use golem_common_next::model::agent::AgentTypes;
-use golem_common_next::model::auth::AuthCtx;
-use golem_common_next::model::component::VersionedComponentId;
-use golem_common_next::model::error::{ErrorBody, ErrorsBody};
-use golem_common_next::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
-use golem_common_next::model::{
-    ComponentFilePathWithPermissionsList, Empty, PluginInstallationId, ProjectId,
-};
-use golem_common_next::model::{ComponentId, ComponentType};
+use super::ApiResult;
+use super::model::components::CreateComponentRequest;
+use golem_common_next::model::component::Component;
 use golem_common_next::recorded_http_api_request;
 use golem_service_base_next::api_tags::ApiTags;
 use golem_service_base_next::model::auth::GolemSecurityScheme;
-use golem_service_base_next::model::{BatchPluginInstallationUpdates};
-use golem_service_base_next::poem::TempFileUpload;
-use poem::Body;
-use poem_openapi::param::{Path, Query};
-use poem_openapi::payload::{Binary, Json};
-use poem_openapi::types::multipart::{JsonField, Upload};
+use poem_openapi::payload::Json;
 use poem_openapi::*;
-use std::collections::HashMap;
-use std::sync::Arc;
 use tracing::Instrument;
-use super::ApiResult;
 
-pub struct EnvironmentComponentsApi { }
+pub struct EnvironmentComponentsApi {}
 
 #[OpenApi(prefix_path = "/v1/envs/{environment_id}/components", tag = ApiTags::Component)]
 impl EnvironmentComponentsApi {
@@ -51,14 +36,9 @@ impl EnvironmentComponentsApi {
         payload: CreateComponentRequest,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Component>> {
-        let auth = AuthCtx::new(token.secret());
-        let record = recorded_http_api_request!(
-            "create_component",
-            component_name = payload.query.0.component_name.to_string(),
-            project_id = payload.query.0.project_id.as_ref().map(|v| v.to_string()),
-        );
+        let record = recorded_http_api_request!("create_component",);
         let response = self
-            .create_component_internal(payload, auth)
+            .create_component_internal(payload, token)
             .instrument(record.span.clone())
             .await;
         record.result(response)
@@ -66,8 +46,8 @@ impl EnvironmentComponentsApi {
 
     async fn create_component_internal(
         &self,
-        payload: UploadPayload,
-        auth: AuthCtx,
+        _payload: CreateComponentRequest,
+        _token: GolemSecurityScheme,
     ) -> ApiResult<Json<Component>> {
         todo!()
     }

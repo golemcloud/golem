@@ -12,26 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common_next::model::auth::AuthCtx;
-use golem_common_next::model::error::ErrorBody;
-use golem_common_next::model::{AccountId, Empty, PluginId};
-use golem_common_next::recorded_http_api_request;
-use golem_service_base_next::api_tags::ApiTags;
-use golem_service_base_next::model::auth::GolemSecurityScheme;
-use poem_openapi::param::{Path, Query};
-use poem_openapi::payload::Json;
-use poem_openapi::OpenApi;
-use std::sync::Arc;
-use tracing::Instrument;
 use super::ApiResult;
 use super::model::Page;
 use super::model::plugins::*;
+use golem_common_next::model::{Empty, PluginId};
+use golem_common_next::recorded_http_api_request;
+use golem_service_base_next::api_tags::ApiTags;
+use golem_service_base_next::model::auth::GolemSecurityScheme;
+use poem_openapi::OpenApi;
+use poem_openapi::param::{Path, Query};
+use poem_openapi::payload::Json;
+use tracing::Instrument;
 
-pub struct PluginsApi { }
+pub struct PluginsApi {}
 
 #[OpenApi(prefix_path = "/v1", tag = ApiTags::Plugin)]
 impl PluginsApi {
-
     /// Lists all the registered plugins (including all versions of each).
     #[oai(path = "/plugins", method = "get", operation_id = "list_plugins")]
     pub async fn list_plugins(
@@ -68,10 +64,7 @@ impl PluginsApi {
         plugin_id: Path<PluginId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<PluginDefinition>> {
-        let record = recorded_http_api_request!(
-            "get_plugin",
-            plugin_id = plugin_id.0
-        );
+        let record = recorded_http_api_request!("get_plugin", plugin_id = plugin_id.0.to_string());
 
         let response = self
             .get_plugin_internal(plugin_id.0, token)
@@ -100,10 +93,8 @@ impl PluginsApi {
         plugin_id: Path<PluginId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Empty>> {
-        let record = recorded_http_api_request!(
-            "delete_plugin",
-            plugin_id = plugin_id.0
-        );
+        let record =
+            recorded_http_api_request!("delete_plugin", plugin_id = plugin_id.0.to_string());
 
         let response = self
             .delete_plugin_internal(plugin_id.0, token)
@@ -182,7 +173,6 @@ impl PluginsApi {
     ) -> ApiResult<Json<Empty>> {
         todo!()
     }
-
 
     /// Registers a new app plugin
     #[oai(

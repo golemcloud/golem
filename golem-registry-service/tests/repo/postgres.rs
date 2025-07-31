@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::repo::Deps;
 use golem_common_next::config::DbPostgresConfig;
 use golem_registry_service::repo::account::{DbAccountRepo, LoggedAccountRepo};
 use golem_registry_service::repo::application::{DbApplicationRepo, LoggedApplicationRepo};

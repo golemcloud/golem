@@ -12,28 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use poem_openapi::{Enum, Multipart, Object, Union};
-use poem_openapi::types::multipart::{JsonField, Upload};
-use golem_common_next::model::{ComponentFilePath, ComponentFilePermissions};
-use golem_service_base_next::poem::TempFileUpload;
-use std::collections::HashMap;
 use golem_common_next::model::agent::AgentTypes;
-
-#[derive(Debug, Copy, Clone, Enum)]
-pub enum ComponentType {
-    Durable,
-    Ephemeral,
-}
+use golem_common_next::model::{ComponentFilePath, ComponentFilePermissions, ComponentType};
+use golem_service_base_next::poem::TempFileUpload;
+use poem_openapi::types::multipart::{JsonField, Upload};
+use poem_openapi::types::{ParseFromJSON, ParseResult};
+use poem_openapi::{Object, Union};
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Object)]
 pub struct ComponentFilePathWithPermissionsList {
     pub values: Vec<ComponentFilePathWithPermissions>,
 }
 
+impl poem_openapi::types::ParseFromMultipartField for ComponentFilePathWithPermissionsList {
+    async fn parse_from_multipart(field: Option<poem::web::Field>) -> ParseResult<Self> {
+        String::parse_from_multipart(field)
+            .await
+            .map_err(|err| err.propagate::<ComponentFilePathWithPermissionsList>())
+            .and_then(|s| ParseFromJSON::parse_from_json_string(&s))
+    }
+}
+
 #[derive(Clone, Debug, Object)]
 pub struct ComponentFilePathWithPermissions {
     pub path: ComponentFilePath,
     pub permissions: ComponentFilePermissions,
+}
+
+#[derive(Clone, Debug, Object)]
+#[oai(rename_all = "camelCase")]
+pub struct ComponentEnv {
+    pub key_values: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, Object)]
@@ -49,12 +59,6 @@ pub enum DynamicLinkedInstance {
 }
 
 #[derive(Debug, Clone, Object)]
-pub struct DynamicLinkedWasmRpc {
-    /// Maps resource names within the dynamic linked interface to target information
-    pub targets: HashMap<String, WasmRpcTarget>,
-}
-
-#[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]
 pub struct WasmRpcTarget {
     pub interface_name: String,
@@ -62,20 +66,20 @@ pub struct WasmRpcTarget {
     pub component_type: ComponentType,
 }
 
-#[derive(Clone, Debug, Object)]
-#[oai(rename_all = "camelCase")]
-pub struct ComponentEnv {
-    pub key_values: HashMap<String, String>,
+#[derive(Debug, Clone, Object)]
+pub struct DynamicLinkedWasmRpc {
+    /// Maps resource names within the dynamic linked interface to target information
+    pub targets: HashMap<String, WasmRpcTarget>,
 }
 
-#[derive(Multipart)]
+#[derive(poem_openapi::Multipart)]
 #[oai(rename_all = "camelCase")]
 pub struct CreateComponentRequest {
-    component: Upload,
-    component_type: Option<ComponentType>,
-    files_permissions: Option<ComponentFilePathWithPermissionsList>,
-    files: Option<TempFileUpload>,
-    dynamic_linking: Option<JsonField<DynamicLinking>>,
-    env: Option<JsonField<ComponentEnv>>,
-    agent_types: Option<JsonField<AgentTypes>>,
+    pub component: Upload,
+    pub component_type: Option<ComponentType>,
+    pub files_permissions: Option<ComponentFilePathWithPermissionsList>,
+    pub files: Option<TempFileUpload>,
+    pub dynamic_linking: Option<JsonField<DynamicLinking>>,
+    pub env: Option<JsonField<ComponentEnv>>,
+    pub agent_types: Option<JsonField<AgentTypes>>,
 }

@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use golem_wasm_ast::analysis::AnalysedExport;
-use serde::{Deserialize, Serialize};
 use golem_common_next::model::base64::Base64;
-use golem_common_next::model::component::{Component, ComponentName, ComponentOwner, VersionedComponentId};
+use golem_common_next::model::component::{Component, ComponentName, VersionedComponentId};
 use golem_common_next::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
 };
 use golem_common_next::model::{
-    AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ProjectId,
+    ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ProjectId,
 };
+use golem_wasm_ast::analysis::AnalysedExport;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

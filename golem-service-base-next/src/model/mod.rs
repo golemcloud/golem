@@ -14,26 +14,21 @@
 
 pub mod auth;
 
-use applying::Apply;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
-use golem_common_next::model::component::{ComponentName, ComponentOwner, VersionedComponentId};
-use golem_common_next::model::component_metadata::ComponentMetadata;
 use golem_common_next::model::oplog::OplogIndex;
-use golem_common_next::model::plugin::{PluginInstallation, PluginInstallationAction};
+use golem_common_next::model::plugin::PluginInstallationAction;
 use golem_common_next::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common_next::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
-    ComponentType, ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter,
-    WorkerId,
+    ComponentVersion, ScanCursor, Timestamp, WorkerFilter, WorkerId,
 };
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
 use golem_wasm_rpc_derive::IntoValue;
-use poem_openapi::{Enum, NewType, Object, Union};
+use poem_openapi::{Enum, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
-use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]

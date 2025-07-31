@@ -14,14 +14,14 @@
 
 use super::{ComponentType, InitialComponentFile, PluginInstallationId, ProjectId};
 use crate::base_model::{ComponentId, ComponentVersion};
+use crate::model::component_metadata::ComponentMetadata;
 use crate::model::AccountId;
 use bincode::{Decode, Encode};
 use core::fmt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
-use crate::model::component_metadata::ComponentMetadata;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,38 +72,6 @@ impl Display for VersionedComponentId {
     }
 }
 
-#[cfg(feature = "protobuf")]
-mod protobuf {
-    use crate::model::component::VersionedComponentId;
-
-    impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId>
-        for VersionedComponentId
-    {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::component::VersionedComponentId,
-        ) -> Result<Self, Self::Error> {
-            Ok(Self {
-                component_id: value
-                    .component_id
-                    .ok_or("Missing component_id")?
-                    .try_into()?,
-                version: value.version,
-            })
-        }
-    }
-
-    impl From<VersionedComponentId> for golem_api_grpc::proto::golem::component::VersionedComponentId {
-        fn from(value: VersionedComponentId) -> Self {
-            Self {
-                component_id: Some(value.component_id.into()),
-                version: value.version,
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -142,4 +110,36 @@ pub struct Component {
     pub files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<PluginInstallation>,
     pub env: HashMap<String, String>,
+}
+
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use crate::model::component::VersionedComponentId;
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId>
+        for VersionedComponentId
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::VersionedComponentId,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                component_id: value
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()?,
+                version: value.version,
+            })
+        }
+    }
+
+    impl From<VersionedComponentId> for golem_api_grpc::proto::golem::component::VersionedComponentId {
+        fn from(value: VersionedComponentId) -> Self {
+            Self {
+                component_id: Some(value.component_id.into()),
+                version: value.version,
+            }
+        }
+    }
 }

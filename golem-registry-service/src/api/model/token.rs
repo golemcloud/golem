@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::{Deserialize, Serialize};
-use poem_openapi::Object;
-use golem_common_next::model::{AccountId, TokenId};
 use chrono::Utc;
+use poem_openapi::Object;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]

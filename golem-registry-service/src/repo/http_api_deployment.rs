@@ -20,7 +20,7 @@ use crate::repo::model::http_api_deployment::{
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::future::BoxFuture;
-use futures::{stream, FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt, stream};
 use golem_service_base_next::db::postgres::PostgresPool;
 use golem_service_base_next::db::sqlite::SqlitePool;
 use golem_service_base_next::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};

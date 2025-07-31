@@ -18,6 +18,7 @@ use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use golem_service_base_next::db::postgres::PostgresPool;
 use golem_service_base_next::db::sqlite::SqlitePool;
 use golem_service_base_next::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};

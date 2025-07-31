@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod account_applications;
 pub mod account_grants;
 pub mod account_tokens;
 pub mod accounts;
+pub mod environment_components;
 pub mod login;
 pub mod model;
 pub mod plugins;
-pub mod account_applications;
-pub mod environment_components;
 // pub mod project;
 
 use golem_common_next::metrics::api::TraceErrorKind;

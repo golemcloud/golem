@@ -13,15 +13,14 @@
 // limitations under the License.
 
 pub mod accounts;
-pub mod login;
-pub mod token;
-pub mod plugins;
 pub mod components;
+pub mod login;
+pub mod plugins;
+pub mod token;
 
-use poem_openapi::{Object, Enum};
-use golem_common_next::model::{AccountId, ProjectId};
+use golem_common_next::model::{AccountId, ApplicationId, EnvironmentId, ProjectId};
 use poem_openapi::types::{ParseFromJSON, ToJSON};
-use golem_common_next::newtype_uuid;
+use poem_openapi::{Enum, Object};
 
 #[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]
@@ -48,7 +47,7 @@ pub enum ProjectType {
 
 #[derive(Debug, Clone, Object)]
 pub struct GetProjectsResponse {
-    pub values: Vec<Project>
+    pub values: Vec<Project>,
 }
 
 #[derive(Debug, Clone, Object)]

@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use poem_openapi::{Multipart, NewType, Object, Union};
 use golem_common_next::model::{ComponentId, ComponentVersion, Empty, PluginId, ProjectId};
-use poem_openapi::types::{Binary, ParseError, ParseFromMultipartField, ParseFromParameter, ParseResult};
-use poem::web::Field;
 use golem_service_base_next::poem::TempFileUpload;
+use poem::web::Field;
+use poem_openapi::types::{
+    Binary, ParseError, ParseFromMultipartField, ParseFromParameter, ParseResult,
+};
+use poem_openapi::{Multipart, NewType, Object, Union};
 
 #[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]
@@ -83,7 +85,7 @@ pub enum PluginScope {
 impl ParseFromParameter for PluginScope {
     fn parse_from_parameter(value: &str) -> ParseResult<Self> {
         if value == "global" {
-            Ok(Self::Global(Empty {  }))
+            Ok(Self::Global(Empty {}))
         } else if let Some(id_part) = value.strip_prefix("component:") {
             let component_id = ComponentId::try_from(id_part);
             match component_id {
@@ -97,7 +99,9 @@ impl ParseFromParameter for PluginScope {
                 Err(err) => Err(ParseError::custom(err)),
             }
         } else {
-            Err(ParseError::custom("Unexpected representation of plugin scope - must be 'global', 'component:<component_id>' or 'project:<project_id>'"))
+            Err(ParseError::custom(
+                "Unexpected representation of plugin scope - must be 'global', 'component:<component_id>' or 'project:<project_id>'",
+            ))
         }
     }
 }

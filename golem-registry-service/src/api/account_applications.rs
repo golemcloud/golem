@@ -12,32 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common_next::model::auth::AuthCtx;
-use golem_common_next::model::error::ErrorBody;
-use golem_common_next::model::{AccountId, Empty, PluginId};
+use super::ApiResult;
+use super::model::{Application, ApplicationData, Environment, EnvironmentData, Page};
+use golem_common_next::model::AccountId;
 use golem_common_next::recorded_http_api_request;
 use golem_service_base_next::api_tags::ApiTags;
 use golem_service_base_next::model::auth::GolemSecurityScheme;
-use poem_openapi::param::{Path, Query};
-use poem_openapi::payload::Json;
 use poem_openapi::OpenApi;
-use std::sync::Arc;
+use poem_openapi::param::Path;
+use poem_openapi::payload::Json;
 use tracing::Instrument;
-use super::ApiResult;
-use super::model::{Application, ApplicationData, Environment, EnvironmentData, Page};
-use super::model::plugins::*;
 
-pub struct AccountApplicationsApi { }
+pub struct AccountApplicationsApi {}
 
 #[OpenApi(prefix_path = "/v1/accounts/:account_id/apps", tag = ApiTags::Plugin)]
 impl AccountApplicationsApi {
-
     /// Get all applications in the account.
-    #[oai(
-        path = "/",
-        method = "get",
-        operation_id = "list_applications"
-    )]
+    #[oai(path = "/", method = "get", operation_id = "list_applications")]
     pub async fn list_applications(
         &self,
         account_id: Path<AccountId>,
@@ -172,7 +163,12 @@ impl AccountApplicationsApi {
         let record = recorded_http_api_request!("get_application_environment_by_name",);
 
         let response = self
-            .get_application_environment_by_name_internal(account_id.0, application_name.0, environment_name.0, token)
+            .get_application_environment_by_name_internal(
+                account_id.0,
+                application_name.0,
+                environment_name.0,
+                token,
+            )
             .instrument(record.span.clone())
             .await;
 
@@ -206,7 +202,13 @@ impl AccountApplicationsApi {
         let record = recorded_http_api_request!("get_application_environment_by_name",);
 
         let response = self
-            .put_application_environment_by_name_internal(account_id.0, application_name.0, environment_name.0, data.0, token)
+            .put_application_environment_by_name_internal(
+                account_id.0,
+                application_name.0,
+                environment_name.0,
+                data.0,
+                token,
+            )
             .instrument(record.span.clone())
             .await;
 
@@ -223,5 +225,4 @@ impl AccountApplicationsApi {
     ) -> ApiResult<Json<Environment>> {
         todo!()
     }
-
 }

@@ -12,24 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ApiError;
+use super::model::login::{Token, TokenWithSecret};
+use super::model::token::CreateTokenRequest;
 use crate::api::ApiResult;
-use golem_common_next::model::auth::AccountAction;
-use golem_common_next::model::error::ErrorBody;
-use golem_common_next::model::{AccountId, Empty};
 use golem_common_next::model::TokenId;
+use golem_common_next::model::{AccountId, Empty};
 use golem_common_next::recorded_http_api_request;
 use golem_service_base_next::api_tags::ApiTags;
 use golem_service_base_next::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
-use std::sync::Arc;
 use tracing::Instrument;
-use super::model::login::{Token, TokenWithSecret};
-use super::model::token::CreateTokenRequest;
 
-pub struct TokenApi { }
+pub struct TokenApi {}
 
 #[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Token)]
 impl TokenApi {
