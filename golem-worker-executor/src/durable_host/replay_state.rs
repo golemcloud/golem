@@ -349,6 +349,7 @@ impl ReplayState {
     ) -> Option<OplogIndex> {
         self.lookup_oplog_entry_with_condition(begin_idx, check, |_, _| true)
             .await
+            .map(|(idx, _)| idx)
     }
 
     pub async fn lookup_oplog_entry_with_condition(
@@ -356,7 +357,7 @@ impl ReplayState {
         begin_idx: OplogIndex,
         end_check: impl Fn(&OplogEntry, OplogIndex) -> bool,
         for_all_intermediate: impl Fn(&OplogEntry, OplogIndex) -> bool,
-    ) -> Option<OplogIndex> {
+    ) -> Option<(OplogIndex, OplogEntry)> {
         let replay_target = self.replay_target.get();
         let mut start = self.last_replayed_index.get().next();
 
@@ -392,7 +393,7 @@ impl ReplayState {
                         .find_next_deleted_region(idx.next());
                 }
                 if end_check(entry, begin_idx) {
-                    return Some(*idx);
+                    return Some((*idx, entry.clone()));
                 } else if !for_all_intermediate(entry, begin_idx) {
                     return None;
                 }
