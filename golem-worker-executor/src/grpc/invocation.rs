@@ -26,6 +26,7 @@ use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
 use golem_wasm_rpc::protobuf::Val;
 use golem_wasm_rpc::{Value, ValueAndType};
 use rib::{ParsedFunctionName, ParsedFunctionSite};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -36,6 +37,7 @@ pub trait CanStartWorker {
     fn worker_id(&self) -> Result<TargetWorkerId, WorkerExecutorError>;
     fn args(&self) -> Option<Vec<String>>;
     fn env(&self) -> Option<Vec<(String, String)>>;
+    fn wasi_config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError>;
     fn parent(&self) -> Option<WorkerId>;
 }
 
@@ -98,6 +100,20 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
         self.proto_invocation_context()
             .as_ref()
             .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
+    }
+
+    fn wasi_config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError> {
+        match self.proto_invocation_context() {
+            Some(ctx) => Ok(Some(
+                ctx.wasi_config_vars
+                    .clone()
+                    .ok_or(WorkerExecutorError::invalid_request(
+                        "wasi_config_vars not found",
+                    ))?
+                    .into(),
+            )),
+            None => Ok(None),
+        }
     }
 
     fn parent(&self) -> Option<WorkerId> {

@@ -60,7 +60,7 @@ use golem_api_grpc::proto::golem::worker::{
     InvokeParameters, InvokeResult, InvokeResultTyped, LogEvent, OplogCursor, OplogEntry,
     OplogEntryWithIndex, PendingUpdate, ResourceMetadata, SuccessfulUpdate, TargetWorkerId,
     UpdateMode, UpdateRecord, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerMetadata,
-    WorkerNameFilter, WorkerStatusFilter, WorkerVersionFilter,
+    WorkerNameFilter, WorkerStatusFilter, WorkerVersionFilter, WorkerWasiConfigVarsFilter,
 };
 use golem_client::api::ApiDefinitionClient as ApiDefinitionServiceHttpClient;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionServiceHttpClientLive;
@@ -75,6 +75,7 @@ use golem_client::model::{
     SecuritySchemeData,
 };
 use golem_client::{Context, Security};
+use golem_common::model::worker::WasiConfigVars;
 use golem_common::model::ProjectId;
 use golem_common::model::WorkerEvent;
 use golem_service_base::clients::authorised_request;
@@ -171,6 +172,10 @@ pub trait WorkerService: Send + Sync {
                             name: request.name,
                             args: request.args,
                             env: request.env,
+                            wasi_config_vars: request
+                                .wasi_config_vars
+                                .expect("no wasi_config_vars field")
+                                .into(),
                         },
                     )
                     .await?;
@@ -1421,6 +1426,7 @@ fn http_worker_metadata_to_grpc(
         project_id: Some(ProjectId(worker_metadata.project_id).into()),
         args: worker_metadata.args,
         env: worker_metadata.env,
+        wasi_config_vars: Some(WasiConfigVars(worker_metadata.wasi_config_vars).into()),
         status: worker_metadata.status.into(),
         component_version: worker_metadata.component_version,
         retry_count: worker_metadata.retry_count,
@@ -1560,6 +1566,18 @@ fn grpc_filter_to_http_filter(filter: Filter) -> Vec<String> {
             }) => {
                 vec![format!(
                     "env.{} {} {}",
+                    name,
+                    grpc_string_filter_comparator_to_http(comparator),
+                    value
+                )]
+            }
+            Filter::WasiConfigVars(WorkerWasiConfigVarsFilter {
+                name,
+                comparator,
+                value,
+            }) => {
+                vec![format!(
+                    "config.{} {} {}",
                     name,
                     grpc_string_filter_comparator_to_http(comparator),
                     value

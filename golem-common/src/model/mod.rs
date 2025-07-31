@@ -12,15 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod agent;
+pub mod auth;
+pub mod base64;
+pub mod component;
+pub mod component_constraint;
+pub mod component_metadata;
+pub mod error;
+pub mod exports;
+pub mod invocation_context;
+pub mod lucene;
+pub mod oplog;
+pub mod plugin;
+#[cfg(feature = "poem")]
+mod poem;
+pub mod project;
+#[cfg(feature = "protobuf")]
+pub mod protobuf;
+pub mod public_oplog;
+pub mod regions;
+pub mod trim_date;
+pub mod worker;
+
+pub use crate::base_model::*;
+use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{IndexedResourceKey, TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-
-pub use crate::base_model::*;
-use crate::model::invocation_context::InvocationContextStack;
 use golem_wasm_ast::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
@@ -30,38 +51,13 @@ use rand::prelude::IteratorRandom;
 use serde::de::Unexpected;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
-
-#[cfg(feature = "model")]
-pub mod agent;
-pub mod auth;
-pub mod base64;
-pub mod component;
-pub mod component_constraint;
-pub mod component_metadata;
-pub mod config;
-pub mod error;
-pub mod exports;
-pub mod invocation_context;
-pub mod lucene;
-pub mod oplog;
-pub mod plugin;
-pub mod project;
-pub mod public_oplog;
-pub mod regions;
-pub mod trim_date;
-
-#[cfg(feature = "poem")]
-mod poem;
-
-#[cfg(feature = "protobuf")]
-pub mod protobuf;
 
 #[cfg(feature = "poem")]
 pub trait PoemTypeRequirements:
@@ -510,6 +506,7 @@ pub struct WorkerMetadata {
     pub env: Vec<(String, String)>,
     pub project_id: ProjectId,
     pub created_by: AccountId,
+    pub wasi_config_vars: BTreeMap<String, String>,
     pub created_at: Timestamp,
     pub parent: Option<WorkerId>,
     pub last_known_status: WorkerStatusRecord,
@@ -527,6 +524,7 @@ impl WorkerMetadata {
             env: vec![],
             project_id,
             created_by,
+            wasi_config_vars: BTreeMap::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord::default(),
@@ -547,6 +545,7 @@ impl IntoValue for WorkerMetadata {
             self.last_known_status.status.into_value(),
             self.last_known_status.component_version.into_value(),
             0u64.into_value(), // retry count could be computed from the worker status record here but we don't support it yet
+            self.wasi_config_vars.into_value(),
         ])
     }
 
@@ -558,6 +557,7 @@ impl IntoValue for WorkerMetadata {
             field("status", WorkerStatus::get_type()),
             field("component-version", u64()),
             field("retry-count", u64()),
+            field("wasi_config_vars", HashMap::<String, String>::get_type()),
         ])
     }
 }
@@ -1091,6 +1091,36 @@ impl Display for WorkerEnvFilter {
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+pub struct WorkerWasiConfigVarsFilter {
+    pub name: String,
+    pub comparator: StringFilterComparator,
+    pub value: String,
+}
+
+impl WorkerWasiConfigVarsFilter {
+    pub fn new(name: String, comparator: StringFilterComparator, value: String) -> Self {
+        Self {
+            name,
+            comparator,
+            value,
+        }
+    }
+}
+
+impl Display for WorkerWasiConfigVarsFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "wasi_config_vars.{} {} {}",
+            self.name, self.comparator, self.value
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerAndFilter {
     pub filters: Vec<WorkerFilter>,
 }
@@ -1178,6 +1208,7 @@ pub enum WorkerFilter {
     And(WorkerAndFilter),
     Or(WorkerOrFilter),
     Not(WorkerNotFilter),
+    WasiConfigVars(WorkerWasiConfigVarsFilter),
 }
 
 impl WorkerFilter {
@@ -1227,6 +1258,16 @@ impl WorkerFilter {
                     }
                 }
                 result
+            }
+            WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter {
+                name,
+                comparator,
+                value,
+            }) => {
+                let env_value = metadata.wasi_config_vars.get(&name);
+                env_value
+                    .map(|ev| comparator.matches(ev, &value))
+                    .unwrap_or(false)
             }
             WorkerFilter::CreatedAt(WorkerCreatedAtFilter { comparator, value }) => {
                 comparator.matches(&metadata.created_at, &value)
@@ -1281,6 +1322,14 @@ impl WorkerFilter {
         WorkerFilter::Env(WorkerEnvFilter::new(name, comparator, value))
     }
 
+    pub fn new_wasi_config_vars(
+        name: String,
+        comparator: StringFilterComparator,
+        value: String,
+    ) -> Self {
+        WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter::new(name, comparator, value))
+    }
+
     pub fn new_version(comparator: FilterComparator, value: ComponentVersion) -> Self {
         WorkerFilter::Version(WorkerVersionFilter::new(comparator, value))
     }
@@ -1318,6 +1367,9 @@ impl Display for WorkerFilter {
                 write!(f, "{filter}")
             }
             WorkerFilter::Env(filter) => {
+                write!(f, "{filter}")
+            }
+            WorkerFilter::WasiConfigVars(filter) => {
                 write!(f, "{filter}")
             }
             WorkerFilter::Not(filter) => {
@@ -2009,7 +2061,7 @@ impl From<ComponentId> for golem_wasm_rpc::ComponentId {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, HashSet};
     use std::str::FromStr;
     use std::time::SystemTime;
     use std::vec;
@@ -2203,6 +2255,7 @@ mod tests {
             created_by: AccountId {
                 value: "account-1".to_string(),
             },
+            wasi_config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord {
@@ -2263,6 +2316,20 @@ mod tests {
                 "worker-2".to_string(),
             ))
             .matches(&worker_metadata));
+
+        assert!(WorkerFilter::new_wasi_config_vars(
+            "var1".to_string(),
+            StringFilterComparator::Equal,
+            "value1".to_string(),
+        )
+        .matches(&worker_metadata));
+
+        assert!(!WorkerFilter::new_wasi_config_vars(
+            "var1".to_string(),
+            StringFilterComparator::Equal,
+            "value2".to_string(),
+        )
+        .matches(&worker_metadata));
     }
 
     #[test]

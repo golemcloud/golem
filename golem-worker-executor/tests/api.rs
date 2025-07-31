@@ -1017,6 +1017,7 @@ async fn component_env_and_worker_env_priority(
             "component-env-variables-1",
             vec![],
             worker_env,
+            vec![],
         )
         .await;
 
@@ -1889,7 +1890,7 @@ async fn long_running_poll_loop_works_as_expected(
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "poll-loop-component-0", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-0", vec![], env, vec![])
         .await;
 
     executor.log_output(&worker_id).await;
@@ -1959,7 +1960,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "poll-loop-component-0", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-0", vec![], env, vec![])
         .await;
 
     executor.log_output(&worker_id).await;
@@ -2027,7 +2028,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "poll-loop-component-1", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-1", vec![], env, vec![])
         .await;
 
     executor.log_output(&worker_id).await;
@@ -2169,7 +2170,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "poll-loop-component-2", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-2", vec![], env, vec![])
         .await;
 
     let mut rx = executor.capture_output_with_termination(&worker_id).await;
@@ -2252,7 +2253,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "poll-loop-component-3", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-3", vec![], env, vec![])
         .await;
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
@@ -2324,7 +2325,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "poll-loop-component-4", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-4", vec![], env, vec![])
         .await;
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
@@ -2453,7 +2454,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "poll-loop-component-5", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-5", vec![], env, vec![])
         .await;
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
@@ -3010,7 +3011,13 @@ async fn invocation_queue_is_persistent(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "invocation-queue-is-persistent", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "invocation-queue-is-persistent",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     executor.log_output(&worker_id).await;

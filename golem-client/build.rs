@@ -86,8 +86,16 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_wasm_rpc::json::OptionallyValueAndTypeJson",
             ),
             (
+                "WasiConfigVarsEntry",
+                "golem_common::model::worker::WasiConfigVarsEntry",
+            ),
+            (
                 "WasmRpcTarget",
                 "golem_common::model::component_metadata::WasmRpcTarget",
+            ),
+            (
+                "WorkerCreationRequest",
+                "golem_common::model::worker::WorkerCreationRequest",
             ),
             ("WorkerFilter", "golem_common::model::WorkerFilter"),
             ("WorkerId", "golem_common::model::WorkerId"),
