@@ -19,13 +19,14 @@
 /// - types specific to this api that are not reused by the client -> golem_registry_service::api::model::*
 
 pub mod components;
-pub mod login;
 
-use golem_common_next::model::{AccountId, ApplicationId, EnvironmentId, ProjectId};
+use golem_common_next::model::{AccountId, ApplicationId, Empty, EnvironmentId, ProjectId};
 use poem_openapi::types::{ParseFromJSON, ToJSON};
-use poem_openapi::{Enum, Object};
+use poem_openapi::{ApiResponse, Enum, Object};
 use golem_common_next::model::plugin::PluginScope;
 use golem_service_base_next::poem::TempFileUpload;
+use poem::web::Json;
+use self::login::TokenWithSecret;
 
 #[derive(Debug, poem_openapi::Multipart)]
 #[oai(rename_all = "camelCase")]
@@ -49,4 +50,24 @@ pub struct CreateAppPluginRequest {
     pub homepage: String,
     pub scope: PluginScope,
     pub wasm: TempFileUpload,
+}
+
+#[derive(Debug, Clone, ApiResponse)]
+pub enum WebFlowPollResponse {
+    /// OAuth flow has completed
+    #[oai(status = 200)]
+    Completed(Json<TokenWithSecret>),
+    /// OAuth flow is pending
+    #[oai(status = 202)]
+    Pending(Json<Empty>),
+}
+
+#[derive(Debug, Clone, ApiResponse)]
+pub enum WebFlowCallbackResponse {
+    /// Redirect to the given URL specified in the web flow start
+    #[oai(status = 302)]
+    Redirect(Json<Empty>, #[oai(header = "Location")] String),
+    /// OAuth flow has completed
+    #[oai(status = 200)]
+    Success(Json<Empty>),
 }

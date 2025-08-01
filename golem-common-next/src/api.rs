@@ -51,3 +51,10 @@ pub enum PluginTypeSpecificCreation {
     ComponentTransformer(ComponentTransformerDefinition),
     OplogProcessor(OplogProcessorDefinition),
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct WebFlowAuthorizeUrlResponse {
+    pub url: String,
+    pub state: String,
+}

@@ -47,6 +47,8 @@ fn rounded_ts(ts: Timestamp) -> Timestamp {
 #[test]
 #[cfg(feature = "poem")]
 fn create_serialization_poem_serde_equivalence() {
+    use uuid::uuid;
+
     let entry = PublicOplogEntry::Create(CreateParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
         worker_id: WorkerId {
@@ -60,9 +62,7 @@ fn create_serialization_poem_serde_equivalence() {
         env: vec![("x".to_string(), "y".to_string())]
             .into_iter()
             .collect(),
-        created_by: AccountId {
-            value: "account_id".to_string(),
-        },
+        created_by: AccountId(uuid!("2C8208FC-2389-41CC-9D40-A891F05B071A")),
         wasi_config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]).into(),
         project_id: ProjectId::new_v4(),
         parent: Some(WorkerId {

@@ -24,6 +24,7 @@ pub mod error;
 pub mod exports;
 pub mod invocation_context;
 pub mod lucene;
+pub mod login;
 pub mod oplog;
 pub mod plugin;
 #[cfg(feature = "poem")]
@@ -935,48 +936,6 @@ impl<'de, Context> BorrowDecode<'de, Context> for WorkerInvocation {
 pub struct TimestampedWorkerInvocation {
     pub timestamp: Timestamp,
     pub invocation: WorkerInvocation,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialOrd,
-    Ord,
-    derive_more::FromStr,
-    Eq,
-    Hash,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Encode,
-    Decode,
-    IntoValue,
-)]
-#[serde(transparent)]
-pub struct AccountId {
-    pub value: String,
-}
-
-impl AccountId {
-    pub fn generate() -> Self {
-        Self {
-            value: Uuid::new_v4().to_string(),
-        }
-    }
-}
-
-impl From<&str> for AccountId {
-    fn from(value: &str) -> Self {
-        Self {
-            value: value.to_string(),
-        }
-    }
-}
-
-impl Display for AccountId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.value)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
@@ -2081,6 +2040,7 @@ mod tests {
 
     use rand::{rng, Rng};
     use serde::{Deserialize, Serialize};
+    use uuid::uuid;
 
     #[test]
     fn timestamp_conversion() {
@@ -2096,30 +2056,6 @@ mod tests {
     #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
     struct ExampleWithAccountId {
         account_id: AccountId,
-    }
-
-    #[test]
-    fn account_id_from_json_apigateway_version() {
-        let json = "{ \"account_id\": \"account-1\" }";
-        let example: ExampleWithAccountId = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            example.account_id,
-            AccountId {
-                value: "account-1".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn account_id_json_serialization() {
-        // We want to use this variant for serialization because it is used on the public API gateway API
-        let example: ExampleWithAccountId = ExampleWithAccountId {
-            account_id: AccountId {
-                value: "account-1".to_string(),
-            },
-        };
-        let json = serde_json::to_string(&example).unwrap();
-        assert_eq!(json, "{\"account_id\":\"account-1\"}");
     }
 
     #[test]
@@ -2254,9 +2190,7 @@ mod tests {
                 ("env2".to_string(), "value2".to_string()),
             ],
             project_id: ProjectId::new_v4(),
-            created_by: AccountId {
-                value: "account-1".to_string(),
-            },
+            created_by: AccountId(uuid!("2C8208FC-2389-41CC-9D40-A891F05B071A")),
             wasi_config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
             created_at: Timestamp::now_utc(),
             parent: None,

@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use serde::{Deserialize, Serialize};
+use super::{AccountId, TokenId};
 use chrono::Utc;
-use golem_common_next::model::{AccountId, Empty, TokenId};
-use poem_openapi::ApiResponse;
-use poem_openapi::payload::Json;
-use poem_openapi_derive::Object;
 
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 pub struct Token {
     pub id: TokenId,
     pub account_id: AccountId,
@@ -27,14 +27,17 @@ pub struct Token {
     pub expires_at: chrono::DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Object)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct TokenWithSecret {
     pub data: Token,
     pub secret: String,
 }
 
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 pub struct OAuth2Data {
     pub url: String,
     pub user_code: String,
