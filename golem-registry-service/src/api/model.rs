@@ -27,7 +27,7 @@ use golem_service_base_next::poem::TempFileUpload;
 use poem_openapi::payload::Json;
 use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::types::{ParseFromJSON, ParseResult};
-use poem_openapi::{ApiResponse, Object};
+use poem_openapi::{ApiResponse, Multipart, Object};
 use std::collections::HashMap;
 
 #[derive(Debug, poem_openapi::Multipart)]
@@ -100,11 +100,23 @@ pub struct DynamicLinking {
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
 }
 
-#[derive(poem_openapi::Multipart)]
+#[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 pub struct CreateComponentRequest {
     pub component: Upload,
     pub component_type: Option<ComponentType>,
+    pub files_permissions: Option<ComponentFilePathWithPermissionsList>,
+    pub files: Option<TempFileUpload>,
+    pub dynamic_linking: Option<JsonField<DynamicLinking>>,
+    pub env: Option<JsonField<ComponentEnv>>,
+    pub agent_types: Option<JsonField<AgentTypes>>,
+}
+
+#[derive(Multipart)]
+#[oai(rename_all = "camelCase")]
+pub struct UpdateComponentRequest {
+    pub component_type: Option<ComponentType>,
+    pub component: Upload,
     pub files_permissions: Option<ComponentFilePathWithPermissionsList>,
     pub files: Option<TempFileUpload>,
     pub dynamic_linking: Option<JsonField<DynamicLinking>>,

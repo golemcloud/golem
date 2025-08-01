@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::ApiResult;
-use super::model::CreateComponentRequest;
+use super::model::{CreateComponentRequest, UpdateComponentRequest};
 use golem_common_next::model::component::{Component, ComponentName};
 use golem_common_next::recorded_http_api_request;
 use golem_service_base_next::api_tags::ApiTags;
@@ -23,40 +23,44 @@ use poem_openapi::*;
 use tracing::Instrument;
 use poem_openapi::param::Path;
 use golem_common_next::model::EnvironmentId;
+use golem_common_next::model::auth::AuthCtx;
+use golem_common_next::api::Page;
 
 pub struct EnvironmentComponentsApi {}
 
 #[OpenApi(prefix_path = "/v1/envs/{environment_id}/components", tag = ApiTags::Component)]
 impl EnvironmentComponentsApi {
-    /// Create a new component
-    ///
-    /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-    /// If the component type is not specified, it will be considered as a `Durable` component.
+    /// Get all components
     #[oai(
         path = "/",
-        method = "post",
-        operation_id = "create_component"
+        method = "get",
+        operation_id = "get_components"
     )]
-    async fn create_component(
+    async fn get_components(
         &self,
         environment_id: Path<EnvironmentId>,
-        payload: CreateComponentRequest,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Component>> {
-        let record = recorded_http_api_request!("create_component",);
+    ) -> ApiResult<Json<Page<Component>>> {
+        let record = recorded_http_api_request!(
+            "get_components",
+            environment_id = environment_id.0.to_string(),
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
         let response = self
-            .create_component_internal(environment_id.0, payload, token)
+            .get_components_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
+
         record.result(response)
     }
 
-    async fn create_component_internal(
+    async fn get_components_internal(
         &self,
         _environment_id: EnvironmentId,
-        _payload: CreateComponentRequest,
-        _token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Component>> {
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Page<Component>>> {
         todo!()
     }
 
@@ -72,11 +76,19 @@ impl EnvironmentComponentsApi {
         component_name: Path<ComponentName>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Component>> {
-        let record = recorded_http_api_request!("create_component",);
+        let record = recorded_http_api_request!(
+            "get_component_by_name",
+            environment_id = environment_id.0.to_string(),
+            component_name = component_name.0.to_string()
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
         let response = self
-            .get_component_by_name_internal(environment_id.0, component_name.0, token)
+            .get_component_by_name_internal(environment_id.0, component_name.0, auth)
             .instrument(record.span.clone())
             .await;
+
         record.result(response)
     }
 
@@ -84,7 +96,49 @@ impl EnvironmentComponentsApi {
         &self,
         _environment_id: EnvironmentId,
         _component_name: ComponentName,
-        _token: GolemSecurityScheme,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Component>> {
+        todo!()
+    }
+
+    /// Create or update a component by name
+    ///
+    /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+    /// If the component type is not specified, it will be considered as a `Durable` component.
+    #[oai(
+        path = "/:component_name",
+        method = "put",
+        operation_id = "put_component"
+    )]
+    async fn put_component(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        component_name: Path<ComponentName>,
+        payload: CreateComponentRequest,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Component>> {
+        let record = recorded_http_api_request!(
+            "put_component",
+            environment_id = environment_id.0.to_string(),
+            component_name = component_name.0.to_string()
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .put_component_internal(environment_id.0, component_name.0, payload, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn put_component_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_name: ComponentName,
+        _payload: CreateComponentRequest,
+        _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         todo!()
     }
