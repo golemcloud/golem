@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod account;
 pub mod agent;
 pub mod auth;
 pub mod base64;
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
+pub mod environment;
 pub mod error;
 pub mod exports;
 pub mod invocation_context;

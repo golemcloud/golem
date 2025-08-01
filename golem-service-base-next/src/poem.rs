@@ -26,6 +26,13 @@ use std::{
 };
 use tempfile::NamedTempFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
+use golem_common_next::model::plugin::PluginScope;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, poem_openapi::Object)]
+pub struct Page<T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON> {
+    pub values: Vec<T>,
+}
 
 /// A uploaded file for multipart.
 ///

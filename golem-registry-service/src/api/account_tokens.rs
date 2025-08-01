@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::model::login::{Token, TokenWithSecret};
-use super::model::token::CreateTokenRequest;
 use crate::api::ApiResult;
 use golem_common_next::model::TokenId;
 use golem_common_next::model::{AccountId, Empty};
@@ -24,6 +23,7 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::Instrument;
+use golem_common_next::api::CreateTokenRequest;
 
 pub struct TokenApi {}
 

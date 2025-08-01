@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::ApiResult;
-use super::model::accounts::*;
 use golem_common_next::model::{AccountId, Empty};
 use golem_common_next::recorded_http_api_request;
 use golem_service_base_next::api_tags::ApiTags;
@@ -23,6 +22,8 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::Instrument;
+use golem_common_next::api::Page;
+use golem_common_next::model::account::{Account, AccountData, Plan};
 
 pub struct AccountsApi {}
 
@@ -36,7 +37,7 @@ impl AccountsApi {
         &self,
         email: Query<Option<String>>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<FindAccountsResponse>> {
+    ) -> ApiResult<Json<Page<Account>>> {
         let record = recorded_http_api_request!("find_accounts", email = email.0);
         let response = self
             .find_accounts_internal(email.0, token)
@@ -50,7 +51,7 @@ impl AccountsApi {
         &self,
         _email: Option<String>,
         _token: GolemSecurityScheme,
-    ) -> ApiResult<Json<FindAccountsResponse>> {
+    ) -> ApiResult<Json<Page<Account>>> {
         todo!()
     }
 

@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common_next::model::{AccountId, PlanId};
-use poem_openapi_derive::Object;
+use serde::{Deserialize, Serialize};
+use super::{AccountId, PlanId};
 
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct Account {
     pub id: AccountId,
     pub name: String,
@@ -24,21 +26,28 @@ pub struct Account {
     pub plan_id: PlanId,
 }
 
-#[derive(Debug, Clone, Object)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct AccountData {
     pub name: String,
     pub email: String,
 }
 
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct Plan {
     pub plan_id: PlanId,
     pub plan_data: PlanData,
 }
 
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct PlanData {
     pub project_limit: i32,
     pub component_limit: i32,
@@ -46,9 +55,4 @@ pub struct PlanData {
     pub storage_limit: i32,
     pub monthly_gas_limit: i64,
     pub monthly_upload_limit: i32,
-}
-
-#[derive(Debug, Clone, Object)]
-pub struct FindAccountsResponse {
-    pub values: Vec<Account>,
 }

@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use super::ApiResult;
-use super::model::Page;
-use super::model::plugins::*;
 use golem_common_next::model::{Empty, PluginId};
 use golem_common_next::recorded_http_api_request;
 use golem_service_base_next::api_tags::ApiTags;
@@ -23,6 +21,9 @@ use poem_openapi::OpenApi;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use tracing::Instrument;
+use golem_common_next::api::{CreatePluginRequest, Page};
+use golem_common_next::model::plugin::{PluginDefinition, PluginScope};
+use super::model::{CreateAppPluginRequest, CreateLibraryPluginRequest};
 
 pub struct PluginsApi {}
 

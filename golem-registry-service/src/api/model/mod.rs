@@ -12,81 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod accounts;
+/// Organization of api types is as follows:
+/// - domain types that are reused in the http api / clients -> golem_common::model::*
+/// - api specific types that are reused by the clients -> golem_common::api::*
+/// - general server-side only utilities -> golem_service_base::api::*
+/// - types specific to this api that are not reused by the client -> golem_registry_service::api::model::*
+
 pub mod components;
 pub mod login;
-pub mod plugins;
-pub mod token;
 
 use golem_common_next::model::{AccountId, ApplicationId, EnvironmentId, ProjectId};
 use poem_openapi::types::{ParseFromJSON, ToJSON};
 use poem_openapi::{Enum, Object};
+use golem_common_next::model::plugin::PluginScope;
+use golem_service_base_next::poem::TempFileUpload;
 
-#[derive(Debug, Clone, Object)]
+#[derive(Debug, poem_openapi::Multipart)]
 #[oai(rename_all = "camelCase")]
-pub struct Project {
-    pub project_id: ProjectId,
-    pub project_data: ProjectData,
-}
-
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
-pub struct ProjectData {
+pub struct CreateLibraryPluginRequest {
     pub name: String,
-    pub owner_account_id: AccountId,
+    pub version: String,
     pub description: String,
-    pub default_environment_id: String,
-    pub project_type: ProjectType,
+    pub icon: poem_openapi::types::Binary<Vec<u8>>,
+    pub homepage: String,
+    pub scope: PluginScope,
+    pub wasm: TempFileUpload,
 }
 
-#[derive(Debug, Clone, Enum)]
-pub enum ProjectType {
-    Default,
-    NonDefault,
-}
-
-#[derive(Debug, Clone, Object)]
-pub struct GetProjectsResponse {
-    pub values: Vec<Project>,
-}
-
-#[derive(Debug, Clone, Object)]
+#[derive(Debug, poem_openapi::Multipart)]
 #[oai(rename_all = "camelCase")]
-pub struct CreateProjectRequest {
+pub struct CreateAppPluginRequest {
     pub name: String,
-    pub owner_account_id: AccountId,
+    pub version: String,
     pub description: String,
-}
-
-#[derive(Debug, Clone, Object)]
-pub struct Page<T: poem_openapi::types::Type + ParseFromJSON + ToJSON> {
-    pub values: Vec<T>,
-}
-
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
-pub struct Application {
-    pub id: ApplicationId,
-    pub account_id: AccountId,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
-pub struct ApplicationData {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
-pub struct Environment {
-    pub id: EnvironmentId,
-    pub application_id: ApplicationId,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
-pub struct EnvironmentData {
-    pub name: String,
+    pub icon: poem_openapi::types::Binary<Vec<u8>>,
+    pub homepage: String,
+    pub scope: PluginScope,
+    pub wasm: TempFileUpload,
 }

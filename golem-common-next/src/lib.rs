@@ -17,6 +17,9 @@ use std::convert::Infallible;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+#[cfg(feature = "model")]
+pub mod api;
+
 #[cfg(feature = "base-model")]
 pub mod base_model;
 
