@@ -23,6 +23,7 @@ use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use tracing::Instrument;
+use golem_common_next::model::auth::AuthCtx;
 
 pub struct AccountApplicationsApi {}
 
@@ -35,10 +36,15 @@ impl AccountApplicationsApi {
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<Application>>> {
-        let record = recorded_http_api_request!("list_plugins",);
+        let record = recorded_http_api_request!(
+            "list_plugins",
+            account_id = account_id.0.to_string()
+        );
+
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .list_applications_internal(account_id.0, token)
+            .list_applications_internal(account_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -48,7 +54,7 @@ impl AccountApplicationsApi {
     async fn list_applications_internal(
         &self,
         _account_id: AccountId,
-        _token: GolemSecurityScheme,
+        _auth: AuthCtx,
     ) -> ApiResult<Json<Page<Application>>> {
         todo!()
     }
@@ -57,62 +63,109 @@ impl AccountApplicationsApi {
     #[oai(
         path = "/:application_name",
         method = "get",
-        operation_id = "get_application_by_name"
+        operation_id = "get_application"
     )]
-    pub async fn get_application_by_name(
+    pub async fn get_application(
         &self,
         account_id: Path<AccountId>,
         application_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Application>> {
-        let record = recorded_http_api_request!("get_application_by_name",);
+        let record = recorded_http_api_request!("get_application",);
+
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .get_application_by_name_internal(account_id.0, application_name.0, token)
+            .get_application_internal(account_id.0, application_name.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_application_by_name_internal(
+    async fn get_application_internal(
         &self,
         _account_id: AccountId,
         _application_name: String,
-        _token: GolemSecurityScheme,
+        _auth: AuthCtx,
     ) -> ApiResult<Json<Application>> {
         todo!()
     }
 
-    /// Update or create an application by name
+    /// Create an application by name
     #[oai(
         path = "/:application_name",
-        method = "put",
-        operation_id = "put_application_by_name"
+        method = "post",
+        operation_id = "create_application"
     )]
-    pub async fn put_application_by_name(
+    pub async fn create_application(
         &self,
         account_id: Path<AccountId>,
         application_name: Path<String>,
-        data: Json<ApplicationData>,
+        data: Json<CreateApplicationRequest>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Application>> {
-        let record = recorded_http_api_request!("put_application_by_name",);
+        let record = recorded_http_api_request!(
+            "create_application",
+            account_id = account_id.0.to_string(),
+            application_name = application_name.0
+        );
+
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .put_application_by_name_internal(account_id.0, application_name.0, data.0, token)
+            .create_application_internal(account_id.0, application_name.0, data.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn put_application_by_name_internal(
+    async fn create_application_internal(
         &self,
         _account_id: AccountId,
         _application_name: String,
-        _data: ApplicationData,
-        _token: GolemSecurityScheme,
+        _data: CreateApplicationRequest,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Application>> {
+        todo!()
+    }
+
+    /// Update an application by name
+    #[oai(
+        path = "/:application_name",
+        method = "patch",
+        operation_id = "update_application"
+    )]
+    pub async fn update_application(
+        &self,
+        account_id: Path<AccountId>,
+        application_name: Path<String>,
+        data: Json<UpdateApplicationRequest>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Application>> {
+        let record = recorded_http_api_request!(
+            "update_application",
+            account_id = account_id.0.to_string(),
+            application_name = application_name.0
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .update_application_internal(account_id.0, application_name.0, data.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn update_application_internal(
+        &self,
+        _account_id: AccountId,
+        _application_name: String,
+        _data: UpdateApplicationRequest,
+        _auth: AuthCtx,
     ) -> ApiResult<Json<Application>> {
         todo!()
     }
@@ -129,10 +182,16 @@ impl AccountApplicationsApi {
         application_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<Environment>>> {
-        let record = recorded_http_api_request!("list_application_environments",);
+        let record = recorded_http_api_request!(
+            "list_application_environments",
+            account_id = account_id.0.to_string(),
+            application_name = application_name.0
+        );
+
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .list_application_environments_internal(account_id.0, application_name.0, token)
+            .list_application_environments_internal(account_id.0, application_name.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -143,7 +202,7 @@ impl AccountApplicationsApi {
         &self,
         _account_id: AccountId,
         _application_name: String,
-        _token: GolemSecurityScheme,
+        _auth: AuthCtx,
     ) -> ApiResult<Json<Page<Environment>>> {
         todo!()
     }
@@ -152,23 +211,30 @@ impl AccountApplicationsApi {
     #[oai(
         path = "/:application_name/envs/:environment_name",
         method = "get",
-        operation_id = "get_application_environment_by_name"
+        operation_id = "get_application_environment"
     )]
-    pub async fn get_application_environment_by_name(
+    pub async fn get_application_environment(
         &self,
         account_id: Path<AccountId>,
         application_name: Path<String>,
         environment_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Environment>> {
-        let record = recorded_http_api_request!("get_application_environment_by_name",);
+        let record = recorded_http_api_request!(
+            "get_application_environment",
+            account_id = account_id.0.to_string(),
+            application_name = application_name.0,
+            environment_name = environment_name.0
+        );
+
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .get_application_environment_by_name_internal(
+            .get_application_environment_internal(
                 account_id.0,
                 application_name.0,
                 environment_name.0,
-                token,
+                auth,
             )
             .instrument(record.span.clone())
             .await;
@@ -176,39 +242,46 @@ impl AccountApplicationsApi {
         record.result(response)
     }
 
-    async fn get_application_environment_by_name_internal(
+    async fn get_application_environment_internal(
         &self,
         _account_id: AccountId,
         _application_name: String,
         _environment_name: String,
-        _token: GolemSecurityScheme,
+        _auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
         todo!()
     }
 
-    /// Create or update application environment by name
+    /// Create an application environment by name
     #[oai(
         path = "/:application_name/envs/:environment_name",
-        method = "put",
-        operation_id = "put_application_environment_by_name"
+        method = "post",
+        operation_id = "create_application_environment"
     )]
-    pub async fn put_application_environment_by_name(
+    pub async fn create_application_environment(
         &self,
         account_id: Path<AccountId>,
         application_name: Path<String>,
         environment_name: Path<String>,
-        data: Json<EnvironmentData>,
+        data: Json<CreateEnvironmentRequest>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Environment>> {
-        let record = recorded_http_api_request!("get_application_environment_by_name",);
+        let record = recorded_http_api_request!(
+            "create_application_environment",
+            account_id = account_id.0.to_string(),
+            application_name = application_name.0,
+            environment_name = environment_name.0
+        );
+
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .put_application_environment_by_name_internal(
+            .create_application_environment_internal(
                 account_id.0,
                 application_name.0,
                 environment_name.0,
                 data.0,
-                token,
+                auth,
             )
             .instrument(record.span.clone())
             .await;
@@ -216,13 +289,61 @@ impl AccountApplicationsApi {
         record.result(response)
     }
 
-    async fn put_application_environment_by_name_internal(
+    async fn create_application_environment_internal(
         &self,
         _account_id: AccountId,
         _application_name: String,
         _environment_name: String,
-        _data: EnvironmentData,
-        _token: GolemSecurityScheme,
+        _data: CreateEnvironmentRequest,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Environment>> {
+        todo!()
+    }
+
+    /// Update an application environment by name
+    #[oai(
+        path = "/:application_name/envs/:environment_name",
+        method = "patch",
+        operation_id = "update_application_environment"
+    )]
+    pub async fn update_application_environment(
+        &self,
+        account_id: Path<AccountId>,
+        application_name: Path<String>,
+        environment_name: Path<String>,
+        data: Json<UpdateEnvironmentRequest>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Environment>> {
+        let record = recorded_http_api_request!(
+            "update_application_environment",
+            account_id = account_id.0.to_string(),
+            application_name = application_name.0,
+            environment_name = environment_name.0
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .update_application_environment_internal(
+                account_id.0,
+                application_name.0,
+                environment_name.0,
+                data.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn update_application_environment_internal(
+        &self,
+        _account_id: AccountId,
+        _application_name: String,
+        _environment_name: String,
+        _data: UpdateEnvironmentRequest,
+        _auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
         todo!()
     }

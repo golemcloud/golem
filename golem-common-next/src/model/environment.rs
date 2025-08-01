@@ -27,8 +27,15 @@ pub struct Application {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-pub struct ApplicationData {
+pub struct CreateApplicationRequest {
     pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct UpdateApplicationRequest {
+    pub previous_version: u64,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +50,13 @@ pub struct Environment {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-pub struct EnvironmentData {
+pub struct CreateEnvironmentRequest {
     pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+pub struct UpdateEnvironmentRequest {
+    pub previous_version: u64,
+    pub name: Option<String>,
 }

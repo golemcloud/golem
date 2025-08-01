@@ -17,10 +17,10 @@ pub mod account_grants;
 pub mod account_tokens;
 pub mod accounts;
 pub mod environment_components;
+pub mod environment_api_definitions;
 pub mod login;
 pub mod model;
 pub mod plugins;
-// pub mod project;
 
 use golem_common_next::metrics::api::TraceErrorKind;
 use golem_common_next::model::error::{ErrorBody, ErrorsBody};
