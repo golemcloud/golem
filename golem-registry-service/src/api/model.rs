@@ -21,8 +21,8 @@
 use golem_common_next::model::agent::{AgentType};
 use golem_common_next::model::component_metadata::DynamicLinkedInstance;
 use golem_common_next::model::login::TokenWithSecret;
-use golem_common_next::model::plugin::PluginScope;
-use golem_common_next::model::{ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentType, Empty};
+use golem_common_next::model::plugin::{PluginInstallationAction, PluginScope};
+use golem_common_next::model::{ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentType, ComponentVersion, Empty};
 use golem_service_base_next::poem::TempFileUpload;
 use poem_openapi::payload::Json;
 use poem_openapi::types::multipart::{JsonField, Upload};
@@ -111,19 +111,13 @@ pub struct ComponentFileOptionsForUpdate {
     pub permissions: ComponentFilePermissions,
 }
 
-#[derive(Clone, Debug, Object)]
-#[oai(rename_all = "camelCase")]
-pub struct DynamicLinking {
-    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-}
-
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 pub struct CreateComponentRequest {
     pub component: Upload,
     pub component_type: Option<ComponentType>,
-    pub files: Option<TempFileUpload>,
-    pub files_options: Option<JsonField<HashMap<ComponentFilePath, ComponentFileOptions>>>,
+    pub files: Option<JsonField<HashMap<ComponentFilePath, ComponentFileOptions>>>,
+    pub files_archive: Option<TempFileUpload>,
     pub dynamic_linking: Option<JsonField<HashMap<String, DynamicLinkedInstance>>>,
     pub env: Option<JsonField<HashMap<String, String>>>,
     pub agent_types: Option<JsonField<Vec<AgentType>>>,
@@ -132,11 +126,13 @@ pub struct CreateComponentRequest {
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 pub struct UpdateComponentRequest {
+    pub previous_version: ComponentVersion,
     pub component_type: Option<ComponentType>,
     pub component: Option<Upload>,
-    pub files: Option<TempFileUpload>,
-    pub files_options: Option<JsonField<HashMap<ComponentFilePath, ComponentFileOptionsForUpdate>>>,
+    pub files: Option<JsonField<HashMap<ComponentFilePath, ComponentFileOptionsForUpdate>>>,
+    pub files_archive: Option<TempFileUpload>,
     pub dynamic_linking: Option<JsonField<HashMap<String, DynamicLinkedInstance>>>,
     pub env: Option<JsonField<HashMap<String, String>>>,
     pub agent_types: Option<JsonField<Vec<AgentType>>>,
+    pub plugin_installation_actions: Option<JsonField<Vec<PluginInstallationAction>>>
 }

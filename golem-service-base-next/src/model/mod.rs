@@ -543,8 +543,3 @@ impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::Rever
         }
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct BatchPluginInstallationUpdates {
-    pub actions: Vec<PluginInstallationAction>,
-}

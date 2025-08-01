@@ -18,19 +18,20 @@ use golem_common_next::model::component::{Component, ComponentName};
 use golem_common_next::recorded_http_api_request;
 use golem_service_base_next::api_tags::ApiTags;
 use golem_service_base_next::model::auth::GolemSecurityScheme;
-use poem_openapi::payload::Json;
+use poem_openapi::payload::{Binary, Json};
 use poem_openapi::*;
 use tracing::Instrument;
 use poem_openapi::param::Path;
 use golem_common_next::model::EnvironmentId;
 use golem_common_next::model::auth::AuthCtx;
 use golem_common_next::api::Page;
+use poem::Body;
 
 pub struct EnvironmentComponentsApi {}
 
 #[OpenApi(prefix_path = "/v1/envs/:environment_id/components", tag = ApiTags::Component)]
 impl EnvironmentComponentsApi {
-    /// Get all components
+    /// Get all components in the environment
     #[oai(
         path = "/",
         method = "get",
@@ -64,20 +65,20 @@ impl EnvironmentComponentsApi {
         todo!()
     }
 
-    /// Get a component in an environment by name
+    /// Get a component in the environment by name
     #[oai(
         path = "/:component_name",
         method = "get",
-        operation_id = "get_component_by_name"
+        operation_id = "get_component"
     )]
-    async fn get_component_by_name(
+    async fn get_component(
         &self,
         environment_id: Path<EnvironmentId>,
         component_name: Path<ComponentName>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Component>> {
         let record = recorded_http_api_request!(
-            "get_component_by_name",
+            "get_component",
             environment_id = environment_id.0.to_string(),
             component_name = component_name.0.to_string()
         );
@@ -85,19 +86,56 @@ impl EnvironmentComponentsApi {
         let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .get_component_by_name_internal(environment_id.0, component_name.0, auth)
+            .get_component_internal(environment_id.0, component_name.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_component_by_name_internal(
+    async fn get_component_internal(
         &self,
         _environment_id: EnvironmentId,
         _component_name: ComponentName,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
+        todo!()
+    }
+
+    /// Get all revisions for a component in the environment
+    #[oai(
+        path = "/:component_name/revisions",
+        method = "get",
+        operation_id = "get_component_revisions"
+    )]
+    async fn get_component_revisions(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        component_name: Path<ComponentName>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<Component>>> {
+        let record = recorded_http_api_request!(
+            "get_component_revisions",
+            environment_id = environment_id.0.to_string(),
+            component_name = component_name.0.to_string()
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .get_component_revisions_internal(environment_id.0, component_name.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_component_revisions_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_name: ComponentName,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Page<Component>>> {
         todo!()
     }
 
@@ -180,6 +218,43 @@ impl EnvironmentComponentsApi {
         _payload: UpdateComponentRequest,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
+        todo!()
+    }
+
+    /// Get the component wasm binary
+    #[oai(
+        path = "/:component_name/wasm",
+        method = "get",
+        operation_id = "get_component_wasm"
+    )]
+    async fn get_component_wasm(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        component_name: Path<ComponentName>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Binary<Body>> {
+        let record = recorded_http_api_request!(
+            "get_component_wasm",
+            environment_id = environment_id.0.to_string(),
+            component_name = component_name.0.to_string()
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .get_component_wasm_internal(environment_id.0, component_name.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_component_wasm_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_name: ComponentName,
+        _auth: AuthCtx,
+    ) -> ApiResult<Binary<Body>> {
         todo!()
     }
 }
