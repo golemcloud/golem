@@ -1817,10 +1817,10 @@ impl<'de> Deserialize<'de> for ComponentFilePath {
     }
 }
 
-impl TryFrom<&str> for ComponentFilePath {
-    type Error = String;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::from_either_str(value)
+impl FromStr for ComponentFilePath {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_either_str(s)
     }
 }
 

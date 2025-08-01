@@ -210,11 +210,3 @@ pub struct TextSource {
 pub struct TextType {
     pub language_code: String,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct AgentTypes {
-    pub types: Vec<AgentType>,
-}

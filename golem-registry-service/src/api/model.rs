@@ -18,17 +18,21 @@
 //! - general server-side only utilities -> golem_service_base::api::*
 //! - types specific to this api that are not reused by the client -> golem_registry_service::api::model::*
 
-use golem_common_next::model::agent::AgentTypes;
+use golem_common_next::model::agent::{AgentType};
 use golem_common_next::model::component_metadata::DynamicLinkedInstance;
 use golem_common_next::model::login::TokenWithSecret;
 use golem_common_next::model::plugin::PluginScope;
-use golem_common_next::model::{ComponentFilePathWithPermissions, ComponentType, Empty};
+use golem_common_next::model::{ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentType, Empty};
 use golem_service_base_next::poem::TempFileUpload;
 use poem_openapi::payload::Json;
 use poem_openapi::types::multipart::{JsonField, Upload};
-use poem_openapi::types::{ParseFromJSON, ParseResult};
-use poem_openapi::{ApiResponse, Multipart, Object};
+use poem_openapi::types::{ParseError, ParseFromJSON, ParseResult};
+use poem_openapi::{ApiResponse, Multipart, NewType, Object, Union};
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::fmt::format;
+use std::borrow::Cow;
+use poem_openapi::registry::{MetaSchemaRef, MetaSchema};
 
 #[derive(Debug, poem_openapi::Multipart)]
 #[oai(rename_all = "camelCase")]
@@ -75,23 +79,36 @@ pub enum WebFlowCallbackResponse {
 }
 
 #[derive(Clone, Debug, Object)]
-pub struct ComponentFilePathWithPermissionsList {
-    pub values: Vec<ComponentFilePathWithPermissions>,
-}
-
-impl poem_openapi::types::ParseFromMultipartField for ComponentFilePathWithPermissionsList {
-    async fn parse_from_multipart(field: Option<poem::web::Field>) -> ParseResult<Self> {
-        String::parse_from_multipart(field)
-            .await
-            .map_err(|err| err.propagate::<ComponentFilePathWithPermissionsList>())
-            .and_then(|s| ParseFromJSON::parse_from_json_string(&s))
-    }
+pub struct PreviousVersionComponentFileSource {
+    /// path in the filesystem of the previous component version
+    path_in_previous_version: String
 }
 
 #[derive(Clone, Debug, Object)]
-#[oai(rename_all = "camelCase")]
-pub struct ComponentEnv {
-    pub key_values: HashMap<String, String>,
+pub struct ArchiveComponentFileSource {
+    /// path in the archive that was uploaded as part of this request
+    path_in_archive: String
+}
+
+#[derive(Clone, Debug, Union)]
+#[oai(one_of = true)]
+pub enum ComponentFileSource {
+    PreviousVersion(PreviousVersionComponentFileSource),
+    Archive(ArchiveComponentFileSource)
+}
+
+#[derive(Clone, Debug, Object)]
+pub struct ComponentFileOptions {
+    /// Path of the file in the uploaded archive
+    pub source: ArchiveComponentFileSource,
+    pub permissions: ComponentFilePermissions,
+}
+
+#[derive(Clone, Debug, Object)]
+pub struct ComponentFileOptionsForUpdate {
+    /// Path of the file in the uploaded archive
+    pub source: ComponentFileSource,
+    pub permissions: ComponentFilePermissions,
 }
 
 #[derive(Clone, Debug, Object)]
@@ -105,21 +122,21 @@ pub struct DynamicLinking {
 pub struct CreateComponentRequest {
     pub component: Upload,
     pub component_type: Option<ComponentType>,
-    pub files_permissions: Option<ComponentFilePathWithPermissionsList>,
     pub files: Option<TempFileUpload>,
-    pub dynamic_linking: Option<JsonField<DynamicLinking>>,
-    pub env: Option<JsonField<ComponentEnv>>,
-    pub agent_types: Option<JsonField<AgentTypes>>,
+    pub files_options: Option<JsonField<HashMap<ComponentFilePath, ComponentFileOptions>>>,
+    pub dynamic_linking: Option<JsonField<HashMap<String, DynamicLinkedInstance>>>,
+    pub env: Option<JsonField<HashMap<String, String>>>,
+    pub agent_types: Option<JsonField<Vec<AgentType>>>,
 }
 
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 pub struct UpdateComponentRequest {
     pub component_type: Option<ComponentType>,
-    pub component: Upload,
-    pub files_permissions: Option<ComponentFilePathWithPermissionsList>,
+    pub component: Option<Upload>,
     pub files: Option<TempFileUpload>,
-    pub dynamic_linking: Option<JsonField<DynamicLinking>>,
-    pub env: Option<JsonField<ComponentEnv>>,
-    pub agent_types: Option<JsonField<AgentTypes>>,
+    pub files_options: Option<JsonField<HashMap<ComponentFilePath, ComponentFileOptionsForUpdate>>>,
+    pub dynamic_linking: Option<JsonField<HashMap<String, DynamicLinkedInstance>>>,
+    pub env: Option<JsonField<HashMap<String, String>>>,
+    pub agent_types: Option<JsonField<Vec<AgentType>>>,
 }

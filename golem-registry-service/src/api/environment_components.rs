@@ -28,7 +28,7 @@ use golem_common_next::api::Page;
 
 pub struct EnvironmentComponentsApi {}
 
-#[OpenApi(prefix_path = "/v1/envs/{environment_id}/components", tag = ApiTags::Component)]
+#[OpenApi(prefix_path = "/v1/envs/:environment_id/components", tag = ApiTags::Component)]
 impl EnvironmentComponentsApi {
     /// Get all components
     #[oai(
@@ -101,16 +101,15 @@ impl EnvironmentComponentsApi {
         todo!()
     }
 
-    /// Create or update a component by name
+    /// Create a component by name
     ///
     /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-    /// If the component type is not specified, it will be considered as a `Durable` component.
     #[oai(
         path = "/:component_name",
-        method = "put",
-        operation_id = "put_component"
+        method = "post",
+        operation_id = "post_component"
     )]
-    async fn put_component(
+    async fn create_component(
         &self,
         environment_id: Path<EnvironmentId>,
         component_name: Path<ComponentName>,
@@ -118,7 +117,7 @@ impl EnvironmentComponentsApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Component>> {
         let record = recorded_http_api_request!(
-            "put_component",
+            "create_component",
             environment_id = environment_id.0.to_string(),
             component_name = component_name.0.to_string()
         );
@@ -126,18 +125,59 @@ impl EnvironmentComponentsApi {
         let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .put_component_internal(environment_id.0, component_name.0, payload, auth)
+            .create_component_internal(environment_id.0, component_name.0, payload, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn put_component_internal(
+    async fn create_component_internal(
         &self,
         _environment_id: EnvironmentId,
         _component_name: ComponentName,
         _payload: CreateComponentRequest,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Component>> {
+        todo!()
+    }
+
+    /// Update a component by name
+    ///
+    /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+    #[oai(
+        path = "/:component_name",
+        method = "patch",
+        operation_id = "update_component"
+    )]
+    async fn update_component(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        component_name: Path<ComponentName>,
+        payload: UpdateComponentRequest,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Component>> {
+        let record = recorded_http_api_request!(
+            "update_component",
+            environment_id = environment_id.0.to_string(),
+            component_name = component_name.0.to_string()
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .update_component_internal(environment_id.0, component_name.0, payload, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn update_component_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_name: ComponentName,
+        _payload: UpdateComponentRequest,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         todo!()
