@@ -23,13 +23,12 @@ pub mod environment;
 pub mod error;
 pub mod exports;
 pub mod invocation_context;
-pub mod lucene;
 pub mod login;
+pub mod lucene;
 pub mod oplog;
 pub mod plugin;
 #[cfg(feature = "poem")]
 mod poem;
-pub mod project;
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
 pub mod public_oplog;

@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::login::{Token, TokenWithSecret};
 use crate::api::ApiResult;
+use golem_common_next::api::CreateTokenRequest;
 use golem_common_next::model::TokenId;
+use golem_common_next::model::login::{Token, TokenWithSecret};
 use golem_common_next::model::{AccountId, Empty};
 use golem_common_next::recorded_http_api_request;
 use golem_service_base_next::api_tags::ApiTags;
@@ -23,7 +24,6 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::Instrument;
-use golem_common_next::api::CreateTokenRequest;
 
 pub struct TokenApi {}
 

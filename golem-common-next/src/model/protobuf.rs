@@ -30,6 +30,29 @@ use golem_api_grpc::proto::golem::worker::Cursor;
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
 
+impl TryFrom<golem_api_grpc::proto::golem::common::AccountId> for AccountId {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::common::AccountId,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self(
+            value
+                .name
+                .try_into()
+                .map_err(|e| format!("Failed parsing account_id: {e}"))?,
+        ))
+    }
+}
+
+impl From<AccountId> for golem_api_grpc::proto::golem::common::AccountId {
+    fn from(value: AccountId) -> Self {
+        Self {
+            name: value.0.into(),
+        }
+    }
+}
+
 impl From<Timestamp> for prost_types::Timestamp {
     fn from(value: Timestamp) -> Self {
         let d = value
@@ -191,18 +214,6 @@ impl From<WorkerStatus> for golem_api_grpc::proto::golem::worker::WorkerStatus {
             WorkerStatus::Failed => golem_api_grpc::proto::golem::worker::WorkerStatus::Failed,
             WorkerStatus::Exited => golem_api_grpc::proto::golem::worker::WorkerStatus::Exited,
         }
-    }
-}
-
-impl From<golem_api_grpc::proto::golem::common::AccountId> for AccountId {
-    fn from(proto: golem_api_grpc::proto::golem::common::AccountId) -> Self {
-        Self { value: proto.name }
-    }
-}
-
-impl From<AccountId> for golem_api_grpc::proto::golem::common::AccountId {
-    fn from(value: AccountId) -> Self {
-        golem_api_grpc::proto::golem::common::AccountId { name: value.value }
     }
 }
 

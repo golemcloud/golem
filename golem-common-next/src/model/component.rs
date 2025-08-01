@@ -15,44 +15,10 @@
 use super::{ComponentType, InitialComponentFile, PluginInstallationId, ProjectId};
 use crate::base_model::{ComponentId, ComponentVersion};
 use crate::model::component_metadata::ComponentMetadata;
-use crate::model::AccountId;
 use bincode::{Decode, Encode};
-use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
-use std::str::FromStr;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct ComponentOwner {
-    pub project_id: ProjectId,
-    pub account_id: AccountId,
-}
-
-impl Display for ComponentOwner {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.account_id, self.project_id)
-    }
-}
-
-impl FromStr for ComponentOwner {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 2 {
-            return Err(format!("Invalid namespace: {s}"));
-        }
-
-        Ok(Self {
-            project_id: ProjectId::try_from(parts[1])?,
-            account_id: AccountId::from(parts[0]),
-        })
-    }
-}
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,

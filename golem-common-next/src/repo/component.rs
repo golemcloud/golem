@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use super::plugin::PluginOwnerRow;
-use crate::model::component::ComponentOwner;
-use crate::model::{AccountId, ProjectId};
 use crate::repo::RowMeta;
 use sqlx::query_builder::Separated;
 use sqlx::{Database, Encode, QueryBuilder, Type};
@@ -30,28 +28,6 @@ pub struct ComponentOwnerRow {
 impl Display for ComponentOwnerRow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.account_id, self.project_id)
-    }
-}
-
-impl From<ComponentOwner> for ComponentOwnerRow {
-    fn from(owner: ComponentOwner) -> Self {
-        Self {
-            account_id: owner.account_id.value,
-            project_id: owner.project_id.0,
-        }
-    }
-}
-
-impl TryFrom<ComponentOwnerRow> for ComponentOwner {
-    type Error = String;
-
-    fn try_from(value: ComponentOwnerRow) -> Result<Self, Self::Error> {
-        Ok(Self {
-            account_id: AccountId {
-                value: value.account_id,
-            },
-            project_id: ProjectId(value.project_id),
-        })
     }
 }
 

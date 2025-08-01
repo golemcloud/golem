@@ -12,13 +12,67 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Organization of api types is as follows:
+//! - domain types that are reused in the http api / clients -> golem_common::model::*
+//! - api specific types that are reused by the clients -> golem_common::api::*
+//! - general server-side only utilities -> golem_service_base::api::*
+//! - types specific to this api that are not reused by the client -> golem_registry_service::api::model::*
+
 use golem_common_next::model::agent::AgentTypes;
-use golem_common_next::model::{ComponentFilePath, ComponentFilePermissions, ComponentType};
+use golem_common_next::model::component_metadata::DynamicLinkedInstance;
+use golem_common_next::model::login::TokenWithSecret;
+use golem_common_next::model::plugin::PluginScope;
+use golem_common_next::model::{ComponentFilePathWithPermissions, ComponentType, Empty};
 use golem_service_base_next::poem::TempFileUpload;
+use poem_openapi::payload::Json;
 use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::types::{ParseFromJSON, ParseResult};
-use poem_openapi::{Object, Union};
+use poem_openapi::{ApiResponse, Object};
 use std::collections::HashMap;
+
+#[derive(Debug, poem_openapi::Multipart)]
+#[oai(rename_all = "camelCase")]
+pub struct CreateLibraryPluginRequest {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub icon: poem_openapi::types::Binary<Vec<u8>>,
+    pub homepage: String,
+    pub scope: PluginScope,
+    pub wasm: TempFileUpload,
+}
+
+#[derive(Debug, poem_openapi::Multipart)]
+#[oai(rename_all = "camelCase")]
+pub struct CreateAppPluginRequest {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub icon: poem_openapi::types::Binary<Vec<u8>>,
+    pub homepage: String,
+    pub scope: PluginScope,
+    pub wasm: TempFileUpload,
+}
+
+#[derive(Debug, Clone, ApiResponse)]
+pub enum WebFlowPollResponse {
+    /// OAuth flow has completed
+    #[oai(status = 200)]
+    Completed(Json<TokenWithSecret>),
+    /// OAuth flow is pending
+    #[oai(status = 202)]
+    Pending(Json<Empty>),
+}
+
+#[derive(Debug, Clone, ApiResponse)]
+pub enum WebFlowCallbackResponse {
+    /// Redirect to the given URL specified in the web flow start
+    #[oai(status = 302)]
+    Redirect(Json<Empty>, #[oai(header = "Location")] String),
+    /// OAuth flow has completed
+    #[oai(status = 200)]
+    Success(Json<Empty>),
+}
 
 #[derive(Clone, Debug, Object)]
 pub struct ComponentFilePathWithPermissionsList {
@@ -35,12 +89,6 @@ impl poem_openapi::types::ParseFromMultipartField for ComponentFilePathWithPermi
 }
 
 #[derive(Clone, Debug, Object)]
-pub struct ComponentFilePathWithPermissions {
-    pub path: ComponentFilePath,
-    pub permissions: ComponentFilePermissions,
-}
-
-#[derive(Clone, Debug, Object)]
 #[oai(rename_all = "camelCase")]
 pub struct ComponentEnv {
     pub key_values: HashMap<String, String>,
@@ -50,26 +98,6 @@ pub struct ComponentEnv {
 #[oai(rename_all = "camelCase")]
 pub struct DynamicLinking {
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-}
-
-#[derive(Clone, Debug, Union)]
-#[oai(discriminator_name = "type", one_of = true)]
-pub enum DynamicLinkedInstance {
-    WasmRpc(DynamicLinkedWasmRpc),
-}
-
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
-pub struct WasmRpcTarget {
-    pub interface_name: String,
-    pub component_name: String,
-    pub component_type: ComponentType,
-}
-
-#[derive(Debug, Clone, Object)]
-pub struct DynamicLinkedWasmRpc {
-    /// Maps resource names within the dynamic linked interface to target information
-    pub targets: HashMap<String, WasmRpcTarget>,
 }
 
 #[derive(poem_openapi::Multipart)]

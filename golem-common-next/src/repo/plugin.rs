@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::model::plugin::ComponentPluginScope;
-use crate::model::plugin::{PluginOwner, PluginScope, ProjectPluginScope};
-use crate::model::{AccountId, ComponentId, Empty, ProjectId};
+use crate::model::plugin::{PluginScope, ProjectPluginScope};
+use crate::model::{ComponentId, Empty, ProjectId};
 use crate::repo::RowMeta;
 use sqlx::query_builder::Separated;
 use sqlx::{Database, Encode, QueryBuilder, Type};
@@ -29,26 +29,6 @@ pub struct PluginOwnerRow {
 impl Display for PluginOwnerRow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.account_id)
-    }
-}
-
-impl From<PluginOwner> for PluginOwnerRow {
-    fn from(owner: PluginOwner) -> Self {
-        Self {
-            account_id: owner.account_id.value,
-        }
-    }
-}
-
-impl TryFrom<PluginOwnerRow> for PluginOwner {
-    type Error = String;
-
-    fn try_from(value: PluginOwnerRow) -> Result<Self, Self::Error> {
-        Ok(Self {
-            account_id: AccountId {
-                value: value.account_id,
-            },
-        })
     }
 }
 

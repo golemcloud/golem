@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::ApiResult;
-use super::model::login::*;
+use super::model::{WebFlowCallbackResponse, WebFlowPollResponse};
+use golem_common_next::api::WebFlowAuthorizeUrlResponse;
+use golem_common_next::model::login::{OAuth2Data, Token, TokenWithSecret};
 use golem_common_next::recorded_http_api_request;
 use golem_service_base_next::api_tags::ApiTags;
 use golem_service_base_next::model::auth::GolemSecurityScheme;

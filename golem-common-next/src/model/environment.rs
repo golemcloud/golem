@@ -1,4 +1,3 @@
-
 // Copyright 2024-2025 Golem Cloud
 //
 // Licensed under the Golem Source License v1.0 (the "License");
@@ -13,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::{Deserialize, Serialize};
 use super::{AccountId, ApplicationId, EnvironmentId};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]

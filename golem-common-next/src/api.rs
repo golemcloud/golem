@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::{Deserialize, Serialize};
-use chrono::Utc;
 use crate::model::plugin::{ComponentTransformerDefinition, OplogProcessorDefinition, PluginScope};
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "poem")]
 #[derive(Debug, Clone, Serialize, Deserialize, poem_openapi::Object)]
-pub struct Page<T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON> {
+pub struct Page<
+    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
+> {
     pub values: Vec<T>,
 }
 

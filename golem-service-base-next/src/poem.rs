@@ -20,17 +20,18 @@ use poem_openapi::{
     registry::{MetaSchema, MetaSchemaRef},
     types::{ParseError, ParseFromMultipartField, ParseResult, Type},
 };
+use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Formatter},
 };
 use tempfile::NamedTempFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
-use golem_common_next::model::plugin::PluginScope;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, poem_openapi::Object)]
-pub struct Page<T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON> {
+pub struct Page<
+    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
+> {
     pub values: Vec<T>,
 }
 

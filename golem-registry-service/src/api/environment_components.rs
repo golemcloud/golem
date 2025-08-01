@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::ApiResult;
-use super::model::components::CreateComponentRequest;
+use super::model::CreateComponentRequest;
 use golem_common_next::model::component::Component;
 use golem_common_next::recorded_http_api_request;
 use golem_service_base_next::api_tags::ApiTags;

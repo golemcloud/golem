@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::component::ComponentOwner;
 use super::{Empty, PluginId, ProjectId};
 use crate::model::{
     AccountId, ComponentId, ComponentVersion, PluginInstallationId, PoemTypeRequirements,
@@ -21,7 +20,6 @@ use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
-use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
@@ -118,38 +116,6 @@ pub trait PluginInstallationTarget:
     fn table_name() -> &'static str;
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct PluginOwner {
-    pub account_id: AccountId,
-}
-
-impl Display for PluginOwner {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.account_id)
-    }
-}
-
-impl FromStr for PluginOwner {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self {
-            account_id: AccountId::from(s),
-        })
-    }
-}
-
-impl From<ComponentOwner> for PluginOwner {
-    fn from(value: ComponentOwner) -> Self {
-        Self {
-            account_id: value.account_id,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
@@ -163,7 +129,7 @@ pub struct PluginDefinition {
     pub homepage: String,
     pub specs: PluginTypeSpecificDefinition,
     pub scope: PluginScope,
-    pub owner: PluginOwner,
+    pub account_id: AccountId,
     pub deleted: bool,
 }
 
@@ -370,7 +336,7 @@ mod poem {
 mod protobuf {
     use super::{
         AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
-        OplogProcessorDefinition, PluginDefinition, PluginInstallation, PluginOwner, PluginScope,
+        OplogProcessorDefinition, PluginDefinition, PluginInstallation, PluginScope,
         PluginTypeSpecificDefinition, PluginWasmFileKey,
     };
 
@@ -556,9 +522,7 @@ mod protobuf {
                 homepage: value.homepage,
                 specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
                 scope: value.scope.ok_or("Missing plugin scope")?.try_into()?,
-                owner: PluginOwner {
-                    account_id: value.account_id.ok_or("Missing plugin owner")?.into(),
-                },
+                account_id: value.account_id.ok_or("Missing plugin owner")?.try_into()?,
                 deleted: value.deleted,
             })
         }
@@ -571,7 +535,7 @@ mod protobuf {
                 name: value.name,
                 version: value.version,
                 scope: Some(value.scope.into()),
-                account_id: Some(value.owner.account_id.into()),
+                account_id: Some(value.account_id.into()),
                 description: value.description,
                 icon: value.icon,
                 homepage: value.homepage,

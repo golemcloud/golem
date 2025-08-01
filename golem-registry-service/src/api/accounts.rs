@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use super::ApiResult;
+use golem_common_next::api::Page;
+use golem_common_next::model::account::{Account, AccountData, Plan};
 use golem_common_next::model::{AccountId, Empty};
 use golem_common_next::recorded_http_api_request;
 use golem_service_base_next::api_tags::ApiTags;
@@ -22,8 +24,6 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::Instrument;
-use golem_common_next::api::Page;
-use golem_common_next::model::account::{Account, AccountData, Plan};
 
 pub struct AccountsApi {}
 

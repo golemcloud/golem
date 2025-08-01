@@ -14,7 +14,6 @@
 
 pub mod api;
 pub mod api_tags;
-pub mod clients;
 pub mod config;
 pub mod db;
 pub mod error;
