@@ -138,7 +138,7 @@ async fn jump(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(1).await;
 
@@ -148,7 +148,7 @@ async fn jump(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "runtime-service-jump", vec![], env)
+        .start_worker_with(&component_id, "runtime-service-jump", vec![], env, vec![])
         .await;
 
     let (rx, abort_capture) = executor.capture_output_forever(&worker_id).await;
@@ -201,7 +201,7 @@ async fn explicit_oplog_commit(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("runtime-service").store().await;
 
@@ -234,7 +234,7 @@ async fn set_retry_policy(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("runtime-service").store().await;
     let worker_id = executor
@@ -295,7 +295,7 @@ async fn atomic_region(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(2).await;
     let component_id = executor.component("runtime-service").store().await;
@@ -304,7 +304,7 @@ async fn atomic_region(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "atomic-region", vec![], env)
+        .start_worker_with(&component_id, "atomic-region", vec![], env, vec![])
         .await;
 
     let _ = executor
@@ -332,7 +332,7 @@ async fn idempotence_on(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(1).await;
 
@@ -342,7 +342,7 @@ async fn idempotence_on(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "idempotence-flag", vec![], env)
+        .start_worker_with(&component_id, "idempotence-flag", vec![], env, vec![])
         .await;
 
     let _ = executor
@@ -374,7 +374,7 @@ async fn idempotence_off(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(1).await;
 
@@ -384,7 +384,7 @@ async fn idempotence_off(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "idempotence-flag", vec![], env)
+        .start_worker_with(&component_id, "idempotence-flag", vec![], env, vec![])
         .await;
 
     let result = executor
@@ -417,7 +417,7 @@ async fn persist_nothing(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(2).await;
 
@@ -427,7 +427,7 @@ async fn persist_nothing(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "persist-nothing", vec![], env)
+        .start_worker_with(&component_id, "persist-nothing", vec![], env, vec![])
         .await;
 
     let result = executor
@@ -457,7 +457,7 @@ async fn golem_rust_explicit_oplog_commit(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("golem-rust-tests").store().await;
 
@@ -490,7 +490,7 @@ async fn golem_rust_set_retry_policy(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("golem-rust-tests").store().await;
     let worker_id = executor
@@ -550,7 +550,7 @@ async fn golem_rust_atomic_region(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(2).await;
     let component_id = executor.component("golem-rust-tests").store().await;
@@ -559,7 +559,13 @@ async fn golem_rust_atomic_region(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "golem-rust-tests-atomic-region", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "golem-rust-tests-atomic-region",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let _ = executor
@@ -587,7 +593,7 @@ async fn golem_rust_idempotence_on(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(1).await;
 
@@ -602,6 +608,7 @@ async fn golem_rust_idempotence_on(
             "golem-rust-tests-idempotence-flag-on",
             vec![],
             env,
+            vec![],
         )
         .await;
 
@@ -634,7 +641,7 @@ async fn golem_rust_idempotence_off(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(1).await;
 
@@ -649,6 +656,7 @@ async fn golem_rust_idempotence_off(
             "golem-rust-tests-idempotence-flag-off",
             vec![],
             env,
+            vec![],
         )
         .await;
 
@@ -682,7 +690,7 @@ async fn golem_rust_persist_nothing(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start(2).await;
 
@@ -697,6 +705,7 @@ async fn golem_rust_persist_nothing(
             "golem-rust-tests-persist-nothing",
             vec![],
             env,
+            vec![],
         )
         .await;
 
@@ -726,7 +735,7 @@ async fn golem_rust_fallible_transaction(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start_custom(
         Arc::new(|step| match step {
@@ -747,6 +756,7 @@ async fn golem_rust_fallible_transaction(
             "golem-rust-tests-fallible-transaction",
             vec![],
             env,
+            vec![],
         )
         .await;
 
@@ -790,7 +800,7 @@ async fn golem_rust_infallible_transaction(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = TestHttpServer::start_custom(
         Arc::new(|step| match step {
@@ -811,6 +821,7 @@ async fn golem_rust_infallible_transaction(
             "golem-rust-tests-infallible-transaction",
             vec![],
             env,
+            vec![],
         )
         .await;
 
@@ -855,7 +866,7 @@ async fn idempotency_keys_in_ephemeral_workers(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor
         .component("runtime-service")

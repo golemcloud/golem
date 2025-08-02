@@ -14,7 +14,8 @@
 
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::PublicOplogEntry;
-use golem_common::model::WorkerId;
+use golem_common::model::{LogLevel, Timestamp, WorkerId};
+use golem_worker_executor::model::event::InternalWorkerEvent;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -27,7 +28,6 @@ pub struct PlaybackParams {
     pub target_index: OplogIndex,
     pub overrides: Option<Vec<PlaybackOverride>>,
     pub ensure_invocation_boundary: Option<bool>,
-    pub time_out_in_seconds: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -40,7 +40,6 @@ pub struct PlaybackOverride {
 pub struct RewindParams {
     pub target_index: OplogIndex,
     pub ensure_invocation_boundary: Option<bool>,
-    pub time_out_in_seconds: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -52,7 +51,6 @@ pub struct ForkParams {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ConnectResult {
     pub worker_id: WorkerId,
-    pub success: bool,
     pub message: String,
 }
 
@@ -60,15 +58,14 @@ pub struct ConnectResult {
 pub struct PlaybackResult {
     pub worker_id: WorkerId,
     pub current_index: OplogIndex,
-    pub success: bool,
     pub message: String,
+    pub incremental_playback: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RewindResult {
     pub worker_id: WorkerId,
     pub current_index: OplogIndex,
-    pub success: bool,
     pub message: String,
 }
 
@@ -76,6 +73,57 @@ pub struct RewindResult {
 pub struct ForkResult {
     pub source_worker_id: WorkerId,
     pub target_worker_id: WorkerId,
-    pub success: bool,
     pub message: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum LogNotification {
+    StdOut {
+        timestamp: Timestamp,
+        message: String,
+    },
+    StdErr {
+        timestamp: Timestamp,
+        message: String,
+    },
+    Log {
+        timestamp: Timestamp,
+        level: LogLevel,
+        context: String,
+        message: String,
+    },
+}
+
+impl LogNotification {
+    pub fn from_internal_worker_event(event: InternalWorkerEvent) -> Option<Self> {
+        match event {
+            InternalWorkerEvent::InvocationStart { .. } => None,
+            InternalWorkerEvent::InvocationFinished { .. } => None,
+            InternalWorkerEvent::StdOut { timestamp, bytes } => Some(Self::StdOut {
+                timestamp,
+                message: String::from_utf8_lossy(&bytes).to_string(),
+            }),
+            InternalWorkerEvent::StdErr { timestamp, bytes } => Some(Self::StdErr {
+                timestamp,
+                message: String::from_utf8_lossy(&bytes).to_string(),
+            }),
+            InternalWorkerEvent::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            } => Some(Self::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LogsLaggedNotification {
+    pub number_of_missed_messages: u64,
 }

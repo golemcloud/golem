@@ -23,6 +23,7 @@ import public "golem/component/component_id.proto";
 import public "golem/worker/update_mode.proto";
 import public "golem/worker/target_worker_id.proto";
 import public "golem/worker/filesystem.proto";
+import "golem/worker/wasi_config_vars.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
@@ -45,7 +46,7 @@ service WorkerService {
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
   rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
 
-  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
+  rpc GetFileSystemNode(GetFileSystemNodeRequest) returns (GetFileSystemNodeResponse);
   rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
 
   rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
@@ -64,6 +65,7 @@ message LaunchNewWorkerRequest {
   string name = 2;
   repeated string args = 3;
   map<string, string> env = 4;
+  golem.worker.WasiConfigVars wasi_config_vars = 5;
 }
 
 message LaunchNewWorkerResponse {
@@ -294,21 +296,22 @@ message SearchOplogSuccessResponse {
   uint64 last_index = 5;
 }
 
-message ListDirectoryRequest {
+message GetFileSystemNodeRequest {
   golem.worker.TargetWorkerId worker_id = 1;
   string path = 2;
 }
 
-message ListDirectoryResponse {
+message GetFileSystemNodeResponse {
   oneof result {
-    ListDirectorySuccessResponse success = 1;
+    ListFileSystemNodeResponse success = 1;
     WorkerError error = 2;
   }
 }
 
-message ListDirectorySuccessResponse {
+message ListFileSystemNodeResponse {
   repeated golem.worker.FileSystemNode nodes = 1;
 }
+ 
 
 message GetFileContentsRequest {
   golem.worker.TargetWorkerId worker_id = 1;

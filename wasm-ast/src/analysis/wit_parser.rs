@@ -265,7 +265,8 @@ impl ToAnalysedType for TypeDef {
                             })
                     })
                     .collect::<Result<_, _>>()?,
-            )),
+            )
+            .with_optional_name(self.name.clone())),
             TypeDefKind::Resource => {
                 Err("to_analysed_type not implemented for resource type".to_string())
             }
@@ -275,6 +276,7 @@ impl ToAnalysedType for TypeDef {
                     Some(resource_id) => Ok(AnalysedType::Handle(TypeHandle {
                         resource_id,
                         mode: AnalysedResourceMode::Owned,
+                        name: self.name.clone(),
                     })),
                     None => Err("to_analysed_type not implemented for handle type".to_string()),
                 },
@@ -282,6 +284,7 @@ impl ToAnalysedType for TypeDef {
                     Some(resource_id) => Ok(AnalysedType::Handle(TypeHandle {
                         resource_id,
                         mode: AnalysedResourceMode::Borrowed,
+                        name: self.name.clone(),
                     })),
                     None => Err("to_analysed_type not implemented for handle type".to_string()),
                 },
@@ -292,14 +295,16 @@ impl ToAnalysedType for TypeDef {
                     .iter()
                     .map(|flag| flag.name.as_str())
                     .collect::<Vec<_>>(),
-            )),
+            )
+            .with_optional_name(self.name.clone())),
             TypeDefKind::Tuple(tuple) => Ok(analysed_type::tuple(
                 tuple
                     .types
                     .iter()
                     .map(|typ| typ.to_analysed_type(resolve, resource_map))
                     .collect::<Result<_, _>>()?,
-            )),
+            )
+            .with_optional_name(self.name.clone())),
             TypeDefKind::Variant(variant) => Ok(analysed_type::variant(
                 variant
                     .cases
@@ -314,33 +319,40 @@ impl ToAnalysedType for TypeDef {
                             })
                     })
                     .collect::<Result<_, _>>()?,
-            )),
+            )
+            .with_optional_name(self.name.clone())),
             TypeDefKind::Enum(enum_) => Ok(analysed_type::r#enum(
                 &enum_
                     .cases
                     .iter()
                     .map(|case| case.name.as_str())
                     .collect::<Vec<_>>(),
-            )),
+            )
+            .with_optional_name(self.name.clone())),
             TypeDefKind::Option(inner) => Ok(analysed_type::option(
                 inner.to_analysed_type(resolve, resource_map)?,
-            )),
+            )
+            .with_optional_name(self.name.clone())),
             TypeDefKind::Result(result) => match (result.ok, result.err) {
                 (Some(ok), Some(err)) => Ok(analysed_type::result(
                     ok.to_analysed_type(resolve, resource_map)?,
                     err.to_analysed_type(resolve, resource_map)?,
-                )),
+                )
+                .with_optional_name(self.name.clone())),
                 (Some(ok), None) => Ok(analysed_type::result_ok(
                     ok.to_analysed_type(resolve, resource_map)?,
-                )),
+                )
+                .with_optional_name(self.name.clone())),
                 (None, Some(err)) => Ok(analysed_type::result_err(
                     err.to_analysed_type(resolve, resource_map)?,
-                )),
+                )
+                .with_optional_name(self.name.clone())),
                 (None, None) => Err("result type with no ok or err case".to_string()),
             },
             TypeDefKind::List(ty) => Ok(analysed_type::list(
                 ty.to_analysed_type(resolve, resource_map)?,
-            )),
+            )
+            .with_optional_name(self.name.clone())),
             TypeDefKind::Future(_) => {
                 Err("to_analysed_type not implemented for future type".to_string())
             }

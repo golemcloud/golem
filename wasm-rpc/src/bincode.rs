@@ -1,4 +1,5 @@
-use crate::{Uri, WitNode, WitValue};
+use crate::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId};
+use crate::{NodeIndex, ResourceMode, Uri, WitNode, WitType, WitTypeNode, WitValue};
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
 use bincode::error::{AllowedEnumVariants, DecodeError, EncodeError};
@@ -348,6 +349,282 @@ impl<'de, Context> BorrowDecode<'de, Context> for WitNode {
                 found: tag as u32,
                 type_name: "WitNode",
                 allowed: &AllowedEnumVariants::Range { min: 0, max: 21 },
+            }),
+        }
+    }
+}
+
+impl Encode for WitType {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        self.nodes.encode(encoder)
+    }
+}
+
+impl<Context> Decode<Context> for WitType {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let nodes = Vec::<NamedWitTypeNode>::decode(decoder)?;
+        Ok(WitType { nodes })
+    }
+}
+
+impl<'de, Context> BorrowDecode<'de, Context> for WitType {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
+        let nodes = Vec::<NamedWitTypeNode>::borrow_decode(decoder)?;
+        Ok(WitType { nodes })
+    }
+}
+
+impl Encode for ResourceMode {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        match self {
+            ResourceMode::Borrowed => 0u8.encode(encoder),
+            ResourceMode::Owned => 1u8.encode(encoder),
+        }
+    }
+}
+
+impl<Context> Decode<Context> for ResourceMode {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let tag: u8 = Decode::decode(decoder)?;
+        match tag {
+            0u8 => Ok(ResourceMode::Borrowed),
+            1u8 => Ok(ResourceMode::Owned),
+            _ => Err(DecodeError::UnexpectedVariant {
+                found: tag as u32,
+                type_name: "ResourceMode",
+                allowed: &AllowedEnumVariants::Range { min: 0, max: 1 },
+            }),
+        }
+    }
+}
+
+impl<'de, Context> BorrowDecode<'de, Context> for ResourceMode {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
+        let tag: u8 = BorrowDecode::borrow_decode(decoder)?;
+        match tag {
+            0u8 => Ok(ResourceMode::Borrowed),
+            1u8 => Ok(ResourceMode::Owned),
+            _ => Err(DecodeError::UnexpectedVariant {
+                found: tag as u32,
+                type_name: "ResourceMode",
+                allowed: &AllowedEnumVariants::Range { min: 0, max: 1 },
+            }),
+        }
+    }
+}
+
+impl Encode for NamedWitTypeNode {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        self.name.encode(encoder)?;
+        self.type_.encode(encoder)
+    }
+}
+
+impl<Context> Decode<Context> for NamedWitTypeNode {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let name = Option::<String>::decode(decoder)?;
+        let type_ = WitTypeNode::decode(decoder)?;
+        Ok(NamedWitTypeNode { name, type_ })
+    }
+}
+
+impl<'de, Context> BorrowDecode<'de, Context> for NamedWitTypeNode {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
+        let name = Option::<String>::borrow_decode(decoder)?;
+        let type_ = WitTypeNode::borrow_decode(decoder)?;
+        Ok(NamedWitTypeNode { name, type_ })
+    }
+}
+
+impl Encode for WitTypeNode {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        match self {
+            WitTypeNode::RecordType(field_types) => {
+                0u8.encode(encoder)?;
+                field_types.encode(encoder)
+            }
+            WitTypeNode::VariantType(cons_types) => {
+                1u8.encode(encoder)?;
+                cons_types.encode(encoder)
+            }
+            WitTypeNode::EnumType(names) => {
+                2u8.encode(encoder)?;
+                names.encode(encoder)
+            }
+            WitTypeNode::FlagsType(names) => {
+                3u8.encode(encoder)?;
+                names.encode(encoder)
+            }
+            WitTypeNode::TupleType(field_types) => {
+                4u8.encode(encoder)?;
+                field_types.encode(encoder)
+            }
+            WitTypeNode::ListType(elem_type) => {
+                5u8.encode(encoder)?;
+                elem_type.encode(encoder)
+            }
+            WitTypeNode::OptionType(inner_type) => {
+                6u8.encode(encoder)?;
+                inner_type.encode(encoder)
+            }
+            WitTypeNode::ResultType((ok_type, err_type)) => {
+                7u8.encode(encoder)?;
+                ok_type.encode(encoder)?;
+                err_type.encode(encoder)
+            }
+            WitTypeNode::HandleType((id, mode)) => {
+                8u8.encode(encoder)?;
+                id.encode(encoder)?;
+                mode.encode(encoder)
+            }
+            WitTypeNode::PrimU8Type => 9u8.encode(encoder),
+            WitTypeNode::PrimU16Type => 10u8.encode(encoder),
+            WitTypeNode::PrimU32Type => 11u8.encode(encoder),
+            WitTypeNode::PrimU64Type => 12u8.encode(encoder),
+            WitTypeNode::PrimS8Type => 13u8.encode(encoder),
+            WitTypeNode::PrimS16Type => 14u8.encode(encoder),
+            WitTypeNode::PrimS32Type => 15u8.encode(encoder),
+            WitTypeNode::PrimS64Type => 16u8.encode(encoder),
+            WitTypeNode::PrimF32Type => 17u8.encode(encoder),
+            WitTypeNode::PrimF64Type => 18u8.encode(encoder),
+            WitTypeNode::PrimCharType => 19u8.encode(encoder),
+            WitTypeNode::PrimBoolType => 20u8.encode(encoder),
+            WitTypeNode::PrimStringType => 21u8.encode(encoder),
+        }
+    }
+}
+
+impl<Context> Decode<Context> for WitTypeNode {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let tag: u8 = Decode::decode(decoder)?;
+        match tag {
+            0u8 => {
+                let field_types = Vec::<(String, NodeIndex)>::decode(decoder)?;
+                Ok(WitTypeNode::RecordType(field_types))
+            }
+            1u8 => {
+                let cons_types = Vec::<(String, Option<NodeIndex>)>::decode(decoder)?;
+                Ok(WitTypeNode::VariantType(cons_types))
+            }
+            2u8 => {
+                let names = Vec::<String>::decode(decoder)?;
+                Ok(WitTypeNode::EnumType(names))
+            }
+            3u8 => {
+                let names = Vec::<String>::decode(decoder)?;
+                Ok(WitTypeNode::FlagsType(names))
+            }
+            4u8 => {
+                let field_types = Vec::<NodeIndex>::decode(decoder)?;
+                Ok(WitTypeNode::TupleType(field_types))
+            }
+            5u8 => {
+                let elem_type = NodeIndex::decode(decoder)?;
+                Ok(WitTypeNode::ListType(elem_type))
+            }
+            6u8 => {
+                let inner_type = NodeIndex::decode(decoder)?;
+                Ok(WitTypeNode::OptionType(inner_type))
+            }
+            7u8 => {
+                let ok_type = Option::<NodeIndex>::decode(decoder)?;
+                let err_type = Option::<NodeIndex>::decode(decoder)?;
+                Ok(WitTypeNode::ResultType((ok_type, err_type)))
+            }
+            8u8 => {
+                let resource_id = ResourceId::decode(decoder)?;
+                let resource_mode = ResourceMode::decode(decoder)?;
+                Ok(WitTypeNode::HandleType((resource_id, resource_mode)))
+            }
+            9u8 => Ok(WitTypeNode::PrimU8Type),
+            10u8 => Ok(WitTypeNode::PrimU16Type),
+            11u8 => Ok(WitTypeNode::PrimU32Type),
+            12u8 => Ok(WitTypeNode::PrimU64Type),
+            13u8 => Ok(WitTypeNode::PrimS8Type),
+            14u8 => Ok(WitTypeNode::PrimS16Type),
+            15u8 => Ok(WitTypeNode::PrimS32Type),
+            16u8 => Ok(WitTypeNode::PrimS64Type),
+            17u8 => Ok(WitTypeNode::PrimF32Type),
+            18u8 => Ok(WitTypeNode::PrimF64Type),
+            19u8 => Ok(WitTypeNode::PrimCharType),
+            20u8 => Ok(WitTypeNode::PrimBoolType),
+            21u8 => Ok(WitTypeNode::PrimStringType),
+            _ => Err(DecodeError::UnexpectedVariant {
+                found: tag as u32,
+                type_name: "WitTypeNode",
+                allowed: &AllowedEnumVariants::Range { min: 0, max: 9 },
+            }),
+        }
+    }
+}
+
+impl<'de, Context> BorrowDecode<'de, Context> for WitTypeNode {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
+        let tag: u8 = BorrowDecode::borrow_decode(decoder)?;
+        match tag {
+            0u8 => {
+                let field_types = Vec::<(String, NodeIndex)>::borrow_decode(decoder)?;
+                Ok(WitTypeNode::RecordType(field_types))
+            }
+            1u8 => {
+                let cons_types = Vec::<(String, Option<NodeIndex>)>::borrow_decode(decoder)?;
+                Ok(WitTypeNode::VariantType(cons_types))
+            }
+            2u8 => {
+                let names = Vec::<String>::borrow_decode(decoder)?;
+                Ok(WitTypeNode::EnumType(names))
+            }
+            3u8 => {
+                let names = Vec::<String>::borrow_decode(decoder)?;
+                Ok(WitTypeNode::FlagsType(names))
+            }
+            4u8 => {
+                let field_types = Vec::<NodeIndex>::borrow_decode(decoder)?;
+                Ok(WitTypeNode::TupleType(field_types))
+            }
+            5u8 => {
+                let elem_type = NodeIndex::borrow_decode(decoder)?;
+                Ok(WitTypeNode::ListType(elem_type))
+            }
+            6u8 => {
+                let inner_type = NodeIndex::borrow_decode(decoder)?;
+                Ok(WitTypeNode::OptionType(inner_type))
+            }
+            7u8 => {
+                let ok_type = Option::<NodeIndex>::borrow_decode(decoder)?;
+                let err_type = Option::<NodeIndex>::borrow_decode(decoder)?;
+                Ok(WitTypeNode::ResultType((ok_type, err_type)))
+            }
+            8u8 => {
+                let resource_id = ResourceId::borrow_decode(decoder)?;
+                let resource_mode = ResourceMode::borrow_decode(decoder)?;
+                Ok(WitTypeNode::HandleType((resource_id, resource_mode)))
+            }
+            9u8 => Ok(WitTypeNode::PrimU8Type),
+            10u8 => Ok(WitTypeNode::PrimU16Type),
+            11u8 => Ok(WitTypeNode::PrimU32Type),
+            12u8 => Ok(WitTypeNode::PrimU64Type),
+            13u8 => Ok(WitTypeNode::PrimS8Type),
+            14u8 => Ok(WitTypeNode::PrimS16Type),
+            15u8 => Ok(WitTypeNode::PrimS32Type),
+            16u8 => Ok(WitTypeNode::PrimS64Type),
+            17u8 => Ok(WitTypeNode::PrimF32Type),
+            18u8 => Ok(WitTypeNode::PrimF64Type),
+            19u8 => Ok(WitTypeNode::PrimCharType),
+            20u8 => Ok(WitTypeNode::PrimBoolType),
+            21u8 => Ok(WitTypeNode::PrimStringType),
+            _ => Err(DecodeError::UnexpectedVariant {
+                found: tag as u32,
+                type_name: "WitTypeNode",
+                allowed: &AllowedEnumVariants::Range { min: 0, max: 9 },
             }),
         }
     }

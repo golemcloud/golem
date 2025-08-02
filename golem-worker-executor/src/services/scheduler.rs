@@ -28,7 +28,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::Value;
 use std::ops::{Add, Deref};
@@ -49,15 +49,17 @@ pub trait SchedulerService: Send + Sync {
 /// for `SchedulerServiceDefault`, making it easier to test (by being independent of `WorkerCtx`).
 #[async_trait]
 pub trait SchedulerWorkerAccess {
-    async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId);
+    async fn activate_worker(&self, created_by: &AccountId, owned_worker_id: &OwnedWorkerId);
     async fn open_oplog(
         &self,
+        created_by: &AccountId,
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
 
     // enqueue and invocation to the worker
     async fn enqueue_invocation(
         &self,
+        created_by: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: IdempotencyKey,
         full_function_name: String,
@@ -68,22 +70,26 @@ pub trait SchedulerWorkerAccess {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
-    async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId) {
-        self.deref().activate_worker(owned_worker_id).await;
+    async fn activate_worker(&self, created_by: &AccountId, owned_worker_id: &OwnedWorkerId) {
+        self.deref()
+            .activate_worker(created_by, owned_worker_id)
+            .await;
     }
 
     async fn open_oplog(
         &self,
+        created_by: &AccountId,
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let worker = self
-            .get_or_create_suspended(owned_worker_id, None, None, None, None)
+            .get_or_create_suspended(created_by, owned_worker_id, None, None, None, None, None)
             .await?;
         Ok(worker.oplog())
     }
 
     async fn enqueue_invocation(
         &self,
+        created_by: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: IdempotencyKey,
         full_function_name: String,
@@ -91,7 +97,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         invocation_context: InvocationContextStack,
     ) -> Result<(), WorkerExecutorError> {
         let worker = self
-            .get_or_create_suspended(owned_worker_id, None, None, None, None)
+            .get_or_create_suspended(created_by, owned_worker_id, None, None, None, None, None)
             .await?;
 
         worker
@@ -217,10 +223,11 @@ impl SchedulerServiceDefault {
         for (key, action) in matching {
             match action.clone() {
                 ScheduledAction::CompletePromise {
-                    promise_id,
                     account_id,
+                    promise_id,
+                    project_id,
                 } => {
-                    let owned_worker_id = OwnedWorkerId::new(&account_id, &promise_id.worker_id);
+                    let owned_worker_id = OwnedWorkerId::new(&project_id, &promise_id.worker_id);
 
                     let result = self
                         .promise_service
@@ -238,7 +245,7 @@ impl SchedulerServiceDefault {
                                     worker_id = owned_worker_id.worker_id.to_string()
                                 );
                                 self.worker_access
-                                    .activate_worker(&owned_worker_id)
+                                    .activate_worker(&account_id, &owned_worker_id)
                                     .instrument(span)
                                     .await;
                             }
@@ -255,6 +262,7 @@ impl SchedulerServiceDefault {
                     }
                 }
                 ScheduledAction::ArchiveOplog {
+                    account_id,
                     owned_worker_id,
                     last_oplog_index,
                     next_after,
@@ -264,7 +272,11 @@ impl SchedulerServiceDefault {
                             self.oplog_service.get_last_index(&owned_worker_id).await;
                         if current_last_index == last_oplog_index {
                             // Need to create the `Worker` instance to avoid race conditions
-                            match self.worker_access.open_oplog(&owned_worker_id).await {
+                            match self
+                                .worker_access
+                                .open_oplog(&account_id, &owned_worker_id)
+                                .await
+                            {
                                 Ok(oplog) => {
                                     let start = Instant::now();
                                     if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
@@ -273,6 +285,7 @@ impl SchedulerServiceDefault {
                                             self.schedule(
                                                 now.add(next_after),
                                                 ScheduledAction::ArchiveOplog {
+                                                    account_id,
                                                     owned_worker_id,
                                                     last_oplog_index,
                                                     next_after,
@@ -304,6 +317,7 @@ impl SchedulerServiceDefault {
                     }
                 }
                 ScheduledAction::Invoke {
+                    account_id,
                     owned_worker_id,
                     idempotency_key,
                     full_function_name,
@@ -315,6 +329,7 @@ impl SchedulerServiceDefault {
                     let result = self
                         .worker_access
                         .enqueue_invocation(
+                            &account_id,
                             &owned_worker_id,
                             idempotency_key,
                             full_function_name.clone(),
@@ -431,8 +446,8 @@ mod tests {
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId,
-        WorkerId,
+        AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ProjectId, PromiseId,
+        ScheduledAction, ShardId, WorkerId,
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -448,15 +463,18 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
-        async fn activate_worker(&self, _owned_worker_id: &OwnedWorkerId) {}
+        async fn activate_worker(&self, _created_by: &AccountId, _owned_worker_id: &OwnedWorkerId) {
+        }
         async fn open_oplog(
             &self,
+            _created_by: &AccountId,
             _owned_worker_id: &OwnedWorkerId,
         ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
             unimplemented!()
         }
         async fn enqueue_invocation(
             &self,
+            _created_by: &AccountId,
             _owned_worker_id: &OwnedWorkerId,
             _idempotency_key: IdempotencyKey,
             _full_function_name: String,
@@ -526,9 +544,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let account_id = AccountId {
-            value: "test-account".to_string(),
-        };
+        let project_id = ProjectId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -567,11 +583,16 @@ mod tests {
             Duration::from_secs(1000), // not testing process() here
         );
 
+        let account_id = AccountId {
+            value: "test_account".to_string(),
+        };
+
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
+                    project_id: project_id.clone(),
                     promise_id: p1.clone(),
                 },
             )
@@ -580,8 +601,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p2.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p2.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -589,8 +611,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p3.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p3.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -608,8 +631,9 @@ mod tests {
                     vec![(
                         3540000.0,
                         serialized_bytes(&ScheduledAction::CompletePromise {
+                            account_id: account_id.clone(),
                             promise_id: p2,
-                            account_id: account_id.clone()
+                            project_id: project_id.clone()
                         })
                     )]
                 ),
@@ -619,15 +643,17 @@ mod tests {
                         (
                             300000.0,
                             serialized_bytes(&ScheduledAction::CompletePromise {
+                                account_id: account_id.clone(),
                                 promise_id: p1,
-                                account_id: account_id.clone()
+                                project_id: project_id.clone()
                             })
                         ),
                         (
                             301000.0,
                             serialized_bytes(&ScheduledAction::CompletePromise {
+                                account_id: account_id.clone(),
                                 promise_id: p3,
-                                account_id: account_id.clone()
+                                project_id: project_id.clone()
                             })
                         )
                     ]
@@ -648,9 +674,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let account_id = AccountId {
-            value: "test-account".to_string(),
-        };
+        let project_id = ProjectId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -690,12 +714,17 @@ mod tests {
             Duration::from_secs(1000), // not testing process() here
         );
 
+        let account_id = AccountId {
+            value: "test_account".to_string(),
+        };
+
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p1.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p1.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -703,8 +732,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p2.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p2.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -712,8 +742,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p3.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p3.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -735,8 +766,9 @@ mod tests {
                     vec![(
                         300000.0,
                         serialized_bytes(&ScheduledAction::CompletePromise {
+                            account_id: account_id.clone(),
                             promise_id: p1,
-                            account_id: account_id.clone()
+                            project_id: project_id.clone()
                         })
                     )]
                 )
@@ -756,9 +788,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let account_id = AccountId {
-            value: "test-account".to_string(),
-        };
+        let project_id = ProjectId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -797,12 +827,17 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
+        let account_id = AccountId {
+            value: "test_account".to_string(),
+        };
+
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p1.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p1.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -810,8 +845,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p2.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p2.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -819,8 +855,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p3.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p3.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -842,8 +879,9 @@ mod tests {
                 vec![(
                     3540000.0,
                     serialized_bytes(&ScheduledAction::CompletePromise {
+                        account_id: account_id.clone(),
                         promise_id: p2.clone(),
-                        account_id: account_id.clone()
+                        project_id: project_id.clone()
                     })
                 )]
             )])
@@ -868,9 +906,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let account_id = AccountId {
-            value: "test-account".to_string(),
-        };
+        let project_id = ProjectId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -909,12 +945,17 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
+        let account_id = AccountId {
+            value: "test_account".to_string(),
+        };
+
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p1.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p1.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -922,8 +963,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p2.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p2.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -931,8 +973,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p3.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p3.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -974,9 +1017,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let account_id = AccountId {
-            value: "test-account".to_string(),
-        };
+        let project_id = ProjectId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -1019,12 +1060,17 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
+        let account_id = AccountId {
+            value: "test_account".to_string(),
+        };
+
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p1.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p1.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -1032,8 +1078,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p2.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p2.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -1041,8 +1088,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p3.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p3.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -1050,8 +1098,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p4.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p4.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -1094,9 +1143,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let account_id = AccountId {
-            value: "test-account".to_string(),
-        };
+        let project_id = ProjectId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -1135,12 +1182,17 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
+        let account_id = AccountId {
+            value: "test_account".to_string(),
+        };
+
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p1.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p1.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -1148,8 +1200,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p2.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p2.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;
@@ -1157,8 +1210,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    promise_id: p3.clone(),
                     account_id: account_id.clone(),
+                    promise_id: p3.clone(),
+                    project_id: project_id.clone(),
                 },
             )
             .await;

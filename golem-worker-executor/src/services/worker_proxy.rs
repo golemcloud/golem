@@ -32,7 +32,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::{Value, ValueAndType, WitValue};
 use http::Uri;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
@@ -52,6 +52,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
+        caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
     ) -> Result<Option<ValueAndType>, WorkerProxyError>;
 
@@ -64,6 +65,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
+        caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
     ) -> Result<(), WorkerProxyError>;
 
@@ -86,7 +88,7 @@ pub trait WorkerProxy: Send + Sync {
 
     async fn revert(
         &self,
-        worker_id: WorkerId,
+        worker_id: &WorkerId,
         target: RevertWorkerTarget,
     ) -> Result<(), WorkerProxyError>;
 }
@@ -223,6 +225,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
+        caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
     ) -> Result<Option<ValueAndType>, WorkerProxyError> {
         debug!(
@@ -253,6 +256,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                             parent: Some(caller_worker_id.clone().into()),
                             args: caller_args.clone(),
                             env: caller_env.clone(),
+                            wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
                             tracing: Some(caller_stack.clone().into()),
                         }),
                     },
@@ -266,21 +270,12 @@ impl WorkerProxy for RemoteWorkerProxy {
             Some(invoke_and_await_typed_response::Result::Success(result)) => {
                 let result = result
                     .result
-                    .map(|tav| {
-                        tav.type_annotated_value
-                            .ok_or(WorkerProxyError::InternalError(
-                                WorkerExecutorError::unknown(
-                                    "Missing type_annotated_value in the worker API response"
-                                        .to_string(),
-                                ),
-                            ))
-                            .and_then(|tav| {
-                                ValueAndType::try_from(tav).map_err(|e| {
-                                    WorkerProxyError::InternalError(WorkerExecutorError::unknown(
-                                        format!("Failed to parse invocation result value: {e}"),
-                                    ))
-                                })
-                            })
+                    .map(|proto_vnt| {
+                        ValueAndType::try_from(proto_vnt).map_err(|e| {
+                            WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
+                                "Failed to parse invocation result value: {e}"
+                            )))
+                        })
                     })
                     .transpose()?;
                 Ok(result)
@@ -301,6 +296,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
+        caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
     ) -> Result<(), WorkerProxyError> {
         debug!("Invoking remote worker function {function_name} with parameters {function_params:?} without awaiting for the result");
@@ -329,6 +325,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                             parent: Some(caller_worker_id.clone().into()),
                             args: caller_args.clone(),
                             env: caller_env.clone(),
+                            wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
                             tracing: Some(caller_stack.clone().into()),
                         }),
                     },
@@ -441,7 +438,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn revert(
         &self,
-        worker_id: WorkerId,
+        worker_id: &WorkerId,
         target: RevertWorkerTarget,
     ) -> Result<(), WorkerProxyError> {
         let response: RevertWorkerResponse = self

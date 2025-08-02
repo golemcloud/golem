@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::worker::{log_event, InvokeResult, LogEvent, Ta
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tracing::info;
@@ -36,7 +36,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let (component_id, _) = admin
         .component("environment-service")
@@ -62,6 +62,7 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
                     ("TEST_ENV_VAR_1".to_string(), "value_1".to_string()),
                     ("TEST_ENV_VAR_2".to_string(), "value_2".to_string()),
                 ]),
+                wasi_config_vars: Some(BTreeMap::new().into()),
             },
         )
         .await

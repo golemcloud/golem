@@ -25,17 +25,18 @@ use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
-    cancel_invocation_response, fork_worker_response, get_oplog_response,
-    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response,
-    revert_worker_response, search_oplog_response, update_worker_response, worker_execution_error,
-    CancelInvocationRequest, ConnectWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
-    ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest,
-    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, LaunchNewWorkerRequest,
-    ListDirectoryRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+    cancel_invocation_response, fork_worker_response, get_file_system_node_response,
+    get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
+    interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
+    invoke_and_await_typed_response, invoke_response, launch_new_worker_response,
+    resume_worker_response, revert_worker_response, search_oplog_response, update_worker_response,
+    worker_execution_error, CancelInvocationRequest, ConnectWorkerRequest, DeleteWorkerRequest,
+    ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetFileSystemNodeRequest,
+    GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitJsonRequest, LaunchNewWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest,
+    SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
 use golem_client::model::Account;
@@ -62,7 +63,7 @@ use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex, Revert
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tempfile::Builder;
@@ -287,6 +288,7 @@ pub trait TestDsl {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> crate::Result<WorkerId>;
 
     async fn try_start_worker_with(
@@ -295,6 +297,7 @@ pub trait TestDsl {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> crate::Result<Result<WorkerId, Error>>;
 
     async fn get_worker_metadata(
@@ -433,7 +436,7 @@ pub trait TestDsl {
 
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()>;
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
@@ -632,9 +635,15 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .map_item(|i| i.map_err(widen_infallible))
             .map_error(widen_infallible);
 
+        let project_id = self
+            .deps
+            .cloud_service()
+            .get_default_project(&self.token)
+            .await
+            .expect("Failed to get default project");
         self.deps
             .initial_component_files_service()
-            .put_if_not_exists(&self.account_id, stream)
+            .put_if_not_exists(&project_id, stream)
             .await
             .expect("Failed to add initial component file")
     }
@@ -730,7 +739,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         component_id: &ComponentId,
         name: &str,
     ) -> crate::Result<WorkerId> {
-        TestDsl::start_worker_with(self, component_id, name, vec![], HashMap::new()).await
+        TestDsl::start_worker_with(self, component_id, name, vec![], HashMap::new(), vec![]).await
     }
 
     async fn try_start_worker(
@@ -738,7 +747,8 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         component_id: &ComponentId,
         name: &str,
     ) -> crate::Result<Result<WorkerId, Error>> {
-        TestDsl::try_start_worker_with(self, component_id, name, vec![], HashMap::new()).await
+        TestDsl::try_start_worker_with(self, component_id, name, vec![], HashMap::new(), vec![])
+            .await
     }
 
     async fn start_worker_with(
@@ -747,8 +757,11 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> crate::Result<WorkerId> {
-        let result = TestDsl::try_start_worker_with(self, component_id, name, args, env).await?;
+        let result =
+            TestDsl::try_start_worker_with(self, component_id, name, args, env, wasi_config_vars)
+                .await?;
         Ok(result.map_err(|err| anyhow!("Failed to start worker: {err:?}"))?)
     }
 
@@ -758,6 +771,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> crate::Result<Result<WorkerId, Error>> {
         let response = self
             .deps
@@ -769,6 +783,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                     name: name.to_string(),
                     args,
                     env,
+                    wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
                 },
             )
             .await?;
@@ -1094,15 +1109,12 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             Some(invoke_and_await_typed_response::Result::Success(response)) => {
                 match response.result {
                     None => Ok(Ok(None)),
-                    Some(response) => match response.type_annotated_value {
-                        Some(response) => {
-                            let response: ValueAndType = response.try_into().map_err(|err| {
-                                anyhow!("Invocation result had unexpected format: {err}")
-                            })?;
-                            Ok(Ok(Some(response)))
-                        }
-                        None => Err(anyhow!("Missing type_annotated_value field")),
-                    },
+                    Some(response) => {
+                        let response: ValueAndType = response.try_into().map_err(|err| {
+                            anyhow!("Invocation result had unexpected format: {err}")
+                        })?;
+                        Ok(Ok(Some(response)))
+                    }
                 }
             }
             Some(invoke_and_await_typed_response::Result::Error(WorkerError {
@@ -1556,7 +1568,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         Ok(())
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
@@ -1566,9 +1578,9 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         let response = self
             .deps
             .worker_service()
-            .list_directory(
+            .get_file_system_node(
                 &self.token,
-                ListDirectoryRequest {
+                GetFileSystemNodeRequest {
                     worker_id: Some(target_worker_id.into()),
                     path: path.to_string(),
                 },
@@ -1576,7 +1588,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .await?;
 
         match response.result {
-            Some(list_directory_response::Result::Success(response)) => {
+            Some(get_file_system_node_response::Result::Success(response)) => {
                 let converted = response
                     .nodes
                     .into_iter()
@@ -2047,8 +2059,18 @@ pub fn to_worker_metadata(
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect::<Vec<_>>(),
-            account_id: metadata
-                .account_id
+            wasi_config_vars: metadata
+                .wasi_config_vars
+                .clone()
+                .expect("no wasi_config_vars_field")
+                .into(),
+            project_id: metadata
+                .project_id
+                .expect("no project_id")
+                .try_into()
+                .expect("invalid project_id"),
+            created_by: metadata
+                .created_by
                 .clone()
                 .expect("no account_id")
                 .clone()
@@ -2206,6 +2228,7 @@ pub trait TestDslUnsafe {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> WorkerId;
     async fn try_start_worker_with(
         &self,
@@ -2213,6 +2236,7 @@ pub trait TestDslUnsafe {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> Result<WorkerId, Error>;
     async fn get_worker_metadata(
         &self,
@@ -2319,7 +2343,7 @@ pub trait TestDslUnsafe {
 
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId);
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
@@ -2477,8 +2501,9 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> WorkerId {
-        <T as TestDsl>::start_worker_with(self, component_id, name, args, env)
+        <T as TestDsl>::start_worker_with(self, component_id, name, args, env, wasi_config_vars)
             .await
             .expect("Failed to start worker")
     }
@@ -2489,8 +2514,9 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> Result<WorkerId, Error> {
-        <T as TestDsl>::try_start_worker_with(self, component_id, name, args, env)
+        <T as TestDsl>::try_start_worker_with(self, component_id, name, args, env, wasi_config_vars)
             .await
             .expect("Failed to start worker")
     }
@@ -2690,14 +2716,14 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Oplog check failed")
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         path: &str,
     ) -> Vec<ComponentFileSystemNode> {
-        <T as TestDsl>::list_directory(self, worker_id, path)
+        <T as TestDsl>::get_file_system_node(self, worker_id, path)
             .await
-            .expect("Failed to list directory")
+            .expect("Failed to get file system node")
     }
     async fn get_file_contents(
         &self,

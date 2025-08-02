@@ -3853,7 +3853,9 @@ components:
       - componentVersion
       - args
       - env
-      - accountId
+      - projectId
+      - createdBy
+      - wasiConfigVars
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
@@ -3874,8 +3876,15 @@ components:
           type: object
           additionalProperties:
             type: string
-        accountId:
+        projectId:
           type: string
+          format: uuid
+        createdBy:
+          type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
         parent:
           $ref: '#/components/schemas/WorkerId'
         componentSize:
@@ -4335,7 +4344,7 @@ components:
       - functionName
       - request
       - response
-      - wrappedFunctionType
+      - durableFunctionType
       properties:
         timestamp:
           type: string
@@ -4346,7 +4355,7 @@ components:
           $ref: '#/components/schemas/ValueAndType'
         response:
           $ref: '#/components/schemas/ValueAndType'
-        wrappedFunctionType:
+        durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
     IndexedWorkerMetadata:
       type: object
@@ -4382,7 +4391,7 @@ components:
       title: InvokeResult
       properties:
         result:
-          $ref: '#/components/schemas/TypeAnnotatedValue'
+          $ref: '#/components/schemas/ValueAndType'
     JumpParameters:
       type: object
       title: JumpParameters
@@ -5721,15 +5730,6 @@ components:
         timestamp:
           type: string
           format: date-time
-    TypeAnnotatedValue:
-      type: object
-      required:
-      - typ
-      - value
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-        value: {}
     TypeBool:
       type: object
       title: TypeBool
@@ -5742,6 +5742,8 @@ components:
       required:
       - cases
       properties:
+        name:
+          type: string
         cases:
           type: array
           items:
@@ -5758,6 +5760,8 @@ components:
       required:
       - names
       properties:
+        name:
+          type: string
         names:
           type: array
           items:
@@ -5769,6 +5773,8 @@ components:
       - resource_id
       - mode
       properties:
+        name:
+          type: string
         resource_id:
           type: integer
           format: uint64
@@ -5780,6 +5786,8 @@ components:
       required:
       - inner
       properties:
+        name:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
     TypeOption:
@@ -5788,6 +5796,8 @@ components:
       required:
       - inner
       properties:
+        name:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
     TypeRecord:
@@ -5796,6 +5806,8 @@ components:
       required:
       - fields
       properties:
+        name:
+          type: string
         fields:
           type: array
           items:
@@ -5804,6 +5816,8 @@ components:
       type: object
       title: TypeResult
       properties:
+        name:
+          type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
         err:
@@ -5829,6 +5843,8 @@ components:
       required:
       - items
       properties:
+        name:
+          type: string
         items:
           type: array
           items:
@@ -5851,6 +5867,8 @@ components:
       required:
       - cases
       properties:
+        name:
+          type: string
         cases:
           type: array
           items:
@@ -5943,6 +5961,17 @@ components:
       properties:
         version:
           type: string
+    WasiConfigVarsEntry:
+      type: object
+      title: WasiConfigVarsEntry
+      required:
+      - key
+      - value
+      properties:
+        key:
+          type: string
+        value:
+          type: string
     WorkerAndFilter:
       type: object
       title: WorkerAndFilter
@@ -5983,6 +6012,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
     WorkerCreationResponse:
       type: object
       title: WorkerCreationResponse
@@ -6034,6 +6068,7 @@ components:
       - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
       discriminator:
         propertyName: type
         mapping:
@@ -6045,6 +6080,7 @@ components:
           And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
           Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
           Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+          WasiConfigVars: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
     WorkerFilter_WorkerAndFilter:
       allOf:
       - type: object
@@ -6141,6 +6177,18 @@ components:
             - Version
             example: Version
       - $ref: '#/components/schemas/WorkerVersionFilter'
+    WorkerFilter_WorkerWasiConfigVarsFilter:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - WasiConfigVars
+            example: WasiConfigVars
+      - $ref: '#/components/schemas/WorkerWasiConfigVarsFilter'
     WorkerId:
       type: object
       title: WorkerId
@@ -6158,9 +6206,11 @@ components:
       title: WorkerMetadata
       required:
       - workerId
-      - accountId
+      - projectId
+      - createdBy
       - args
       - env
+      - wasiConfigVars
       - status
       - componentVersion
       - retryCount
@@ -6176,7 +6226,10 @@ components:
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-        accountId:
+        projectId:
+          type: string
+          format: uuid
+        createdBy:
           type: string
         args:
           type: array
@@ -6186,6 +6239,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
         status:
           $ref: '#/components/schemas/WorkerStatus'
         componentVersion:
@@ -6306,6 +6363,20 @@ components:
         value:
           type: integer
           format: uint64
+    WorkerWasiConfigVarsFilter:
+      type: object
+      title: WorkerWasiConfigVarsFilter
+      required:
+      - name
+      - comparator
+      - value
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
     WorkersMetadataRequest:
       type: object
       title: WorkersMetadataRequest

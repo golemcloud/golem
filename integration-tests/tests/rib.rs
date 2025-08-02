@@ -71,7 +71,7 @@ async fn test_rib_with_resource_methods_with_worker_param(deps: &EnvBasedTestDep
 }
 
 async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
 
     let metadata = admin.get_latest_component_metadata(&component_id).await;
@@ -142,19 +142,22 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
                 Value::String("item1".to_string()),
                 Value::F32(10.0),
                 Value::U32(2),
-            ]),]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            ])]),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+            ),
         ))
     );
 }
 
 async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
 
     let metadata = admin.get_latest_component_metadata(&component_id).await;
@@ -242,12 +245,15 @@ async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<
                     Value::U32(2),
                 ]),
             ]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+            ),
         ))
     );
 }
@@ -256,7 +262,7 @@ async fn test_rib_with_resource_methods(
     deps: &EnvBasedTestDependencies,
     worker_name: Option<&str>,
 ) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart-resource").store().await;
 
     let metadata = admin.get_latest_component_metadata(&component_id).await;
@@ -344,12 +350,15 @@ async fn test_rib_with_resource_methods(
                     Value::U32(2),
                 ])
             ]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+            ),
         ))
     );
 }
@@ -388,6 +397,7 @@ impl RibComponentFunctionInvoke for TestRibFunctionInvoke {
         let result = self
             .dependencies
             .admin()
+            .await
             .invoke_and_await_typed(target_worker_id, function_name.0.as_str(), args.0)
             .await;
 

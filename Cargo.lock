@@ -193,6 +193,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
 
 [[package]]
+name = "arrayref"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
+
+[[package]]
+name = "arrayvec"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
+
+[[package]]
 name = "assert2"
 version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1164,6 +1176,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake3"
+version = "1.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3888aaa89e4b2a40fca9848e400f6a658a5a3978de7be858e209cafa8be9a4a0"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
+ "rayon-core",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1594,10 +1620,9 @@ dependencies = [
  "chrono",
  "conditional-trait-gen",
  "console-subscriber",
- "darling",
+ "darling 0.20.11",
  "figment",
  "futures",
- "futures-util",
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
@@ -1793,6 +1818,12 @@ dependencies = [
  "quote",
  "unicode-xid",
 ]
+
+[[package]]
+name = "constant_time_eq"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "convert_case"
@@ -2289,8 +2320,18 @@ version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
 dependencies = [
- "darling_core",
- "darling_macro",
+ "darling_core 0.20.11",
+ "darling_macro 0.20.11",
+]
+
+[[package]]
+name = "darling"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a79c4acb1fd5fa3d9304be4c76e031c54d2e92d172a393e24b19a14fe8532fe9"
+dependencies = [
+ "darling_core 0.21.0",
+ "darling_macro 0.21.0",
 ]
 
 [[package]]
@@ -2308,12 +2349,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "darling_core"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74875de90daf30eb59609910b84d4d368103aaec4c924824c6799b28f77d6a1d"
+dependencies = [
+ "fnv",
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "syn 2.0.101",
+]
+
+[[package]]
 name = "darling_macro"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
 dependencies = [
- "darling_core",
+ "darling_core 0.20.11",
+ "quote",
+ "syn 2.0.101",
+]
+
+[[package]]
+name = "darling_macro"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e79f8e61677d5df9167cd85265f8e5f64b215cdea3fb55eebc3e622e44c7a146"
+dependencies = [
+ "darling_core 0.21.0",
  "quote",
  "syn 2.0.101",
 ]
@@ -3439,7 +3505,7 @@ dependencies = [
  "chrono",
  "combine",
  "console-subscriber",
- "darling",
+ "darling 0.20.11",
  "dashmap",
  "derive_more 2.0.1",
  "figment",
@@ -3484,6 +3550,67 @@ dependencies = [
  "typed-path",
  "url",
  "uuid",
+ "wasmtime",
+]
+
+[[package]]
+name = "golem-common-next"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bincode",
+ "bytes 1.10.1",
+ "chrono",
+ "combine",
+ "console-subscriber",
+ "darling 0.20.11",
+ "dashmap",
+ "derive_more 2.0.1",
+ "figment",
+ "fred",
+ "golem-api-grpc",
+ "golem-rib",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "golem-wasm-rpc-derive",
+ "http 1.3.1",
+ "humantime-serde",
+ "iso8601-timestamp",
+ "itertools 0.14.0",
+ "lazy_static",
+ "nonempty-collections",
+ "poem",
+ "poem-derive",
+ "poem-openapi",
+ "poem-openapi-derive",
+ "prometheus 0.13.4",
+ "prost",
+ "prost-types",
+ "rand 0.9.1",
+ "range-set-blaze",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "shadow-rs",
+ "sqlx",
+ "strum",
+ "strum_macros",
+ "test-r",
+ "thiserror 2.0.12",
+ "tokio",
+ "toml",
+ "tonic",
+ "tracing",
+ "tracing-serde",
+ "tracing-subscriber",
+ "tracing-test",
+ "typed-path",
+ "url",
+ "uuid",
+ "wasmtime",
 ]
 
 [[package]]
@@ -3492,7 +3619,6 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
- "futures-util",
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
@@ -3524,10 +3650,9 @@ dependencies = [
  "chrono",
  "conditional-trait-gen",
  "console-subscriber",
- "darling",
+ "darling 0.20.11",
  "figment",
  "futures",
- "futures-util",
  "golem-api-grpc",
  "golem-common",
  "golem-rib",
@@ -3586,7 +3711,7 @@ dependencies = [
  "axum-jrpc",
  "bincode",
  "bytes 1.10.1",
- "futures-util",
+ "futures",
  "gethostname 0.5.0",
  "golem-api-grpc",
  "golem-common",
@@ -3606,7 +3731,9 @@ dependencies = [
  "test-r",
  "thiserror 2.0.12",
  "tokio",
+ "tokio-stream",
  "tokio-tungstenite",
+ "tokio-util",
  "tonic",
  "tracing",
  "tracing-subscriber",
@@ -3632,6 +3759,74 @@ dependencies = [
  "openapiv3",
  "serde",
  "serde_yaml",
+]
+
+[[package]]
+name = "golem-registry-service"
+version = "0.0.0"
+dependencies = [
+ "assert2",
+ "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
+ "bigdecimal",
+ "blake3",
+ "bytes 1.10.1",
+ "chrono",
+ "conditional-trait-gen",
+ "console-subscriber",
+ "darling 0.20.11",
+ "figment",
+ "futures",
+ "golem-api-grpc",
+ "golem-common-next",
+ "golem-rib",
+ "golem-service-base-next",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "http 1.3.1",
+ "humantime-serde",
+ "hyper 1.6.0",
+ "indoc",
+ "jsonwebtoken",
+ "lazy_static",
+ "mappable-rc",
+ "num-traits",
+ "opentelemetry 0.28.0",
+ "opentelemetry-prometheus 0.28.0",
+ "opentelemetry_sdk 0.28.0",
+ "poem",
+ "poem-derive",
+ "poem-openapi",
+ "poem-openapi-derive",
+ "prometheus 0.13.4",
+ "prost",
+ "reqwest 0.12.18",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "serde_yaml",
+ "similar",
+ "sqlx",
+ "strum",
+ "strum_macros",
+ "tap",
+ "tempfile",
+ "test-r",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "tryhard",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3741,6 +3936,66 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-service-base-next"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "applying",
+ "assert2",
+ "async-fs",
+ "async-hash",
+ "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
+ "axum",
+ "bincode",
+ "bitflags 2.9.1",
+ "bytes 1.10.1",
+ "chrono",
+ "conditional-trait-gen",
+ "dashmap",
+ "figment",
+ "futures",
+ "golem-api-grpc",
+ "golem-common-next",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "golem-wasm-rpc-derive",
+ "headers",
+ "hex",
+ "http 1.3.1",
+ "http-body 1.0.1",
+ "http-body-util",
+ "humantime-serde",
+ "include_dir",
+ "lazy_static",
+ "pin-project 1.1.10",
+ "poem",
+ "poem-openapi",
+ "poem-openapi-derive",
+ "prometheus 0.13.4",
+ "prost-types",
+ "reqwest 0.12.18",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "test-r",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tracing",
+ "tryhard",
+ "url",
+ "uuid",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "golem-shard-manager"
 version = "0.0.0"
 dependencies = [
@@ -3787,7 +4042,7 @@ dependencies = [
  "clap",
  "cli-table",
  "colored",
- "futures-util",
+ "futures",
  "golem-api-grpc",
  "golem-client",
  "golem-common",
@@ -3921,7 +4176,6 @@ dependencies = [
  "fred",
  "fs-set-times",
  "futures",
- "futures-util",
  "gethostname 1.0.2",
  "goldenfile",
  "golem-api-grpc",
@@ -3989,13 +4243,12 @@ dependencies = [
  "chrono",
  "conditional-trait-gen",
  "criterion",
- "darling",
+ "darling 0.20.11",
  "derive_more 2.0.1",
  "fastrand",
  "figment",
  "fred",
  "futures",
- "futures-util",
  "golem-api-grpc",
  "golem-common",
  "golem-rib",
@@ -5124,7 +5377,7 @@ version = "0.98.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37745d8a4076b77e0b1952e94e358726866c8e14ec94baaca677d47dcdb98658"
 dependencies = [
- "darling",
+ "darling 0.20.11",
  "proc-macro2",
  "quote",
  "serde_json",
@@ -6402,7 +6655,7 @@ version = "5.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c0a35fb674ebb1d0351de9084231ef732a1d5a8a5fdf5b835ee286ce0d0192f"
 dependencies = [
- "darling",
+ "darling 0.20.11",
  "http 1.3.1",
  "indexmap 2.9.0",
  "mime",
@@ -6804,9 +7057,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.37.5"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "331e97a1af0bf59823e6eadffe373d7b27f485be8748f71471c662c1f269b7fb"
+checksum = "8927b0664f5c5a98265138b7e3f90aa19a6b21353182469ace36d4ac527b7b1b"
 dependencies = [
  "memchr",
 ]
@@ -7889,7 +8142,7 @@ version = "3.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d00caa5193a3c8362ac2b73be6b9e768aa5a4b2f721d8f4b339600c3cb51f8e"
 dependencies = [
- "darling",
+ "darling 0.20.11",
  "proc-macro2",
  "quote",
  "syn 2.0.101",
@@ -8588,9 +8841,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "2.2.0"
+version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5c7da0463236fee62bf5ef8f7dd654aff17eed417facd9b09ccc923629e435a"
+checksum = "a250edb45c30e3911a5d8c9117fd494b980daa7bf3d12df0a15466c4b1146e90"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -8600,9 +8853,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "3.0.0"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40731e12e45e5a472e37921915244e79e38b741fea75457a91cbdeda4dfc5f23"
+checksum = "230a4bbf5aabc86a040da6d02c8395a485bf8d106ed2eb2a16c3cf07cd4ba3a5"
 dependencies = [
  "anstream",
  "anstyle",
@@ -8614,7 +8867,7 @@ dependencies = [
  "futures",
  "interprocess",
  "parking_lot",
- "quick-xml 0.37.5",
+ "quick-xml 0.38.0",
  "rand 0.9.1",
  "tokio",
  "topological-sort",
@@ -8623,11 +8876,11 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "1.3.0"
+version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b498715a4c05a942643aa5b6efa1c570563fad4ff20025d0c50f583856a4d977"
+checksum = "631a1357747913d4e66cf97d3f2af25c6fad928339f5139d9d60e5e9b725f679"
 dependencies = [
- "darling",
+ "darling 0.21.0",
  "humantime",
  "proc-macro2",
  "quote",

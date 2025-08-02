@@ -69,6 +69,8 @@ run_task = [
         "remove-wit-deps",
         "wit-host",
         "wit-wasm-rpc",
+        "wit-golem-common",
+        "wit-golem-common-next",
         "wit-done",
     ] },
 ]
@@ -83,6 +85,32 @@ cp wit/deps/io wasm-rpc/wit/deps
 cp wit/deps/clocks wasm-rpc/wit/deps
 cp wit/deps/golem-1.x wasm-rpc/wit/deps
 cp wit/deps/golem-rpc wasm-rpc/wit/deps
+"""
+
+[tasks.wit-golem-common]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r golem-common/wit/deps
+mkdir golem-common/wit/deps
+cp wit/deps/io golem-common/wit/deps
+cp wit/deps/clocks golem-common/wit/deps
+cp wit/deps/golem-1.x golem-common/wit/deps
+cp wit/deps/golem-rpc golem-common/wit/deps
+cp wit/deps/golem-agent golem-common/wit/deps
+"""
+
+[tasks.wit-golem-common-next]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r golem-common-next/wit/deps
+mkdir golem-common-next/wit/deps
+cp wit/deps/io golem-common-next/wit/deps
+cp wit/deps/clocks golem-common-next/wit/deps
+cp wit/deps/golem-1.x golem-common-next/wit/deps
+cp wit/deps/golem-rpc golem-common-next/wit/deps
+cp wit/deps/golem-agent golem-common-next/wit/deps
 """
 
 [tasks.wit-host]
@@ -103,6 +131,8 @@ script = """
 rm -rf wit/deps.done
 rm -rf wit/deps
 rm -rf wasm-rpc/wit/deps
+rm -rf golem-common/wit/deps
+rm -rf golem-common-next/wit/deps
 """
 
 [tasks.diff-wit]
@@ -263,6 +293,14 @@ script = '''
 cargo test --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
 '''
 
+[tasks.worker-executor-tests-rdbms-service]
+dependencies = ["wit"]
+description = "Runs only untagged worker-executor-tests"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+cargo test --package golem-worker-executor --test integration :tag:rdbms-service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
+'''
+
 [tasks.worker-executor-tests-group1]
 dependencies = ["wit"]
 description = "Runs worker executor tests only (group 1/8)"
@@ -368,6 +406,7 @@ dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-service-base-next --test integration -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package cloud-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package golem-debugging-service --test 'integration' -- --report-time $JUNIT_OPTS
@@ -417,6 +456,18 @@ dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc" }
 script = '''
 cargo test --package integration-tests --test api -- :tag: --nocapture --report-time $JUNIT_OPTS
+'''
+
+[tasks.registry-repo-coverage]
+description = "Run registry service tests with covarage report for repository sources"
+script = '''
+cargo tarpaulin \
+    --skip-clean \
+    --target-dir target-tarpaulin \
+    --package golem-registry-service \
+    --include-files "golem-registry-service/src/repo/*" \
+    --out html \
+    --output-dir target-tarpaulin/reports
 '''
 
 ## ** CHECK-OPENAPI **
@@ -479,7 +530,7 @@ description = "Generates openapi spec from the code and saves it to the openapi 
 
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
-dependencies = [ "build-worker-service" ]
+dependencies = ["build-worker-service"]
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
@@ -488,7 +539,7 @@ mkdir -pv ../data
 
 [tasks.generate-component-service-openapi]
 description = "Generates openapi spec for component service"
-dependencies = [ "build-component-service" ]
+dependencies = ["build-component-service"]
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
@@ -497,7 +548,7 @@ mkdir -pv ../data
 
 [tasks.generate-cloud-service-openapi]
 description = "Generates openapi spec for cloud service"
-dependencies = [ "build-cloud-service" ]
+dependencies = ["build-cloud-service"]
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
@@ -755,7 +806,7 @@ script = { file = "./local-run/start.sh" }
 description = "Runs all the services locally with the oauth2 login system enabled"
 dependencies = ["build"]
 
-condition = { env_set = [ "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"], fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager. GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET env vars must be set." }
+condition = { env_set = ["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"], fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager. GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET env vars must be set." }
 
 condition_script = [
     "nginx -v",

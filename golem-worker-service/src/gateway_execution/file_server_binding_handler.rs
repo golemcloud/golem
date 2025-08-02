@@ -18,7 +18,7 @@ use crate::service::worker::{WorkerService, WorkerServiceError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use futures_util::TryStreamExt;
+use futures::TryStreamExt;
 use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::{ComponentFilePath, ComponentId, TargetWorkerId, WorkerId};
 use golem_common::SafeDisplay;
@@ -268,7 +268,7 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
         if let Some(file) = matching_ro_file {
             let data = self
                 .initial_component_files_service
-                .get(&namespace.account_id, &file.key)
+                .get(&namespace.project_id, &file.key)
                 .await
                 .map_err(|e| {
                     FileServerBindingError::InternalError(format!(

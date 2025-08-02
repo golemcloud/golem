@@ -20,7 +20,8 @@ use crate::model::{
     ComponentEnv, DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use crate::model::{ComponentQuery, ComponentSearch};
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures::{stream, StreamExt, TryStreamExt};
+use golem_common::model::agent::AgentTypes;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
@@ -53,6 +54,7 @@ pub struct UploadPayload {
     files: Option<TempFileUpload>,
     dynamic_linking: Option<JsonField<DynamicLinking>>,
     env: Option<JsonField<ComponentEnv>>,
+    agent_types: Option<JsonField<AgentTypes>>,
 }
 
 pub struct ComponentApi {
@@ -162,6 +164,7 @@ impl ComponentApi {
                 HashMap::new(),
                 &auth,
                 HashMap::new(),
+                vec![],
             )
             .await?;
 
@@ -226,6 +229,10 @@ impl ComponentApi {
                     .dynamic_linking,
                 &auth,
                 env,
+                payload
+                    .agent_types
+                    .map(|types| types.0.types)
+                    .unwrap_or_default(),
             )
             .await?;
 
@@ -292,6 +299,10 @@ impl ComponentApi {
                     .dynamic_linking,
                 &auth,
                 env,
+                payload
+                    .agent_types
+                    .map(|types| types.0.types)
+                    .unwrap_or_default(),
             )
             .await?;
 
@@ -706,9 +717,9 @@ impl ComponentApi {
     #[oai(
         path = "/:component_id/versions/latest/plugins/installs/batch",
         method = "post",
-        operation_id = "bath_update_installed_plugins"
+        operation_id = "batch_update_installed_plugins"
     )]
-    async fn bath_update_installed_plugins(
+    async fn batch_update_installed_plugins(
         &self,
         component_id: Path<ComponentId>,
         updates: Json<BatchPluginInstallationUpdates>,

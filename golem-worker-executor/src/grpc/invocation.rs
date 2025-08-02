@@ -12,30 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::component::ComponentMetadata;
 use crate::services::HasComponentService;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_common::base_model::{TargetWorkerId, WorkerId};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, WorkerMetadata};
+use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, ProjectId, WorkerMetadata};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::Component;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
 use golem_wasm_rpc::protobuf::Val;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{Value, ValueAndType};
 use rib::{ParsedFunctionName, ParsedFunctionSite};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::warn;
 
 pub trait CanStartWorker {
     fn account_id(&self) -> Result<AccountId, WorkerExecutorError>;
     fn account_limits(&self) -> Option<GrpcResourceLimits>;
+    fn project_id(&self) -> Result<ProjectId, WorkerExecutorError>;
     fn worker_id(&self) -> Result<TargetWorkerId, WorkerExecutorError>;
     fn args(&self) -> Option<Vec<String>>;
     fn env(&self) -> Option<Vec<(String, String)>>;
+    fn wasi_config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError>;
     fn parent(&self) -> Option<WorkerId>;
 }
 
@@ -54,6 +56,7 @@ trait ProtobufInvocationDetails {
     fn proto_account_limits(&self)
         -> &Option<golem_api_grpc::proto::golem::common::ResourceLimits>;
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::TargetWorkerId>;
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId>;
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext>;
@@ -70,6 +73,13 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 
     fn account_limits(&self) -> Option<GrpcResourceLimits> {
         *self.proto_account_limits()
+    }
+
+    fn project_id(&self) -> Result<ProjectId, WorkerExecutorError> {
+        (*self.proto_project_id())
+            .ok_or(WorkerExecutorError::invalid_request("project_id not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)
     }
 
     fn worker_id(&self) -> Result<TargetWorkerId, WorkerExecutorError> {
@@ -92,6 +102,20 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
             .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
     }
 
+    fn wasi_config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError> {
+        match self.proto_invocation_context() {
+            Some(ctx) => Ok(Some(
+                ctx.wasi_config_vars
+                    .clone()
+                    .ok_or(WorkerExecutorError::invalid_request(
+                        "wasi_config_vars not found",
+                    ))?
+                    .into(),
+            )),
+            None => Ok(None),
+        }
+    }
+
     fn parent(&self) -> Option<WorkerId> {
         self.proto_invocation_context().as_ref().and_then(|ctx| {
             ctx.parent
@@ -102,7 +126,7 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 }
 
 impl ProtobufInvocationDetails
-    for golem_api_grpc::proto::golem::workerexecutor::v1::ListDirectoryRequest
+    for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileSystemNodeRequest
 {
     fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
         &self.account_id
@@ -116,6 +140,10 @@ impl ProtobufInvocationDetails
 
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::TargetWorkerId> {
         &self.worker_id
+    }
+
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
     }
 
     fn proto_invocation_context(
@@ -142,6 +170,10 @@ impl ProtobufInvocationDetails
         &self.worker_id
     }
 
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
+    }
+
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
@@ -164,6 +196,10 @@ impl ProtobufInvocationDetails
 
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::TargetWorkerId> {
         &self.worker_id
+    }
+
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
     }
 
     fn proto_invocation_context(
@@ -190,6 +226,10 @@ impl ProtobufInvocationDetails
         &self.worker_id
     }
 
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
+    }
+
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
@@ -212,6 +252,10 @@ impl ProtobufInvocationDetails
 
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::TargetWorkerId> {
         &self.worker_id
+    }
+
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
     }
 
     fn proto_invocation_context(
@@ -257,6 +301,10 @@ impl ProtobufInvocationDetails
 
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::TargetWorkerId> {
         &self.worker_id
+    }
+
+    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
+        &self.project_id
     }
 
     fn proto_invocation_context(
@@ -346,14 +394,14 @@ fn assume_future_component_version(metadata: &WorkerMetadata) -> ComponentVersio
 }
 
 fn resolve_function<'t>(
-    component: &'t ComponentMetadata,
+    component: &'t Component,
     function: &str,
 ) -> Result<(&'t AnalysedFunction, ParsedFunctionName), WorkerExecutorError> {
     let parsed =
         ParsedFunctionName::parse(function).map_err(WorkerExecutorError::invalid_request)?;
     let mut functions = Vec::new();
 
-    for export in &component.exports {
+    for export in &component.metadata.exports {
         match export {
             AnalysedExport::Instance(interface) => {
                 if matches!(parsed.site().interface_name(), Some(name) if name == interface.name) {
@@ -397,7 +445,7 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
     let component_metadata = worker
         .component_service()
         .get_metadata(
-            &metadata.account_id,
+            &metadata.project_id,
             &metadata.worker_id.component_id,
             Some(assumed_component_version),
         )
@@ -419,20 +467,15 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
                 param.name
             ))
         })?;
-        let type_annotated_value =
-            TypeAnnotatedValue::parse_with_type(&json, &param.typ).map_err(|errors| {
+        let value_and_type =
+            ValueAndType::parse_with_type(&json, &param.typ).map_err(|errors| {
                 WorkerExecutorError::invalid_request(format!(
                     "Parameter {} has unexpected type: {}",
                     param.name,
                     errors.join(", ")
                 ))
             })?;
-        let val: Value = type_annotated_value.try_into().map_err(|err| {
-            WorkerExecutorError::invalid_request(format!(
-                "Invalid parameter value for {}: {err}",
-                param.name
-            ))
-        })?;
+        let val: Value = value_and_type.value;
         input.push(val.into());
     }
 

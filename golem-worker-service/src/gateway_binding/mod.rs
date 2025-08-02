@@ -12,21 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod gateway_binding_compiled;
+mod http_handler_binding;
+mod static_binding;
+mod worker_binding;
+
 pub(crate) use self::http_handler_binding::*;
 pub(crate) use self::worker_binding::*;
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 pub(crate) use gateway_binding_compiled::*;
-use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType;
 use golem_common::model::component::VersionedComponentId;
 use rib::{ComponentDependency, Expr, RibByteCode, RibCompilationError, RibInputTypeInfo};
 pub use static_binding::*;
-
-mod gateway_binding_compiled;
-mod http_handler_binding;
-mod static_binding;
-mod worker_binding;
 
 // A gateway binding is integration to the backend. This is similar to AWS's x-amazon-gateway-integration
 // where it holds the details of where to re-route.
@@ -79,154 +78,6 @@ impl GatewayBinding {
                 Some(http_handler_binding.component_id.clone())
             }
             Self::Static(_) => None,
-        }
-    }
-}
-
-impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
-    type Error = String;
-    fn try_from(value: GatewayBinding) -> Result<Self, String> {
-        match value {
-            GatewayBinding::Default(worker_binding) => Ok(
-                golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
-                    binding_type: Some(GatewayBindingType::Default.into()),
-                    component: Some(worker_binding.component_id.into()),
-                    worker_name: None,
-                    response: Some(worker_binding.response_mapping.0.into()),
-                    idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
-                    static_binding: None,
-                    invocation_context: worker_binding.invocation_context.map(|x| x.into()),
-                },
-            ),
-            GatewayBinding::FileServer(worker_binding) => Ok(
-                golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
-                    binding_type: Some(GatewayBindingType::FileServer.into()),
-                    component: Some(worker_binding.component_id.into()),
-                    worker_name: worker_binding.worker_name.map(|x| x.into()),
-                    response: Some(worker_binding.response_mapping.0.into()),
-                    idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
-                    static_binding: None,
-                    invocation_context: None,
-                },
-            ),
-            GatewayBinding::Static(static_binding) => {
-                let static_binding =
-                    golem_api_grpc::proto::golem::apidefinition::StaticBinding::try_from(
-                        static_binding.clone(),
-                    )?;
-
-                let inner = static_binding
-                    .static_binding
-                    .clone()
-                    .ok_or("Missing static binding")?;
-
-                let gateway_binding_type: GatewayBindingType = match inner {
-                    golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::HttpCorsPreflight(_) => GatewayBindingType::CorsPreflight,
-                    golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::AuthCallback(_)  => GatewayBindingType::AuthCallBack,
-                };
-
-                Ok(
-                    golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
-                        binding_type: Some(gateway_binding_type.into()),
-                        component: None,
-                        worker_name: None,
-                        response: None,
-                        idempotency_key: None,
-                        static_binding: Some(static_binding),
-                        invocation_context: None,
-                    },
-                )
-            }
-            GatewayBinding::HttpHandler(worker_binding) => Ok(
-                golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
-                    binding_type: Some(GatewayBindingType::HttpHandler.into()),
-                    component: Some(worker_binding.component_id.into()),
-                    worker_name: worker_binding.worker_name.map(|x| x.into()),
-                    response: None,
-                    idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
-                    static_binding: None,
-                    invocation_context: None,
-                },
-            ),
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for GatewayBinding {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::apidefinition::GatewayBinding,
-    ) -> Result<Self, Self::Error> {
-        let binding_type_proto =
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::try_from(
-                value.binding_type.unwrap_or(0),
-            )
-            .map_err(|_| "Failed to convert binding type".to_string())?;
-
-        match binding_type_proto {
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default => {
-                let component_id = VersionedComponentId::try_from(
-                    value.component.ok_or("Missing component id".to_string())?,
-                )?;
-                let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
-                let invocation_context =
-                    value.invocation_context.map(Expr::try_from).transpose()?;
-                let response_proto = value.response.ok_or("Missing response field")?;
-                let response = Expr::try_from(response_proto)?;
-
-                Ok(GatewayBinding::Default(Box::new(WorkerBinding {
-                    component_id,
-                    idempotency_key,
-                    response_mapping: ResponseMapping(response),
-                    invocation_context,
-                })))
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => {
-                let component_id = VersionedComponentId::try_from(
-                    value.component.ok_or("Missing component id".to_string())?,
-                )?;
-                let worker_name = value.worker_name.map(Expr::try_from).transpose()?;
-                let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
-                let response_proto = value.response.ok_or("Missing response field")?;
-                let response = Expr::try_from(response_proto)?;
-
-                Ok(GatewayBinding::FileServer(Box::new(FileServerBinding {
-                    component_id,
-                    worker_name,
-                    idempotency_key,
-                    response_mapping: ResponseMapping(response),
-                    invocation_context: None,
-                })))
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler => {
-                let component_id = VersionedComponentId::try_from(
-                    value.component.ok_or("Missing component id".to_string())?,
-                )?;
-                let worker_name = value.worker_name.map(Expr::try_from).transpose()?;
-                let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
-
-                Ok(GatewayBinding::HttpHandler(Box::new(HttpHandlerBinding {
-                    component_id,
-                    worker_name,
-                    idempotency_key,
-                })))
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
-                let static_binding = value.static_binding.ok_or("Missing static binding")?;
-
-                Ok(GatewayBinding::static_binding(StaticBinding::try_from(
-                    static_binding,
-                )?))
-            }
-
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::AuthCallBack => {
-                let static_binding = value.static_binding.ok_or("Missing static binding")?;
-
-                Ok(GatewayBinding::static_binding(StaticBinding::try_from(
-                    static_binding,
-                )?))
-            }
         }
     }
 }

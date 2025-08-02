@@ -11,47 +11,8 @@ import "golem/component/versioned_component_id.proto";
 import "google/protobuf/timestamp.proto";
 
 // Used in api definition repo and needs to be backward compatible
-message ApiDefinition {
-  ApiDefinitionId id = 1;
-  string version = 2;
-  oneof definition {
-    HttpApiDefinition http = 3;
-  }
-  bool draft = 4;
-  google.protobuf.Timestamp created_at = 5;
-}
-
-// Used in api definition repo and needs to be backward compatible
-message ApiDefinitionList {
-  repeated ApiDefinition definitions = 1;
-}
-
-// Used in api definition repo and needs to be backward compatible
-message HttpApiDefinition {
-  repeated HttpRoute routes = 1;
-}
-
-// Used in api definition repo and needs to be backward compatible
-message SecuritySchemeReference {
-  string security_scheme_identifier = 1;
-}
-
-// Used in api definition repo and needs to be backward compatible
 message CompiledHttpApiDefinition {
   repeated CompiledHttpRoute routes = 1;
-}
-
-// Used in api definition repo and needs to be backward compatible
-message ApiDefinitionId {
-  string value = 1;
-}
-
-// Used in api definition repo and needs to be backward compatible
-message HttpRoute {
-  HttpMethod method = 1;
-  string path = 2;
-  GatewayBinding binding = 3;
-  Middleware middleware = 4;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -73,20 +34,6 @@ enum HttpMethod {
   OPTIONS = 6;
   TRACE = 7;
   HEAD = 8;
-}
-
-// Used in api definition repo and needs to be backward compatible
-message GatewayBinding {
-  // Optional field to keep backward compatibility
-  optional golem.component.VersionedComponentId component = 1;
-  optional golem.rib.Expr worker_name = 2;
-  // Optional field to keep backward compatibility
-  optional golem.rib.Expr response = 3;
-  optional golem.rib.Expr idempotency_key = 4;
-  // type discriminator to keep backward compatibility
-  optional GatewayBindingType binding_type = 5;
-  optional StaticBinding static_binding = 6;
-  optional golem.rib.Expr invocation_context = 7;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -112,10 +59,6 @@ message CompiledGatewayBinding {
     optional golem.rib.RibInputType invocation_context_rib_input = 17;
 }
 
-message SecuritySchemaReference {
-    string security_scheme_identifier = 1;
-}
-
 // Used in api definition repo and needs to be backward compatible
 enum GatewayBindingType {
   DEFAULT = 0;
@@ -139,6 +82,7 @@ message StaticBinding {
   }
 }
 
+// Used in api definition repo and needs to be backward compatible
 message AuthCallBack {
   SecurityWithProviderMetadata security_with_provider_metadata = 1;
 }
@@ -153,11 +97,13 @@ message CorsPreflight {
   optional bool allow_credentials = 6;
 }
 
+// Used in api definition repo and needs to be backward compatible
 message SecurityWithProviderMetadata {
   SecurityScheme security_scheme = 1;
   IdentityProviderMetadata identity_provider_metadata = 2;
 }
 
+// Used in api definition repo and needs to be backward compatible
 message SecurityScheme {
   Provider provider = 1;
   string scheme_identifier = 2;
@@ -167,6 +113,7 @@ message SecurityScheme {
   repeated string scopes = 6;
 }
 
+// Used in api definition repo and needs to be backward compatible
 message Provider {
   oneof provider {
     Google google = 1;
@@ -176,11 +123,16 @@ message Provider {
   }
 }
 
+// Used in api definition repo and needs to be backward compatible
 message Google{}
+// Used in api definition repo and needs to be backward compatible
 message Facebook{}
+// Used in api definition repo and needs to be backward compatible
 message Microsoft{}
+// Used in api definition repo and needs to be backward compatible
 message Gitlab{}
 
+// Used in api definition repo and needs to be backward compatible
 message IdentityProviderMetadata {
   string metadata = 1;
 }

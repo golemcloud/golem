@@ -44,7 +44,7 @@ http {
         }
 
         location / {
-            proxy_pass http://$GOLEM_COMPONENT_SERVICE_HOST:$GOLEM_CLOUD_SERVICE_PORT;
+            proxy_pass http://$GOLEM_COMPONENT_SERVICE_HOST:$GOLEM_COMPONENT_SERVICE_PORT;
         }
     }
 }

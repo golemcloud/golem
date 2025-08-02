@@ -22,7 +22,7 @@ use bytes::Bytes;
 use chrono::Datelike;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{log_event_to_string, TestDslUnsafe};
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm_rpc::{IntoValueAndType, Record, Value};
 use http::HeaderMap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -42,7 +42,7 @@ async fn zig_example_3(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("zig-3").store().await;
     let worker_id = executor.start_worker(&component_id, "zig-3").await;
@@ -83,7 +83,7 @@ async fn tinygo_example(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("tinygo-wasi").store().await;
     let worker_id = executor
@@ -92,6 +92,7 @@ async fn tinygo_example(
             "tinygo-wasi-1",
             vec!["arg-1".to_string(), "arg-2".to_string()],
             HashMap::from([("ENV_VAR_1".to_string(), "ENV_VAR_VALUE_1".to_string())]),
+            vec![],
         )
         .await;
 
@@ -149,7 +150,7 @@ async fn tinygo_http_client(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
@@ -195,7 +196,7 @@ async fn tinygo_http_client(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "tinygo-wasi-http-1", vec![], env)
+        .start_worker_with(&component_id, "tinygo-wasi-http-1", vec![], env, vec![])
         .await;
 
     let result = executor
@@ -236,7 +237,7 @@ async fn grain_example_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("grain-1").store().await;
     let worker_id = executor.start_worker(&component_id, "grain-1").await;
@@ -282,7 +283,7 @@ async fn java_example_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("java-1").store().await;
     let worker_id = executor.start_worker(&component_id, "java-1").await;
@@ -330,7 +331,7 @@ async fn java_shopping_cart(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("java-2").store().await;
     let worker_id = executor.start_worker(&component_id, "java-2").await;
@@ -347,12 +348,12 @@ async fn java_shopping_cart(
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -361,12 +362,12 @@ async fn java_shopping_cart(
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1001".into_value_and_type()),
                 ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                 ("price", 999999.0f32.into_value_and_type()),
                 ("quantity", 1u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -375,12 +376,12 @@ async fn java_shopping_cart(
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -438,7 +439,7 @@ async fn c_example_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("c-1").store().await;
     let worker_id = executor.start_worker(&component_id, "c-1").await;
@@ -478,7 +479,7 @@ async fn c_example_2(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("c-1").store().await;
     let worker_id = executor.start_worker(&component_id, "c-2").await;
@@ -520,7 +521,7 @@ async fn c_example_3(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("large-initial-memory").store().await;
     let worker_id = executor
@@ -550,7 +551,7 @@ async fn c_example_4(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("large-dynamic-memory").store().await;
     let worker_id = executor

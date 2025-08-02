@@ -27,22 +27,13 @@ use golem_common::model::{
     ComponentType, ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter,
     WorkerId,
 };
-use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
+use golem_wasm_rpc::ValueAndType;
 use golem_wasm_rpc_derive::IntoValue;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WorkerCreationRequest {
-    pub name: String,
-    pub args: Vec<String>,
-    pub env: HashMap<String, String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -83,7 +74,7 @@ impl From<CompleteParameters> for golem_api_grpc::proto::golem::worker::Complete
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct InvokeParameters {
-    pub params: Vec<OptionallyTypeAnnotatedValueJson>,
+    pub params: Vec<OptionallyValueAndTypeJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
@@ -426,7 +417,7 @@ impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::Index
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct InvokeResult {
-    pub result: Option<TypeAnnotatedValue>,
+    pub result: Option<ValueAndType>,
 }
 
 #[derive(Debug, Clone)]

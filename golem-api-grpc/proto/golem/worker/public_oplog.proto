@@ -5,11 +5,13 @@ package golem.worker;
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
 import "golem/common/plugin_installation_id.proto";
+import "golem/common/project_id.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
-import "wasm/rpc/type_annotated_value.proto";
+import "wasm/rpc/value_and_type.proto";
+import "golem/worker/wasi_config_vars.proto";
 
 message OplogEntry {
   oneof entry {
@@ -75,25 +77,27 @@ message CreateParameters {
   uint64 component_version = 3;
   repeated string args = 4;
   map<string, string> env = 5;
-  golem.common.AccountId account_id = 6;
+  golem.common.AccountId created_by = 6;
   optional WorkerId parent = 7;
   uint64 component_size = 8;
   uint64 initial_total_linear_memory_size = 9;
   repeated PluginInstallationDescription initial_active_plugins = 10;
+  golem.common.ProjectId project_id = 11;
+  WasiConfigVars wasi_config_vars = 12;
 }
 
 message ImportedFunctionInvokedParameters {
   google.protobuf.Timestamp timestamp = 1;
   string function_name = 2;
-  wasm.rpc.TypeAnnotatedValue request = 3;
-  wasm.rpc.TypeAnnotatedValue response = 4;
+  wasm.rpc.ValueAndType request = 3;
+  wasm.rpc.ValueAndType response = 4;
   WrappedFunctionType wrapped_function_type = 5;
 }
 
 message ExportedFunctionInvokedParameters {
   google.protobuf.Timestamp timestamp = 1;
   string function_name = 2;
-  repeated wasm.rpc.TypeAnnotatedValue request = 3;
+  repeated wasm.rpc.ValueAndType request = 3;
   IdempotencyKey idempotency_key = 4;
   string trace_id = 5;
   repeated string trace_states = 6;
@@ -102,7 +106,7 @@ message ExportedFunctionInvokedParameters {
 
 message ExportedFunctionCompletedParameters {
   google.protobuf.Timestamp timestamp = 1;
-  wasm.rpc.TypeAnnotatedValue response = 2;
+  wasm.rpc.ValueAndType response = 2;
   int64 consumed_fuel = 3;
 }
 
@@ -143,7 +147,7 @@ message EndRemoteWriteParameters {
 message ExportedFunctionInvocationParameters {
   IdempotencyKey idempotency_key = 1;
   string function_name = 2;
-  repeated wasm.rpc.TypeAnnotatedValue input = 3;
+  repeated wasm.rpc.ValueAndType input = 3;
   bool valid_input = 4;
   string trace_id = 5;
   repeated string trace_states = 6;
@@ -211,7 +215,7 @@ message DescribeResourceParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 resource_id = 2;
   string resource_name = 3;
-  repeated wasm.rpc.TypeAnnotatedValue resource_params = 4;
+  repeated wasm.rpc.ValueAndType resource_params = 4;
 }
 
 message TimestampParameter {

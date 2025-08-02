@@ -21,15 +21,14 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId,
-    WorkerStatusRecord,
+    AccountId, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
     InterruptKind, WorkerExecutorError, WorkerOutOfMemory,
 };
 use golem_wasm_rpc::ValueAndType;
 use nonempty_collections::NEVec;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -65,21 +64,25 @@ pub struct WorkerConfig {
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
     pub component_version_for_replay: u64,
+    pub created_by: AccountId,
+    pub initial_wasi_config_vars: BTreeMap<String, String>,
 }
 
 impl WorkerConfig {
     pub fn new(
         worker_id: WorkerId,
-        component_version: u64,
+        target_component_version: u64,
         worker_args: Vec<String>,
         mut worker_env: Vec<(String, String)>,
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
         component_version_for_replay: u64,
+        created_by: AccountId,
+        initial_wasi_config_vars: BTreeMap<String, String>,
     ) -> WorkerConfig {
         let worker_name = worker_id.worker_name.clone();
         let component_id = worker_id.component_id;
-        let component_version = component_version.to_string();
+        let component_version = target_component_version.to_string();
         worker_env.retain(|(key, _)| {
             key != "GOLEM_WORKER_NAME"
                 && key != "GOLEM_COMPONENT_ID"
@@ -94,6 +97,8 @@ impl WorkerConfig {
             deleted_regions,
             total_linear_memory_size,
             component_version_for_replay,
+            created_by,
+            initial_wasi_config_vars,
         }
     }
 }
@@ -335,13 +340,6 @@ pub enum LookupResult {
     Pending,
     Interrupted,
     Complete(Result<Option<ValueAndType>, WorkerExecutorError>),
-}
-
-#[derive(Clone, Debug)]
-pub enum ListDirectoryResult {
-    Ok(Vec<ComponentFileSystemNode>),
-    NotFound,
-    NotADirectory,
 }
 
 pub enum ReadFileResult {

@@ -56,31 +56,27 @@ impl SqliteBlobStorage {
 
     fn namespace(namespace: BlobStorageNamespace) -> String {
         match namespace {
-            BlobStorageNamespace::CompilationCache => "compilation_cache".to_string(),
-            BlobStorageNamespace::CustomStorage(account_id) => {
-                format!("custom_data-{}", account_id.value)
+            BlobStorageNamespace::CompilationCache { project_id } => {
+                format!("compilation_cache-{project_id}")
+            }
+            BlobStorageNamespace::CustomStorage { project_id } => {
+                format!("custom_data-{project_id}")
             }
             BlobStorageNamespace::OplogPayload {
-                account_id,
+                project_id,
                 worker_id,
-            } => format!(
-                "oplog_payload-{}-{}",
-                account_id.value, worker_id.worker_name
-            ),
+            } => format!("oplog_payload-{}-{}", project_id, worker_id.worker_name),
             BlobStorageNamespace::CompressedOplog {
-                account_id,
+                project_id,
                 component_id,
                 level,
-            } => format!(
-                "compressed_oplog-{}-{}-{}",
-                account_id.value, component_id, level
-            ),
-            BlobStorageNamespace::InitialComponentFiles { account_id } => {
-                format!("initial_component_files-{}", account_id.value)
+            } => format!("compressed_oplog-{project_id}-{component_id}-{level}"),
+            BlobStorageNamespace::InitialComponentFiles { project_id } => {
+                format!("initial_component_files-{project_id}")
             }
-            BlobStorageNamespace::Components => "components".to_string(),
+            BlobStorageNamespace::Components { project_id } => format!("components-{project_id}"),
             BlobStorageNamespace::PluginWasmFiles { account_id } => {
-                format!("plugin_wasm_files-{}", account_id.value)
+                format!("plugin_wasm_files-{account_id}")
             }
         }
     }
@@ -270,7 +266,7 @@ impl BlobStorage for SqliteBlobStorage {
 
         self.pool
             .with_ro(target_label, op_label)
-            .fetch_all::<(String,), _>(query)
+            .fetch_all_as::<(String,), _>(query)
             .await
             .map(|r| r.into_iter().map(|row| path.join(row.0)).collect())
             .map_err(|err| err.to_safe_string())

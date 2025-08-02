@@ -25,7 +25,7 @@ impl IntoValue for StructuredInput {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        builder.record().field("payload").string().finish()
+        builder.record(Some("StructuredInput".to_string())).field("payload").string().finish()
     }
 }
 
@@ -55,7 +55,7 @@ impl IntoValue for StructuredResult {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        builder.record().field("result").string().finish()
+        builder.record(Some("StructuredResult".to_string())).field("result").string().finish()
     }
 }
 
@@ -89,7 +89,7 @@ impl IntoValue for UnusedError {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        builder.variant().unit_case("unused-error").finish()
+        builder.variant(Some("UnusedError".to_string())).unit_case("unused-error").finish()
     }
 }
 

@@ -42,7 +42,7 @@ async fn auction_example_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let registry_component_id = executor
         .component("auction_registry")
@@ -79,7 +79,13 @@ async fn auction_example_1(
         auction_component_id.to_string(),
     );
     let registry_worker_id = executor
-        .start_worker_with(&registry_component_id, "auction-registry-1", vec![], env)
+        .start_worker_with(
+            &registry_component_id,
+            "auction-registry-1",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let _ = executor.log_output(&registry_worker_id).await;
@@ -139,7 +145,7 @@ async fn auction_example_2(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let registry_component_id = executor
         .component("auction_registry")
@@ -176,7 +182,13 @@ async fn auction_example_2(
         auction_component_id.to_string(),
     );
     let registry_worker_id = executor
-        .start_worker_with(&registry_component_id, "auction-registry-2", vec![], env)
+        .start_worker_with(
+            &registry_component_id,
+            "auction-registry-2",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let _ = executor.log_output(&registry_worker_id).await;
@@ -236,7 +248,7 @@ async fn counter_resource_test_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor
@@ -288,7 +300,7 @@ async fn counter_resource_test_1(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-1", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-1", vec![], env, vec![])
         .await;
 
     let result = executor
@@ -321,7 +333,7 @@ async fn counter_resource_test_2(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor
@@ -373,7 +385,7 @@ async fn counter_resource_test_2(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-2", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-2", vec![], env, vec![])
         .await;
 
     let result1 = executor
@@ -407,7 +419,7 @@ async fn counter_resource_test_2_with_restart(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor
@@ -459,7 +471,7 @@ async fn counter_resource_test_2_with_restart(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-2r", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-2r", vec![], env, vec![])
         .await;
 
     let result1 = executor
@@ -471,7 +483,7 @@ async fn counter_resource_test_2_with_restart(
         .await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let result2 = executor
         .invoke_and_await(
@@ -497,7 +509,7 @@ async fn counter_resource_test_3(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor
@@ -549,7 +561,7 @@ async fn counter_resource_test_3(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-3", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-3", vec![], env, vec![])
         .await;
 
     let result1 = executor
@@ -583,7 +595,7 @@ async fn counter_resource_test_3_with_restart(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor
@@ -635,7 +647,7 @@ async fn counter_resource_test_3_with_restart(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-3r", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-3r", vec![], env, vec![])
         .await;
 
     let result1 = executor
@@ -647,7 +659,7 @@ async fn counter_resource_test_3_with_restart(
         .await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let result2 = executor
         .invoke_and_await(
@@ -673,7 +685,7 @@ async fn context_inheritance(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor
@@ -731,6 +743,7 @@ async fn context_inheritance(
             "rpc-counters-4",
             vec!["a".to_string(), "b".to_string(), "c".to_string()],
             env,
+            vec![],
         )
         .await;
 
@@ -806,7 +819,7 @@ async fn counter_resource_test_5(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor
@@ -858,7 +871,7 @@ async fn counter_resource_test_5(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-5", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-5", vec![], env, vec![])
         .await;
 
     executor.log_output(&caller_worker_id).await;
@@ -893,7 +906,7 @@ async fn counter_resource_test_5_with_restart(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     // using store_unique_component to avoid collision with counter_resource_test_5
     let counters_component_id = executor.component("counters").unique().store().await;
@@ -947,7 +960,7 @@ async fn counter_resource_test_5_with_restart(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-5r", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-5r", vec![], env, vec![])
         .await;
 
     executor.log_output(&caller_worker_id).await;
@@ -962,7 +975,7 @@ async fn counter_resource_test_5_with_restart(
 
     drop(executor);
 
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let result2 = executor
         .invoke_and_await(
@@ -1003,7 +1016,7 @@ async fn wasm_rpc_bug_32_test(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor
@@ -1055,7 +1068,13 @@ async fn wasm_rpc_bug_32_test(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-bug32", vec![], env)
+        .start_worker_with(
+            &caller_component_id,
+            "rpc-counters-bug32",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let result = executor
@@ -1093,7 +1112,7 @@ async fn error_message_non_existing_target_component(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let registry_component_id = executor
         .component("auction_registry")
@@ -1134,6 +1153,7 @@ async fn error_message_non_existing_target_component(
             "auction-registry-non-existing-target",
             vec![],
             env,
+            vec![],
         )
         .await;
 
@@ -1173,7 +1193,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let ephemeral_component_id = executor.component("ephemeral").ephemeral().store().await;
     let caller_component_id = executor
@@ -1225,7 +1245,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
         ephemeral_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-ephemeral-1", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-ephemeral-1", vec![], env, vec![])
         .await;
 
     let result = executor
@@ -1288,7 +1308,7 @@ async fn golem_bug_1265_test(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor
@@ -1340,7 +1360,13 @@ async fn golem_bug_1265_test(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-bug1265", vec![], env)
+        .start_worker_with(
+            &caller_component_id,
+            "rpc-counters-bug1265",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let result = executor

@@ -19,12 +19,13 @@ use crate::service::component::ComponentService;
 use crate::service::worker::{proxy_worker_connection, InvocationParameters};
 use crate::service::worker::{ConnectWorkerStream, WorkerService};
 use futures::StreamExt;
-use futures_util::TryStreamExt;
+use futures::TryStreamExt;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::{ProjectAction, TokenSecret};
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
+use golem_common::model::worker::WorkerCreationRequest;
 use golem_common::model::{
     ComponentFilePath, ComponentId, IdempotencyKey, PluginInstallationId, ScanCursor,
     TargetWorkerId, WorkerFilter, WorkerId,
@@ -123,7 +124,12 @@ impl WorkerApi {
                 }))
             })?;
 
-        let WorkerCreationRequest { name, args, env } = request;
+        let WorkerCreationRequest {
+            name,
+            args,
+            env,
+            wasi_config_vars,
+        } = request;
 
         let worker_id = validated_worker_id(component_id, name)?;
 
@@ -139,6 +145,7 @@ impl WorkerApi {
                 latest_component.versioned_component_id.version,
                 args,
                 env,
+                wasi_config_vars.into(),
                 namespace,
             )
             .await?;
@@ -1001,7 +1008,7 @@ impl WorkerApi {
 
         let nodes = self
             .worker_service
-            .list_directory(&worker_id.into_target_worker_id(), path, namespace)
+            .get_file_system_node(&worker_id.into_target_worker_id(), path, namespace)
             .await?;
 
         Ok(Json(GetFilesResponse {

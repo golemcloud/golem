@@ -36,6 +36,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         false,
         true,
         &[
+            ("AgentType", "golem_common::model::agent::AgentType"),
             ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
             ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
             ("PluginScope", "golem_common::model::plugin::PluginScope"),
@@ -79,17 +80,22 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::public_oplog::PublicOplogEntry",
             ),
             ("ShardId", "golem_common::model::ShardId"),
-            (
-                "TypeAnnotatedValue",
-                "golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue",
-            ),
+            ("ValueAndType", "golem_wasm_rpc::ValueAndType"),
             (
                 "ValueAndOptionalType",
-                "golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson",
+                "golem_wasm_rpc::json::OptionallyValueAndTypeJson",
+            ),
+            (
+                "WasiConfigVarsEntry",
+                "golem_common::model::worker::WasiConfigVarsEntry",
             ),
             (
                 "WasmRpcTarget",
                 "golem_common::model::component_metadata::WasmRpcTarget",
+            ),
+            (
+                "WorkerCreationRequest",
+                "golem_common::model::worker::WorkerCreationRequest",
             ),
             ("WorkerFilter", "golem_common::model::WorkerFilter"),
             ("WorkerId", "golem_common::model::WorkerId"),

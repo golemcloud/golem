@@ -19,8 +19,7 @@ use bytes::Bytes;
 use golem_common::model::auth::Namespace;
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_common::{virtual_exports, widen_infallible};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::TypeAnnotatedValueConstructors;
+use golem_wasm_rpc::ValueAndType;
 use http::StatusCode;
 use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
@@ -71,15 +70,10 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
     ) -> HttpHandlerBindingResult {
         let component_id = worker_detail.component_id.clone();
 
-        let typ: golem_wasm_ast::analysis::protobuf::Type =
-            (&IncomingHttpRequest::analysed_type()).into();
-
-        let type_annotated_param =
-            TypeAnnotatedValue::create(&incoming_http_request.to_value(), typ).map_err(|e| {
-                HttpHandlerBindingError::InternalError(format!(
-                    "Failed converting request into wasm rpc: {e:?}"
-                ))
-            })?;
+        let type_annotated_param = ValueAndType::new(
+            incoming_http_request.to_value(),
+            IncomingHttpRequest::analysed_type(),
+        );
 
         let resolved_request = GatewayResolvedWorkerRequest {
             component_id,

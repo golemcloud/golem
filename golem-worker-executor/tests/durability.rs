@@ -19,7 +19,7 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::{BoxError, Router};
 use bytes::Bytes;
-use futures_util::{stream, StreamExt};
+use futures::{stream, StreamExt};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
@@ -44,7 +44,7 @@ async fn custom_durability_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let response = Arc::new(AtomicU32::new(0));
     let response_clone = response.clone();
@@ -83,7 +83,7 @@ async fn custom_durability_1(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "custom-durability-1", vec![], env)
+        .start_worker_with(&component_id, "custom-durability-1", vec![], env, vec![])
         .await;
 
     let result1 = executor
@@ -99,7 +99,7 @@ async fn custom_durability_1(
 
     drop(executor);
 
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let result2 = executor
         .invoke_and_await(
@@ -127,7 +127,7 @@ async fn lazy_pollable(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
@@ -178,7 +178,7 @@ async fn lazy_pollable(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "custom-durability-1", vec![], env)
+        .start_worker_with(&component_id, "custom-durability-1", vec![], env, vec![])
         .await;
 
     signal_tx.send(()).unwrap();
@@ -217,7 +217,7 @@ async fn lazy_pollable(
     signal_tx.send(()).unwrap();
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     signal_tx.send(()).unwrap();
 

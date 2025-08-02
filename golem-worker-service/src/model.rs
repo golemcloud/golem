@@ -16,6 +16,7 @@ use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
 use derive_more::FromStr;
 use golem_common::model::regions::OplogRegion;
+use golem_common::model::worker::WasiConfigVars;
 use golem_common::model::{AccountId, PluginInstallationId, ScanCursor, WorkerId};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
 use golem_service_base::model::{ResourceMetadata, UpdateRecord};
@@ -30,9 +31,11 @@ use uuid::Uuid;
 #[oai(rename_all = "camelCase")]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
-    pub account_id: AccountId,
+    pub project_id: ProjectId,
+    pub created_by: AccountId,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
+    pub wasi_config_vars: WasiConfigVars,
     pub status: WorkerStatus,
     pub component_version: ComponentVersion,
     pub retry_count: u64,
@@ -60,9 +63,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            account_id: value.account_id.ok_or("Missing account_id")?.into(),
+            project_id: value.project_id.ok_or("Missing project_id")?.try_into()?,
+            created_by: value.created_by.ok_or("Missing account_id")?.into(),
             args: value.args,
             env: value.env,
+            wasi_config_vars: value
+                .wasi_config_vars
+                .ok_or("Missing wasi_config_vars field")?
+                .into(),
             status: value.status.try_into()?,
             component_version: value.component_version,
             retry_count: value.retry_count,
@@ -104,9 +112,11 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
     fn from(value: WorkerMetadata) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
-            account_id: Some(value.account_id.into()),
+            project_id: Some(value.project_id.into()),
+            created_by: Some(value.created_by.into()),
             args: value.args,
             env: value.env,
+            wasi_config_vars: Some(value.wasi_config_vars.into()),
             status: value.status.into(),
             component_version: value.component_version,
             retry_count: value.retry_count,

@@ -188,12 +188,15 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
         result,
         Some(RibResult::Val(ValueAndType::new(
             Value::List(vec![]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+            ),
         )))
     );
 
@@ -220,12 +223,15 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
                 Value::F32(10.0),
                 Value::U32(2),
             ])]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],)),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+            ),
         )))
     );
 }
@@ -301,12 +307,15 @@ async fn test_repl_invoking_resource_methods(
         result,
         Some(RibResult::Val(ValueAndType::new(
             Value::List(vec![]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+            ),
         )))
     );
 
@@ -333,12 +342,15 @@ async fn test_repl_invoking_resource_methods(
                 Value::F32(10.0),
                 Value::U32(2),
             ])]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],)),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+            ),
         )))
     )
 }
@@ -369,6 +381,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         let component_id = self
             .dependencies
             .admin()
+            .await
             .component(component_name.as_str())
             .store()
             .await;
@@ -376,6 +389,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         let metadata = self
             .dependencies
             .admin()
+            .await
             .get_latest_component_metadata(&component_id)
             .await;
 
@@ -430,6 +444,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
         let result = self
             .embedded_worker_executor
             .admin()
+            .await
             .invoke_and_await_typed(target_worker_id, function_name, args)
             .await;
 

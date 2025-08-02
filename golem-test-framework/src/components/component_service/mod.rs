@@ -27,7 +27,7 @@ use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures::{stream, StreamExt, TryStreamExt};
 pub use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
 pub use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -512,6 +512,7 @@ pub trait ComponentService: Send + Sync {
                                     .map(|(k, v)| (k.clone(), v.clone().into())),
                             ),
                             env: env.clone(),
+                            agent_types: vec![],
                         },
                     )),
                 }];
@@ -600,6 +601,7 @@ pub trait ComponentService: Send + Sync {
                         Some(&golem_client::model::ComponentEnv {
                             key_values: env.clone(),
                         }),
+                        None,
                     )
                     .await
                 {
@@ -668,6 +670,7 @@ pub trait ComponentService: Send + Sync {
                                     .map(|(k, v)| (k.clone(), v.clone().into())),
                             ),
                             env: env.clone(),
+                            agent_types: vec![],
                         },
                     )),
                 }];
@@ -750,6 +753,7 @@ pub trait ComponentService: Send + Sync {
                         archive_file,
                         to_http_dynamic_linking(dynamic_linking).as_ref(),
                         Some(&component_env),
+                        None,
                     )
                     .await
                 {

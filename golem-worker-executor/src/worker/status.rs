@@ -167,13 +167,7 @@ fn calculate_latest_worker_status(
             OplogEntry::Create { .. } => {
                 result = WorkerStatus::Idle;
             }
-            OplogEntry::ImportedFunctionInvokedV1 { .. } => {
-                result = WorkerStatus::Running;
-            }
             OplogEntry::ImportedFunctionInvoked { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::ExportedFunctionInvokedV1 { .. } => {
                 result = WorkerStatus::Running;
             }
             OplogEntry::ExportedFunctionInvoked { .. } => {
@@ -246,10 +240,6 @@ fn calculate_latest_worker_status(
             OplogEntry::Restart { .. } => {
                 result = WorkerStatus::Idle;
             }
-            OplogEntry::CreateV1 { .. } => {
-                result = WorkerStatus::Idle;
-            }
-            OplogEntry::SuccessfulUpdateV1 { .. } => {}
             OplogEntry::ActivatePlugin { .. } => {}
             OplogEntry::DeactivatePlugin { .. } => {}
             OplogEntry::Revert { .. } => {}
@@ -322,7 +312,7 @@ fn calculate_skipped_regions(
                     .build(),
                 )
             }
-            OplogEntry::SuccessfulUpdate { .. } | OplogEntry::SuccessfulUpdateV1 { .. } => {
+            OplogEntry::SuccessfulUpdate { .. } => {
                 if let Some(ovrd) = skipped_override {
                     for region in ovrd.into_regions() {
                         skipped_builder.add(region);
@@ -391,10 +381,7 @@ fn calculate_pending_invocations(
                     invocation: invocation.clone(),
                 });
             }
-            OplogEntry::ExportedFunctionInvokedV1 {
-                idempotency_key, ..
-            }
-            | OplogEntry::ExportedFunctionInvoked {
+            OplogEntry::ExportedFunctionInvoked {
                 idempotency_key, ..
             } => {
                 result.retain(|invocation| match invocation {
@@ -484,15 +471,6 @@ fn calculate_update_fields(
                 component_version_for_replay = *component_version;
                 size = *component_size;
             }
-            OplogEntry::CreateV1 {
-                component_version,
-                component_size,
-                ..
-            } => {
-                version = *component_version;
-                component_version_for_replay = *component_version;
-                size = *component_size;
-            }
             OplogEntry::PendingUpdate {
                 timestamp,
                 description,
@@ -515,29 +493,6 @@ fn calculate_update_fields(
                     details: details.clone(),
                 });
                 pending_updates.pop_front();
-            }
-            OplogEntry::SuccessfulUpdateV1 {
-                timestamp,
-                target_version,
-                new_component_size,
-            } => {
-                successful_updates.push(SuccessfulUpdateRecord {
-                    timestamp: *timestamp,
-                    target_version: *target_version,
-                });
-                version = *target_version;
-                size = *new_component_size;
-
-                let applied_update = pending_updates.pop_front();
-                if matches!(
-                    applied_update,
-                    Some(TimestampedUpdateDescription {
-                        description: UpdateDescription::SnapshotBased { .. },
-                        ..
-                    })
-                ) {
-                    component_version_for_replay = *target_version
-                }
             }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
@@ -592,10 +547,7 @@ fn calculate_invocation_results(
         }
 
         match entry {
-            OplogEntry::ExportedFunctionInvokedV1 {
-                idempotency_key, ..
-            }
-            | OplogEntry::ExportedFunctionInvoked {
+            OplogEntry::ExportedFunctionInvoked {
                 idempotency_key, ..
             } => {
                 current_idempotency_key = Some(idempotency_key.clone());
@@ -637,12 +589,6 @@ fn calculate_total_linear_memory_size(
 
         match entry {
             OplogEntry::Create {
-                initial_total_linear_memory_size,
-                ..
-            } => {
-                result = *initial_total_linear_memory_size;
-            }
-            OplogEntry::CreateV1 {
                 initial_total_linear_memory_size,
                 ..
             } => {
@@ -747,9 +693,9 @@ mod test {
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AccountId, ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey,
-        OwnedWorkerId, PluginInstallationId, RetryConfig, ScanCursor, SuccessfulUpdateRecord,
-        Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
-        WorkerStatus, WorkerStatusRecord,
+        OwnedWorkerId, PluginInstallationId, ProjectId, RetryConfig, ScanCursor,
+        SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+        WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use golem_common::serialization::serialize;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -1046,10 +992,15 @@ mod test {
         entries: Vec<TestEntry>,
         previous_status_record: WorkerStatusRecord,
         owned_worker_id: OwnedWorkerId,
+        account_id: AccountId,
     }
 
     impl TestCaseBuilder {
-        pub fn new(owned_worker_id: OwnedWorkerId, component_version: ComponentVersion) -> Self {
+        pub fn new(
+            account_id: AccountId,
+            owned_worker_id: OwnedWorkerId,
+            component_version: ComponentVersion,
+        ) -> Self {
             let status = WorkerStatusRecord {
                 component_version,
                 component_version_for_replay: component_version,
@@ -1065,7 +1016,9 @@ mod test {
                         component_version,
                         vec![],
                         vec![],
-                        owned_worker_id.account_id(),
+                        BTreeMap::new(),
+                        owned_worker_id.project_id(),
+                        account_id.clone(),
                         None,
                         100,
                         200,
@@ -1075,6 +1028,7 @@ mod test {
                 }],
                 previous_status_record: status,
                 owned_worker_id,
+                account_id,
             }
         }
 
@@ -1154,7 +1108,7 @@ mod test {
                     function_name: name.to_string(),
                     request: OplogPayload::Inline(serialize(i).unwrap().to_vec()),
                     response: OplogPayload::Inline(serialize(o).unwrap().to_vec()),
-                    wrapped_function_type: func_type,
+                    durable_function_type: func_type,
                 },
                 |status| status,
             )
@@ -1354,6 +1308,7 @@ mod test {
 
         pub fn build(self) -> TestCase {
             TestCase {
+                account_id: self.account_id,
                 owned_worker_id: self.owned_worker_id,
                 entries: self
                     .entries
@@ -1381,22 +1336,25 @@ mod test {
 
     #[derive(Debug, Clone)]
     struct TestCase {
+        account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
         entries: Vec<TestEntry>,
     }
 
     impl TestCase {
         pub fn builder(initial_component_version: ComponentVersion) -> TestCaseBuilder {
+            let project_id = ProjectId::new_v4();
+            let account_id = AccountId {
+                value: "test-account".to_string(),
+            };
             let owned_worker_id = OwnedWorkerId::new(
-                &AccountId {
-                    value: "test-account".to_string(),
-                },
+                &project_id,
                 &WorkerId {
                     component_id: ComponentId::new_v4(),
                     worker_name: "test-worker".to_string(),
                 },
             );
-            TestCaseBuilder::new(owned_worker_id, initial_component_version)
+            TestCaseBuilder::new(account_id, owned_worker_id, initial_component_version)
         }
     }
 
@@ -1458,7 +1416,7 @@ mod test {
 
         async fn scan_for_component(
             &self,
-            _account_id: &AccountId,
+            _project_id: &ProjectId,
             _component_id: &ComponentId,
             _cursor: ScanCursor,
             _count: u64,
@@ -1503,7 +1461,8 @@ mod test {
                     last_known_status: test_case.entries[idx - 1].expected_status.clone(),
                     ..WorkerMetadata::default(
                         test_case.owned_worker_id.worker_id(),
-                        test_case.owned_worker_id.account_id(),
+                        test_case.account_id.clone(),
+                        test_case.owned_worker_id.project_id(),
                     )
                 })
             };

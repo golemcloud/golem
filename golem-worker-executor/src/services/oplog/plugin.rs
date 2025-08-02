@@ -17,6 +17,7 @@ use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::services::plugins::Plugins;
+use crate::services::projects::ProjectService;
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
 use crate::services::{
@@ -35,7 +36,7 @@ use golem_common::model::plugin::{
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PluginInstallationId,
-    ScanCursor, ShardId, TargetWorkerId, WorkerId, WorkerMetadata,
+    ProjectId, ScanCursor, ShardId, TargetWorkerId, WorkerId, WorkerMetadata,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{IntoValue, Value};
@@ -70,12 +71,14 @@ pub struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
     shard_service: Arc<dyn ShardService>,
     worker_activator: Arc<dyn WorkerActivator<Ctx>>,
     plugins: Arc<dyn Plugins>,
+    project_service: Arc<dyn ProjectService>,
 }
 
-type WorkerKey = (AccountId, String, String);
+type WorkerKey = (ProjectId, String, String);
 
 #[derive(Debug, Clone)]
 struct RunningPlugin {
+    pub account_id: AccountId,
     pub owned_worker_id: OwnedWorkerId,
     pub configuration: HashMap<String, String>,
     pub component_version: ComponentVersion,
@@ -87,6 +90,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         shard_service: Arc<dyn ShardService>,
         worker_activator: Arc<dyn WorkerActivator<Ctx>>,
         plugins: Arc<dyn Plugins>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Self {
         Self {
             workers: Arc::new(RwLock::new(HashMap::new())),
@@ -94,20 +98,22 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
             shard_service,
             worker_activator,
             plugins,
+            project_service,
         }
     }
 
     async fn resolve_plugin_worker(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: ComponentVersion,
         plugin_installation_id: &PluginInstallationId,
     ) -> Result<RunningPlugin, WorkerExecutorError> {
+        let project_owner = self.project_service.get_project_owner(project_id).await?;
         let (installation, definition) = self
             .plugins
             .get(
-                account_id,
+                &project_owner,
                 component_id,
                 component_version,
                 plugin_installation_id,
@@ -116,7 +122,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
 
         let workers = self.workers.upgradable_read().await;
         let key = (
-            account_id.clone(),
+            project_id.clone(),
             definition.name.to_string(),
             definition.version.to_string(),
         );
@@ -131,10 +137,11 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                             Self::get_oplog_processor_component_id(&definition)?;
                         let worker_id = self.generate_worker_id_for(&plugin_component_id).await?;
                         let owned_worker_id = OwnedWorkerId {
-                            account_id: account_id.clone(),
+                            project_id: project_id.clone(),
                             worker_id: worker_id.clone(),
                         };
                         let running_plugin = RunningPlugin {
+                            account_id: project_owner,
                             owned_worker_id: owned_worker_id.clone(),
                             configuration: installation.parameters.clone(),
                             component_version: plugin_component_version,
@@ -191,7 +198,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
     ) -> Result<(), WorkerExecutorError> {
         let running_plugin = self
             .resolve_plugin_worker(
-                &worker_metadata.account_id,
+                &worker_metadata.project_id,
                 &worker_metadata.worker_id.component_id,
                 worker_metadata.last_known_status.component_version,
                 plugin_installation_id,
@@ -201,7 +208,9 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         let worker = self
             .worker_activator
             .get_or_create_running(
+                &running_plugin.account_id,
                 &running_plugin.owned_worker_id,
+                None,
                 None,
                 None,
                 Some(running_plugin.component_version),
@@ -215,7 +224,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             worker_metadata.worker_id.component_id.0.as_u64_pair();
         let wave_account_info = format!(
             "{{ account-id: {{ value: \"{}\" }} }}",
-            worker_metadata.account_id.value
+            worker_metadata.created_by.value
         );
         let wave_component_id =
             format!("{{ uuid: {{ high-bits: {component_id_hi}, low-bits: {component_id_lo} }} }}");
@@ -296,6 +305,7 @@ impl<Ctx: WorkerCtx> Clone for PerExecutorOplogProcessorPlugin<Ctx> {
             shard_service: self.shard_service.clone(),
             worker_activator: self.worker_activator.clone(),
             plugins: self.plugins.clone(),
+            project_service: self.project_service.clone(),
         }
     }
 }
@@ -340,6 +350,7 @@ struct CreateOplogConstructor {
     plugins: Arc<dyn Plugins>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     initial_worker_metadata: WorkerMetadata,
+    project_service: Arc<dyn ProjectService>,
 }
 
 // We can have clone here independently of whether T is clone due to the Arcs, so deriving
@@ -356,6 +367,7 @@ impl Clone for CreateOplogConstructor {
             plugins: self.plugins.clone(),
             execution_status: self.execution_status.clone(),
             initial_worker_metadata: self.initial_worker_metadata.clone(),
+            project_service: self.project_service.clone(),
         }
     }
 }
@@ -371,6 +383,7 @@ impl CreateOplogConstructor {
         plugins: Arc<dyn Plugins>,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         initial_worker_metadata: WorkerMetadata,
+        project_service: Arc<dyn ProjectService>,
     ) -> Self {
         Self {
             owned_worker_id,
@@ -382,6 +395,7 @@ impl CreateOplogConstructor {
             plugins,
             execution_status,
             initial_worker_metadata,
+            project_service,
         }
     }
 }
@@ -415,6 +429,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.inner,
             self.components,
             self.plugins,
+            self.project_service,
             self.execution_status,
             self.initial_worker_metadata,
             self.last_oplog_index,
@@ -430,6 +445,7 @@ pub struct ForwardingOplogService {
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
     plugins: Arc<dyn Plugins>,
+    project_service: Arc<dyn ProjectService>,
 }
 
 impl ForwardingOplogService {
@@ -438,6 +454,7 @@ impl ForwardingOplogService {
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
         plugins: Arc<dyn Plugins>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Self {
         Self {
             inner,
@@ -445,6 +462,7 @@ impl ForwardingOplogService {
             oplog_plugins,
             components,
             plugins,
+            project_service,
         }
     }
 }
@@ -477,6 +495,7 @@ impl OplogService for ForwardingOplogService {
                     self.plugins.clone(),
                     execution_status,
                     initial_worker_metadata,
+                    self.project_service.clone(),
                 ),
             )
             .await
@@ -502,6 +521,7 @@ impl OplogService for ForwardingOplogService {
                     self.plugins.clone(),
                     execution_status,
                     initial_worker_metadata,
+                    self.project_service.clone(),
                 ),
             )
             .await
@@ -530,7 +550,7 @@ impl OplogService for ForwardingOplogService {
 
     async fn scan_for_component(
         &self,
-        account_id: &AccountId,
+        account_id: &ProjectId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
@@ -574,6 +594,7 @@ impl ForwardingOplog {
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         plugins: Arc<dyn Plugins>,
+        project_service: Arc<dyn ProjectService>,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         initial_worker_metadata: WorkerMetadata,
         last_oplog_idx: OplogIndex,
@@ -590,6 +611,7 @@ impl ForwardingOplog {
             oplog_service,
             components,
             plugins,
+            project_service,
         }));
 
         let timer = tokio::spawn({
@@ -690,6 +712,7 @@ struct ForwardingOplogState {
     oplog_service: Arc<dyn OplogService>,
     components: Arc<dyn ComponentService>,
     plugins: Arc<dyn Plugins>,
+    project_service: Arc<dyn ProjectService>,
 }
 
 impl ForwardingOplogState {
@@ -744,6 +767,7 @@ impl ForwardingOplogState {
                 self.oplog_service.clone(),
                 self.components.clone(),
                 self.plugins.clone(),
+                self.project_service.clone(),
                 &metadata.owned_worker_id(),
                 metadata.last_known_status.component_version, // NOTE: this is only safe if the component version is not changing within one batch
             )

@@ -27,6 +27,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
         .attrs
         .iter()
         .any(|attr| attr.path().is_ident("wit_transparent"));
+    let lit_name = LitStr::new(&ident.to_string(), Span::call_site());
 
     let (into_value, get_type) = match ast.data {
         Data::Struct(data) => {
@@ -58,7 +59,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
 
             match newtype_result {
                 Some(newtype_result) => newtype_result,
-                None => record_or_tuple(&data.fields),
+                None => record_or_tuple(&lit_name, &data.fields),
             }
         }
         Data::Enum(data) => {
@@ -95,7 +96,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                 let get_type = quote! {
                     golem_wasm_ast::analysis::analysed_type::r#enum(
                         &[#(#case_labels),*]
-                    )
+                    ).named(#lit_name)
                 };
 
                 (into_value, get_type)
@@ -222,7 +223,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                                 golem_wasm_ast::analysis::analysed_type::case(#case_name, <#typ as golem_wasm_rpc::IntoValue>::get_type())
                             }
                         } else {
-                            let (_, inner_get_type) = record_or_tuple(&variant.fields);
+                            let (_, inner_get_type) = record_or_tuple(&LitStr::new(&case_name, Span::call_site()), &variant.fields);
 
                             quote! {
                                 golem_wasm_ast::analysis::analysed_type::case(#case_name, #inner_get_type)
@@ -239,7 +240,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                 let get_type = quote! {
                     golem_wasm_ast::analysis::analysed_type::variant(
                         vec![#(#case_defs),*]
-                    )
+                    ).named(#lit_name)
                 };
 
                 (into_value, get_type)
@@ -265,7 +266,10 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
     result.into()
 }
 
-fn record_or_tuple(fields: &Fields) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
+fn record_or_tuple(
+    lit_name: &LitStr,
+    fields: &Fields,
+) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     let all_fields_has_names = fields.iter().all(|field| field.ident.is_some());
 
     if all_fields_has_names {
@@ -347,7 +351,7 @@ fn record_or_tuple(fields: &Fields) -> (proc_macro2::TokenStream, proc_macro2::T
         let get_type = quote! {
             golem_wasm_ast::analysis::analysed_type::record(vec![
                 #(#field_defs),*
-            ])
+            ]).named(#lit_name)
         };
 
         (into_value, get_type)
@@ -378,7 +382,7 @@ fn record_or_tuple(fields: &Fields) -> (proc_macro2::TokenStream, proc_macro2::T
         let get_type = quote! {
             golem_wasm_ast::analysis::analysed_type::tuple(vec![
                 #(#tuple_field_types),*
-            ])
+            ]).named(#lit_name)
         };
 
         (into_value, get_type)

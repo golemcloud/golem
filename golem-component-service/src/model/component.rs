@@ -14,6 +14,7 @@
 
 use super::ComponentSearchParameters;
 use chrono::Utc;
+use golem_common::model::agent::AgentType;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
@@ -61,8 +62,9 @@ impl Component {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: ComponentOwner,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentProcessingError> {
-        let metadata = ComponentMetadata::analyse_component(data, dynamic_linking)?;
+        let metadata = ComponentMetadata::analyse_component(data, dynamic_linking, agent_types)?;
 
         let versioned_component_id = VersionedComponentId {
             component_id: component_id.clone(),
@@ -91,7 +93,7 @@ impl Component {
         format!("{}:user", self.object_store_key)
     }
 
-    pub fn protected_object_store_key(&self) -> String {
+    pub fn transformed_object_store_key(&self) -> String {
         format!("{}:protected", self.transformed_object_store_key)
     }
 

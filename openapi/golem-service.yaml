@@ -1950,7 +1950,7 @@ paths:
       tags:
       - Project
       summary: Applies a batch of changes to the installed plugins of a component
-      operationId: bath_update_installed_plugins_of_project
+      operationId: batch_update_installed_plugins_of_project
       parameters:
       - in: path
         name: project_id
@@ -2890,6 +2890,8 @@ paths:
                   $ref: '#/components/schemas/DynamicLinking'
                 env:
                   $ref: '#/components/schemas/ComponentEnv'
+                agentTypes:
+                  $ref: '#/components/schemas/AgentTypes'
               required:
               - component
         required: true
@@ -3042,6 +3044,8 @@ paths:
                   $ref: '#/components/schemas/DynamicLinking'
                 env:
                   $ref: '#/components/schemas/ComponentEnv'
+                agentTypes:
+                  $ref: '#/components/schemas/AgentTypes'
               required:
               - query
               - component
@@ -3650,7 +3654,7 @@ paths:
       tags:
       - Component
       summary: Applies a batch of changes to the installed plugins of a component
-      operationId: bath_update_installed_plugins
+      operationId: batch_update_installed_plugins
       parameters:
       - in: path
         name: component_id
@@ -7922,6 +7926,92 @@ components:
     WebFlowCallbackSuccessResponse:
       title: WebFlowCallbackSuccessResponse
       type: object
+    AgentConstructor:
+      title: AgentConstructor
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        promptHint:
+          type: string
+        inputSchema:
+          $ref: '#/components/schemas/DataSchema'
+      required:
+      - description
+      - inputSchema
+    AgentDependency:
+      title: AgentDependency
+      type: object
+      properties:
+        typeName:
+          type: string
+        description:
+          type: string
+        constructor:
+          $ref: '#/components/schemas/AgentConstructor'
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentMethod'
+      required:
+      - typeName
+      - constructor
+      - methods
+    AgentMethod:
+      title: AgentMethod
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        promptHint:
+          type: string
+        inputSchema:
+          $ref: '#/components/schemas/DataSchema'
+        outputSchema:
+          $ref: '#/components/schemas/DataSchema'
+      required:
+      - name
+      - description
+      - inputSchema
+      - outputSchema
+    AgentType:
+      title: AgentType
+      type: object
+      properties:
+        typeName:
+          type: string
+        description:
+          type: string
+        constructor:
+          $ref: '#/components/schemas/AgentConstructor'
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentMethod'
+        dependencies:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentDependency'
+      required:
+      - typeName
+      - description
+      - constructor
+      - methods
+      - dependencies
+    AgentTypes:
+      title: AgentTypes
+      type: object
+      properties:
+        types:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
+      required:
+      - types
     AnalysedExport:
       discriminator:
         propertyName: type
@@ -8330,6 +8420,22 @@ components:
           type: string
       required:
       - blobStorageKey
+    BinaryDescriptor:
+      title: BinaryDescriptor
+      type: object
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/BinaryType'
+    BinaryType:
+      title: BinaryType
+      type: object
+      properties:
+        mimeType:
+          type: string
+      required:
+      - mimeType
     Component:
       title: Component
       type: object
@@ -8441,12 +8547,17 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/DynamicLinkedInstance'
+        agentTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
       required:
       - exports
       - producers
       - memories
       - binaryWit
       - dynamicLinking
+      - agentTypes
     ComponentPluginScope:
       title: ComponentPluginScope
       type: object
@@ -8511,6 +8622,28 @@ components:
       enum:
       - Durable
       - Ephemeral
+    DataSchema:
+      discriminator:
+        propertyName: type
+        mapping:
+          Tuple: '#/components/schemas/DataSchema_NamedElementSchemas'
+          Multimodal: '#/components/schemas/DataSchema_NamedElementSchemas'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
+      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
+    DataSchema_NamedElementSchemas:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Multimodal
+            type: string
+            enum:
+            - Multimodal
+        required:
+        - type
+      - $ref: '#/components/schemas/NamedElementSchemas'
     DynamicLinkedInstance:
       discriminator:
         propertyName: type
@@ -8552,6 +8685,54 @@ components:
             $ref: '#/components/schemas/DynamicLinkedInstance'
       required:
       - dynamicLinking
+    ElementSchema:
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentModel: '#/components/schemas/ElementSchema_AnalysedType'
+          UnstructuredText: '#/components/schemas/ElementSchema_TextDescriptor'
+          UnstructuredBinary: '#/components/schemas/ElementSchema_BinaryDescriptor'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ElementSchema_AnalysedType'
+      - $ref: '#/components/schemas/ElementSchema_TextDescriptor'
+      - $ref: '#/components/schemas/ElementSchema_BinaryDescriptor'
+    ElementSchema_AnalysedType:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentModel
+            type: string
+            enum:
+            - ComponentModel
+        required:
+        - type
+      - $ref: '#/components/schemas/AnalysedType'
+    ElementSchema_BinaryDescriptor:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredBinary
+            type: string
+            enum:
+            - UnstructuredBinary
+        required:
+        - type
+      - $ref: '#/components/schemas/BinaryDescriptor'
+    ElementSchema_TextDescriptor:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredText
+            type: string
+            enum:
+            - UnstructuredText
+        required:
+        - type
+      - $ref: '#/components/schemas/TextDescriptor'
     InitialComponentFile:
       title: InitialComponentFile
       type: object
@@ -8613,6 +8794,27 @@ components:
       required:
       - name
       - typ
+    NamedElementSchema:
+      title: NamedElementSchema
+      type: object
+      properties:
+        name:
+          type: string
+        schema:
+          $ref: '#/components/schemas/ElementSchema'
+      required:
+      - name
+      - schema
+    NamedElementSchemas:
+      title: NamedElementSchemas
+      type: object
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamedElementSchema'
+      required:
+      - elements
     OplogProcessorDefinition:
       title: OplogProcessorDefinition
       type: object
@@ -8878,6 +9080,22 @@ components:
           format: uuid
       required:
       - projectId
+    TextDescriptor:
+      title: TextDescriptor
+      type: object
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TextType'
+    TextType:
+      title: TextType
+      type: object
+      properties:
+        languageCode:
+          type: string
+      required:
+      - languageCode
     TypeBool:
       title: TypeBool
       type: object
@@ -8888,6 +9106,8 @@ components:
       title: TypeEnum
       type: object
       properties:
+        name:
+          type: string
         cases:
           type: array
           items:
@@ -8904,6 +9124,8 @@ components:
       title: TypeFlags
       type: object
       properties:
+        name:
+          type: string
         names:
           type: array
           items:
@@ -8914,6 +9136,8 @@ components:
       title: TypeHandle
       type: object
       properties:
+        name:
+          type: string
         resource_id:
           type: integer
           format: uint64
@@ -8926,6 +9150,8 @@ components:
       title: TypeList
       type: object
       properties:
+        name:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -8934,6 +9160,8 @@ components:
       title: TypeOption
       type: object
       properties:
+        name:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -8942,6 +9170,8 @@ components:
       title: TypeRecord
       type: object
       properties:
+        name:
+          type: string
         fields:
           type: array
           items:
@@ -8952,6 +9182,8 @@ components:
       title: TypeResult
       type: object
       properties:
+        name:
+          type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
         err:
@@ -8975,6 +9207,8 @@ components:
       title: TypeTuple
       type: object
       properties:
+        name:
+          type: string
         items:
           type: array
           items:
@@ -8997,6 +9231,8 @@ components:
       title: TypeVariant
       type: object
       properties:
+        name:
+          type: string
         cases:
           type: array
           items:
@@ -9250,8 +9486,15 @@ components:
           type: object
           additionalProperties:
             type: string
-        accountId:
+        projectId:
           type: string
+          format: uuid
+        createdBy:
+          type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
         parent:
           $ref: '#/components/schemas/WorkerId'
         componentSize:
@@ -9270,7 +9513,9 @@ components:
       - componentVersion
       - args
       - env
-      - accountId
+      - projectId
+      - createdBy
+      - wasiConfigVars
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
@@ -9702,14 +9947,14 @@ components:
           $ref: '#/components/schemas/ValueAndType'
         response:
           $ref: '#/components/schemas/ValueAndType'
-        wrappedFunctionType:
+        durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
       required:
       - timestamp
       - functionName
       - request
       - response
-      - wrappedFunctionType
+      - durableFunctionType
     IndexedWorkerMetadata:
       title: IndexedWorkerMetadata
       type: object
@@ -9744,7 +9989,7 @@ components:
       type: object
       properties:
         result:
-          $ref: '#/components/schemas/TypeAnnotatedValue'
+          $ref: '#/components/schemas/ValueAndType'
     JumpParameters:
       title: JumpParameters
       type: object
@@ -11062,15 +11307,6 @@ components:
           format: date-time
       required:
       - timestamp
-    TypeAnnotatedValue:
-      type: object
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-        value: {}
-      required:
-      - typ
-      - value
     UpdateRecord:
       discriminator:
         propertyName: type
@@ -11151,6 +11387,17 @@ components:
       required:
       - typ
       - value
+    WasiConfigVarsEntry:
+      title: WasiConfigVarsEntry
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+      required:
+      - key
+      - value
     WorkerAndFilter:
       title: WorkerAndFilter
       type: object
@@ -11187,6 +11434,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
       required:
       - name
       - args
@@ -11243,6 +11495,7 @@ components:
           And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
           Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
           Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+          WasiConfigVars: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
       type: object
       oneOf:
       - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
@@ -11253,6 +11506,7 @@ components:
       - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
     WorkerFilter_WorkerAndFilter:
       allOf:
       - type: object
@@ -11349,6 +11603,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerVersionFilter'
+    WorkerFilter_WorkerWasiConfigVarsFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WasiConfigVars
+            type: string
+            enum:
+            - WasiConfigVars
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerWasiConfigVarsFilter'
     WorkerId:
       title: WorkerId
       type: object
@@ -11367,7 +11633,10 @@ components:
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-        accountId:
+        projectId:
+          type: string
+          format: uuid
+        createdBy:
           type: string
         args:
           type: array
@@ -11377,6 +11646,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
         status:
           $ref: '#/components/schemas/WorkerStatus'
         componentVersion:
@@ -11427,9 +11700,11 @@ components:
             $ref: '#/components/schemas/OplogRegion'
       required:
       - workerId
-      - accountId
+      - projectId
+      - createdBy
       - args
       - env
+      - wasiConfigVars
       - status
       - componentVersion
       - retryCount
@@ -11512,6 +11787,20 @@ components:
           type: integer
           format: uint64
       required:
+      - comparator
+      - value
+    WorkerWasiConfigVarsFilter:
+      title: WorkerWasiConfigVarsFilter
+      type: object
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - name
       - comparator
       - value
     WorkersMetadataRequest:

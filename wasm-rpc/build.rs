@@ -18,7 +18,7 @@ fn main() -> Result<()> {
         &[
             "proto/wasm/rpc/val.proto",
             "proto/wasm/rpc/witvalue.proto",
-            "proto/wasm/rpc/type_annotated_value.proto",
+            "proto/wasm/rpc/value_and_type.proto",
         ],
         &[&format!("{wasm_ast_root}/proto"), &"proto".to_string()],
     )?;

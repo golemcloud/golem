@@ -6,10 +6,13 @@ members = [
     "golem-api-grpc",
     "golem-client",
     "golem-common",
+    "golem-common-next",
     "golem-debugging-service",
     "golem-service-base",
+    "golem-service-base-next",
     "golem-component-service",
     "golem-component-compilation-service",
+    "golem-registry-service",
     "golem-rib",
     "golem-rib-repl",
     "golem-test-framework",
@@ -67,6 +70,7 @@ exclude = [
     "test-components/update-test-v4",
     "test-components/update-test-env-var",
     "test-components/variant-service",
+    "test-components/wasi-config",
     "test-components/wasi-http-incoming-request-handler",
     "test-components/wasi-http-incoming-request-handler-echo",
     "test-components/wasi-http-incoming-request-handler-state",
@@ -102,6 +106,7 @@ bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bincode = { version = "2.0.1", features = ["serde"] }
 bincode_derive = { version = "2.0.1" }
 bit-vec = { version = "0.6.3", features = ["serde"] }
+blake3 = { version = "1.8.2", features = ["rayon"] }
 bytes = "1.10.1"
 cap-std = "3.4.2" # keep in sync with wasmtime
 chrono = { version = "0.4.40", features = ["serde"] }
@@ -131,10 +136,8 @@ fred = { version = "=9.4.0", features = [
     "serde-json",
     "partial-tracing",
 ] } # pinned to 9.x to avoid conflicting cookie-factory dependencies
-futures = "0.3"
+futures = "0.3.31"
 futures-concurrency = "7.6.3"
-futures-core = "0.3.31"
-futures-util = "0.3.31"
 gethostname = "0.5.0"
 headers = "0.4.0"
 hex = "0.4.3"
@@ -145,6 +148,7 @@ humansize = "2.1.3"
 humantime-serde = "1.1.1"
 hyper = { version = "1.6.0", features = ["full"] }
 include_dir = "0.7.4"
+indoc = "2.0.6"
 iso8601-timestamp = "0.3.3"
 itertools = "0.14.0"
 jsonwebtoken = "9.2.0"
@@ -217,6 +221,7 @@ serde_yaml = { version = "0.9.34" }
 sha2 = "0.10.8"
 shadow-rs = "1.2.0"
 shell-words = "1.1.0"
+similar = "2.7.0"
 sqlx-core = { version = "0.8" }
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
@@ -244,7 +249,7 @@ testcontainers-modules = { version = "0.11.6", features = [
     "minio",
     "mysql",
 ] }
-test-r = { version = "2.2.0", default-features = true }
+test-r = { version = "2.2.1", default-features = true }
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
 tokio = { version = "1.44", features = [

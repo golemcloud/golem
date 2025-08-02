@@ -18,6 +18,7 @@ use golem_common::model::component::VersionedComponentId;
 use golem_common::model::{AccountId, ComponentFilePath, ComponentId, WorkerId};
 use golem_common::SafeDisplay;
 use golem_service_base::clients::limit::LimitError;
+use golem_service_base::clients::project::ProjectError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +31,8 @@ pub enum WorkerServiceError {
     InternalCallError(CallWorkerExecutorError),
     #[error(transparent)]
     GolemError(#[from] WorkerExecutorError),
+    #[error(transparent)]
+    Project(#[from] ProjectError),
 
     #[error("Type checker error: {0}")]
     TypeChecker(String),
@@ -64,6 +67,7 @@ impl SafeDisplay for WorkerServiceError {
             Self::FileNotFound(_) => self.to_string(),
             Self::BadFileType(_) => self.to_string(),
             Self::LimitError(inner) => inner.to_safe_string(),
+            Self::Project(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -116,6 +120,7 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
             }
 
             WorkerServiceError::Component(component) => component.into(),
+            WorkerServiceError::Project(project_error) => project_error.into(),
 
             WorkerServiceError::LimitError(LimitError::LimitExceeded(_)) => {
                 Self::LimitExceeded(ErrorBody {

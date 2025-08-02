@@ -73,8 +73,8 @@ impl S3BlobStorage {
 
     fn bucket_of(&self, namespace: &BlobStorageNamespace) -> &String {
         match namespace {
-            BlobStorageNamespace::CompilationCache => &self.config.compilation_cache_bucket,
-            BlobStorageNamespace::CustomStorage(_account_id) => &self.config.custom_data_bucket,
+            BlobStorageNamespace::CompilationCache { .. } => &self.config.compilation_cache_bucket,
+            BlobStorageNamespace::CustomStorage { .. } => &self.config.custom_data_bucket,
             BlobStorageNamespace::OplogPayload { .. } => &self.config.oplog_payload_bucket,
             BlobStorageNamespace::CompressedOplog { level, .. } => {
                 &self.config.compressed_oplog_buckets[*level]
@@ -82,72 +82,61 @@ impl S3BlobStorage {
             BlobStorageNamespace::InitialComponentFiles { .. } => {
                 &self.config.initial_component_files_bucket
             }
-            BlobStorageNamespace::Components => &self.config.components_bucket,
+            BlobStorageNamespace::Components { .. } => &self.config.components_bucket,
             BlobStorageNamespace::PluginWasmFiles { .. } => &self.config.plugin_wasm_files_bucket,
         }
     }
 
     fn prefix_of(&self, namespace: &BlobStorageNamespace) -> PathBuf {
         match namespace {
-            BlobStorageNamespace::CompilationCache => {
-                Path::new(&self.config.object_prefix).to_path_buf()
-            }
-            BlobStorageNamespace::CustomStorage(account_id) => {
-                let account_id_string = account_id.to_string();
+            BlobStorageNamespace::CompilationCache { project_id }
+            | BlobStorageNamespace::CustomStorage { project_id }
+            | BlobStorageNamespace::InitialComponentFiles { project_id }
+            | BlobStorageNamespace::Components { project_id } => {
+                let project_id_string = project_id.to_string();
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&account_id_string).to_path_buf()
+                    Path::new(&project_id_string).to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
-                        .join(account_id_string)
+                        .join(project_id_string)
                         .to_path_buf()
                 }
             }
             BlobStorageNamespace::OplogPayload {
-                account_id,
+                project_id,
                 worker_id,
             } => {
-                let account_id_string = account_id.to_string();
+                let project_id_string = project_id.to_string();
                 let worker_id_string = worker_id.to_string();
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&account_id_string)
+                    Path::new(&project_id_string)
                         .join(worker_id_string)
                         .to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
-                        .join(account_id_string)
+                        .join(project_id_string)
                         .join(worker_id_string)
                         .to_path_buf()
                 }
             }
             BlobStorageNamespace::CompressedOplog {
-                account_id,
+                project_id,
                 component_id,
                 ..
             } => {
-                let account_id_string = account_id.to_string();
+                let project_id_string = project_id.to_string();
                 let component_id_string = component_id.to_string();
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&account_id_string)
+                    Path::new(&project_id_string)
                         .join(component_id_string)
                         .to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
-                        .join(account_id_string)
+                        .join(project_id_string)
                         .join(component_id_string)
                         .to_path_buf()
                 }
             }
-            BlobStorageNamespace::InitialComponentFiles { account_id } => {
-                let account_id_string = account_id.to_string();
-                if self.config.object_prefix.is_empty() {
-                    PathBuf::from(&account_id_string)
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(account_id_string)
-                        .to_path_buf()
-                }
-            }
-            BlobStorageNamespace::Components => Path::new(&self.config.object_prefix).to_path_buf(),
             BlobStorageNamespace::PluginWasmFiles { account_id } => {
                 let account_id_string = account_id.to_string();
                 if self.config.object_prefix.is_empty() {
@@ -195,7 +184,7 @@ impl S3BlobStorage {
                     })
                 },
                 Self::is_list_objects_v2_error_retriable,
-                Self::as_loggable_generic,
+                Self::sdk_error_as_loggable_string,
                 false,
             )
             .await
@@ -281,7 +270,7 @@ impl S3BlobStorage {
         }
     }
 
-    fn as_loggable_generic<T: Error>(error: &SdkError<T>) -> Option<String> {
+    fn sdk_error_as_loggable_string<T: Error>(error: &SdkError<T>) -> Option<String> {
         Some(Self::error_string(error))
     }
 
@@ -443,7 +432,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_get_object_error_retriable,
-            Self::as_loggable_generic,
+            Self::sdk_error_as_loggable_string,
             false,
         )
         .await;
@@ -586,7 +575,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_put_object_error_retriable,
-            Self::as_loggable_generic,
+            Self::sdk_error_as_loggable_string,
             false,
         )
         .await
@@ -687,7 +676,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_delete_object_error_retriable,
-            Self::as_loggable_generic,
+            Self::sdk_error_as_loggable_string,
             false,
         )
         .await
@@ -739,7 +728,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_delete_objects_error_retriable,
-            Self::as_loggable_generic,
+            Self::sdk_error_as_loggable_string,
             false,
         )
         .await
@@ -777,7 +766,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_put_object_error_retriable,
-            Self::as_loggable_generic,
+            Self::sdk_error_as_loggable_string,
             false,
         )
         .await
@@ -874,7 +863,7 @@ impl BlobStorage for S3BlobStorage {
                     })
                 },
                 Self::is_delete_objects_error_retriable,
-                Self::as_loggable_generic,
+                Self::sdk_error_as_loggable_string,
                 false,
             )
             .await
@@ -987,7 +976,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_copy_object_error_retriable,
-            Self::as_loggable_generic,
+            Self::sdk_error_as_loggable_string,
             false,
         )
         .await
@@ -1025,7 +1014,9 @@ impl<T> SdkErrorOrCustomError<T> {
         T: Error,
     {
         match self {
-            SdkErrorOrCustomError::SdkError(err) => S3BlobStorage::as_loggable_generic(err),
+            SdkErrorOrCustomError::SdkError(err) => {
+                S3BlobStorage::sdk_error_as_loggable_string(err)
+            }
             SdkErrorOrCustomError::CustomError(err) => Some(err.clone()),
         }
     }

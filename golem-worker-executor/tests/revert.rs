@@ -36,7 +36,7 @@ async fn revert_successful_invocations(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("counters").store().await;
     let worker_id = executor
@@ -131,7 +131,7 @@ async fn revert_failed_worker(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("failing-component").store().await;
     let worker_id = executor
@@ -189,7 +189,7 @@ async fn revert_auto_update(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -249,7 +249,7 @@ async fn revert_manual_update(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = crate::hot_update::TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -257,7 +257,7 @@ async fn revert_manual_update(
 
     let component_id = executor.component("update-test-v2").unique().store().await;
     let worker_id = executor
-        .start_worker_with(&component_id, "revert_manual_update", vec![], env)
+        .start_worker_with(&component_id, "revert_manual_update", vec![], env, vec![])
         .await;
     let _ = executor.log_output(&worker_id).await;
 

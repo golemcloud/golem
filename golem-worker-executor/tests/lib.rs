@@ -98,6 +98,8 @@ tag_suite!(guest_languages3, group7);
 tag_suite!(ts_rpc2, group8);
 tag_suite!(ts_rpc2_stubless, group8);
 
+tag_suite!(rdbms_service, rdbms_service);
+
 #[derive(Clone)]
 pub struct WorkerExecutorPerTestDependencies {
     redis: Arc<dyn Redis>,
@@ -158,6 +160,7 @@ impl WorkerExecutorTestDependencies {
         let component_directory = Path::new("../test-components").to_path_buf();
         let account_id = AccountId::generate();
         let project_id = ProjectId::new_v4();
+        let project_name = "default".to_string();
         let token = Uuid::new_v4();
         let component_service: Arc<dyn ComponentService> = Arc::new(
             FileSystemComponentService::new(
@@ -170,7 +173,10 @@ impl WorkerExecutorTestDependencies {
         );
 
         let cloud_service = Arc::new(AdminOnlyStubCloudService::new(
-            account_id, token, project_id,
+            account_id,
+            token,
+            project_id,
+            project_name,
         ));
 
         Self {

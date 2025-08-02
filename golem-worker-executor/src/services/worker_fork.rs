@@ -21,25 +21,26 @@ use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::plugins::Plugins;
+use crate::services::projects::ProjectService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
-    shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
+    shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
     HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
-    HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins, HasPromiseService,
-    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator,
-    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
+    HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins, HasProjectService,
+    HasPromiseService, HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService,
+    HasSchedulerService, HasShardManagerService, HasShardService, HasWasmtimeEngine,
+    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
 };
 use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRange};
-use golem_common::model::{AccountId, Timestamp, WorkerMetadata, WorkerStatusRecord};
+use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata, WorkerStatusRecord};
 use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -51,6 +52,7 @@ use tokio::runtime::Handle;
 pub trait WorkerForkService: Send + Sync {
     async fn fork(
         &self,
+        fork_account_id: &AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -58,6 +60,7 @@ pub trait WorkerForkService: Send + Sync {
 
     async fn fork_and_write_fork_result(
         &self,
+        fork_account_id: &AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -91,6 +94,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub plugins: Arc<dyn Plugins>,
     pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     pub resource_limits: Arc<dyn ResourceLimits>,
+    pub project_service: Arc<dyn ProjectService>,
     pub extra_deps: Ctx::ExtraDeps,
 }
 
@@ -207,7 +211,7 @@ impl<Ctx: WorkerCtx> HasExtraDeps<Ctx> for DefaultWorkerFork<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasShardService for DefaultWorkerFork<Ctx> {
-    fn shard_service(&self) -> Arc<dyn shard::ShardService> {
+    fn shard_service(&self) -> Arc<dyn ShardService> {
         self.shard_service.clone()
     }
 }
@@ -254,6 +258,12 @@ impl<Ctx: WorkerCtx> HasResourceLimits for DefaultWorkerFork<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasProjectService for DefaultWorkerFork<Ctx> {
+    fn project_service(&self) -> Arc<dyn ProjectService> {
+        self.project_service.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
@@ -282,6 +292,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
+            project_service: self.project_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -317,6 +328,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
+        project_service: Arc<dyn ProjectService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -345,13 +357,14 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             plugins,
             oplog_processor_plugin,
             resource_limits,
+            project_service,
             extra_deps,
         }
     }
 
     async fn validate_worker_forking(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -364,7 +377,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             ));
         }
 
-        let owned_target_worker_id = OwnedWorkerId::new(account_id, target_worker_id);
+        let owned_target_worker_id = OwnedWorkerId::new(project_id, target_worker_id);
 
         let target_metadata = self.worker_service.get(&owned_target_worker_id).await;
 
@@ -378,7 +391,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // We assume the source worker belongs to this executor
         self.shard_service.check_worker(source_worker_id)?;
 
-        let owned_source_worker_id = OwnedWorkerId::new(account_id, source_worker_id);
+        let owned_source_worker_id = OwnedWorkerId::new(project_id, source_worker_id);
 
         self.worker_service
             .get(&owned_source_worker_id)
@@ -392,6 +405,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
     async fn copy_source_oplog(
         &self,
+        fork_account_id: &AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -400,7 +414,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let (owned_source_worker_id, owned_target_worker_id) = self
             .validate_worker_forking(
-                &source_worker_id.account_id,
+                &source_worker_id.project_id,
                 &source_worker_id.worker_id,
                 target_worker_id,
                 oplog_index_cut_off,
@@ -408,19 +422,29 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .await?;
 
         let target_worker_id = owned_target_worker_id.worker_id.clone();
-        let account_id = owned_target_worker_id.account_id.clone();
+        let project_id = owned_target_worker_id.project_id.clone();
 
-        let source_worker_instance =
-            Worker::get_or_create_suspended(self, &owned_source_worker_id, None, None, None, None)
-                .await?;
+        let source_worker_instance = Worker::get_or_create_suspended(
+            self,
+            fork_account_id,
+            &owned_source_worker_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
 
         let source_worker_metadata = source_worker_instance.get_metadata()?;
 
         let target_worker_metadata = WorkerMetadata {
             worker_id: target_worker_id.clone(),
-            account_id,
+            created_by: fork_account_id.clone(),
+            project_id,
             env: source_worker_metadata.env.clone(),
             args: source_worker_metadata.args.clone(),
+            wasi_config_vars: source_worker_metadata.wasi_config_vars.clone(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord::default(),
@@ -468,12 +492,18 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork(
         &self,
+        fork_account_id: &AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
-            .copy_source_oplog(source_worker_id, target_worker_id, oplog_index_cut_off)
+            .copy_source_oplog(
+                fork_account_id,
+                source_worker_id,
+                target_worker_id,
+                oplog_index_cut_off,
+            )
             .await?;
 
         new_oplog.commit(CommitLevel::Always).await;
@@ -494,12 +524,18 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
 
     async fn fork_and_write_fork_result(
         &self,
+        fork_account_id: &AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
-            .copy_source_oplog(source_worker_id, target_worker_id, oplog_index_cut_off)
+            .copy_source_oplog(
+                fork_account_id,
+                source_worker_id,
+                target_worker_id,
+                oplog_index_cut_off,
+            )
             .await?;
 
         // durability.persist will write an ImportedFunctionInvoked entry persisting ForkResult::Original
