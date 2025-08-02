@@ -26,6 +26,7 @@ use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use std::num::{NonZeroU128, NonZeroU64};
 use test_r::test;
+use std::path::PathBuf;
 
 #[test]
 pub fn oplog_entry() {
@@ -101,7 +102,7 @@ pub fn oplog_entry() {
         value: AttributeValue::String("value".to_string()),
     };
 
-    let mut mint = Mint::new("tests/goldenfiles");
+    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
     backward_compatible("oplog_entry_revert", &mut mint, oe31);
     backward_compatible("oplog_entry_cancel_pending_invocation", &mut mint, oe32);
     backward_compatible("oplog_entry_exported_function_invoked_v12", &mut mint, oe33);
@@ -140,7 +141,7 @@ pub async fn timestamped_worker_invocation() {
         },
     };
 
-    let mut mint = Mint::new("tests/goldenfiles");
+    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
     backward_compatible(
         "timestamped_worker_invocation_exported_function_v1_2",
         &mut mint,

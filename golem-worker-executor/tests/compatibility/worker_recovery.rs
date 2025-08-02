@@ -21,10 +21,11 @@ use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDslUnsafe;
 use redis::AsyncCommands;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tracing::info;
+use url::form_urlencoded::Target;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -230,10 +231,10 @@ async fn restore_from_recovery_golden_file(
     name: &str,
     component_names: &[&str],
 ) -> WorkerId {
-    let worker_id_path =
-        Path::new("tests/goldenfiles").join(format!("worker_recovery_{name}.worker_id.bin"));
-    let oplog_path =
-        Path::new("tests/goldenfiles").join(format!("worker_recovery_{name}.oplog.bin"));
+    let worker_id_path = PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles",
+        format!("worker_recovery_{name}.worker_id.bin").as_str() ]);
+    let oplog_path = PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles",
+        format!("worker_recovery_{name}.oplog.bin").as_str() ]);
 
     let worker_id = tokio::fs::read(&worker_id_path).await.unwrap();
     let worker_id: WorkerId = deserialize(&worker_id).unwrap();
@@ -307,10 +308,10 @@ pub async fn save_recovery_golden_file(
             .await
             .unwrap();
 
-        let oplog_path =
-            Path::new("tests/goldenfiles").join(format!("worker_recovery_{name}.oplog.bin"));
-        let worker_id_path =
-            Path::new("tests/goldenfiles").join(format!("worker_recovery_{name}.worker_id.bin"));
+        let worker_id_path = PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles",
+            format!("worker_recovery_{name}.worker_id.bin").as_str() ]);
+        let oplog_path = PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles",
+            format!("worker_recovery_{name}.oplog.bin").as_str() ]);
 
         let encoded_oplog = serialize(&entries).unwrap();
         let encoded_worker_id = serialize(&worker_id).unwrap();

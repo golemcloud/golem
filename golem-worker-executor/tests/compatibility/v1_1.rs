@@ -25,12 +25,13 @@ use golem_worker_executor::services::rpc::RpcError;
 use std::collections::HashSet;
 use test_r::test;
 use uuid::Uuid;
+use std::path::PathBuf;
 
 #[test]
 pub fn golem_error() {
     let g1 = WorkerExecutorError::ShardingNotReady;
 
-    let mut mint = Mint::new("tests/goldenfiles");
+    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
     backward_compatible("golem_error_sharding_not_ready", &mut mint, g1);
 }
 
@@ -123,7 +124,7 @@ pub fn oplog_entry() {
         ),
     };
 
-    let mut mint = Mint::new("tests/goldenfiles");
+    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
     backward_compatible("oplog_entry_restart", &mut mint, oe25);
     backward_compatible("oplog_entry_import_function_invoked_v11", &mut mint, oe26);
     backward_compatible("oplog_entry_create_v11a", &mut mint, oe27a);
@@ -148,7 +149,7 @@ pub fn serializable_invoke_result() {
         details: "not now".to_string(),
     }));
 
-    let mut mint = Mint::new("tests/goldenfiles");
+    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
     backward_compatible("serializable_invoke_result_v11_pending", &mut mint, sir1);
     backward_compatible("serializable_invoke_result_v11_failed", &mut mint, sir2);
     backward_compatible(

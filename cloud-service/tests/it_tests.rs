@@ -19,7 +19,7 @@ use golem_common::model::{PlanId, ProjectGrantId, ProjectPolicyId, TokenId};
 use golem_service_base::db;
 use golem_service_base::migration::{Migrations, MigrationsDir};
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{env, vec};
 use testcontainers::runners::AsyncRunner;
@@ -78,6 +78,8 @@ async fn start_docker_postgres() -> (CloudServiceConfig, ContainerAsync<Postgres
         "GOLEM__COMPONENTS__STORE__CONFIG__ROOT_PATH",
         "/tmp/golem/components",
     );
+
+    env::set_current_dir( PathBuf::from(env!("CARGO_MANIFEST_DIR")) ).expect("Failed to set current directory");
 
     let config = make_config_loader()
         .load_or_dump_config()
@@ -614,6 +616,8 @@ pub async fn test_sqlite_db() {
         "GOLEM__COMPONENTS__STORE__CONFIG__ROOT_PATH",
         "/tmp/golem/components",
     );
+
+    env::set_current_dir( PathBuf::from(env!("CARGO_MANIFEST_DIR")) ).expect("Failed to set current directory");
 
     let config = make_config_loader()
         .load_or_dump_config()
