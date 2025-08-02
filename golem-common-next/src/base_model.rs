@@ -40,6 +40,7 @@ newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
 newtype_uuid!(AccountId);
 newtype_uuid!(ApplicationId);
 newtype_uuid!(EnvironmentId);
+newtype_uuid!(ApiDefinitionId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Encode, Decode)]
 #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]

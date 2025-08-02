@@ -17,7 +17,7 @@ pub mod account_grants;
 pub mod account_tokens;
 pub mod accounts;
 pub mod environment_components;
-pub mod environment_api_definitions;
+pub mod environment_api_deployments;
 pub mod login;
 pub mod model;
 pub mod plugins;

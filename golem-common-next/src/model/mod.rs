@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod agent;
+pub mod api_deployment;
 pub mod auth;
 pub mod base64;
 pub mod component;
