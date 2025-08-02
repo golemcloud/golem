@@ -17,13 +17,10 @@ use super::{ApiDefinitionId, EnvironmentId, ProjectId};
 use chrono::DateTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct ApiSite {
-    pub host: String,
-    pub subdomain: Option<String>,
-}
+#[repr(transparent)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
+pub struct ApiSite(pub String);
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
