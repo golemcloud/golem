@@ -565,6 +565,7 @@ impl IntoValue for WorkerMetadata {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct WorkerResourceDescription {
     pub created_at: Timestamp,
+    pub type_name: Option<String>,
     pub indexed_resource_key: Option<IndexedResourceKey>,
 }
 

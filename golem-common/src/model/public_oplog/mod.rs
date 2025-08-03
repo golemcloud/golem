@@ -472,6 +472,7 @@ pub struct GrowMemoryParameters {
 pub struct ResourceParameters {
     pub timestamp: Timestamp,
     pub id: WorkerResourceId,
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
@@ -481,6 +482,7 @@ pub struct ResourceParameters {
 pub struct DescribeResourceParameters {
     pub timestamp: Timestamp,
     pub id: WorkerResourceId,
+    pub resource_owner: String,
     pub resource_name: String,
     #[wit_field(convert_vec = WitValue)]
     pub resource_params: Vec<ValueAndType>,

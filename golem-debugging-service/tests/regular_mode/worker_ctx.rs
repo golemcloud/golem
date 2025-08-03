@@ -49,6 +49,7 @@ use golem_worker_executor::workerctx::{
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
     StatusManagement, UpdateManagement, WorkerCtx,
 };
+use rib::ParsedFunctionSite;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use tracing::debug;
@@ -380,27 +381,34 @@ impl FuelManagement for TestWorkerCtx {
 impl IndexedResourceStore for TestWorkerCtx {
     fn get_indexed_resource(
         &self,
+        resource_owner: &ParsedFunctionSite,
         resource_name: &str,
         resource_params: &[String],
     ) -> Option<WorkerResourceId> {
         self.durable_ctx
-            .get_indexed_resource(resource_name, resource_params)
+            .get_indexed_resource(resource_owner, resource_name, resource_params)
     }
 
     async fn store_indexed_resource(
         &mut self,
+        resource_owner: &ParsedFunctionSite,
         resource_name: &str,
         resource_params: &[String],
         resource: WorkerResourceId,
     ) {
         self.durable_ctx
-            .store_indexed_resource(resource_name, resource_params, resource)
+            .store_indexed_resource(resource_owner, resource_name, resource_params, resource)
             .await
     }
 
-    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
+    fn drop_indexed_resource(
+        &mut self,
+        resource_owner: &ParsedFunctionSite,
+        resource_name: &str,
+        resource_params: &[String],
+    ) {
         self.durable_ctx
-            .drop_indexed_resource(resource_name, resource_params)
+            .drop_indexed_resource(resource_owner, resource_name, resource_params)
     }
 }
 

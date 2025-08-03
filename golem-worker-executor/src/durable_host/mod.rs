@@ -105,6 +105,7 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
+use rib::ParsedFunctionSite;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -1179,8 +1180,8 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         self.state.self_uri()
     }
 
-    async fn add(&mut self, resource: ResourceAny) -> u64 {
-        let id = self.state.add(resource).await;
+    async fn add(&mut self, resource: ResourceAny, name: Option<&str>) -> u64 {
+        let id = self.state.add(resource, name).await;
         let resource_id = WorkerResourceId(id);
         if self.state.is_live() {
             let entry = OplogEntry::create_resource(resource_id);
@@ -1190,6 +1191,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
                     resource_id,
                     WorkerResourceDescription {
                         created_at: entry.timestamp(),
+                        type_name: name.map(|n| n.to_string()),
                         indexed_resource_key: None,
                     },
                 );
@@ -1322,23 +1324,28 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
     fn get_indexed_resource(
         &self,
+        resource_owner: &ParsedFunctionSite,
         resource_name: &str,
         resource_params: &[String],
     ) -> Option<WorkerResourceId> {
         let key = IndexedResourceKey {
+            resource_owner: resource_owner.clone(),
             resource_name: resource_name.to_string(),
             resource_params: resource_params.to_vec(),
         };
         self.state.indexed_resources.get(&key).copied()
     }
 
+    // TODO: expose this as a host function
     async fn store_indexed_resource(
         &mut self,
+        resource_owner: &ParsedFunctionSite,
         resource_name: &str,
         resource_params: &[String],
         resource: WorkerResourceId,
     ) {
         let key = IndexedResourceKey {
+            resource_owner: resource_owner.clone(),
             resource_name: resource_name.to_string(),
             resource_params: resource_params.to_vec(),
         };
@@ -1357,8 +1364,15 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
+    // TODO: expose this as a host function
+    fn drop_indexed_resource(
+        &mut self,
+        resource_owner: &ParsedFunctionSite,
+        resource_name: &str,
+        resource_params: &[String],
+    ) {
         let key = IndexedResourceKey {
+            resource_owner: resource_owner.clone(),
             resource_name: resource_name.to_string(),
             resource_params: resource_params.to_vec(),
         };
@@ -2666,7 +2680,7 @@ impl ResourceStore for PrivateDurableWorkerState {
         }
     }
 
-    async fn add(&mut self, resource: ResourceAny) -> u64 {
+    async fn add(&mut self, resource: ResourceAny, _name: Option<&str>) -> u64 {
         let id = self.last_resource_id;
         self.last_resource_id = self.last_resource_id.next();
         self.resources.insert(id, resource);

@@ -47,6 +47,7 @@ use golem_worker_executor::durable_host::wasm_rpc::serialized::{
 };
 use golem_worker_executor::services::blob_store::ObjectMetadata;
 use golem_worker_executor::services::rpc::RpcError;
+use rib::ParsedFunctionSite;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
@@ -423,6 +424,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::DescribeResource(DescribeResourceParameters {
             timestamp,
             id,
+            resource_owner,
             resource_name,
             resource_params,
         }) => {
@@ -431,10 +433,13 @@ fn get_oplog_entry_from_public_oplog_entry(
                 .map(|value_and_type| value_and_type.to_string()) // This will call to_string of wasm wave
                 .collect::<Vec<_>>();
 
+            let resource_owner = ParsedFunctionSite::parse(&resource_owner)?;
+
             Ok(OplogEntry::DescribeResource {
                 timestamp,
                 id,
                 indexed_resource: IndexedResourceKey {
+                    resource_owner,
                     resource_name,
                     resource_params,
                 },

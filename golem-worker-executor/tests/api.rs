@@ -39,6 +39,7 @@ use golem_wasm_ast::analysis::{analysed_type, AnalysedType, TypeStr};
 use golem_wasm_rpc::{IntoValue, Record};
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use redis::Commands;
+use rib::ParsedFunctionSite;
 use std::collections::HashMap;
 use std::env;
 use std::io::Write;
@@ -2879,6 +2880,12 @@ async fn counter_resource_test_2(
                     WorkerResourceDescription {
                         created_at: ts,
                         indexed_resource_key: Some(IndexedResourceKey {
+                            resource_owner: ParsedFunctionSite::PackagedInterface {
+                                namespace: "rpc".to_string(),
+                                package: "counters-export".to_string(),
+                                interface: "api".to_string(),
+                                version: None
+                            },
                             resource_name: "counter".to_string(),
                             resource_params: vec!["\"counter1\"".to_string()]
                         })
@@ -2889,6 +2896,12 @@ async fn counter_resource_test_2(
                     WorkerResourceDescription {
                         created_at: ts,
                         indexed_resource_key: Some(IndexedResourceKey {
+                            resource_owner: ParsedFunctionSite::PackagedInterface {
+                                namespace: "rpc".to_string(),
+                                package: "counters-export".to_string(),
+                                interface: "api".to_string(),
+                                version: None
+                            },
                             resource_name: "counter".to_string(),
                             resource_params: vec!["\"counter2\"".to_string()]
                         })

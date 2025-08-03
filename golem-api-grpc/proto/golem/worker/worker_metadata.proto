@@ -60,6 +60,7 @@ message ResourceMetadata {
 message IndexedResourceMetadata {
   string resource_name = 1;
   repeated string resource_params = 2;
+  string resource_owner = 3;
 }
 
 message OplogRegion {

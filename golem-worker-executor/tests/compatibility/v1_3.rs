@@ -27,10 +27,11 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
     AccountId, IdempotencyKey, OwnedWorkerId, RetryConfig, ScheduledAction, Timestamp,
-    WorkerInvocation,
+    WorkerInvocation, WorkerResourceDescription,
 };
 use golem_common::serialization::deserialize;
 use golem_wasm_rpc::Value;
+use rib::ParsedFunctionSite;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
@@ -438,4 +439,28 @@ pub fn oplog_entry() {
     backward_compatible("oplog_entry_start_span", &mut mint, oe34);
     backward_compatible("oplog_entry_finish_span", &mut mint, oe35);
     backward_compatible("oplog_entry_set_span_attribute", &mut mint, oe36);
+}
+
+#[test]
+pub fn worker_resource_description() {
+    let wrd1 = WorkerResourceDescription {
+        created_at: Timestamp::from(1724701938466),
+        indexed_resource_key: None,
+    };
+    let wrd2 = WorkerResourceDescription {
+        created_at: Timestamp::from(1724701938466),
+        indexed_resource_key: Some(IndexedResourceKey {
+            resource_owner: ParsedFunctionSite::PackagedInterface {
+                namespace: "rpc".to_string(),
+                package: "counters-export".to_string(),
+                interface: "api".to_string(),
+                version: None,
+            },
+            resource_name: "r1".to_string(),
+            resource_params: vec!["a".to_string(), "b".to_string()],
+        }),
+    };
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("worker_resource_description", &mut mint, wrd1);
+    backward_compatible("worker_resource_description_indexed", &mut mint, wrd2);
 }

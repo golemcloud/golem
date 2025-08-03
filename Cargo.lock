@@ -3715,6 +3715,7 @@ dependencies = [
  "gethostname 0.5.0",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-service-base",
  "golem-test-framework",
  "golem-wasm-ast",

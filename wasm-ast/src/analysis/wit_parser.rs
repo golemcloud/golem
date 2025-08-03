@@ -271,23 +271,26 @@ impl ToAnalysedType for TypeDef {
                 Err("to_analysed_type not implemented for resource type".to_string())
             }
 
-            TypeDefKind::Handle(handle) => match handle {
-                Handle::Own(type_id) => match resource_map.get_resource_id(*type_id) {
-                    Some(resource_id) => Ok(AnalysedType::Handle(TypeHandle {
-                        resource_id,
-                        mode: AnalysedResourceMode::Owned,
-                        name: self.name.clone(),
-                    })),
-                    None => Err("to_analysed_type not implemented for handle type".to_string()),
-                },
-                Handle::Borrow(type_id) => match resource_map.get_resource_id(*type_id) {
-                    Some(resource_id) => Ok(AnalysedType::Handle(TypeHandle {
-                        resource_id,
-                        mode: AnalysedResourceMode::Borrowed,
-                        name: self.name.clone(),
-                    })),
-                    None => Err("to_analysed_type not implemented for handle type".to_string()),
-                },
+            TypeDefKind::Handle(handle) => {
+                // TODO: get resource name (and owner?) using type_id?
+                match handle {
+                    Handle::Own(type_id) => match resource_map.get_resource_id(*type_id) {
+                        Some(resource_id) => Ok(AnalysedType::Handle(TypeHandle {
+                            resource_id,
+                            mode: AnalysedResourceMode::Owned,
+                            name: self.name.clone(),
+                        })),
+                        None => Err("to_analysed_type not implemented for handle type".to_string()),
+                    },
+                    Handle::Borrow(type_id) => match resource_map.get_resource_id(*type_id) {
+                        Some(resource_id) => Ok(AnalysedType::Handle(TypeHandle {
+                            resource_id,
+                            mode: AnalysedResourceMode::Borrowed,
+                            name: self.name.clone(),
+                        })),
+                        None => Err("to_analysed_type not implemented for handle type".to_string()),
+                    },
+                }
             },
             TypeDefKind::Flags(flag) => Ok(analysed_type::flags(
                 &flag

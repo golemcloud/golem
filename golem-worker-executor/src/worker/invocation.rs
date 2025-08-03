@@ -379,6 +379,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
     let resource_name = parsed_function_name.function().resource_name().ok_or(
         WorkerExecutorError::invalid_request("Cannot extract resource name from function name"),
     )?;
+    let resource_owner = parsed_function_name.site();
 
     let resource_constructor_name = ParsedFunctionName::new(
         parsed_function_name.site().clone(),
@@ -410,7 +411,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
 
     match store
         .data()
-        .get_indexed_resource(resource_name, raw_constructor_params)
+        .get_indexed_resource(resource_owner, resource_name, raw_constructor_params)
     {
         Some(resource_id) => {
             debug!("Using existing indexed resource with id {resource_id}");

@@ -46,7 +46,7 @@ impl Display for EncodingError {
 #[async_trait]
 pub trait ResourceStore {
     fn self_uri(&self) -> Uri;
-    async fn add(&mut self, resource: ResourceAny) -> u64;
+    async fn add(&mut self, resource: ResourceAny, name: Option<&str>) -> u64;
     async fn get(&mut self, resource_id: u64) -> Option<ResourceAny>;
     async fn borrow(&self, resource_id: u64) -> Option<ResourceAny>;
 }
@@ -491,6 +491,7 @@ async fn decode_param_impl(
 pub async fn encode_output(
     value: &Val,
     typ: &Type,
+    analysed_typ: Option<&AnalysedType>,
     resource_store: &mut (impl ResourceStore + Send),
 ) -> Result<Value, EncodingError> {
     match value {
@@ -666,7 +667,8 @@ pub async fn encode_output(
             }
         }
         Val::Resource(resource) => {
-            let id = resource_store.add(*resource).await;
+            let name = analysed_typ.and_then(|t| t.name());
+            let id = resource_store.add(*resource, name).await;
             Ok(Value::Handle {
                 uri: resource_store.self_uri().value,
                 resource_id: id,

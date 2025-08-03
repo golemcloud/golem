@@ -395,24 +395,6 @@ pub fn timestamp() {
 }
 
 #[test]
-pub fn worker_resource_description() {
-    let wrd1 = WorkerResourceDescription {
-        created_at: Timestamp::from(1724701938466),
-        indexed_resource_key: None,
-    };
-    let wrd2 = WorkerResourceDescription {
-        created_at: Timestamp::from(1724701938466),
-        indexed_resource_key: Some(IndexedResourceKey {
-            resource_name: "r1".to_string(),
-            resource_params: vec!["a".to_string(), "b".to_string()],
-        }),
-    };
-    let mut mint = Mint::new("tests/goldenfiles");
-    backward_compatible("worker_resource_description", &mut mint, wrd1);
-    backward_compatible("worker_resource_description_indexed", &mut mint, wrd2);
-}
-
-#[test]
 pub fn oplog_payload() {
     let op1 = OplogPayload::Inline(vec![0, 1, 2, 3, 4]);
     let op2 = OplogPayload::External {

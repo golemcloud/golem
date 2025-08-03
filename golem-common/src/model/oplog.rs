@@ -28,6 +28,7 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
+use rib::ParsedFunctionSite;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
@@ -198,6 +199,7 @@ impl Display for WorkerResourceId {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct IndexedResourceKey {
+    pub resource_owner: ParsedFunctionSite,
     pub resource_name: String,
     pub resource_params: Vec<String>,
 }
@@ -358,6 +360,7 @@ pub enum OplogEntry {
     CreateResource {
         timestamp: Timestamp,
         id: WorkerResourceId,
+        name: Option<String>,
     },
     /// Dropped a resource instance
     DropResource {
@@ -950,6 +953,7 @@ impl WorkerError {
 mod protobuf {
     use super::WorkerError;
     use crate::model::oplog::{IndexedResourceKey, PersistenceLevel};
+    use rib::ParsedFunctionSite;
 
     impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
         fn from(value: IndexedResourceKey) -> Self {
@@ -960,12 +964,17 @@ mod protobuf {
         }
     }
 
-    impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
-        fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
-            IndexedResourceKey {
+    impl TryFrom<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata,
+        ) -> Result<Self, Self::Error> {
+            Ok(IndexedResourceKey {
+                resource_owner: ParsedFunctionSite::parse(&value.resource_owner)?,
                 resource_name: value.resource_name,
                 resource_params: value.resource_params,
-            }
+            })
         }
     }
 
