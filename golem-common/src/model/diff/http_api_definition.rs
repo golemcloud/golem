@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::model::diff::{hash_from_serialized_value, BTreeMapDiff, Diffable, Hash, Hashable};
+use crate::model::GatewayBindingType;
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Display;
-use crate::model::GatewayBindingType;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpApiMethodAndPath {
