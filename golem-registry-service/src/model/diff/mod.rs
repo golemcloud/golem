@@ -198,7 +198,7 @@ mod test {
         ToSerializableWithModeExt,
     };
     use crate::model::diff::{ComponentMetadata, Diffable};
-    use golem_common_next::model::{ComponentFilePermissions, ComponentType};
+    use golem_common::model::{ComponentFilePermissions, ComponentType};
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
 

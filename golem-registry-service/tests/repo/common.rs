@@ -16,8 +16,8 @@ use crate::repo::Deps;
 use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
-use golem_common_next::model::component_metadata::ComponentMetadata;
-use golem_common_next::model::ComponentFilePermissions;
+use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::ComponentFilePermissions;
 use golem_registry_service::repo::account::AccountRecord;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
 use golem_registry_service::repo::model::audit::{
@@ -27,8 +27,6 @@ use golem_registry_service::repo::model::component::{
     ComponentFileRecord, ComponentRevisionRecord, ComponentStatus,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
-use golem_wasm_ast::analysis::AnalysedResourceMode::Borrowed;
-use poem_openapi::types::Type;
 use std::collections::BTreeMap;
 use std::default::Default;
 // Common test cases -------------------------------------------------------------------------------
