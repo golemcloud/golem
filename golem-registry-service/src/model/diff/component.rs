@@ -15,7 +15,7 @@
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
 use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
-use golem_common_next::model::{ComponentFilePermissions, ComponentType};
+use golem_common::model::{ComponentFilePermissions, ComponentType};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
