@@ -13,5 +13,4 @@
 // limitations under the License.
 
 pub mod account;
-pub mod diff;
 pub mod token;
