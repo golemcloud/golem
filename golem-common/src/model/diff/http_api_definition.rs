@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::diff::{hash_from_serialized_value, BTreeMapDiff, Diffable, Hash, Hashable};
-use golem_common::model::GatewayBindingType;
+use crate::model::GatewayBindingType;
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;

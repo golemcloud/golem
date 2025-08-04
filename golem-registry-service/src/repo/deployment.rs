@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::diff::Hashable;
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::deployment::{
@@ -27,6 +26,7 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use golem_common::model::diff::Hashable;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{
