@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::Deps;
 use crate::Tracing;
-use golem_common::config::DbPostgresConfig;
+use crate::repo::Deps;
+use golem_common_next::config::DbPostgresConfig;
 use golem_registry_service::repo::account::{DbAccountRepo, LoggedAccountRepo};
 use golem_registry_service::repo::application::{DbApplicationRepo, LoggedApplicationRepo};
 use golem_registry_service::repo::environment::{DbEnvironmentRepo, LoggedEnvironmentRepo};
 use golem_registry_service::repo::plan::{DbPlanRepository, LoggedPlanRepository};
-use golem_service_base::db;
-use golem_service_base::db::postgres::PostgresPool;
-use golem_service_base::migration::{Migrations, MigrationsDir};
+use golem_service_base_next::db;
+use golem_service_base_next::db::postgres::PostgresPool;
+use golem_service_base_next::migration::{Migrations, MigrationsDir};
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::test;

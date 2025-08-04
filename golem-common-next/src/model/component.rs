@@ -1,0 +1,112 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::{ComponentType, InitialComponentFile, PluginInstallationId, ProjectId};
+use crate::base_model::{ComponentId, ComponentVersion};
+use crate::model::component_metadata::ComponentMetadata;
+use bincode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt::{Debug, Display, Formatter};
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+
+pub struct VersionedComponentId {
+    pub component_id: ComponentId,
+    pub version: ComponentVersion,
+}
+
+impl Display for VersionedComponentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}#{}", self.component_id, self.version)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInstallation {
+    pub id: PluginInstallationId,
+    pub name: String,
+    pub version: String,
+    /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
+    pub registered: bool,
+    pub priority: i32,
+    pub parameters: HashMap<String, String>,
+}
+
+// TODO: Add validations (non-empty, no "/", no " ", ...)
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
+pub struct ComponentName(pub String);
+
+impl Display for ComponentName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+pub struct Component {
+    pub versioned_component_id: VersionedComponentId,
+    pub component_name: ComponentName,
+    pub component_size: u64,
+    pub metadata: ComponentMetadata,
+    pub project_id: ProjectId,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub component_type: ComponentType,
+    pub files: Vec<InitialComponentFile>,
+    pub installed_plugins: Vec<PluginInstallation>,
+    pub env: HashMap<String, String>,
+}
+
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use crate::model::component::VersionedComponentId;
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId>
+        for VersionedComponentId
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::VersionedComponentId,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                component_id: value
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()?,
+                version: value.version,
+            })
+        }
+    }
+
+    impl From<VersionedComponentId> for golem_api_grpc::proto::golem::component::VersionedComponentId {
+        fn from(value: VersionedComponentId) -> Self {
+            Self {
+                component_id: Some(value.component_id.into()),
+                version: value.version,
+            }
+        }
+    }
+}
