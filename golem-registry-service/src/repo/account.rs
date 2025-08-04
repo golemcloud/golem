@@ -73,8 +73,8 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     }
 }
 
-pub struct DbAccountRepo<DB: Pool> {
-    db_pool: DB,
+pub struct DbAccountRepo<DBP: Pool> {
+    db_pool: DBP,
 }
 
 static METRICS_SVC_NAME: &str = "account";
@@ -82,6 +82,13 @@ static METRICS_SVC_NAME: &str = "account";
 impl<DBP: Pool> DbAccountRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
+    }
+
+    pub fn logged(db_pool: DBP) -> LoggedAccountRepo<Self>
+    where
+        Self: AccountRepo,
+    {
+        LoggedAccountRepo::new(Self::new(db_pool))
     }
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {

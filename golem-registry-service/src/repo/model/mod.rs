@@ -33,6 +33,10 @@ use uuid::Uuid;
 
 // TODO: typed revision_id and entity UUIDs
 
+pub fn new_repo_uuid() -> Uuid {
+    Uuid::now_v7()
+}
+
 /// BindFields is used to extract binding of common field sets, e.g., audit fields
 pub trait BindFields {
     fn bind_audit(self, entity_audit_fields: AuditFields) -> Self;

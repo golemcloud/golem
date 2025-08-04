@@ -15,17 +15,20 @@
 use crate::Tracing;
 use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
+use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
+use golem_registry_service::repo::http_api_definition::HttpApiDefinitionRepo;
+use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
 use golem_registry_service::repo::model::account::AccountRecord;
 use golem_registry_service::repo::model::application::ApplicationRecord;
 use golem_registry_service::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use golem_registry_service::repo::model::environment::{
     EnvironmentCurrentRevisionRecord, EnvironmentRevisionRecord,
 };
+use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::plan::PlanRepository;
 use std::str::FromStr;
-use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;
 
@@ -38,12 +41,15 @@ inherit_test_dep!(Tracing);
 sequential_suite!(postgres);
 sequential_suite!(sqlite);
 
-#[derive(Clone)]
 pub struct Deps {
-    pub account_repo: Arc<dyn AccountRepo>,
-    pub application_repo: Arc<dyn ApplicationRepo>,
-    pub environment_repo: Arc<dyn EnvironmentRepo>,
-    pub plan_repo: Arc<dyn PlanRepository>,
+    pub account_repo: Box<dyn AccountRepo>,
+    pub application_repo: Box<dyn ApplicationRepo>,
+    pub environment_repo: Box<dyn EnvironmentRepo>,
+    pub plan_repo: Box<dyn PlanRepository>,
+    pub component_repo: Box<dyn ComponentRepo>,
+    pub http_api_definition_repo: Box<dyn HttpApiDefinitionRepo>,
+    pub http_api_deployment_repo: Box<dyn HttpApiDeploymentRepo>,
+    pub deployment_repo: Box<dyn HttpApiDeploymentRepo>,
 }
 
 impl Deps {
@@ -62,7 +68,7 @@ impl Deps {
     }
 
     pub async fn create_account(&self) -> AccountRecord {
-        let account_id = Uuid::new_v4();
+        let account_id = new_repo_uuid();
         self.account_repo
             .create(AccountRecord {
                 account_id,
@@ -79,7 +85,7 @@ impl Deps {
     pub async fn create_application(&self) -> ApplicationRecord {
         let owner = self.create_account().await;
         let user = self.create_account().await;
-        let app_name = format!("app-name-{}", Uuid::new_v4());
+        let app_name = format!("app-name-{}", new_repo_uuid());
 
         self.application_repo
             .ensure(&user.account_id, &owner.account_id, &app_name)
@@ -89,13 +95,13 @@ impl Deps {
 
     pub async fn create_env(&self) -> EnvironmentCurrentRevisionRecord {
         let app = self.create_application().await;
-        let env_name = format!("env-{}", Uuid::new_v4());
+        let env_name = format!("env-{}", new_repo_uuid());
         self.environment_repo
             .create(
                 &app.application_id,
                 &env_name,
                 EnvironmentRevisionRecord {
-                    environment_id: Uuid::new_v4(),
+                    environment_id: new_repo_uuid(),
                     revision_id: 0,
                     audit: DeletableRevisionAuditFields::new(app.audit.modified_by),
                     compatibility_check: false,

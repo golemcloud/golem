@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::component::{
-    ComponentFileRecord, ComponentRecord, ComponentRevisionRecord,
+    ComponentFileRecord, ComponentRecord, ComponentRevisionIdentityRecord, ComponentRevisionRecord,
 };
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
@@ -221,6 +221,13 @@ impl<DBP: Pool> DbComponentRepo<DBP> {
         Self { db_pool }
     }
 
+    pub fn logged(db_pool: DBP) -> LoggedComponentRepo<Self>
+    where
+        Self: ComponentRepo,
+    {
+        LoggedComponentRepo::new(Self::new(db_pool))
+    }
+
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
@@ -246,6 +253,25 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         name: &str,
         revision: ComponentRevisionRecord,
     ) -> repo::Result<Option<ComponentRevisionRecord>> {
+        let opt_deleted_revision: Option<ComponentRevisionIdentityRecord> = self.with_ro("create - get opt deleted").fetch_optional_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT c.component_id, c.name, cr.revision_id, cr.revision_id, cr.version, cr.status, cr.hash
+                FROM components c
+                JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
+                WHERE c.environment_id = $1 AND c.name = $2 AND c.deleted_at IS NOT NULL
+            "#})
+                .bind(environment_id)
+                .bind(name)
+        ).await?;
+
+        if let Some(deleted_revision) = opt_deleted_revision {
+            let revision = ComponentRevisionRecord {
+                component_id: deleted_revision.component_id,
+                ..revision
+            };
+            return self.update(deleted_revision.revision_id, revision).await;
+        }
+
         let environment_id = *environment_id;
         let name = name.to_owned();
         let revision = revision.ensure_first();
@@ -399,8 +425,8 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
                     WHERE c.component_id = $1 AND c.deleted_at IS NULL
                 "#})
-                .bind(component_id),
-        )
+                    .bind(component_id),
+            )
             .await?;
 
         match revision {
@@ -612,7 +638,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                       created_at, updated_at, deleted_at, modified_by,
                       current_revision_id
                     FROM components
-                    WHERE component_id = $1 AND current_revision_id = $2 and deleted_at IS NULL
+                    WHERE component_id = $1 AND current_revision_id = $2
                 "#})
                 .bind(component_id)
                 .bind(current_revision_id),
@@ -692,7 +718,17 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         revision.files = {
             let mut inserted_files = Vec::<ComponentFileRecord>::with_capacity(files.len());
             for file in files {
-                inserted_files.push(Self::insert_file(tx, file).await?);
+                inserted_files.push(
+                    Self::insert_file(
+                        tx,
+                        file.ensure_component(
+                            revision.component_id,
+                            revision.revision_id,
+                            revision.audit.created_by,
+                        ),
+                    )
+                    .await?,
+                );
             }
             inserted_files
         };
@@ -711,6 +747,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 INSERT INTO component_files
                 (component_id, revision_id, file_path, hash, created_at, created_by, file_key, file_permissions)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING component_id, revision_id, file_path, hash, created_at, created_by, file_key, file_permissions
             "#})
                 .bind(file.component_id)
                 .bind(file.revision_id)

@@ -53,8 +53,8 @@ impl<Repo: PlanRepository> PlanRepository for LoggedPlanRepository<Repo> {
     }
 }
 
-pub struct DbPlanRepository<DB: Pool> {
-    db_pool: DB,
+pub struct DbPlanRepository<DBP: Pool> {
+    db_pool: DBP,
 }
 
 static METRICS_SVC_NAME: &str = "plan";
@@ -62,6 +62,13 @@ static METRICS_SVC_NAME: &str = "plan";
 impl<DBP: Pool> DbPlanRepository<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
+    }
+
+    pub fn logged(db_pool: DBP) -> LoggedPlanRepository<Self>
+    where
+        Self: PlanRepository,
+    {
+        LoggedPlanRepository::new(Self::new(db_pool))
     }
 
     fn with_rw(&self, api_name: &'static str) -> DBP::LabelledApi {

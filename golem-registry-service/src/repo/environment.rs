@@ -160,6 +160,13 @@ impl<DBP: Pool> DbEnvironmentRepo<DBP> {
         Self { db_pool }
     }
 
+    pub fn logged(db_pool: DBP) -> LoggedEnvironmentRepo<Self>
+    where
+        Self: EnvironmentRepo,
+    {
+        LoggedEnvironmentRepo::new(Self::new(db_pool))
+    }
+
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }

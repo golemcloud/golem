@@ -14,7 +14,7 @@
 
 use crate::repo::model::application::{ApplicationRecord, ApplicationRevisionRecord};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
-use crate::repo::model::BindFields;
+use crate::repo::model::{new_repo_uuid, BindFields};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::future::BoxFuture;
@@ -143,8 +143,8 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     }
 }
 
-pub struct DbApplicationRepo<DB: Pool> {
-    db_pool: DB,
+pub struct DbApplicationRepo<DBP: Pool> {
+    db_pool: DBP,
 }
 
 static METRICS_SVC_NAME: &str = "application";
@@ -152,6 +152,13 @@ static METRICS_SVC_NAME: &str = "application";
 impl<DBP: Pool> DbApplicationRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
+    }
+
+    pub fn logged(db_pool: DBP) -> LoggedApplicationRepo<Self>
+    where
+        Self: ApplicationRepo,
+    {
+        LoggedApplicationRepo::new(Self::new(db_pool))
     }
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
@@ -258,7 +265,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                         VALUES ($1, $2, $3, $4, $5, $6, $7)
                         RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by
                     "#})
-                        .bind(Uuid::new_v4())
+                        .bind(new_repo_uuid())
                         .bind(&name)
                         .bind(owner_id)
                         .bind_audit(AuditFields::new(user_id))

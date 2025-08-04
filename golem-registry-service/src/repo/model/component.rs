@@ -20,7 +20,7 @@ use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::Json;
 use sqlx::{Database, FromRow};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Deref;
 use uuid::Uuid;
@@ -291,7 +291,7 @@ pub struct ComponentRevisionRecord {
     pub component_type: i32,
     pub size: i32,
     pub metadata: SqlComponentMetadata,
-    pub env: Json<HashMap<String, String>>,
+    pub env: Json<BTreeMap<String, String>>,
     pub status: ComponentStatus,
     pub object_store_key: String,
     pub binary_hash: SqlBlake3Hash,
@@ -361,6 +361,20 @@ pub struct ComponentFileRecord {
     pub audit: RevisionAuditFields,
     pub file_key: String,
     pub file_permissions: SqlComponentFilePermissions,
+}
+
+impl ComponentFileRecord {
+    pub fn ensure_component(self, component_id: Uuid, revision_id: i64, created_by: Uuid) -> Self {
+        Self {
+            component_id,
+            revision_id,
+            audit: RevisionAuditFields {
+                created_by,
+                ..self.audit
+            },
+            ..self
+        }
+    }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
