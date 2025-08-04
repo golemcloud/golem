@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use super::ApiResult;
-use golem_common_next::api::{CreateApiDeploymentRequest, Page};
-use golem_common_next::model::api_deployment::{ApiDeployment, ApiSiteString};
-use golem_common_next::model::auth::AuthCtx;
-use golem_common_next::model::environment::EnvironmentId;
-use golem_common_next::recorded_http_api_request;
-use golem_service_base_next::api_tags::ApiTags;
-use golem_service_base_next::model::auth::GolemSecurityScheme;
+use golem_common::api::{CreateApiDeploymentRequest, Page};
+use golem_common::model::api_deployment::{ApiDeployment, ApiSiteString};
+use golem_common::model::auth::AuthCtx;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
+use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;

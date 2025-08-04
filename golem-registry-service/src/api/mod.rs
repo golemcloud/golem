@@ -58,9 +58,9 @@ use self::login::LoginApi;
 use self::plugin_registration::PluginRegistrationApi;
 use self::security_schemes::SecuritySchemesApi;
 use self::tokens::TokensApi;
-use golem_common_next::metrics::api::TraceErrorKind;
-use golem_common_next::model::error::{ErrorBody, ErrorsBody};
-use golem_service_base_next::api::HealthcheckApi;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
+use golem_service_base::api::HealthcheckApi;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, OpenApiService};
 

@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::config::RegistryServiceConfig;
-use golem_common_next::config::DbConfig;
-use golem_service_base_next::db::Pool;
-use golem_service_base_next::db::postgres::PostgresPool;
-use golem_service_base_next::db::sqlite::SqlitePool;
+use golem_common::config::DbConfig;
+use golem_service_base::db::Pool;
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::sqlite::SqlitePool;
 
 #[derive(Clone)]
 pub struct Services {}

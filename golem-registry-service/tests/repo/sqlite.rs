@@ -14,14 +14,14 @@
 
 use crate::Tracing;
 use crate::repo::Deps;
-use golem_common_next::config::DbSqliteConfig;
+use golem_common::config::DbSqliteConfig;
 use golem_registry_service::repo::account::{DbAccountRepo, LoggedAccountRepo};
 use golem_registry_service::repo::application::{DbApplicationRepo, LoggedApplicationRepo};
 use golem_registry_service::repo::environment::{DbEnvironmentRepo, LoggedEnvironmentRepo};
 use golem_registry_service::repo::plan::{DbPlanRepository, LoggedPlanRepository};
-use golem_service_base_next::db;
-use golem_service_base_next::db::sqlite::SqlitePool;
-use golem_service_base_next::migration::{Migrations, MigrationsDir};
+use golem_service_base::db;
+use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::migration::{Migrations, MigrationsDir};
 use std::sync::Arc;
 use test_r::test;
 use test_r::{inherit_test_dep, test_dep};

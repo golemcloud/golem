@@ -12,19 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::PlanId;
-use golem_common::model::AccountId;
-use poem_openapi_derive::Object;
-use serde::{Deserialize, Serialize};
+use super::environment::EnvironmentId;
+use crate::model::api_definition::ApiDefinitionId;
+use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
+use chrono::DateTime;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct Account {
-    // TODO: change AccountId to UUID in common
-    pub id: AccountId,
-    pub name: String,
-    pub email: String,
-    pub plan_id: PlanId,
-    // TODO: add created_at
+newtype_uuid!(ApiDeploymentId);
+
+declare_transparent_newtypes! {
+    pub struct ApiSiteString(pub String);
+}
+
+declare_structs! {
+    pub struct ApiDeployment {
+        pub api_definitions: Vec<ApiDefinitionId>,
+        pub environment_id: EnvironmentId,
+        pub site: ApiSiteString,
+        pub created_at: DateTime<chrono::Utc>,
+    }
 }

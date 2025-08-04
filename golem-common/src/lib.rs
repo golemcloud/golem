@@ -17,6 +17,9 @@ use std::convert::Infallible;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+#[cfg(feature = "model")]
+pub mod api;
+
 #[cfg(feature = "base-model")]
 pub mod base_model;
 
@@ -64,6 +67,8 @@ pub mod tracing;
 
 #[cfg(feature = "model")]
 pub mod virtual_exports;
+
+pub mod typedef;
 
 #[cfg(test)]
 test_r::enable!();

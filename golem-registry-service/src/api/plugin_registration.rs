@@ -14,12 +14,12 @@
 
 use super::ApiResult;
 use super::model::{CreateAppPluginRequest, CreateLibraryPluginRequest};
-use golem_common_next::api::{CreatePluginRequest, Page};
-use golem_common_next::model::plugin::{PluginDefinition, PluginScope};
-use golem_common_next::model::{Empty, PluginId};
-use golem_common_next::recorded_http_api_request;
-use golem_service_base_next::api_tags::ApiTags;
-use golem_service_base_next::model::auth::GolemSecurityScheme;
+use golem_common::api::{CreatePluginRequest, Page};
+use golem_common::model::plugin::{PluginDefinition, PluginScope};
+use golem_common::model::{Empty, PluginId};
+use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
+use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;

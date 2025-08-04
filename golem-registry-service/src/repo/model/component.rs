@@ -14,8 +14,8 @@
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
-use golem_common_next::model::ComponentFilePermissions;
-use golem_common_next::model::component_metadata::ComponentMetadata;
+use golem_common::model::ComponentFilePermissions;
+use golem_common::model::component_metadata::ComponentMetadata;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::Json;

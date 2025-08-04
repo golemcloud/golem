@@ -14,13 +14,13 @@
 
 use super::ApiResult;
 use super::model::CreateComponentRequest;
-use golem_common_next::api::Page;
-use golem_common_next::model::auth::AuthCtx;
-use golem_common_next::model::component::{Component, ComponentName};
-use golem_common_next::model::environment::EnvironmentId;
-use golem_common_next::recorded_http_api_request;
-use golem_service_base_next::api_tags::ApiTags;
-use golem_service_base_next::model::auth::GolemSecurityScheme;
+use golem_common::api::Page;
+use golem_common::model::auth::AuthCtx;
+use golem_common::model::component::{Component, ComponentName};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::recorded_http_api_request;
+use golem_service_base::api_tags::ApiTags;
+use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
