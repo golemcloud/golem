@@ -49,42 +49,6 @@ impl Default for CorsConfiguration {
 }
 
 impl CorsConfiguration {
-    fn check_origin(&self, origin: &HeaderValue) -> OriginStatus {
-        let origin_str = match origin.to_str() {
-            Ok(s) => s,
-            Err(_) => return OriginStatus::NotAllowed,
-        };
-
-        if Self::split_origin(&self.allow_origin).any(|o| o == origin_str) {
-            return OriginStatus::AllowedExact;
-        }
-
-        if Self::split_origin(&self.allow_origin)
-            .any(|pattern| pattern.contains('*') && Self::wildcard_match(pattern, origin_str))
-        {
-            return OriginStatus::AllowedWildcard;
-        }
-
-        OriginStatus::NotAllowed
-    }
-
-    fn wildcard_match(pattern: &str, text: &str) -> bool {
-        if !pattern.contains('*') {
-            return pattern == text;
-        }
-
-        let parts: Vec<&str> = pattern.split('*').collect();
-        if parts.len() == 2 {
-            text.starts_with(parts[0]) && text.ends_with(parts[1])
-        } else {
-            false
-        }
-    }
-
-    fn split_origin(input: &str) -> impl Iterator<Item = &str> {
-        input.split(',').map(|s| s.trim()).filter(|s| !s.is_empty())
-    }
-
     pub fn add_header_in_response(&self, response: &mut poem::Response) {
         response.headers_mut().insert(
             ACCESS_CONTROL_ALLOW_ORIGIN,
@@ -283,13 +247,6 @@ impl From<CorsConfiguration> for golem_api_grpc::proto::golem::apidefinition::Co
         }
     }
 }
-
-enum OriginStatus {
-    AllowedExact,
-    AllowedWildcard,
-    NotAllowed,
-}
-
 pub struct CorsPreflightExpr(pub Expr);
 
 impl CorsPreflightExpr {
