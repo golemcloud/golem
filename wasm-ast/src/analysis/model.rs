@@ -89,6 +89,8 @@ pub struct AnalysedInstance {
 pub struct TypeResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub ok: Option<Box<AnalysedType>>,
     pub err: Option<Box<AnalysedType>>,
 }
@@ -118,6 +120,8 @@ pub struct NameOptionTypePair {
 pub struct TypeVariant {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub cases: Vec<NameOptionTypePair>,
 }
 
@@ -128,6 +132,8 @@ pub struct TypeVariant {
 pub struct TypeOption {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub inner: Box<AnalysedType>,
 }
 
@@ -138,6 +144,8 @@ pub struct TypeOption {
 pub struct TypeEnum {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub cases: Vec<String>,
 }
 
@@ -148,6 +156,8 @@ pub struct TypeEnum {
 pub struct TypeFlags {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub names: Vec<String>,
 }
 
@@ -158,6 +168,8 @@ pub struct TypeFlags {
 pub struct TypeRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub fields: Vec<NameTypePair>,
 }
 
@@ -168,6 +180,8 @@ pub struct TypeRecord {
 pub struct TypeTuple {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub items: Vec<AnalysedType>,
 }
 
@@ -178,6 +192,8 @@ pub struct TypeTuple {
 pub struct TypeList {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub inner: Box<AnalysedType>,
 }
 
@@ -266,6 +282,8 @@ pub struct TypeBool;
 pub struct TypeHandle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub resource_id: AnalysedResourceId,
     pub mode: AnalysedResourceMode,
 }
@@ -316,19 +334,7 @@ impl AnalysedType {
             AnalysedType::Tuple(typ) => typ.name.as_deref(),
             AnalysedType::List(typ) => typ.name.as_deref(),
             AnalysedType::Handle(typ) => typ.name.as_deref(),
-            AnalysedType::Str(_) => None,
-            AnalysedType::Chr(_) => None,
-            AnalysedType::F64(_) => None,
-            AnalysedType::F32(_) => None,
-            AnalysedType::U64(_) => None,
-            AnalysedType::S64(_) => None,
-            AnalysedType::U32(_) => None,
-            AnalysedType::S32(_) => None,
-            AnalysedType::U16(_) => None,
-            AnalysedType::S16(_) => None,
-            AnalysedType::U8(_) => None,
-            AnalysedType::S8(_) => None,
-            AnalysedType::Bool(_) => None,
+            _ => None,
         }
     }
 
@@ -376,6 +382,67 @@ impl AnalysedType {
 
     pub fn named(self, name: impl AsRef<str>) -> Self {
         self.with_optional_name(Some(name.as_ref().to_string()))
+    }
+
+    pub fn owner(&self) -> Option<&str> {
+        match self {
+            AnalysedType::Variant(typ) => typ.owner.as_deref(),
+            AnalysedType::Result(typ) => typ.owner.as_deref(),
+            AnalysedType::Option(typ) => typ.owner.as_deref(),
+            AnalysedType::Enum(typ) => typ.owner.as_deref(),
+            AnalysedType::Flags(typ) => typ.owner.as_deref(),
+            AnalysedType::Record(typ) => typ.owner.as_deref(),
+            AnalysedType::Tuple(typ) => typ.owner.as_deref(),
+            AnalysedType::List(typ) => typ.owner.as_deref(),
+            AnalysedType::Handle(typ) => typ.owner.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn with_optional_owner(self, owner: Option<String>) -> Self {
+        match self {
+            AnalysedType::Variant(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Variant(typ)
+            }
+            AnalysedType::Result(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Result(typ)
+            }
+            AnalysedType::Option(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Option(typ)
+            }
+            AnalysedType::Enum(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Enum(typ)
+            }
+            AnalysedType::Flags(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Flags(typ)
+            }
+            AnalysedType::Record(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Record(typ)
+            }
+            AnalysedType::Tuple(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Tuple(typ)
+            }
+            AnalysedType::List(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::List(typ)
+            }
+            AnalysedType::Handle(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Handle(typ)
+            }
+            _ => self,
+        }
+    }
+
+    pub fn owned(self, owner: impl AsRef<str>) -> Self {
+        self.with_optional_owner(Some(owner.as_ref().to_string()))
     }
 }
 
@@ -465,6 +532,7 @@ pub mod analysed_type {
     pub fn list(inner: AnalysedType) -> AnalysedType {
         AnalysedType::List(TypeList {
             name: None,
+            owner: None,
             inner: Box::new(inner),
         })
     }
@@ -472,6 +540,7 @@ pub mod analysed_type {
     pub fn option(inner: AnalysedType) -> AnalysedType {
         AnalysedType::Option(TypeOption {
             name: None,
+            owner: None,
             inner: Box::new(inner),
         })
     }
@@ -479,6 +548,7 @@ pub mod analysed_type {
     pub fn flags(names: &[&str]) -> AnalysedType {
         AnalysedType::Flags(TypeFlags {
             name: None,
+            owner: None,
             names: names.iter().map(|n| n.to_string()).collect(),
         })
     }
@@ -486,17 +556,23 @@ pub mod analysed_type {
     pub fn r#enum(cases: &[&str]) -> AnalysedType {
         AnalysedType::Enum(TypeEnum {
             name: None,
+            owner: None,
             cases: cases.iter().map(|n| n.to_string()).collect(),
         })
     }
 
     pub fn tuple(items: Vec<AnalysedType>) -> AnalysedType {
-        AnalysedType::Tuple(TypeTuple { name: None, items })
+        AnalysedType::Tuple(TypeTuple {
+            name: None,
+            owner: None,
+            items,
+        })
     }
 
     pub fn result(ok: AnalysedType, err: AnalysedType) -> AnalysedType {
         AnalysedType::Result(TypeResult {
             name: None,
+            owner: None,
             ok: Some(Box::new(ok)),
             err: Some(Box::new(err)),
         })
@@ -505,6 +581,7 @@ pub mod analysed_type {
     pub fn result_ok(ok: AnalysedType) -> AnalysedType {
         AnalysedType::Result(TypeResult {
             name: None,
+            owner: None,
             ok: Some(Box::new(ok)),
             err: None,
         })
@@ -513,22 +590,32 @@ pub mod analysed_type {
     pub fn result_err(err: AnalysedType) -> AnalysedType {
         AnalysedType::Result(TypeResult {
             name: None,
+            owner: None,
             ok: None,
             err: Some(Box::new(err)),
         })
     }
 
     pub fn record(fields: Vec<NameTypePair>) -> AnalysedType {
-        AnalysedType::Record(TypeRecord { name: None, fields })
+        AnalysedType::Record(TypeRecord {
+            name: None,
+            owner: None,
+            fields,
+        })
     }
 
     pub fn variant(cases: Vec<NameOptionTypePair>) -> AnalysedType {
-        AnalysedType::Variant(TypeVariant { name: None, cases })
+        AnalysedType::Variant(TypeVariant {
+            name: None,
+            owner: None,
+            cases,
+        })
     }
 
     pub fn handle(resource_id: AnalysedResourceId, mode: AnalysedResourceMode) -> AnalysedType {
         AnalysedType::Handle(TypeHandle {
             name: None,
+            owner: None,
             resource_id,
             mode,
         })
