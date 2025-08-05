@@ -12,15 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod account;
 pub mod agent;
+pub mod api_definition;
+pub mod api_deployment;
+pub mod api_domain;
+pub mod application;
 pub mod auth;
 pub mod base64;
+pub mod certificate;
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
+pub mod environment;
 pub mod error;
 pub mod exports;
 pub mod invocation_context;
+pub mod login;
 pub mod lucene;
 pub mod oplog;
 pub mod plugin;
@@ -1857,10 +1865,10 @@ impl<'de> Deserialize<'de> for ComponentFilePath {
     }
 }
 
-impl TryFrom<&str> for ComponentFilePath {
-    type Error = String;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::from_either_str(value)
+impl FromStr for ComponentFilePath {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_either_str(s)
     }
 }
 

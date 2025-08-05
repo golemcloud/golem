@@ -25,7 +25,9 @@ use uuid::Uuid;
 pub enum DeployError {
     #[error("Deployment concurrent revision creation")]
     DeploymentConcurrentRevisionCreation,
-    #[error("Deployment hash mismatch: requested hash: {requested_hash:?}, actual hash: {actual_hash:?}.")]
+    #[error(
+        "Deployment hash mismatch: requested hash: {requested_hash:?}, actual hash: {actual_hash:?}."
+    )]
     DeploymentHashMismatch {
         requested_hash: SqlBlake3Hash,
         actual_hash: SqlBlake3Hash,

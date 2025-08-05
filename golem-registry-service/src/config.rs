@@ -14,14 +14,14 @@
 
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
-use golem_common::model::auth::Role;
 use golem_common::model::Empty;
+use golem_common::model::auth::Role;
 use golem_common::tracing::TracingConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use uuid::uuid;
 use uuid::Uuid;
+use uuid::uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegistryServiceConfig {
