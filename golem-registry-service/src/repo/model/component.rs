@@ -304,6 +304,14 @@ pub struct ComponentRevisionRecord {
     //pub installed_plugins: Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>,
 }
 
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ComponentExtRevisionRecord {
+    pub name: String,
+    pub environment_id: Uuid,
+    #[sqlx(flatten)]
+    pub revision: ComponentRevisionRecord,
+}
+
 impl ComponentRevisionRecord {
     pub fn ensure_first(self) -> Self {
         Self {

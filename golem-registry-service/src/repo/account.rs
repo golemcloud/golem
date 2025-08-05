@@ -20,6 +20,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo;
+use golem_service_base::repo::ResultExt;
 use indoc::indoc;
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
@@ -104,7 +105,7 @@ impl<DBP: Pool> DbAccountRepo<DBP> {
 #[async_trait]
 impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn create(&self, account: AccountRecord) -> repo::Result<Option<AccountRecord>> {
-        let result = self
+        self
             .with_rw("create")
             .fetch_one_as(
                 sqlx::query_as(indoc! {r#"
@@ -118,13 +119,8 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                     .bind(account.name)
                     .bind(account.plan_id),
             )
-            .await;
-
-        match result {
-            Ok(account) => Ok(Some(account)),
-            Err(err) if err.is_unique_violation() => Ok(None),
-            Err(err) => Err(err),
-        }
+            .await
+            .none_on_unique_violation()
     }
 
     async fn get_by_id(&self, account_id: &Uuid) -> repo::Result<Option<AccountRecord>> {

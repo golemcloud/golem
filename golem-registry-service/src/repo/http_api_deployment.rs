@@ -26,7 +26,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo;
-use golem_service_base::repo::RepoError;
+use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
 use sqlx::Database;
 use tracing::{info_span, Instrument, Span};
@@ -332,38 +332,32 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         let subdomain = subdomain.map(|s| s.to_owned());
         let revision = revision.ensure_first();
 
-        let result: repo::Result<HttpApiDeploymentRevisionRecord> = self
-            .with_tx("create", |tx| {
-                async move {
-                    tx.execute(
-                        sqlx::query(indoc! { r#"
-                            INSERT INTO http_api_deployments
-                            (http_api_deployment_id, environment_id, host, subdomain,
-                                created_at, updated_at, deleted_at, modified_by,
-                                current_revision_id)
-                            VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, 0)
-                        "# })
-                        .bind(revision.http_api_deployment_id)
-                        .bind(environment_id)
-                        .bind(&host)
-                        .bind(&subdomain)
-                        .bind(&revision.audit.created_at)
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by),
-                    )
-                    .await?;
+        self.with_tx("create", |tx| {
+            async move {
+                tx.execute(
+                    sqlx::query(indoc! { r#"
+                        INSERT INTO http_api_deployments
+                        (http_api_deployment_id, environment_id, host, subdomain,
+                            created_at, updated_at, deleted_at, modified_by,
+                            current_revision_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, 0)
+                    "# })
+                    .bind(revision.http_api_deployment_id)
+                    .bind(environment_id)
+                    .bind(&host)
+                    .bind(&subdomain)
+                    .bind(&revision.audit.created_at)
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by),
+                )
+                .await?;
 
-                    Self::insert_revision(tx, revision).await
-                }
-                .boxed()
-            })
-            .await;
-
-        match result {
-            Ok(env) => Ok(Some(env)),
-            Err(err) if err.is_unique_violation() => Ok(None),
-            Err(err) => Err(err),
-        }
+                Self::insert_revision(tx, revision).await
+            }
+            .boxed()
+        })
+        .await
+        .none_on_unique_violation()
     }
 
     async fn update(
@@ -378,36 +372,30 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             return Ok(None);
         };
 
-        let result: repo::Result<HttpApiDeploymentRevisionRecord> = self
-            .with_tx("update", |tx| {
-                async move {
-                    let revision: HttpApiDeploymentRevisionRecord =
-                        Self::insert_revision(tx, revision.ensure_new(current_revision_id)).await?;
+        self.with_tx("update", |tx| {
+            async move {
+                let revision: HttpApiDeploymentRevisionRecord =
+                    Self::insert_revision(tx, revision.ensure_new(current_revision_id)).await?;
 
-                    tx.execute(
-                        sqlx::query(indoc! { r#"
-                            UPDATE http_api_deployments
-                            SET updated_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE http_api_deployment_id = $4
-                        "#})
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by)
-                        .bind(revision.revision_id)
-                        .bind(revision.http_api_deployment_id),
-                    )
-                    .await?;
+                tx.execute(
+                    sqlx::query(indoc! { r#"
+                        UPDATE http_api_deployments
+                        SET updated_at = $1, modified_by = $2, current_revision_id = $3
+                        WHERE http_api_deployment_id = $4
+                    "#})
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+                    .bind(revision.revision_id)
+                    .bind(revision.http_api_deployment_id),
+                )
+                .await?;
 
-                    Ok(revision)
-                }
-                .boxed()
-            })
-            .await;
-
-        match result {
-            Ok(env) => Ok(Some(env)),
-            Err(err) if err.is_unique_violation() => Ok(None),
-            Err(err) => Err(err),
-        }
+                Ok(revision)
+            }
+            .boxed()
+        })
+        .await
+        .none_on_unique_violation()
     }
 
     async fn delete(
@@ -426,43 +414,37 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             return Ok(false);
         };
 
-        let result: repo::Result<()> = self
-            .with_tx("delete", |tx| {
-                async move {
-                    let revision: HttpApiDeploymentRevisionRecord = Self::insert_revision(
-                        tx,
-                        HttpApiDeploymentRevisionRecord::deletion(
-                            user_account_id,
-                            http_api_deployment_id,
-                            current_revision_id,
-                        ),
-                    )
-                    .await?;
+        self.with_tx("delete", |tx| {
+            async move {
+                let revision: HttpApiDeploymentRevisionRecord = Self::insert_revision(
+                    tx,
+                    HttpApiDeploymentRevisionRecord::deletion(
+                        user_account_id,
+                        http_api_deployment_id,
+                        current_revision_id,
+                    ),
+                )
+                .await?;
 
-                    tx.execute(
-                        sqlx::query(indoc! { r#"
-                            UPDATE http_api_deployments
-                            SET deleted_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE http_api_deployment_id = $4
-                        "#})
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by)
-                        .bind(revision.revision_id)
-                        .bind(revision.http_api_deployment_id),
-                    )
-                    .await?;
+                tx.execute(
+                    sqlx::query(indoc! { r#"
+                        UPDATE http_api_deployments
+                        SET deleted_at = $1, modified_by = $2, current_revision_id = $3
+                        WHERE http_api_deployment_id = $4
+                    "#})
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+                    .bind(revision.revision_id)
+                    .bind(revision.http_api_deployment_id),
+                )
+                .await?;
 
-                    Ok(())
-                }
-                .boxed()
-            })
-            .await;
-
-        match result {
-            Ok(()) => Ok(true),
-            Err(err) if err.is_unique_violation() => Ok(false),
-            Err(err) => Err(err),
-        }
+                Ok(())
+            }
+            .boxed()
+        })
+        .await
+        .false_on_unique_violation()
     }
 
     async fn add_definition(

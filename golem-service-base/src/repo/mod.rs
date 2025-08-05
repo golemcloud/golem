@@ -59,3 +59,27 @@ impl SafeDisplay for RepoError {
 pub type Result<T> = std::result::Result<T, RepoError>;
 
 pub type BusinessResult<T, E> = std::result::Result<std::result::Result<T, E>, RepoError>;
+
+pub trait ResultExt<T> {
+    fn none_on_unique_violation(self) -> Result<Option<T>>;
+
+    fn false_on_unique_violation(self) -> Result<bool>;
+}
+
+impl<T> ResultExt<T> for Result<T> {
+    fn none_on_unique_violation(self) -> Result<Option<T>> {
+        match self {
+            Ok(value) => Ok(Some(value)),
+            Err(err) if err.is_unique_violation() => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn false_on_unique_violation(self) -> Result<bool> {
+        match self {
+            Ok(_) => Ok(true),
+            Err(err) if err.is_unique_violation() => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+}

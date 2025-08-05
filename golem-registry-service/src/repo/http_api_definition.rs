@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::repo::model::http_api_definition::{
-    HttpApiDefinitionRecord, HttpApiDefinitionRevisionIdentityRecord,
-    HttpApiDefinitionRevisionRecord,
+    HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRecord,
+    HttpApiDefinitionRevisionIdentityRecord, HttpApiDefinitionRevisionRecord,
 };
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
@@ -25,9 +25,9 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo;
-use golem_service_base::repo::RepoError;
+use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
-use sqlx::Database;
+use sqlx::{Database, Row};
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 
@@ -38,13 +38,13 @@ pub trait HttpApiDefinitionRepo: Send + Sync {
         environment_id: &Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>>;
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>>;
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn delete(
         &self,
@@ -56,34 +56,53 @@ pub trait HttpApiDefinitionRepo: Send + Sync {
     async fn get_staged_by_id(
         &self,
         http_api_definition_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>>;
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn get_staged_by_name(
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>>;
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn get_deployed_by_id(
         &self,
         http_api_definition_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>>;
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn get_deployed_by_name(
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>>;
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>>;
+
+    async fn get_by_id_and_revision(
+        &self,
+        http_api_definition_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>>;
+
+    async fn get_by_name_and_revision(
+        &self,
+        environment_id: &Uuid,
+        name: &str,
+        revision_id: i64,
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn list_staged(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDefinitionRevisionRecord>>;
+    ) -> repo::Result<Vec<HttpApiDefinitionExtRevisionRecord>>;
 
     async fn list_deployed(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDefinitionRevisionRecord>>;
+    ) -> repo::Result<Vec<HttpApiDefinitionExtRevisionRecord>>;
+
+    async fn list_by_deployment(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+    ) -> repo::Result<Vec<HttpApiDefinitionExtRevisionRecord>>;
 }
 
 pub struct LoggedHttpApiDefinitionRepo<Repo: HttpApiDefinitionRepo> {
@@ -101,12 +120,24 @@ impl<Repo: HttpApiDefinitionRepo> LoggedHttpApiDefinitionRepo<Repo> {
         info_span!(SPAN_NAME, environment_id = %environment_id, name)
     }
 
-    fn span_http_api_definition_id(http_api_definition_id: &Uuid) -> Span {
+    fn span_name_and_revision(environment_id: &Uuid, name: &str, revision_id: i64) -> Span {
+        info_span!(SPAN_NAME, environment_id = %environment_id, name, revision_id)
+    }
+
+    fn span_id(http_api_definition_id: &Uuid) -> Span {
         info_span!(SPAN_NAME, http_api_definition_id = %http_api_definition_id)
     }
 
-    fn span_environment_id(environment_id: &Uuid) -> Span {
+    fn span_id_and_revision(http_api_definition_id: &Uuid, revision_id: i64) -> Span {
+        info_span!(SPAN_NAME, http_api_definition_id = %http_api_definition_id, revision_id)
+    }
+
+    fn span_env(environment_id: &Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id)
+    }
+
+    fn span_env_and_deployment(environment_id: &Uuid, deployment_revision_id: i64) -> Span {
+        info_span!(SPAN_NAME, environment_id = %environment_id, deployment_revision_id)
     }
 }
 
@@ -117,7 +148,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
         environment_id: &Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.repo
             .create(environment_id, name, revision)
             .instrument(Self::span_name(environment_id, name))
@@ -128,8 +159,8 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
         &self,
         current_revision_id: i64,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
-        let span = Self::span_http_api_definition_id(&revision.http_api_definition_id);
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
+        let span = Self::span_id(&revision.http_api_definition_id);
         self.repo
             .update(current_revision_id, revision)
             .instrument(span)
@@ -144,17 +175,17 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
     ) -> repo::Result<bool> {
         self.repo
             .delete(user_account_id, http_api_definition_id, current_revision_id)
-            .instrument(Self::span_http_api_definition_id(http_api_definition_id))
+            .instrument(Self::span_id(http_api_definition_id))
             .await
     }
 
     async fn get_staged_by_id(
         &self,
         http_api_definition_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.repo
             .get_staged_by_id(http_api_definition_id)
-            .instrument(Self::span_http_api_definition_id(http_api_definition_id))
+            .instrument(Self::span_id(http_api_definition_id))
             .await
     }
 
@@ -162,7 +193,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.repo
             .get_staged_by_name(environment_id, name)
             .instrument(Self::span_name(environment_id, name))
@@ -172,10 +203,10 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
     async fn get_deployed_by_id(
         &self,
         http_api_definition_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.repo
             .get_deployed_by_id(http_api_definition_id)
-            .instrument(Self::span_http_api_definition_id(http_api_definition_id))
+            .instrument(Self::span_id(http_api_definition_id))
             .await
     }
 
@@ -183,30 +214,73 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.repo
             .get_deployed_by_name(environment_id, name)
             .instrument(Self::span_name(environment_id, name))
             .await
     }
 
+    async fn get_by_id_and_revision(
+        &self,
+        http_api_definition_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
+        self.repo
+            .get_by_id_and_revision(http_api_definition_id, revision_id)
+            .instrument(Self::span_id_and_revision(
+                http_api_definition_id,
+                revision_id,
+            ))
+            .await
+    }
+
+    async fn get_by_name_and_revision(
+        &self,
+        environment_id: &Uuid,
+        name: &str,
+        revision_id: i64,
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
+        self.repo
+            .get_by_name_and_revision(environment_id, name, revision_id)
+            .instrument(Self::span_name_and_revision(
+                environment_id,
+                name,
+                revision_id,
+            ))
+            .await
+    }
+
     async fn list_staged(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Vec<HttpApiDefinitionExtRevisionRecord>> {
         self.repo
             .list_staged(environment_id)
-            .instrument(Self::span_environment_id(environment_id))
+            .instrument(Self::span_env(environment_id))
             .await
     }
 
     async fn list_deployed(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Vec<HttpApiDefinitionExtRevisionRecord>> {
         self.repo
             .list_deployed(environment_id)
-            .instrument(Self::span_environment_id(environment_id))
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn list_by_deployment(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+    ) -> repo::Result<Vec<HttpApiDefinitionExtRevisionRecord>> {
+        self.list_by_deployment(environment_id, deployment_revision_id)
+            .instrument(Self::span_env_and_deployment(
+                environment_id,
+                deployment_revision_id,
+            ))
             .await
     }
 }
@@ -253,7 +327,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         environment_id: &Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
         let opt_deleted_revision: Option<HttpApiDefinitionRevisionIdentityRecord> =
             self.with_ro("create - get opt deleted").fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -279,44 +353,44 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         let name = name.to_owned();
         let revision = revision.ensure_first();
 
-        let result: repo::Result<HttpApiDefinitionRevisionRecord> = self
-            .with_tx("create", |tx| {
-                async move {
-                    tx.execute(
-                        sqlx::query(indoc! { r#"
-                            INSERT INTO http_api_definitions
-                            (http_api_definition_id, name, environment_id,
-                                created_at, updated_at, deleted_at, modified_by,
-                                current_revision_id)
-                            VALUES ($1, $2, $3, $4, $5, NULL, $6, 0)
-                        "# })
-                        .bind(revision.http_api_definition_id)
-                        .bind(&name)
-                        .bind(environment_id)
-                        .bind(&revision.audit.created_at)
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by),
-                    )
-                    .await?;
+        self.with_tx("create", |tx| {
+            async move {
+                tx.execute(
+                    sqlx::query(indoc! { r#"
+                        INSERT INTO http_api_definitions
+                        (http_api_definition_id, name, environment_id,
+                            created_at, updated_at, deleted_at, modified_by,
+                            current_revision_id)
+                        VALUES ($1, $2, $3, $4, $5, NULL, $6, 0)
+                    "# })
+                    .bind(revision.http_api_definition_id)
+                    .bind(&name)
+                    .bind(environment_id)
+                    .bind(&revision.audit.created_at)
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by),
+                )
+                .await?;
 
-                    Self::insert_revision(tx, revision).await
-                }
-                .boxed()
-            })
-            .await;
+                let revision = Self::insert_revision(tx, revision).await?;
 
-        match result {
-            Ok(env) => Ok(Some(env)),
-            Err(err) if err.is_unique_violation() => Ok(None),
-            Err(err) => Err(err),
-        }
+                Ok(HttpApiDefinitionExtRevisionRecord {
+                    name,
+                    environment_id,
+                    revision,
+                })
+            }
+            .boxed()
+        })
+        .await
+        .none_on_unique_violation()
     }
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
         let Some(_checked_http_api_definition) = self
             .check_current_revision(&revision.http_api_definition_id, current_revision_id)
             .await?
@@ -326,17 +400,18 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
 
         // TODO: if env requires check version name uniqueness (but comparing only to deployed ones!)
 
-        let result: repo::Result<HttpApiDefinitionRevisionRecord> = self
-            .with_tx("update", |tx| {
-                async move {
-                    let revision: HttpApiDefinitionRevisionRecord =
-                        Self::insert_revision(tx, revision.ensure_new(current_revision_id)).await?;
+        self.with_tx("update", |tx| {
+            async move {
+                let revision: HttpApiDefinitionRevisionRecord =
+                    Self::insert_revision(tx, revision.ensure_new(current_revision_id)).await?;
 
-                    tx.execute(
+                let ext = tx
+                    .fetch_one(
                         sqlx::query(indoc! { r#"
                             UPDATE http_api_definitions
                             SET updated_at = $1, modified_by = $2, current_revision_id = $3
                             WHERE http_api_definition_id = $4
+                            RETURNING name, environment_id
                         "#})
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by)
@@ -345,17 +420,16 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                     )
                     .await?;
 
-                    Ok(revision)
-                }
-                .boxed()
-            })
-            .await;
-
-        match result {
-            Ok(env) => Ok(Some(env)),
-            Err(err) if err.is_unique_violation() => Ok(None),
-            Err(err) => Err(err),
-        }
+                Ok(HttpApiDefinitionExtRevisionRecord {
+                    name: ext.try_get("name")?,
+                    environment_id: ext.try_get("environment_id")?,
+                    revision,
+                })
+            }
+            .boxed()
+        })
+        .await
+        .none_on_unique_violation()
     }
 
     async fn delete(
@@ -374,53 +448,48 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
             return Ok(false);
         };
 
-        let result: repo::Result<()> = self
-            .with_tx("delete", |tx| {
-                async move {
-                    let revision: HttpApiDefinitionRevisionRecord = Self::insert_revision(
-                        tx,
-                        HttpApiDefinitionRevisionRecord::deletion(
-                            user_account_id,
-                            http_api_definition_id,
-                            current_revision_id,
-                        ),
-                    )
-                    .await?;
+        self.with_tx("delete", |tx| {
+            async move {
+                let revision: HttpApiDefinitionRevisionRecord = Self::insert_revision(
+                    tx,
+                    HttpApiDefinitionRevisionRecord::deletion(
+                        user_account_id,
+                        http_api_definition_id,
+                        current_revision_id,
+                    ),
+                )
+                .await?;
 
-                    tx.execute(
-                        sqlx::query(indoc! { r#"
-                            UPDATE http_api_definitions
-                            SET deleted_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE http_api_definition_id = $4
-                        "#})
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by)
-                        .bind(revision.revision_id)
-                        .bind(revision.http_api_definition_id),
-                    )
-                    .await?;
+                tx.execute(
+                    sqlx::query(indoc! { r#"
+                        UPDATE http_api_definitions
+                        SET deleted_at = $1, modified_by = $2, current_revision_id = $3
+                        WHERE http_api_definition_id = $4
+                    "#})
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+                    .bind(revision.revision_id)
+                    .bind(revision.http_api_definition_id),
+                )
+                .await?;
 
-                    Ok(())
-                }
-                .boxed()
-            })
-            .await;
-
-        match result {
-            Ok(()) => Ok(true),
-            Err(err) if err.is_unique_violation() => Ok(false),
-            Err(err) => Err(err),
-        }
+                Ok(())
+            }
+            .boxed()
+        })
+        .await
+        .false_on_unique_violation()
     }
 
     async fn get_staged_by_id(
         &self,
         http_api_definition_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.with_ro("get_staged_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT dr.http_api_definition_id, dr.revision_id, dr.version, dr.hash,
+                    SELECT d.name, d.environment_id,
+                           dr.http_api_definition_id, dr.revision_id, dr.version, dr.hash,
                            dr.created_at, dr.created_by, dr.deleted, dr.definition
                     FROM http_api_definitions d
                     JOIN http_api_definition_revisions dr
@@ -437,11 +506,12 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.with_ro("get_staged_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT dr.http_api_definition_id, dr.revision_id, dr.version, dr.hash,
+                    SELECT d.name, d.environment_id,
+                           dr.http_api_definition_id, dr.revision_id, dr.version, dr.hash,
                            dr.created_at, dr.created_by, dr.deleted, dr.definition
                     FROM http_api_definitions d
                     JOIN http_api_definition_revisions dr
@@ -458,11 +528,12 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
     async fn get_deployed_by_id(
         &self,
         http_api_definition_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.with_ro("get_deployed_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
+                    SELECT had.name, had.environment_id,
+                           hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
                            hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition
                     FROM http_api_definitions had
                     JOIN http_api_definition_revisions hadr ON had.http_api_definition_id = hadr.http_api_definition_id
@@ -485,11 +556,12 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
         self.with_ro("get_deployed_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
+                    SELECT had.name, had.environment_id,
+                           hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
                            hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition
                     FROM http_api_definitions had
                     JOIN http_api_definition_revisions hadr ON had.http_api_definition_id = hadr.http_api_definition_id
@@ -509,14 +581,61 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
             .await
     }
 
+    async fn get_by_id_and_revision(
+        &self,
+        http_api_definition_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
+        self.with_ro("get_staged_by_id")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT d.name, d.environment_id,
+                           dr.http_api_definition_id, dr.revision_id, dr.version, dr.hash,
+                           dr.created_at, dr.created_by, dr.deleted, dr.definition
+                    FROM http_api_definitions d
+                    JOIN http_api_definition_revisions dr
+                        ON d.http_api_definition_id = dr.http_api_definition_id
+                    WHERE d.http_api_definition_id = $1 AND dr.revision_id = $2 AND d.deleted_at IS NULL
+                "#})
+                    .bind(http_api_definition_id)
+                    .bind(revision_id),
+            )
+            .await
+    }
+
+    async fn get_by_name_and_revision(
+        &self,
+        environment_id: &Uuid,
+        name: &str,
+        revision_id: i64,
+    ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
+        self.with_ro("get_deployed_by_name")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT had.name, had.environment_id,
+                           hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
+                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition
+                    FROM http_api_definitions had
+                    JOIN http_api_definition_revisions hadr
+                        ON had.http_api_definition_id = hadr.http_api_definition_id
+                    WHERE had.environment_id = $1 AND had.name = $2 AND hadr.revision_id = $3 AND hadr.deleted = FALSE
+                "#})
+                    .bind(environment_id)
+                    .bind(name)
+                    .bind(revision_id),
+            )
+            .await
+    }
+
     async fn list_staged(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Vec<HttpApiDefinitionExtRevisionRecord>> {
         self.with_ro("list_staged")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT dr.http_api_definition_id, dr.revision_id, dr.version, dr.hash,
+                    SELECT d.name, d.environment_id,
+                           dr.http_api_definition_id, dr.revision_id, dr.version, dr.hash,
                            dr.created_at, dr.created_by, dr.deleted, dr.definition
                     FROM http_api_definitions d
                     JOIN http_api_definition_revisions dr
@@ -532,11 +651,12 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
     async fn list_deployed(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDefinitionRevisionRecord>> {
+    ) -> repo::Result<Vec<HttpApiDefinitionExtRevisionRecord>> {
         self.with_ro("list_deployed")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
+                    SELECT had.name, had.environment_id,
+                           hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
                            hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition
                     FROM http_api_definitions had
                     JOIN http_api_definition_revisions hadr ON had.http_api_definition_id = hadr.http_api_definition_id
@@ -552,6 +672,31 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                     ORDER BY had.name
                 "#})
                 .bind(environment_id),
+            )
+            .await
+    }
+
+    async fn list_by_deployment(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+    ) -> repo::Result<Vec<HttpApiDefinitionExtRevisionRecord>> {
+        self.with_ro("list_deployed")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT had.name, had.environment_id,
+                           hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
+                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition
+                    FROM http_api_definitions had
+                    JOIN http_api_definition_revisions hadr ON had.http_api_definition_id = hadr.http_api_definition_id
+                    JOIN deployment_http_api_definition_revisions dhadr
+                        ON dhadr.http_api_definition_id = hadr.http_api_definition_id
+                            AND dhadr.http_api_definition_revision_id = hadr.revision_id
+                    WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2 AND hadr.deleted = FALSE
+                    ORDER BY had.name
+                "#})
+                    .bind(environment_id)
+                    .bind(deployment_revision_id),
             )
             .await
     }

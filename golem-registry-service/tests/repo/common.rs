@@ -473,7 +473,9 @@ pub async fn test_component_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(created_revision_0) = created_revision_0);
-    assert!(revision_0 == created_revision_0);
+    assert!(revision_0 == created_revision_0.revision);
+    assert!(created_revision_0.environment_id == env.revision.environment_id);
+    assert!(created_revision_0.name == component_name);
 
     let recreate = deps
         .component_repo
@@ -492,7 +494,9 @@ pub async fn test_component_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
-    assert!(revision_0 == get_revision_0);
+    assert!(revision_0 == get_revision_0.revision);
+    assert!(get_revision_0.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.name == component_name);
 
     let get_revision_0 = deps
         .component_repo
@@ -500,7 +504,9 @@ pub async fn test_component_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
-    assert!(revision_0 == get_revision_0);
+    assert!(revision_0 == get_revision_0.revision);
+    assert!(get_revision_0.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.name == component_name);
 
     let components = deps
         .component_repo
@@ -508,7 +514,9 @@ pub async fn test_component_stage(deps: &Deps) {
         .await
         .unwrap();
     assert!(components.len() == 1);
-    assert!(components[0] == revision_0);
+    assert!(components[0].revision == revision_0);
+    assert!(components[0].environment_id == env.revision.environment_id);
+    assert!(components[0].name == component_name);
 
     let revision_1 = ComponentRevisionRecord {
         revision_id: 1,
@@ -533,7 +541,9 @@ pub async fn test_component_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(created_revision_1) = created_revision_1);
-    assert!(revision_1 == created_revision_1);
+    assert!(revision_1 == created_revision_1.revision);
+    assert!(created_revision_1.environment_id == env.revision.environment_id);
+    assert!(created_revision_1.name == component_name);
 
     let recreated_revision_1 = deps
         .component_repo
@@ -548,7 +558,7 @@ pub async fn test_component_stage(deps: &Deps) {
         .await
         .unwrap();
     assert!(components.len() == 1);
-    assert!(components[0] == revision_1);
+    assert!(components[0].revision == revision_1);
 
     let other_component_id = new_repo_uuid();
     let other_component_name = "test-component-other";
@@ -568,7 +578,7 @@ pub async fn test_component_stage(deps: &Deps) {
         .await
         .unwrap()
         .unwrap();
-    assert!(created_other_component_0 == other_component_revision_0);
+    assert!(created_other_component_0.revision == other_component_revision_0);
 
     let components = deps
         .component_repo
@@ -577,8 +587,8 @@ pub async fn test_component_stage(deps: &Deps) {
         .unwrap();
 
     assert!(components.len() == 2);
-    assert!(components[0] == revision_1);
-    assert!(components[1] == other_component_revision_0);
+    assert!(components[0].revision == revision_1);
+    assert!(components[1].revision == other_component_revision_0);
 
     let delete_with_old_revision = deps
         .component_repo
@@ -601,7 +611,7 @@ pub async fn test_component_stage(deps: &Deps) {
         .unwrap();
 
     assert!(components.len() == 1);
-    assert!(components[0] == other_component_revision_0);
+    assert!(components[0].revision == other_component_revision_0);
 
     let revision_after_delete = ComponentRevisionRecord {
         component_id: new_repo_uuid(),
@@ -623,5 +633,5 @@ pub async fn test_component_stage(deps: &Deps) {
         ..revision_after_delete
     };
     let_assert!(Some(created_after_delete) = created_after_delete);
-    assert!(created_after_delete == revision_after_delete);
+    assert!(created_after_delete.revision == revision_after_delete);
 }

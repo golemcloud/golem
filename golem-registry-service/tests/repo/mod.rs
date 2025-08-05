@@ -23,7 +23,7 @@ use golem_registry_service::repo::model::account::AccountRecord;
 use golem_registry_service::repo::model::application::ApplicationRecord;
 use golem_registry_service::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use golem_registry_service::repo::model::environment::{
-    EnvironmentCurrentRevisionRecord, EnvironmentRevisionRecord,
+    EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
@@ -93,7 +93,7 @@ impl Deps {
             .unwrap()
     }
 
-    pub async fn create_env(&self) -> EnvironmentCurrentRevisionRecord {
+    pub async fn create_env(&self) -> EnvironmentExtRevisionRecord {
         let app = self.create_application().await;
         let env_name = format!("env-{}", new_repo_uuid());
         self.environment_repo

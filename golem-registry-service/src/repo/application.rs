@@ -23,7 +23,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo;
-use golem_service_base::repo::RepoError;
+use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
 use sqlx::Database;
 use tracing::{info_span, Instrument, Span};
@@ -56,7 +56,7 @@ pub trait ApplicationRepo: Send + Sync {
         name: &str,
     ) -> repo::Result<ApplicationRecord>;
 
-    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<()>;
+    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<bool>;
 }
 
 pub struct LoggedApplicationRepo<Repo: ApplicationRepo> {
@@ -135,7 +135,7 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
             .await
     }
 
-    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<()> {
+    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<bool> {
         self.repo
             .delete(user_account_id, application_id)
             .instrument(Self::span_app_id(application_id))
@@ -253,7 +253,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
             return Ok(app);
         }
 
-        let result: repo::Result<ApplicationRecord> = {
+        let result = {
             let user_id = *user_account_id;
             let owner_id = *owner_account_id;
             let name = name.to_owned();
@@ -284,14 +284,10 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
                 Ok(app)
             }.boxed()).await
-        };
+        }.none_on_unique_violation()?;
 
-        let result = match result {
-            Err(err) if err.is_unique_violation() => None,
-            result => Some(result),
-        };
         if let Some(result) = result {
-            return result;
+            return Ok(result);
         }
 
         match self.get_by_name(owner_account_id, name).await? {
@@ -302,10 +298,11 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         }
     }
 
-    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<()> {
+    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<bool> {
         let application_id = *application_id;
         let user_account_id = *user_account_id;
-        let result = self.with_tx("delete", |tx| async move {
+
+        self.with_tx("delete", |tx| async move {
             let latest_revision: Option<ApplicationRevisionRecord> =
                 tx.fetch_optional_as(
                     sqlx::query_as(indoc! {r#"
@@ -348,13 +345,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
             ).await?;
 
             Ok(())
-        }.boxed()).await;
-
-        match result {
-            Ok(()) => Ok(()),
-            Err(err) if err.is_unique_violation() => Ok(()),
-            Err(err) => Err(err),
-        }
+        }.boxed()).await.false_on_unique_violation()
     }
 }
 

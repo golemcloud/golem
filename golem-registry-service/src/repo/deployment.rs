@@ -277,7 +277,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
         let actual_current_staged_revision_id: Option<i64> =
             match actual_current_staged_revision_id_row {
-                Some(row) => Some(row.try_get(0)?),
+                Some(row) => Some(row.try_get("revision_id")?),
                 None => None,
             };
 
@@ -342,7 +342,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .to_business_error_on_unique_violation(|| DeployError::DeploymentConcurrentRevisionCreation)
+        .to_business_result_on_unique_violation(|| {
+            DeployError::DeploymentConcurrentRevisionCreation
+        })
     }
 }
 
@@ -611,7 +613,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .await?;
             deployment.http_api_definitions = definitions
                 .iter()
-                .map(|row| row.try_get(0))
+                .map(|row| row.try_get("http_definition_id"))
                 .collect::<Result<_, _>>()?;
         }
 
@@ -854,7 +856,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .await?;
             deployment.http_api_definitions = definitions
                 .iter()
-                .map(|row| row.try_get(0))
+                .map(|row| row.try_get("http_definition_id"))
                 .collect::<Result<_, _>>()?;
         }
 
