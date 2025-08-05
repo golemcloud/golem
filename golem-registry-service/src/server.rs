@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common_next::config::DbConfig;
-use golem_common_next::tracing::init_tracing_with_default_env_filter;
+use golem_common::config::DbConfig;
+use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_registry_service::bootstrap::Services;
 use golem_registry_service::config::{make_config_loader, RegistryServiceConfig};
 use golem_registry_service::metrics;
-use golem_service_base_next::db;
-use golem_service_base_next::migration::{Migrations, MigrationsDir};
+use golem_service_base::db;
+use golem_service_base::migration::{Migrations, MigrationsDir};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use prometheus::Registry;
