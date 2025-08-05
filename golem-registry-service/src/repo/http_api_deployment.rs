@@ -14,7 +14,8 @@
 
 use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
 use crate::repo::model::http_api_deployment::{
-    HttpApiDeploymentDefinitionRecord, HttpApiDeploymentRecord, HttpApiDeploymentRevisionRecord,
+    HttpApiDeploymentDefinitionRecord, HttpApiDeploymentRecord,
+    HttpApiDeploymentRevisionIdentityRecord, HttpApiDeploymentRevisionRecord,
 };
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
@@ -288,6 +289,44 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         subdomain: Option<&str>,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> repo::Result<Option<HttpApiDeploymentRevisionRecord>> {
+        let opt_deleted_revision: Option<HttpApiDeploymentRevisionIdentityRecord> =
+            self.with_ro("create - get opt deleted").fetch_optional_as(
+                match subdomain {
+                    Some(subdomain) => {
+                        sqlx::query_as(indoc! { r#"
+                            SELECT h.http_api_deployment_id, h.host, h.subdomain, hr.revision_id, hr.hash
+                            FROM http_api_deployments h
+                            JOIN http_api_deployment_revisions hr
+                                ON h.http_api_deployment_id = hr.http_api_deployment_id
+                                    AND h.current_revision_id = hr.revision_id
+                            WHERE environment_id = $1 AND host = $2 AND subdomain = $3 AND deleted_at IS NOT NULL
+                        "#})
+                            .bind(environment_id)
+                            .bind(host)
+                            .bind(subdomain)
+                    }
+                    None =>
+                        sqlx::query_as(indoc! { r#"
+                            SELECT h.http_api_deployment_id, h.host, h.subdomain, hr.revision_id, hr.hash
+                            FROM http_api_deployments h
+                            JOIN http_api_deployment_revisions hr
+                                ON h.http_api_deployment_id = hr.http_api_deployment_id
+                                    AND h.current_revision_id = hr.revision_id
+                            WHERE environment_id = $1 AND host = $2 AND subdomain IS NULL AND deleted_at IS NOT NULL
+                        "#})
+                        .bind(environment_id)
+                        .bind(host)
+                }
+            ).await?;
+
+        if let Some(deleted_revision) = opt_deleted_revision {
+            let revision = HttpApiDeploymentRevisionRecord {
+                http_api_deployment_id: revision.http_api_deployment_id,
+                ..revision
+            };
+            return self.update(deleted_revision.revision_id, revision).await;
+        }
+
         let environment_id = *environment_id;
         let host = host.to_owned();
         let subdomain = subdomain.map(|s| s.to_owned());

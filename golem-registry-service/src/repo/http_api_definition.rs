@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::repo::model::http_api_definition::{
-    HttpApiDefinitionRecord, HttpApiDefinitionRevisionRecord,
+    HttpApiDefinitionRecord, HttpApiDefinitionRevisionIdentityRecord,
+    HttpApiDefinitionRevisionRecord,
 };
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
@@ -253,6 +254,27 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
     ) -> repo::Result<Option<HttpApiDefinitionRevisionRecord>> {
+        let opt_deleted_revision: Option<HttpApiDefinitionRevisionIdentityRecord> =
+            self.with_ro("create - get opt deleted").fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT h.http_api_definition_id, h.name, hr.revision_id, hr.version, hr.hash
+                    FROM http_api_definitions h
+                    JOIN http_api_definition_revisions hr
+                        ON h.http_api_definition_id = hr.http_api_definition_id AND h.current_revision_id = hr.revision_id
+                    WHERE h.environment_id = $1 AND h.name = $2 AND h.deleted_at IS NOT NULL
+                "#})
+                    .bind(environment_id)
+                    .bind(name)
+            ).await?;
+
+        if let Some(deleted_revision) = opt_deleted_revision {
+            let revision = HttpApiDefinitionRevisionRecord {
+                http_api_definition_id: deleted_revision.http_api_definition_id,
+                ..revision
+            };
+            return self.update(deleted_revision.revision_id, revision).await;
+        }
+
         let environment_id = *environment_id;
         let name = name.to_owned();
         let revision = revision.ensure_first();
@@ -570,7 +592,7 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
                            created_at, updated_at, deleted_at, modified_by,
                            current_revision_id
                     FROM http_api_definitions
-                    WHERE http_api_definition_id = $1 AND current_revision_id = $2 and deleted_at IS NULL
+                    WHERE http_api_definition_id = $1 AND current_revision_id = $2
                 "#})
                 .bind(http_api_definition_id)
                 .bind(current_revision_id),
