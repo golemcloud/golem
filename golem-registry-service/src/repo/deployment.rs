@@ -21,10 +21,8 @@ use crate::repo::model::deployment::{
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
-use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use futures::future::BoxFuture;
 use futures::FutureExt;
 use golem_common::model::diff::Hashable;
 use golem_service_base::db::postgres::PostgresPool;
@@ -38,8 +36,10 @@ use indoc::indoc;
 use sqlx::{Database, Row};
 use std::collections::HashSet;
 use std::fmt::Display;
-use tracing::{info_span, Instrument, Span};
+use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
+use super::model::BindFields;
+use futures::future::BoxFuture;
 
 #[async_trait]
 pub trait DeploymentRepo: Send + Sync {
