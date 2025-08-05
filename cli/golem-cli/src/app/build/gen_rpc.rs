@@ -17,7 +17,7 @@ use crate::app::build::{delete_path_logged, env_var_flag, is_up_to_date};
 use crate::app::context::ApplicationContext;
 use crate::fs;
 use crate::fs::PathExtra;
-use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
+use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app::{
     AppComponentName, BinaryComponentSource, DependencyType, DependentAppComponent,
 };
@@ -81,167 +81,181 @@ async fn create_generated_base_wit(
     let component_source_wit = ctx
         .application
         .component_source_wit(component_name, ctx.build_profile());
-    let inputs = {
-        let mut inputs = ctx.application.wit_deps();
-        inputs.push(component_source_wit.clone());
-        inputs
-    };
-    let component_generated_base_wit = ctx.application.component_generated_base_wit(component_name);
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        ComponentGeneratorMarkerHash {
-            component_name,
-            generator_kind: "base_wit",
-        },
-    )?;
 
-    if is_up_to_date(
-        ctx.config.skip_up_to_date_checks
-            || !task_result_marker.is_up_to_date()
-            || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
-        || inputs,
-        || [component_generated_base_wit.clone()],
-    ) {
-        log_skipping_up_to_date(format!(
-            "creating generated base wit directory for {}",
-            component_name.as_str().log_color_highlight()
-        ));
-        Ok(false)
-    } else {
-        log_action(
-            "Creating",
-            format!(
-                "generated base wit directory for {}",
-                component_name.as_str().log_color_highlight(),
-            ),
-        );
+    if component_source_wit.is_dir() {
+        let inputs = {
+            let mut inputs = ctx.application.wit_deps();
+            inputs.push(component_source_wit.clone());
+            inputs
+        };
+        let component_generated_base_wit =
+            ctx.application.component_generated_base_wit(component_name);
+        let task_result_marker = TaskResultMarker::new(
+            &ctx.application.task_result_marker_dir(),
+            ComponentGeneratorMarkerHash {
+                component_name,
+                generator_kind: "base_wit",
+            },
+        )?;
 
-        task_result_marker.result(
-            (async {
-                let _indent = LogIndent::new();
+        if is_up_to_date(
+            ctx.config.skip_up_to_date_checks
+                || !task_result_marker.is_up_to_date()
+                || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
+            || inputs,
+            || [component_generated_base_wit.clone()],
+        ) {
+            log_skipping_up_to_date(format!(
+                "creating generated base wit directory for {}",
+                component_name.as_str().log_color_highlight()
+            ));
+            Ok(false)
+        } else {
+            log_action(
+                "Creating",
+                format!(
+                    "generated base wit directory for {}",
+                    component_name.as_str().log_color_highlight(),
+                ),
+            );
 
-                delete_path_logged(
-                    "generated base wit directory",
-                    &component_generated_base_wit,
-                )?;
-                copy_wit_sources(&component_source_wit, &component_generated_base_wit)?;
+            task_result_marker.result(
+                (async {
+                    let _indent = LogIndent::new();
 
-                let mut missing_package_deps = ctx
-                    .wit
-                    .missing_generic_source_package_deps(component_name)?;
-                let mut packages_from_lib_deps = BTreeSet::new();
+                    delete_path_logged(
+                        "generated base wit directory",
+                        &component_generated_base_wit,
+                    )?;
+                    copy_wit_sources(&component_source_wit, &component_generated_base_wit)?;
 
-                {
-                    let library_dependencies = ctx
-                        .application
-                        .component_dependencies(component_name)
-                        .iter()
-                        .filter(|dep| dep.dep_type == DependencyType::Wasm)
-                        .collect::<BTreeSet<_>>();
+                    let mut missing_package_deps = ctx
+                        .wit
+                        .missing_generic_source_package_deps(component_name)?;
+                    let mut packages_from_lib_deps = BTreeSet::new();
 
-                    if !library_dependencies.is_empty() {
-                        log_action(
-                            "Extracting",
-                            format!(
-                                "WIT interface of library dependencies to {}",
-                                component_generated_base_wit.log_color_highlight()
-                            ),
-                        );
-                        let _indent = LogIndent::new();
-                        for library_dep in &library_dependencies {
-                            // TODO: adding WIT packages from AppComponent wasm dependencies is not supported yet (we don't have a compiled WASM for them at this point)
-                            if !matches!(
-                                library_dep.source,
-                                BinaryComponentSource::AppComponent { .. }
-                            ) {
-                                let path = ctx.resolve_binary_component_source(library_dep).await?;
-                                let result = extract_wasm_interface_as_wit_dep(
-                                    ctx.common_wit_deps()?,
-                                    &library_dep.source.to_string(),
-                                    &path,
+                    {
+                        let library_dependencies = ctx
+                            .application
+                            .component_dependencies(component_name)
+                            .iter()
+                            .filter(|dep| dep.dep_type == DependencyType::Wasm)
+                            .collect::<BTreeSet<_>>();
+
+                        if !library_dependencies.is_empty() {
+                            log_action(
+                                "Extracting",
+                                format!(
+                                    "WIT interface of library dependencies to {}",
+                                    component_generated_base_wit.log_color_highlight()
+                                ),
+                            );
+                            let _indent = LogIndent::new();
+                            for library_dep in &library_dependencies {
+                                // TODO: adding WIT packages from AppComponent wasm dependencies is not supported yet (we don't have a compiled WASM for them at this point)
+                                if !matches!(
+                                    library_dep.source,
+                                    BinaryComponentSource::AppComponent { .. }
+                                ) {
+                                    let path = ctx.resolve_binary_component_source(library_dep).await?;
+                                    let result = extract_wasm_interface_as_wit_dep(
+                                        ctx.common_wit_deps()?,
+                                        &library_dep.source.to_string(),
+                                        &path,
+                                        &component_generated_base_wit,
+                                    )
+                                        .with_context(|| {
+                                            format!(
+                                                "Failed to extract WIT interface of library dependency {}",
+                                                library_dep.source.to_string().log_color_highlight()
+                                            )
+                                        })?;
+                                    packages_from_lib_deps.extend(result.new_packages);
+                                    missing_package_deps.extend(result.required_common_packages);
+                                }
+                            }
+                        }
+                    }
+
+                    {
+                        missing_package_deps.retain(|name| !packages_from_lib_deps.contains(name));
+
+                        if !missing_package_deps.is_empty() {
+                            log_action("Adding", "package deps");
+                            let _indent = LogIndent::new();
+
+                            ctx.common_wit_deps()
+                                .with_context(|| {
+                                    format!(
+                                        "Failed to add package dependencies for {}, missing packages: {}",
+                                        component_name.as_str().log_color_highlight(),
+                                        missing_package_deps
+                                            .iter()
+                                            .map(|s| s.to_string().log_color_highlight())
+                                            .join(", ")
+                                    )
+                                })?
+                                .add_packages_with_transitive_deps_to_wit_dir(
+                                    &missing_package_deps,
                                     &component_generated_base_wit,
                                 )
                                 .with_context(|| {
                                     format!(
-                                        "Failed to extract WIT interface of library dependency {}",
-                                        library_dep.source.to_string().log_color_highlight()
+                                        "Failed to add package dependencies for {} ({})",
+                                        component_name.as_str().log_color_highlight(),
+                                        component_source_wit.log_color_highlight()
                                     )
                                 })?;
-                                packages_from_lib_deps.extend(result.new_packages);
-                                missing_package_deps.extend(result.required_common_packages);
+                        }
+                    }
+
+                    {
+                        let component_exports_package_deps =
+                            ctx.wit.component_exports_package_deps(component_name)?;
+                        if !component_exports_package_deps.is_empty() {
+                            log_action("Adding", "component exports package dependencies");
+                            let _indent = LogIndent::new();
+
+                            for (dep_exports_package_name, dep_component_name) in
+                                &component_exports_package_deps
+                            {
+                                ctx.component_base_output_wit_deps(dep_component_name)?
+                                    .add_packages_with_transitive_deps_to_wit_dir(
+                                        &[dep_exports_package_name.clone()],
+                                        &component_generated_base_wit,
+                                    )?;
                             }
                         }
                     }
-                }
 
-                {
-                    missing_package_deps.retain(|name| !packages_from_lib_deps.contains(name));
-
-                    if !missing_package_deps.is_empty() {
-                        log_action("Adding", "package deps");
+                    {
+                        log_action(
+                            "Extracting",
+                            format!(
+                                "exports package from {} to {}",
+                                component_source_wit.log_color_highlight(),
+                                component_generated_base_wit.log_color_highlight()
+                            ),
+                        );
                         let _indent = LogIndent::new();
-
-                        ctx.common_wit_deps()
-                            .with_context(|| {
-                                format!(
-                                "Failed to add package dependencies for {}, missing packages: {}",
-                                component_name.as_str().log_color_highlight(),
-                                missing_package_deps
-                                    .iter()
-                                    .map(|s| s.to_string().log_color_highlight())
-                                    .join(", ")
-                            )
-                            })?
-                            .add_packages_with_transitive_deps_to_wit_dir(
-                                &missing_package_deps,
-                                &component_generated_base_wit,
-                            )
-                            .with_context(|| {
-                                format!(
-                                    "Failed to add package dependencies for {} ({})",
-                                    component_name.as_str().log_color_highlight(),
-                                    component_source_wit.log_color_highlight()
-                                )
-                            })?;
+                        extract_exports_as_wit_dep(&component_generated_base_wit)?
                     }
-                }
 
-                {
-                    let component_exports_package_deps =
-                        ctx.wit.component_exports_package_deps(component_name)?;
-                    if !component_exports_package_deps.is_empty() {
-                        log_action("Adding", "component exports package dependencies");
-                        let _indent = LogIndent::new();
-
-                        for (dep_exports_package_name, dep_component_name) in
-                            &component_exports_package_deps
-                        {
-                            ctx.component_base_output_wit_deps(dep_component_name)?
-                                .add_packages_with_transitive_deps_to_wit_dir(
-                                    &[dep_exports_package_name.clone()],
-                                    &component_generated_base_wit,
-                                )?;
-                        }
-                    }
-                }
-
-                {
-                    log_action(
-                        "Extracting",
-                        format!(
-                            "exports package from {} to {}",
-                            component_source_wit.log_color_highlight(),
-                            component_generated_base_wit.log_color_highlight()
-                        ),
-                    );
-                    let _indent = LogIndent::new();
-                    extract_exports_as_wit_dep(&component_generated_base_wit)?
-                }
-
-                Ok(true)
-            })
-            .await,
-        )
+                    Ok(true)
+                })
+                    .await,
+            )
+        }
+    } else {
+        log_warn_action(
+            "Skipping",
+            format!(
+                "creating generated base wit directory for {}, {}",
+                component_name.as_str().log_color_highlight(),
+                "source WIT points to a WASM component".log_color_ok_highlight()
+            ),
+        );
+        Ok(false)
     }
 }
 
@@ -250,45 +264,57 @@ fn create_generated_wit(
     component_name: &AppComponentName,
 ) -> Result<bool, Error> {
     let component_generated_base_wit = ctx.application.component_generated_base_wit(component_name);
-    let component_generated_wit = ctx
-        .application
-        .component_generated_wit(component_name, ctx.build_profile());
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        ComponentGeneratorMarkerHash {
-            component_name,
-            generator_kind: "wit",
-        },
-    )?;
+    if component_generated_base_wit.exists() {
+        let component_generated_wit = ctx
+            .application
+            .component_generated_wit(component_name, ctx.build_profile());
+        let task_result_marker = TaskResultMarker::new(
+            &ctx.application.task_result_marker_dir(),
+            ComponentGeneratorMarkerHash {
+                component_name,
+                generator_kind: "wit",
+            },
+        )?;
 
-    if is_up_to_date(
-        ctx.config.skip_up_to_date_checks
-            || !task_result_marker.is_up_to_date()
-            || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
-        || [component_generated_base_wit.clone()],
-        || [component_generated_wit.clone()],
-    ) {
-        log_skipping_up_to_date(format!(
-            "creating generated wit directory for {}",
-            component_name.as_str().log_color_highlight()
-        ));
-        Ok(false)
+        if is_up_to_date(
+            ctx.config.skip_up_to_date_checks
+                || !task_result_marker.is_up_to_date()
+                || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
+            || [component_generated_base_wit.clone()],
+            || [component_generated_wit.clone()],
+        ) {
+            log_skipping_up_to_date(format!(
+                "creating generated wit directory for {}",
+                component_name.as_str().log_color_highlight()
+            ));
+            Ok(false)
+        } else {
+            log_action(
+                "Creating",
+                format!(
+                    "generated wit directory for {}",
+                    component_name.as_str().log_color_highlight(),
+                ),
+            );
+
+            task_result_marker.result((|| {
+                let _indent = LogIndent::new();
+                delete_path_logged("generated wit directory", &component_generated_wit)?;
+                copy_wit_sources(&component_generated_base_wit, &component_generated_wit)?;
+                add_client_deps(ctx, component_name)?;
+                Ok(true)
+            })())
+        }
     } else {
-        log_action(
-            "Creating",
+        log_warn_action(
+            "Skipping",
             format!(
-                "generated wit directory for {}",
+                "creating generated wit directory for {}, {}",
                 component_name.as_str().log_color_highlight(),
+                "no base WIT directory".log_color_ok_highlight()
             ),
         );
-
-        task_result_marker.result((|| {
-            let _indent = LogIndent::new();
-            delete_path_logged("generated wit directory", &component_generated_wit)?;
-            copy_wit_sources(&component_generated_base_wit, &component_generated_wit)?;
-            add_client_deps(ctx, component_name)?;
-            Ok(true)
-        })())
+        Ok(false)
     }
 }
 

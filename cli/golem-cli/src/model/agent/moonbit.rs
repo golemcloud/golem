@@ -17,7 +17,7 @@ use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use golem_client::model::AnalysedType;
 use golem_common::model::agent::{DataSchema, ElementSchema, NamedElementSchemas};
-use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use moonbit_component_generator::{MoonBitComponent, MoonBitPackage, Warning, WarningControl};
 use std::fmt::Write;
 use std::path::Path;
@@ -35,8 +35,8 @@ pub fn generate_moonbit_wrapper(
         .context("Defining bindgen packages")?;
 
     let moonbit_root_package = component.moonbit_root_package()?;
-    let pkg_namespace = component.root_pkg_namespace()?;
-    let pkg_name = component.root_pkg_name()?;
+    let pkg_namespace = component.root_pkg_namespace()?.to_snake_case();
+    let pkg_name = component.root_pkg_name()?.to_snake_case();
 
     // Adding the builder and extractor packages
     add_builder_package(&mut component, &moonbit_root_package)?;
@@ -465,7 +465,7 @@ fn generate_agent_stub(ctx: AgentWrapperGeneratorContext) -> anyhow::Result<Stri
 
         for method in &agent.methods {
             let original_method_name = &method.name;
-            let method_name = method.name.to_lower_camel_case();
+            let method_name = method.name.to_snake_case();
 
             let moonbit_param_defs =
                 to_moonbit_parameter_list(&ctx, &method.input_schema, original_method_name, true)?;

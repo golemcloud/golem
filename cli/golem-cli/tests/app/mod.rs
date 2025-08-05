@@ -221,7 +221,7 @@ fn basic_dependencies_build(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust", "ts"]);
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust", "go"]);
     assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -229,10 +229,7 @@ fn basic_dependencies_build(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"]);
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "app:ts"]);
-    assert!(outputs.success());
-
-    let outputs = ctx.cli([cmd::APP, "ts-npm-install"]);
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "go", "app:go"]);
     assert!(outputs.success());
 
     fs::append_str(
@@ -246,20 +243,20 @@ fn basic_dependencies_build(_tracing: &Tracing) {
               app:rust:
               - target: app:rust
                 type: wasm-rpc
-              - target: app:ts
+              - target: app:go
                 type: wasm-rpc
         "},
     )
     .unwrap();
 
     fs::append_str(
-        ctx.cwd_path_join(Path::new("components-ts").join("app-ts").join("golem.yaml")),
+        ctx.cwd_path_join(Path::new("components-go").join("app-go").join("golem.yaml")),
         indoc! {"
             dependencies:
-              app:ts:
+              app:go:
               - target: app:rust
                 type: wasm-rpc
-              - target: app:ts
+              - target: app:go
                 type: wasm-rpc
         "},
     )
@@ -268,7 +265,7 @@ fn basic_dependencies_build(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::APP]);
     assert!(!outputs.success());
     check!(outputs.stderr_count_lines_containing("- app:rust (wasm-rpc)") == 2);
-    check!(outputs.stderr_count_lines_containing("- app:ts (wasm-rpc)") == 2);
+    check!(outputs.stderr_count_lines_containing("- app:go (wasm-rpc)") == 2);
 
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
     assert!(outputs.success());

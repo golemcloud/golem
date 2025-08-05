@@ -11,6 +11,7 @@ use indoc::formatdoc;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use wit_parser::decoding::DecodedWasm;
 use wit_parser::{
     InterfaceId, Package, PackageId, PackageName, PackageSourceMap, Resolve,
     UnresolvedPackageGroup, WorldItem,
@@ -29,8 +30,17 @@ pub struct ResolvedWitDir {
 }
 
 impl ResolvedWitDir {
-    pub fn new(path: &Path) -> anyhow::Result<ResolvedWitDir> {
+    pub fn new(path: &Path) -> anyhow::Result<Self> {
         resolve_wit_dir(path)
+    }
+
+    pub fn from_wasm(path: &Path, wasm: &DecodedWasm) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            resolve: wasm.resolve().clone(),
+            package_id: wasm.package(),
+            package_sources: IndexMap::new(),
+        }
     }
 
     pub fn package(&self, package_id: PackageId) -> anyhow::Result<&Package> {
@@ -268,18 +278,12 @@ fn collect_package_sources(
 
 pub struct ResolvedWitComponent {
     main_package_name: PackageName,
-    resolved_generated_wit_dir: Option<ResolvedWitDir>,
+    resolved_wit_dir: Option<ResolvedWitDir>,
     app_component_deps: HashSet<AppComponentName>,
     source_referenced_package_deps: HashSet<PackageName>,
     source_contained_package_deps: HashSet<PackageName>,
     source_component_deps: BTreeSet<AppComponentName>, // NOTE: BTree for making dep sorting deterministic
     generated_component_deps: Option<HashSet<AppComponentName>>,
-}
-
-impl ResolvedWitComponent {
-    pub fn generated_wit_dir(&self) -> Option<&ResolvedWitDir> {
-        self.resolved_generated_wit_dir.as_ref()
-    }
 }
 
 #[derive(Default)]
@@ -427,76 +431,150 @@ impl ResolvedWitApplication {
             let source_wit_dir = app.component_source_wit(component_name, profile);
             let generated_wit_dir = app.component_generated_wit(component_name, profile);
 
-            log_action(
-                "Resolving",
-                format!(
-                    "component wit dirs for {} ({}, {})",
-                    component_name.as_str().log_color_highlight(),
-                    source_wit_dir.log_color_highlight(),
-                    generated_wit_dir.log_color_highlight(),
-                ),
-            );
+            let app_component_deps = app
+                .component_dependencies(component_name)
+                .iter()
+                .filter(|&dep| dep.dep_type.is_wasm_rpc())
+                .filter_map(|dep| dep.as_dependent_app_component())
+                .map(|dep| dep.name)
+                .collect();
 
-            let resolved_component = (|| -> anyhow::Result<ResolvedWitComponent> {
-                let unresolved_source_package_group =
-                    UnresolvedPackageGroup::parse_dir(&source_wit_dir).with_context(|| {
+            let resolved_component = if source_wit_dir.is_dir() {
+                log_action(
+                    "Resolving",
+                    format!(
+                        "component wit dirs for {} ({}, {})",
+                        component_name.as_str().log_color_highlight(),
+                        source_wit_dir.log_color_highlight(),
+                        generated_wit_dir.log_color_highlight(),
+                    ),
+                );
+
+                (|| -> anyhow::Result<ResolvedWitComponent> {
+                    let unresolved_source_package_group =
+                        UnresolvedPackageGroup::parse_dir(&source_wit_dir).with_context(|| {
+                            anyhow!(
+                                "Failed to parse component {} main package in source wit dir {}",
+                                component_name.as_str().log_color_error_highlight(),
+                                source_wit_dir.log_color_highlight(),
+                            )
+                        })?;
+
+                    let source_referenced_package_deps = unresolved_source_package_group
+                        .main
+                        .foreign_deps
+                        .keys()
+                        .cloned()
+                        .collect();
+
+                    let source_contained_package_deps = {
+                        let deps_path = source_wit_dir.join("deps");
+                        if !deps_path.exists() {
+                            HashSet::new()
+                        } else {
+                            parse_wit_deps_dir(&deps_path)?
+                                .into_iter()
+                                .map(|package_group| package_group.main.name)
+                                .collect::<HashSet<_>>()
+                        }
+                    };
+
+                    let main_package_name = unresolved_source_package_group.main.name.clone();
+
+                    let resolved_generated_wit_dir = ResolvedWitDir::new(&generated_wit_dir).ok();
+                    let generated_has_same_main_package_name = resolved_generated_wit_dir
+                        .as_ref()
+                        .map(|wit| wit.main_package())
+                        .transpose()?
+                        .map(|generated_main_package| {
+                            main_package_name == generated_main_package.name
+                        })
+                        .unwrap_or_default();
+                    let resolved_generated_wit_dir = generated_has_same_main_package_name
+                        .then_some(resolved_generated_wit_dir)
+                        .flatten();
+
+                    Ok(ResolvedWitComponent {
+                        main_package_name,
+                        resolved_wit_dir: resolved_generated_wit_dir,
+                        app_component_deps,
+                        source_referenced_package_deps,
+                        source_contained_package_deps,
+                        source_component_deps: Default::default(),
+                        generated_component_deps: Default::default(),
+                    })
+                })()
+            } else {
+                log_action(
+                    "Resolving",
+                    format!(
+                        "component interface using base WASM for {} ({}, {})",
+                        component_name.as_str().log_color_highlight(),
+                        source_wit_dir.log_color_highlight(),
+                        generated_wit_dir.log_color_highlight(),
+                    ),
+                );
+
+                (|| -> anyhow::Result<ResolvedWitComponent> {
+                    let source_wasm = std::fs::read(&source_wit_dir)
+                        .with_context(|| anyhow!("Failed to read the source WIT path as a file"))?;
+                    let wasm = wit_parser::decoding::decode(&source_wasm).with_context(|| {
                         anyhow!(
-                            "Failed to parse component {} main package in source wit dir {}",
-                            component_name.as_str().log_color_error_highlight(),
-                            source_wit_dir.log_color_highlight(),
+                            "Failed to decode the source WIT path as a WASM component: {}",
+                            source_wit_dir.log_color_highlight()
                         )
                     })?;
 
-                let source_referenced_package_deps = unresolved_source_package_group
-                    .main
-                    .foreign_deps
-                    .keys()
-                    .cloned()
-                    .collect();
+                    // The WASM has no root package name (always root:component with world root) so
+                    // we use the app component name as a main package name
+                    let main_package_name = component_name.to_package_name()?;
 
-                let source_contained_package_deps = {
-                    let deps_path = source_wit_dir.join("deps");
-                    if !deps_path.exists() {
-                        HashSet::new()
-                    } else {
-                        parse_wit_deps_dir(&deps_path)?
-                            .into_iter()
-                            .map(|package_group| package_group.main.name)
-                            .collect::<HashSet<_>>()
+                    // When using a WASM as a "source WIT", we are currently not supporting transforming
+                    // that into a generated WIT dir, just treat it as a static interface definition for
+                    // the given component. So resolved_wit_dir in this case is the resolved _source_ WIT
+                    // parsed from the WASM.
+                    let resolved_wit_dir = ResolvedWitDir::from_wasm(&source_wit_dir, &wasm);
+
+                    let resolve = wasm.resolve();
+                    let root_package_id = wasm.package();
+                    let root_world_id = resolve.select_world(root_package_id, None)?;
+                    let root_world = resolve.worlds.get(root_world_id).ok_or_else(|| {
+                        anyhow!(
+                            "Failed to get root world from the resolved component interface: {}",
+                            source_wit_dir.log_color_highlight()
+                        )
+                    })?;
+
+                    let mut source_referenced_package_deps = HashSet::new();
+                    for import in root_world.imports.values() {
+                        if let WorldItem::Interface { id, .. } = import {
+                            let iface = resolve.interfaces.get(*id).ok_or_else(|| {
+                                anyhow!(
+                                    "Failed to get interface from the resolved component interface"
+                                )
+                            })?;
+                            if let Some(package) = iface.package {
+                                let pkg = resolve.packages.get(package).ok_or_else(|| {
+                                    anyhow!(
+                                        "Failed to get package from the resolved component interface"
+                                    )
+                                })?;
+                                source_referenced_package_deps.insert(pkg.name.clone());
+                            }
+                        }
                     }
-                };
 
-                let main_package_name = unresolved_source_package_group.main.name.clone();
-
-                let resolved_generated_wit_dir = ResolvedWitDir::new(&generated_wit_dir).ok();
-                let generated_has_same_main_package_name = resolved_generated_wit_dir
-                    .as_ref()
-                    .map(|wit| wit.main_package())
-                    .transpose()?
-                    .map(|generated_main_package| main_package_name == generated_main_package.name)
-                    .unwrap_or_default();
-                let resolved_generated_wit_dir = generated_has_same_main_package_name
-                    .then_some(resolved_generated_wit_dir)
-                    .flatten();
-
-                let app_component_deps = app
-                    .component_dependencies(component_name)
-                    .iter()
-                    .filter(|&dep| dep.dep_type.is_wasm_rpc())
-                    .filter_map(|dep| dep.as_dependent_app_component())
-                    .map(|dep| dep.name)
-                    .collect();
-
-                Ok(ResolvedWitComponent {
-                    main_package_name,
-                    resolved_generated_wit_dir,
-                    app_component_deps,
-                    source_referenced_package_deps,
-                    source_contained_package_deps,
-                    source_component_deps: Default::default(),
-                    generated_component_deps: Default::default(),
-                })
-            })();
+                    Ok(ResolvedWitComponent {
+                        main_package_name,
+                        resolved_wit_dir: Some(resolved_wit_dir),
+                        app_component_deps,
+                        source_referenced_package_deps,
+                        source_contained_package_deps: Default::default(),
+                        source_component_deps: Default::default(),
+                        generated_component_deps: Default::default(),
+                    })
+                })()
+            };
 
             match resolved_component {
                 Ok(resolved_component) => {
@@ -539,15 +617,12 @@ impl ResolvedWitApplication {
                         &self.interface_package_to_component,
                         &component.source_referenced_package_deps,
                     ),
-                    component
-                        .resolved_generated_wit_dir
-                        .as_ref()
-                        .map(|wit_dir| {
-                            component_deps(
-                                &self.stub_package_to_component,
-                                wit_dir.resolve.package_names.keys(),
-                            )
-                        }),
+                    component.resolved_wit_dir.as_ref().map(|wit_dir| {
+                        component_deps(
+                            &self.stub_package_to_component,
+                            wit_dir.resolve.package_names.keys(),
+                        )
+                    }),
                 ),
             );
         }
@@ -721,7 +796,7 @@ impl ResolvedWitApplication {
 
     fn extract_agent_types(&mut self, validation: &mut ValidationBuilder) {
         for (name, component) in &self.components {
-            if let Some(resolved_wit_dir) = &component.resolved_generated_wit_dir {
+            if let Some(resolved_wit_dir) = &component.resolved_wit_dir {
                 match resolved_wit_dir.is_agent() {
                     Ok(true) => {
                         log_action(

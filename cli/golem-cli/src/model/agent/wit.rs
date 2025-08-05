@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::app::AppComponentName;
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use golem_common::model::agent::{
     AgentType, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
 };
@@ -33,8 +33,10 @@ pub fn generate_agent_wrapper_wit(
     agent_types: &[AgentType],
 ) -> anyhow::Result<AgentWrapperGeneratorContext> {
     let mut ctx = AgentWrapperGeneratorContextState::new(agent_types.to_vec());
-    ctx.generate_wit_source(component_name)?;
-    ctx.generate_single_file_wrapper_wit()?;
+    ctx.generate_wit_source(component_name)
+        .context("Generating WIT source")?;
+    ctx.generate_single_file_wrapper_wit()
+        .context("Generating single file wrapper")?;
     ctx.finalize()
 }
 
@@ -165,14 +167,13 @@ impl AgentWrapperGeneratorContextState {
         agent: &AgentType,
     ) -> anyhow::Result<()> {
         let resource_name = agent.type_name.to_kebab_case();
-        let constructor_name = agent.constructor.name.as_deref().unwrap_or("create");
 
         writeln!(result, "    /// {}", agent.description)?;
         writeln!(result, "  resource {resource_name} {{")?;
         writeln!(result, "    constructor(agent-id: string);")?;
 
         writeln!(result, "    /// {}", agent.constructor.description)?;
-        write!(result, "    {constructor_name}: static func(")?;
+        write!(result, "    create: static func(")?;
         self.write_parameter_list(result, &agent.constructor.input_schema, "constructor")?;
         writeln!(result, ") -> result<{resource_name}, agent-error>;")?;
 
@@ -533,7 +534,9 @@ impl ResolvedWrapper {
         let golem_host_package_id = add_golem_host(&mut resolve)?;
         let golem_agent_package_id = add_golem_agent(&mut resolve)?;
 
-        let package_id = resolve.push_str("wrapper.wit", &package_source)?;
+        let package_id = resolve
+            .push_str("wrapper.wit", &package_source)
+            .context(format!("Resolving generated WIT: {package_source}"))?;
 
         Ok(Self {
             resolve,

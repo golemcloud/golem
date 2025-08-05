@@ -259,3 +259,16 @@ description = "Serve the schema.golem.cloud directory locally to help testing th
 install_crate = "miniserve"
 command = "miniserve"
 args = ["--interfaces", "127.0.0.1", "--port", "41357", "schema.golem.cloud"]
+
+## Agent template management
+[tasks.rebuild-ts-agent-template]
+description = "Rebuilds the TypeScript agent template WASM"
+script_runner = "@duckscript"
+script = '''
+cd template-golem-agent-ts
+exec --fail-on-error npm update
+exec --fail-on-error npm install
+exec --fail-on-error npm run generate
+exec --fail-on-error npm run build
+cp dist/wrapper/target/wasm32-wasip1/release/golem_agent.wasm ../golem-templates/templates/ts/ts-agent-app-common/wasm/golem_agent.wasm
+'''

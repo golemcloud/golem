@@ -749,7 +749,6 @@ impl ComponentCommandHandler {
             }
         };
 
-        // TODO: to be sent to component service
         let agent_types: Option<Vec<AgentType>> = {
             let mut app_ctx = self.ctx.app_context_lock_mut().await?;
             let app_ctx = app_ctx.some_or_err_mut()?;

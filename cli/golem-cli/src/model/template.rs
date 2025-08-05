@@ -82,6 +82,17 @@ impl<C: Serialize> Template<C> for app_raw::BuildCommand {
             app_raw::BuildCommand::QuickJSDTS(generate_quickjs_dts) => Ok(
                 app_raw::BuildCommand::QuickJSDTS(generate_quickjs_dts.render(env, ctx)?),
             ),
+            app_raw::BuildCommand::AgentWrapper(agent_wrapper) => Ok(
+                app_raw::BuildCommand::AgentWrapper(agent_wrapper.render(env, ctx)?),
+            ),
+            app_raw::BuildCommand::ComposeAgentWrapper(compose_agent_wrapper) => Ok(
+                app_raw::BuildCommand::ComposeAgentWrapper(compose_agent_wrapper.render(env, ctx)?),
+            ),
+            app_raw::BuildCommand::InjectToPrebuiltQuickJs(inject_to_prebuilt_quickjs) => {
+                Ok(app_raw::BuildCommand::InjectToPrebuiltQuickJs(
+                    inject_to_prebuilt_quickjs.render(env, ctx)?,
+                ))
+            }
         }
     }
 }
@@ -112,7 +123,15 @@ impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSCrate {
         Ok(app_raw::GenerateQuickJSCrate {
             generate_quickjs_crate: self.generate_quickjs_crate.render(env, ctx)?,
             wit: self.wit.render(env, ctx)?,
-            js: self.js.render(env, ctx)?,
+            js_modules: HashMap::from_iter(
+                self.js_modules
+                    .iter()
+                    .map(|(k, v)| {
+                        k.render(env, ctx)
+                            .and_then(|k| v.render(env, ctx).map(|v| (k, v)))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
             world: self.world.render(env, ctx)?,
         })
     }
@@ -126,6 +145,42 @@ impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSDTS {
             generate_quickjs_dts: self.generate_quickjs_dts.render(env, ctx)?,
             wit: self.wit.render(env, ctx)?,
             world: self.world.render(env, ctx)?,
+        })
+    }
+}
+
+impl<C: Serialize> Template<C> for app_raw::GenerateAgentWrapper {
+    type Rendered = app_raw::GenerateAgentWrapper;
+
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+        Ok(app_raw::GenerateAgentWrapper {
+            generate_agent_wrapper: self.generate_agent_wrapper.render(env, ctx)?,
+            based_on_compiled_wasm: self.based_on_compiled_wasm.render(env, ctx)?,
+        })
+    }
+}
+
+impl<C: Serialize> Template<C> for app_raw::ComposeAgentWrapper {
+    type Rendered = app_raw::ComposeAgentWrapper;
+
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+        Ok(app_raw::ComposeAgentWrapper {
+            compose_agent_wrapper: self.compose_agent_wrapper.render(env, ctx)?,
+            with_agent: self.with_agent.render(env, ctx)?,
+            to: self.to.render(env, ctx)?,
+        })
+    }
+}
+
+impl<C: Serialize> Template<C> for app_raw::InjectToPrebuiltQuickJs {
+    type Rendered = app_raw::InjectToPrebuiltQuickJs;
+
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+        Ok(app_raw::InjectToPrebuiltQuickJs {
+            inject_to_prebuilt_quickjs: self.inject_to_prebuilt_quickjs.render(env, ctx)?,
+            module: self.module.render(env, ctx)?,
+            module_wasm: self.module_wasm.render(env, ctx)?,
+            into: self.into.render(env, ctx)?,
         })
     }
 }

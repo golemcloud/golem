@@ -3,7 +3,7 @@ resolver = "2"
 
 members = ["golem", "golem-cli", "golem-templates"]
 
-exclude = ["desktop-app/src-tauri"]
+exclude = ["desktop-app/src-tauri", "template-golem-agent-ts"]
 
 [workspace.metadata]
 license-file = "LICENSE"
@@ -125,7 +125,7 @@ wax = "0.6.0"
 wasm-metadata = { version = "0.228", features = ["oci"] }
 wasmparser = "0.235.0"
 wasm-encoder = "0.235.0"
-wasm-rquickjs = "0.0.4"
+wasm-rquickjs = "0.0.5"
 wasmtime = { version = "33.0.0", features = ["async", "component-model"] }
 wasmtime-wasi = { version = "33.0.0" }
 wit-bindgen = "0.43.0"

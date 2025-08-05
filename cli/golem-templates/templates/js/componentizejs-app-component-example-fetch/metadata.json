@@ -1,4 +1,0 @@
-{
-  "description": "A JavaScript worker making a remote request using 'fetch'",
-  "appComponentGroup": "componentizejs"
-}

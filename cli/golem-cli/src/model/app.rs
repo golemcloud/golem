@@ -9,6 +9,7 @@ use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::naming::wit::package_dep_dir_name_from_parser;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
+use anyhow::anyhow;
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentFilePermissions};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -21,7 +22,6 @@ use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use url::Url;
-use wit_parser::PackageName;
 
 pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
@@ -192,6 +192,30 @@ pub struct AppComponentName(String);
 impl AppComponentName {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl AppComponentName {
+    pub fn to_package_name(&self) -> anyhow::Result<wit_parser::PackageName> {
+        let component_name_str = self.as_str();
+        let package_name_re =
+            regex::Regex::new(r"^(?P<namespace>[^:]+):(?P<name>[^@]+)(?:@(?P<version>.+))?$")?;
+        let captures = package_name_re
+            .captures(component_name_str)
+            .ok_or_else(|| anyhow!("Invalid component name format: {}", component_name_str))?;
+        let namespace = captures.name("namespace").unwrap().as_str().to_string();
+        let name = captures.name("name").unwrap().as_str().to_string();
+        let version = captures
+            .name("version")
+            .map(|m| m.as_str().to_string())
+            .map(|v| semver::Version::parse(&v))
+            .transpose()?;
+
+        Ok(wit_parser::PackageName {
+            namespace,
+            name,
+            version,
+        })
     }
 }
 
@@ -781,7 +805,7 @@ impl Application {
     pub fn component_generated_base_wit_exports_package_dir(
         &self,
         component_name: &AppComponentName,
-        exports_package_name: &PackageName,
+        exports_package_name: &wit_parser::PackageName,
     ) -> PathBuf {
         self.component_generated_base_wit(component_name)
             .join(naming::wit::DEPS_DIR)

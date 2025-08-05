@@ -16,12 +16,9 @@ use crate::app::build::command::execute_build_command;
 use crate::app::context::ApplicationContext;
 use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use crate::model::app::{AppComponentName, DependencyType};
-use crate::wasm_rpc_stubgen::wit_resolve::ExportedFunction;
-use anyhow::{anyhow, Context};
-use heck::ToLowerCamelCase;
 use std::collections::{BTreeSet, HashMap};
 
-pub fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
+pub async fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
     log_action("Building", "components");
     let _indent = LogIndent::new();
 
@@ -48,16 +45,9 @@ pub fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
         );
         let _indent = LogIndent::new();
 
-        let env_vars = build_step_env_vars(ctx, &component_name)
-            .context("Failed to get env vars for build step")?;
-
-        for build_step in &component_properties.build {
-            execute_build_command(
-                ctx,
-                ctx.application.component_source_dir(&component_name),
-                build_step,
-                env_vars.clone(),
-            )?;
+        let env_vars = HashMap::new();
+        for build_step in component_properties.build.clone() {
+            execute_build_command(ctx, &component_name, &build_step, env_vars.clone()).await?;
         }
     }
 
@@ -83,63 +73,4 @@ fn components_to_build(ctx: &ApplicationContext) -> BTreeSet<AppComponentName> {
         }
     }
     components_to_build
-}
-
-fn build_step_env_vars(
-    ctx: &ApplicationContext,
-    component_name: &AppComponentName,
-) -> anyhow::Result<HashMap<String, String>> {
-    let result = HashMap::from_iter(vec![(
-        "JCO_ASYNC_EXPORT_ARGS".to_string(),
-        jco_async_export_args(ctx, component_name)?.join(" "),
-    )]);
-
-    Ok(result)
-}
-
-fn jco_async_export_args(
-    ctx: &ApplicationContext,
-    component_name: &AppComponentName,
-) -> anyhow::Result<Vec<String>> {
-    let resolved = ctx
-        .wit
-        .component(component_name)?
-        .generated_wit_dir()
-        .ok_or(anyhow!("Failed to get generated wit dir"))?;
-
-    let exported_functions = resolved.exported_functions().context(format!(
-        "Failed to look up exported_functions for component {component_name}"
-    ))?;
-
-    let mut result = Vec::new();
-
-    for function in exported_functions {
-        match function {
-            ExportedFunction::Interface {
-                interface_name,
-                function_name,
-            } => {
-                // This is not a typo, it's a workaround for https://github.com/bytecodealliance/jco/issues/622
-                result.push("--async-imports".to_string());
-                result.push(format!("{interface_name}#{function_name}"));
-            }
-            ExportedFunction::InlineInterface {
-                export_name,
-                function_name,
-            } => {
-                // This is not a typo, it's a workaround for https://github.com/bytecodealliance/jco/issues/622
-                result.push("--async-imports".to_string());
-                let transformed = export_name.to_lower_camel_case();
-                result.push(format!("{transformed}#{function_name}"));
-            }
-            ExportedFunction::InlineFunction {
-                world_name,
-                function_name,
-            } => {
-                result.push("--async-exports".to_string());
-                result.push(format!("{world_name}#{function_name}"));
-            }
-        }
-    }
-    Ok(result)
 }

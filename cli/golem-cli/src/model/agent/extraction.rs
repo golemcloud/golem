@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::log::{log_action, LogColorize};
 use anyhow::anyhow;
 use golem_common::model::agent::AgentType;
 use rib::ParsedFunctionName;
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tracing::debug;
+use tracing::{debug, error};
 use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{
     Component, Func, Instance, Linker, LinkerInstance, ResourceTable, ResourceType, Type,
@@ -34,18 +34,31 @@ const FUNCTION_NAME: &str = "discover-agent-types";
 /// Extracts the implemented agent types from the given WASM component, assuming it implements the `golem:agent/guest` interface.
 /// If it does not, it fails.
 pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentType>> {
+    log_action(
+        "Extracting",
+        format!(
+            "agent types from {}",
+            wasm_path
+                .to_string_lossy()
+                .to_string()
+                .log_color_highlight()
+        ),
+    );
+
     let mut config = wasmtime::Config::default();
     config.async_support(true);
     config.wasm_component_model(true);
+
     let engine = Engine::new(&config)?;
     let mut linker: Linker<Host> = Linker::new(&engine);
+    linker.allow_shadowing(true);
 
     wasmtime_wasi::p2::add_to_linker_with_options_async(
         &mut linker,
         &wasmtime_wasi::p2::bindings::LinkOptions::default(),
     )?;
 
-    let (wasi, io) = WasiCtx::builder().build();
+    let (wasi, io) = WasiCtx::builder().inherit_stdout().inherit_stderr().build();
     let host = Host {
         table: Arc::new(Mutex::new(ResourceTable::new())),
         wasi: Arc::new(Mutex::new(wasi)),
@@ -72,6 +85,7 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
         }
     }
 
+    debug!("Instantiating component");
     let instance = linker.instantiate_async(&mut store, &component).await?;
 
     let func = find_discover_function(&mut store, &instance)?;
@@ -199,7 +213,6 @@ fn dynamic_import(
         Ok(())
     } else {
         let mut instance = root.instance(name)?;
-        let mut resources: HashMap<(String, String), Vec<MethodInfo>> = HashMap::new();
         let mut functions = Vec::new();
 
         for (inner_name, inner_item) in inst.exports(engine) {
@@ -216,17 +229,6 @@ fn dynamic_import(
                     ))
                         .map_err(|err| anyhow!(format!("Unexpected linking error: {name}.{{{inner_name}}} is not a valid function name: {err}")))?;
 
-                    if let Some(resource_name) = function_name.function.resource_name() {
-                        let methods = resources
-                            .entry((name.clone(), resource_name.clone()))
-                            .or_default();
-                        methods.push(MethodInfo {
-                            method_name: inner_name.clone(),
-                            params: param_types.clone(),
-                            results: result_types.clone(),
-                        });
-                    }
-
                     functions.push(FunctionInfo {
                         name: function_name,
                         params: param_types,
@@ -239,17 +241,19 @@ fn dynamic_import(
                 ComponentItem::ComponentInstance(_) => {}
                 ComponentItem::Type(_) => {}
                 ComponentItem::Resource(_resource) => {
-                    resources.entry((name, inner_name)).or_default();
+                    if &inner_name != "pollable"
+                        && &inner_name != "input-stream"
+                        && &inner_name != "output-stream"
+                    {
+                        // TODO: figure out how to do this properly
+                        instance.resource(
+                            &inner_name,
+                            ResourceType::host::<ResourceEntry>(),
+                            |_store, _rep| Ok(()),
+                        )?;
+                    }
                 }
             }
-        }
-
-        for ((_interface_name, resource_name), _methods) in resources {
-            instance.resource(
-                &resource_name,
-                ResourceType::host::<ResourceEntry>(),
-                |_store, _rep| Ok(()),
-            )?;
         }
 
         for function in functions {
@@ -258,6 +262,9 @@ fn dynamic_import(
                 move |_store, _params, _results| {
                     let function_name = function.name.clone();
                     Box::new(async move {
+                        error!(
+                            "External function called in get-agent-definitions: {function_name}",
+                        );
                         Err(anyhow!(
                             "External function called in get-agent-definitions: {function_name}"
                         ))

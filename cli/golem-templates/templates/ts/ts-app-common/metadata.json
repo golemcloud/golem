@@ -1,5 +1,5 @@
 {
-  "description": "Composable App Common template for TypeScript",
+  "description": "Composable App Common template for TypeScript Agents",
   "appCommonGroup": "default",
   "appCommonSkipIfExists": "common-ts/golem.yaml",
   "requiresGolemHostWIT": true,

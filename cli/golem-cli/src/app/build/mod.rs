@@ -44,7 +44,7 @@ pub async fn build_app(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
         gen_rpc(ctx).await?;
     }
     if ctx.config.should_run_step(AppBuildStep::Componentize) {
-        componentize(ctx)?;
+        componentize(ctx).await?;
     }
     if ctx.config.should_run_step(AppBuildStep::Link) {
         link(ctx).await?;
