@@ -16,8 +16,8 @@ use crate::repo::Deps;
 use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
-use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::ComponentFilePermissions;
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_registry_service::repo::account::AccountRecord;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
 use golem_registry_service::repo::model::audit::{
@@ -190,12 +190,13 @@ pub async fn test_environment_create(deps: &Deps) {
     let app = deps.create_application().await;
     let env_name = "local";
 
-    assert!(deps
-        .environment_repo
-        .get_by_name(&app.application_id, env_name)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        deps.environment_repo
+            .get_by_name(&app.application_id, env_name)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     let revision_0 = EnvironmentRevisionRecord {
         environment_id: new_repo_uuid(),

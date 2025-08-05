@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::model::BindFields;
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::deployment::{
@@ -21,11 +22,10 @@ use crate::repo::model::deployment::{
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
-use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use golem_common::model::diff::Hashable;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -38,7 +38,7 @@ use indoc::indoc;
 use sqlx::{Database, Row};
 use std::collections::HashSet;
 use std::fmt::Display;
-use tracing::{info_span, Instrument, Span};
+use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 #[async_trait]

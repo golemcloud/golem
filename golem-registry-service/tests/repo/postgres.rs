@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::Deps;
 use crate::Tracing;
+use crate::repo::Deps;
 use golem_common::config::DbPostgresConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
