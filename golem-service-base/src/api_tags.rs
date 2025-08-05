@@ -26,6 +26,7 @@ pub enum ApiTags {
     ApiSecurity,
     Application,
     Component,
+    Deployment,
     Environment,
     Debugging,
     Grant,

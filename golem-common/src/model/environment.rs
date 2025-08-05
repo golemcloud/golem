@@ -32,11 +32,11 @@ declare_structs! {
 
     }
 
-    pub struct EnvironmentSummary {
+    pub struct EnvironmentDeploymentPlan {
 
     }
 
-    pub struct EnvironmentDeploymentPlan {
+    pub struct EnvironmentSummary {
 
     }
 }

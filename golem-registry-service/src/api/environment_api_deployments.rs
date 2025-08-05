@@ -69,29 +69,29 @@ impl EnvironmentApiDeploymentsApi {
     #[oai(
         path = "/:environment_id/api-deployments",
         method = "get",
-        operation_id = "get_api_deployments"
+        operation_id = "get_environment_api_deployments"
     )]
-    async fn get_api_deployments(
+    async fn get_environment_api_deployments(
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<ApiDeployment>>> {
         let record = recorded_http_api_request!(
-            "get_api_deployments",
+            "get_environment_api_deployments",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .get_api_deployments_internal(environment_id.0, auth)
+            .get_environment_api_deployments_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_api_deployments_internal(
+    async fn get_environment_api_deployments_internal(
         &self,
         _environment_id: EnvironmentId,
         _auth: AuthCtx,
@@ -105,7 +105,7 @@ impl EnvironmentApiDeploymentsApi {
         method = "get",
         operation_id = "get_environment_api_deployment"
     )]
-    async fn get_api_deployment(
+    async fn get_environment_api_deployment(
         &self,
         environment_id: Path<EnvironmentId>,
         site: Path<ApiSiteString>,
@@ -120,85 +120,14 @@ impl EnvironmentApiDeploymentsApi {
         let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .get_api_deployment_internal(environment_id.0, site.0, auth)
+            .get_environment_api_deployment_internal(environment_id.0, site.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_api_deployment_internal(
-        &self,
-        _environment_id: EnvironmentId,
-        _site: ApiSiteString,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<ApiDeployment>> {
-        todo!()
-    }
-
-    /// Get all deployed api-deployments in the environment
-    #[oai(
-        path = "/:environment_id/deployed/api-deployments",
-        method = "get",
-        operation_id = "get_deployed_api_deployments"
-    )]
-    async fn get_deployed_api_deployments(
-        &self,
-        environment_id: Path<EnvironmentId>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<ApiDeployment>>> {
-        let record = recorded_http_api_request!(
-            "get_deployed_api_deployments",
-            environment_id = environment_id.0.to_string(),
-        );
-
-        let auth = AuthCtx::new(token.secret());
-
-        let response = self
-            .get_deployed_api_deployments_internal(environment_id.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_deployed_api_deployments_internal(
-        &self,
-        _environment_id: EnvironmentId,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Page<ApiDeployment>>> {
-        todo!()
-    }
-
-    /// Get deployed api-deployment by site
-    #[oai(
-        path = "/:environment_id/deployed/api-deployments/:site",
-        method = "get",
-        operation_id = "get_deployed_api_deployment"
-    )]
-    async fn get_deployed_api_deployment(
-        &self,
-        environment_id: Path<EnvironmentId>,
-        site: Path<ApiSiteString>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<ApiDeployment>> {
-        let record = recorded_http_api_request!(
-            "get_deployed_api_deployment",
-            environment_id = environment_id.0.to_string(),
-            site = site.0.0
-        );
-
-        let auth = AuthCtx::new(token.secret());
-
-        let response = self
-            .get_deployed_api_deployment_internal(environment_id.0, site.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_deployed_api_deployment_internal(
+    async fn get_environment_api_deployment_internal(
         &self,
         _environment_id: EnvironmentId,
         _site: ApiSiteString,

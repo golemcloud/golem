@@ -72,29 +72,29 @@ impl EnvironmentComponentsApi {
     #[oai(
         path = "/:environment_id/components",
         method = "get",
-        operation_id = "get_components"
+        operation_id = "get_environment_components"
     )]
-    async fn get_components(
+    async fn get_environment_components(
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<Component>>> {
         let record = recorded_http_api_request!(
-            "get_components",
+            "get_environment_components",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .get_components_internal(environment_id.0, auth)
+            .get_environment_components_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_components_internal(
+    async fn get_environment_components_internal(
         &self,
         _environment_id: EnvironmentId,
         _auth: AuthCtx,
@@ -108,7 +108,7 @@ impl EnvironmentComponentsApi {
         method = "get",
         operation_id = "get_environment_component"
     )]
-    async fn get_component(
+    async fn get_environment_component(
         &self,
         environment_id: Path<EnvironmentId>,
         component_name: Path<ComponentName>,
@@ -123,85 +123,14 @@ impl EnvironmentComponentsApi {
         let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .get_component_internal(environment_id.0, component_name.0, auth)
+            .get_environment_component_internal(environment_id.0, component_name.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_component_internal(
-        &self,
-        _environment_id: EnvironmentId,
-        _component_name: ComponentName,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Component>> {
-        todo!()
-    }
-
-    /// Get all deployed components in the environment
-    #[oai(
-        path = "/:environment_id/deployed/components",
-        method = "get",
-        operation_id = "get_deployed_components"
-    )]
-    async fn get_deployed_components(
-        &self,
-        environment_id: Path<EnvironmentId>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<Component>>> {
-        let record = recorded_http_api_request!(
-            "get_deployed_components",
-            environment_id = environment_id.0.to_string(),
-        );
-
-        let auth = AuthCtx::new(token.secret());
-
-        let response = self
-            .get_deployed_components_internal(environment_id.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_deployed_components_internal(
-        &self,
-        _environment_id: EnvironmentId,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Page<Component>>> {
-        todo!()
-    }
-
-    /// Get a deployed component in the environment by name
-    #[oai(
-        path = "/:environment_id/deployed/components/:component_name",
-        method = "get",
-        operation_id = "get_deployed_component"
-    )]
-    async fn get_deployed_component(
-        &self,
-        environment_id: Path<EnvironmentId>,
-        component_name: Path<ComponentName>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Component>> {
-        let record = recorded_http_api_request!(
-            "get_deployed_component",
-            environment_id = environment_id.0.to_string(),
-            component_name = component_name.0.to_string()
-        );
-
-        let auth = AuthCtx::new(token.secret());
-
-        let response = self
-            .get_deployed_component_internal(environment_id.0, component_name.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_deployed_component_internal(
+    async fn get_environment_component_internal(
         &self,
         _environment_id: EnvironmentId,
         _component_name: ComponentName,

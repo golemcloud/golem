@@ -22,12 +22,14 @@ pub mod api_domains;
 pub mod applications;
 pub mod certificates;
 pub mod components;
+pub mod deployment_api_definitions;
+pub mod deployment_api_deployments;
+pub mod deployment_components;
 pub mod environment_api_definitions;
 pub mod environment_api_deployments;
 pub mod environment_api_domains;
 pub mod environment_certificates;
 pub mod environment_components;
-pub mod environment_deployment;
 pub mod environment_security_schemes;
 pub mod environments;
 pub mod login;
@@ -46,12 +48,14 @@ use self::api_domains::ApiDomainsApi;
 use self::applications::ApplicationsApi;
 use self::certificates::CertificatesApi;
 use self::components::ComponentsApi;
+use self::deployment_api_definitions::DeploymentApiDefinitionsApi;
+use self::deployment_api_deployments::DeploymentApiDeploymentsApi;
+use self::deployment_components::DeploymentComponentsApi;
 use self::environment_api_definitions::EnvironmentApiDefinitionsApi;
 use self::environment_api_deployments::EnvironmentApiDeploymentsApi;
 use self::environment_api_domains::EnvironmentApiDomainsApi;
 use self::environment_certificates::EnvironmentCertificatesApi;
 use self::environment_components::EnvironmentComponentsApi;
-use self::environment_deployment::EnvironmentDeploymentApi;
 use self::environment_security_schemes::EnvironmentSecuritySchemesApi;
 use self::environments::EnvironmentsApi;
 use self::login::LoginApi;
@@ -66,10 +70,12 @@ use poem_openapi::{ApiResponse, OpenApiService};
 
 pub type Apis = (
     HealthcheckApi,
-    AccountApplicationsApi,
-    AccountGrantsApi,
-    AccountTokensApi,
-    AccountsApi,
+    (
+        AccountApplicationsApi,
+        AccountGrantsApi,
+        AccountTokensApi,
+        AccountsApi,
+    ),
     ApiDefinitionsApi,
     ApiDeploymentsApi,
     ApiDomainsApi,
@@ -77,12 +83,16 @@ pub type Apis = (
     CertificatesApi,
     ComponentsApi,
     (
+        DeploymentApiDefinitionsApi,
+        DeploymentApiDeploymentsApi,
+        DeploymentComponentsApi,
+    ),
+    (
         EnvironmentApiDefinitionsApi,
         EnvironmentApiDeploymentsApi,
         EnvironmentApiDomainsApi,
         EnvironmentCertificatesApi,
         EnvironmentComponentsApi,
-        EnvironmentDeploymentApi,
         EnvironmentsApi,
         EnvironmentSecuritySchemesApi,
     ),
@@ -96,10 +106,12 @@ pub fn make_open_api_service() -> OpenApiService<Apis, ()> {
     OpenApiService::new(
         (
             HealthcheckApi,
-            AccountApplicationsApi {},
-            AccountGrantsApi {},
-            AccountTokensApi {},
-            AccountsApi {},
+            (
+                AccountApplicationsApi {},
+                AccountGrantsApi {},
+                AccountTokensApi {},
+                AccountsApi {},
+            ),
             ApiDefinitionsApi {},
             ApiDeploymentsApi {},
             ApiDomainsApi {},
@@ -107,12 +119,16 @@ pub fn make_open_api_service() -> OpenApiService<Apis, ()> {
             CertificatesApi {},
             ComponentsApi {},
             (
+                DeploymentApiDefinitionsApi {},
+                DeploymentApiDeploymentsApi {},
+                DeploymentComponentsApi {},
+            ),
+            (
                 EnvironmentApiDefinitionsApi {},
                 EnvironmentApiDeploymentsApi {},
                 EnvironmentApiDomainsApi {},
                 EnvironmentCertificatesApi {},
                 EnvironmentComponentsApi {},
-                EnvironmentDeploymentApi {},
                 EnvironmentsApi {},
                 EnvironmentSecuritySchemesApi {},
             ),

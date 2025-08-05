@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::diff::{BTreeSetDiff, Diffable, Hash, Hashable, hash_from_serialized_value};
+use crate::model::diff::{hash_from_serialized_value, BTreeSetDiff, Diffable, Hash, Hashable};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fmt::Display;
