@@ -50,9 +50,10 @@ pub trait DeploymentRepo: Send + Sync {
 
     async fn get_staged_identity(&self, environment_id: &Uuid) -> repo::Result<DeploymentIdentity>;
 
-    async fn get_deployed_identity(
+    async fn get_deployment_identity(
         &self,
         environment_id: &Uuid,
+        revision_id: Option<i64>,
     ) -> repo::Result<Option<DeployedDeploymentIdentity>>;
 
     async fn deploy(
@@ -80,6 +81,14 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
         info_span!(
             SPAN_NAME,
             environment_id = %environment_id,
+        )
+    }
+
+    fn span_env_and_revision(environment_id: &Uuid, revision_id: i64) -> Span {
+        info_span!(
+            SPAN_NAME,
+            environment_id = %environment_id,
+            revision_id
         )
     }
 
@@ -111,13 +120,17 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .await
     }
 
-    async fn get_deployed_identity(
+    async fn get_deployment_identity(
         &self,
         environment_id: &Uuid,
+        revision_id: Option<i64>,
     ) -> repo::Result<Option<DeployedDeploymentIdentity>> {
         self.repo
-            .get_deployed_identity(environment_id)
-            .instrument(Self::span_env(environment_id))
+            .get_deployment_identity(environment_id, revision_id)
+            .instrument(match revision_id {
+                Some(revision_id) => Self::span_env_and_revision(environment_id, revision_id),
+                None => Self::span_env(environment_id),
+            })
             .await
     }
 
@@ -207,11 +220,20 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         }
     }
 
-    async fn get_deployed_identity(
+    async fn get_deployment_identity(
         &self,
         environment_id: &Uuid,
+        revision_id: Option<i64>,
     ) -> repo::Result<Option<DeployedDeploymentIdentity>> {
-        let Some(deployment_revision) = self.get_deployed_revision(environment_id).await? else {
+        let deployment_revision = match revision_id {
+            Some(revision_id) => {
+                self.get_deployment_revision(environment_id, revision_id)
+                    .await?
+            }
+            None => self.get_deployed_revision(environment_id).await?,
+        };
+
+        let Some(deployment_revision) = deployment_revision else {
             return Ok(None);
         };
 
@@ -328,6 +350,12 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 trait DeploymentRepoInternal: DeploymentRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
+
+    async fn get_deployment_revision(
+        &self,
+        environment_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::Result<Option<DeploymentRevisionRecord>>;
 
     async fn create_deployment_revision(
         tx: &mut Self::Tx,
@@ -450,6 +478,24 @@ trait DeploymentRepoInternal: DeploymentRepo {
 impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
+
+    async fn get_deployment_revision(
+        &self,
+        environment_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::Result<Option<DeploymentRevisionRecord>> {
+        self.with_ro("get_deployment_revision")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT environment_id, revision_id, version, hash, created_at, created_by
+                    FROM deployment_revisions
+                    WHERE environment_id = $1 AND revision_id = $2
+                "#})
+                .bind(environment_id)
+                .bind(revision_id),
+            )
+            .await
+    }
 
     async fn create_deployment_revision(
         tx: &mut Self::Tx,
@@ -742,8 +788,8 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     WHERE dcr.environment_id = $1 AND dcr.deployment_revision_id = $2
                     ORDER BY c.name
                 "#})
-                .bind(environment_id)
-                .bind(revision_id),
+                    .bind(environment_id)
+                    .bind(revision_id),
             )
             .await
     }
@@ -765,8 +811,8 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
                     ORDER BY had.name
                 "#})
-                .bind(environment_id)
-                .bind(revision_id),
+                    .bind(environment_id)
+                    .bind(revision_id),
             )
             .await
     }
@@ -788,8 +834,8 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
                     ORDER BY had.host, had.subdomain
                 "#})
-                .bind(environment_id)
-                .bind(revision_id),
+                    .bind(environment_id)
+                    .bind(revision_id),
             )
             .await?;
 
