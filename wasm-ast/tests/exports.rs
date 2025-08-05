@@ -409,7 +409,7 @@ fn exports_shopping_cart_resource_component() {
                     typ: str(),
                 }],
                 result: Some(AnalysedFunctionResult {
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned).named("cart"), // TODO: owned by golem:it/api
                 }),
             },
             AnalysedFunction {
@@ -417,7 +417,8 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart"),
                     },
                     AnalysedFunctionParameter {
                         name: "item".to_string(),
@@ -437,7 +438,8 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart"),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
@@ -451,7 +453,8 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart"),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
@@ -468,7 +471,8 @@ fn exports_shopping_cart_resource_component() {
                 name: "[method]cart.checkout".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                        .named("cart"),
                 }],
                 result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
@@ -485,7 +489,8 @@ fn exports_shopping_cart_resource_component() {
                 name: "[method]cart.get-cart-contents".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                        .named("cart"),
                 }],
                 result: Some(AnalysedFunctionResult {
                     typ: list(
@@ -504,11 +509,13 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart"),
                     },
                     AnalysedFunctionParameter {
                         name: "other-cart".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart"),
                     },
                 ],
                 result: None,

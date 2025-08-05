@@ -279,7 +279,8 @@ impl ToAnalysedType for TypeDef {
                             resource_id,
                             mode: AnalysedResourceMode::Owned,
                             name: self.name.clone(),
-                        })),
+                        })
+                        .with_optional_name(get_type_name(resolve, type_id))),
                         None => Err("to_analysed_type not implemented for handle type".to_string()),
                     },
                     Handle::Borrow(type_id) => match resource_map.get_resource_id(*type_id) {
@@ -287,11 +288,12 @@ impl ToAnalysedType for TypeDef {
                             resource_id,
                             mode: AnalysedResourceMode::Borrowed,
                             name: self.name.clone(),
-                        })),
+                        })
+                        .with_optional_name(get_type_name(resolve, type_id))),
                         None => Err("to_analysed_type not implemented for handle type".to_string()),
                     },
                 }
-            },
+            }
             TypeDefKind::Flags(flag) => Ok(analysed_type::flags(
                 &flag
                     .flags
@@ -396,6 +398,13 @@ impl ToAnalysedType for Type {
             Type::ErrorContext => Err("ErrorContext not supported".to_string()),
         }
     }
+}
+
+fn get_type_name(resolve: &Resolve, type_id: &TypeId) -> Option<String> {
+    resolve
+        .types
+        .get(*type_id)
+        .and_then(|type_def| type_def.name.clone())
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
