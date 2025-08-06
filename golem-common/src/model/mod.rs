@@ -1971,7 +1971,7 @@ pub struct ComponentFileSystemNode {
 }
 
 // Custom Deserialize is replaced with Simple Deserialize
-#[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Default, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 #[serde(rename_all = "kebab-case")]
 #[cfg_attr(feature = "poem", oai(rename_all = "kebab-case"))]

@@ -138,9 +138,3 @@ message Gitlab{}
 message IdentityProviderMetadata {
   string metadata = 1;
 }
-
-message ExportOpenApiSpec {
-  ApiDefinitionId id = 1;
-  string version = 2;
-  string openapi_yaml = 3;
-}

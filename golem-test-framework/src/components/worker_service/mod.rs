@@ -71,8 +71,8 @@ use golem_client::api::ApiSecurityClientLive as ApiSecurityServiceHttpClientLive
 use golem_client::api::WorkerClient as WorkerServiceHttpClient;
 use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
 use golem_client::model::{
-    ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, HttpApiDefinitionRequest,
-    HttpApiDefinitionResponseData, OpenApiHttpApiDefinitionResponse, SecuritySchemeData,
+    ApiDeployment, ApiDeploymentRequest, HttpApiDefinitionRequest, HttpApiDefinitionResponseData,
+    OpenApiHttpApiDefinitionResponse, SecuritySchemeData,
 };
 use golem_client::{Context, Security};
 use golem_common::model::worker::WasiConfigVars;
@@ -1253,19 +1253,16 @@ pub trait WorkerService: Send + Sync {
         &self,
         token: &Uuid,
         project_id: &ProjectId,
-        request: ExportOpenapiSpecRequest,
-    ) -> crate::Result<ExportOpenApiSpec> {
+        api_definition_id: &str,
+        api_definition_version: &str,
+    ) -> crate::Result<OpenApiHttpApiDefinitionResponse> {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => not_available_on_grpc_api("export_openapi_spec"),
             GolemClientProtocol::Http => {
                 let client = self.api_definition_http_client(token).await;
 
                 let result = client
-                    .export_definition(
-                        &project_id.0,
-                        &request.api_definition_id.unwrap().value,
-                        &request.version,
-                    )
+                    .export_definition(&project_id.0, api_definition_id, api_definition_version)
                     .await?;
 
                 Ok(result)

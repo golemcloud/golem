@@ -3796,7 +3796,7 @@ async fn test_swagger_ui_binding() {
     // Create a request to the Swagger UI endpoint
     let mut headers = HeaderMap::new();
     headers.insert(HOST, HeaderValue::from_static("localhost:8080"));
-    let api_request = get_gateway_request("/swagger-ui", None, &headers, Value::Null);
+    let api_request = get_gateway_request("/swagger-ui", None, &headers, JsonValue::Null);
 
     // Create a session store
     let session_store = internal::get_session_store();

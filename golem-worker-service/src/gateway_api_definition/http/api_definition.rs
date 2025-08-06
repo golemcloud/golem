@@ -242,7 +242,7 @@ impl CompiledHttpApiDefinition {
             compiled_routes.push(compiled_route);
         }
 
-        let mut_result = CompiledHttpApiDefinition {
+        let mut result = CompiledHttpApiDefinition {
             id: http_api_definition.id.clone(),
             version: http_api_definition.version.clone(),
             routes: compiled_routes,
@@ -280,7 +280,7 @@ impl CompiledHttpApiDefinition {
             OpenApiHttpApiDefinition::from_compiled_http_api_definition(self, conversion_context),
         )?;
         serde_json::to_string_pretty(&openapi.0)
-            .map_err(|e| format!("Failed to serialize OpenAPI to JSON: {e}"))       
+            .map_err(|e| format!("Failed to serialize OpenAPI to JSON: {e}"))
     }
 }
 
@@ -829,7 +829,7 @@ impl CompiledRoute {
                     binding: GatewayBindingCompiled::SwaggerUi(SwaggerUiBinding::new()),
                     middlewares: route.middlewares.clone(),
                 })
-            }           
+            }
         }
     }
 

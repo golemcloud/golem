@@ -29,7 +29,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
+async fn create_and_get_api_definition(deps: &EnvBasedTestDependencies) {
     let admin = deps.admin().await;
 
     let (_, component_name) = admin
@@ -755,7 +755,6 @@ async fn create_openapi_json_definition(deps: &EnvBasedTestDependencies) {
     );
 }
 
-
 #[test]
 #[tracing::instrument]
 async fn test_export_openapi_spec_simple(deps: &EnvBasedTestDependencies) {
@@ -766,71 +765,51 @@ async fn test_export_openapi_spec_simple(deps: &EnvBasedTestDependencies) {
 
     // Create an API definition with a specific route
     let api_id = Uuid::new_v4().to_string();
-    let request = ApiDefinitionRequest {
-        id: Some(ApiDefinitionId {
-            value: api_id.clone(),
-        }),
+    let request = HttpApiDefinitionRequest {
+        id: api_id.clone(),
         version: "1.0".to_string(),
         draft: true,
-        definition: Some(api_definition_request::Definition::Http(
-            HttpApiDefinition {
-                routes: vec![HttpRoute {
-                    method: HttpMethod::Get as i32,
-                    path: "/test-simple-export".to_string(),
-                    binding: Some(GatewayBinding {
-                        component: Some(VersionedComponentId {
-                            component_id: Some(component_id.clone().into()),
-                            version: 0,
-                        }),
-                        worker_name: None,
-                        response: Some(to_grpc_rib_expr(
-                            r#"
-                                {
-                                    headers: {ContentType: "application/json"},
-                                    body: "Simple export test response",
-                                    status: 200
-                                }
-                            "#,
-                        )),
-                        idempotency_key: None,
-                        binding_type: Some(GatewayBindingType::Default as i32),
-                        static_binding: None,
-                        invocation_context: None,
-                    }),
-                    middleware: None,
-                }],
+        security: None,
+        routes: vec![RouteRequestData {
+            method: MethodPattern::Get,
+            path: "/test-simple-export".to_string(),
+            binding: GatewayBindingData {
+                component: Some(GatewayBindingComponent {
+                    name: component_id.0.to_string(),
+                    version: Some(0),
+                }),
+                worker_name: None,
+                response: Some(
+                    r#"
+                        {
+                            headers: {ContentType: "application/json"},
+                            body: "Simple export test response",
+                            status: 200
+                        }
+                    "#
+                    .to_string(),
+                ),
+                idempotency_key: None,
+                binding_type: Some(GatewayBindingType::Default),
+                invocation_context: None,
             },
-        )),
+            security: None,
+        }],
     };
 
     // Create the API definition
     let response = deps
         .worker_service()
-        .create_api_definition(
-            &admin.token,
-            &project,
-            CreateApiDefinitionRequest {
-                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                    request.clone(),
-                )),
-            },
-        )
+        .create_api_definition(&admin.token, &project, &request)
         .await
         .unwrap();
 
     check_equal_api_definition_request_and_response(&request, &response);
 
-    let export_request = ExportOpenapiSpecRequest {
-        api_definition_id: Some(ApiDefinitionId {
-            value: api_id.clone(),
-        }),
-        version: "1.0".to_string(),
-    };
-
     // Export the API definition
     let export_data = deps
         .worker_service()
-        .export_openapi_spec(&admin.token, &project, export_request)
+        .export_openapi_spec(&admin.token, &project, &api_id, "1.0")
         .await
         .unwrap();
 
@@ -874,57 +853,44 @@ async fn test_roundtrip_api_definition(deps: &EnvBasedTestDependencies) {
 
     // 1. Create an API definition request with a specific route
     let api_id = Uuid::new_v4().to_string();
-    let request = ApiDefinitionRequest {
-        id: Some(ApiDefinitionId {
-            value: api_id.clone(),
-        }),
+    let request = HttpApiDefinitionRequest {
+        id: api_id.clone(),
         version: "1.0".to_string(),
         draft: true,
-        definition: Some(api_definition_request::Definition::Http(
-            HttpApiDefinition {
-                routes: vec![HttpRoute {
-                    method: HttpMethod::Get as i32,
-                    path: "/test-fixed-export-path".to_string(),
-                    binding: Some(GatewayBinding {
-                        component: Some(VersionedComponentId {
-                            component_id: Some(component_id.clone().into()),
-                            version: 0,
-                        }),
-                        worker_name: None,
-                        response: Some(to_grpc_rib_expr(
-                            r#"
-                                {
-                                    headers: {
-                                        ContentType: "application/json"
-                                    },
-                                    body: "Fixed export test response",
-                                    status: 200
-                                }
-                            "#,
-                        )),
-                        idempotency_key: None,
-                        binding_type: Some(GatewayBindingType::Default as i32),
-                        static_binding: None,
-                        invocation_context: None,
-                    }),
-                    middleware: None,
-                }],
+        security: None,
+        routes: vec![RouteRequestData {
+            method: MethodPattern::Get,
+            path: "/test-fixed-export-path".to_string(),
+            binding: GatewayBindingData {
+                component: Some(GatewayBindingComponent {
+                    name: component_id.0.to_string(),
+                    version: Some(0),
+                }),
+                worker_name: None,
+                response: Some(
+                    r#"
+                        {
+                            headers: {
+                                ContentType: "application/json"
+                            },
+                            body: "Fixed export test response",
+                            status: 200
+                        }
+                    "#
+                    .to_string(),
+                ),
+                idempotency_key: None,
+                binding_type: Some(GatewayBindingType::Default),
+                invocation_context: None,
             },
-        )),
+            security: None,
+        }],
     };
 
     // 2. Create the API definition
     let original_api_definition = deps
         .worker_service()
-        .create_api_definition(
-            &admin.token,
-            &project,
-            CreateApiDefinitionRequest {
-                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                    request.clone(),
-                )),
-            },
-        )
+        .create_api_definition(&admin.token, &project, &request)
         .await
         .unwrap();
 
@@ -933,16 +899,7 @@ async fn test_roundtrip_api_definition(deps: &EnvBasedTestDependencies) {
     // 3. Export the API definition to OpenAPI format
     let export_data = deps
         .worker_service()
-        .export_openapi_spec(
-            &admin.token,
-            &project,
-            ExportOpenapiSpecRequest {
-                api_definition_id: Some(ApiDefinitionId {
-                    value: api_id.clone(),
-                }),
-                version: "1.0".to_string(),
-            },
-        )
+        .export_openapi_spec(&admin.token, &project, &api_id, "1.0")
         .await
         .unwrap();
 
@@ -976,46 +933,17 @@ async fn test_roundtrip_api_definition(deps: &EnvBasedTestDependencies) {
 
     // 4. Delete the original API definition
     deps.worker_service()
-        .delete_api_definition(
-            &admin.token,
-            &project,
-            DeleteApiDefinitionRequest {
-                api_definition_id: Some(ApiDefinitionId {
-                    value: api_id.clone(),
-                }),
-                version: "1.0".to_string(),
-            },
-        )
+        .delete_api_definition(&admin.token, &project, &api_id, "1.0")
         .await
         .unwrap();
 
     // 5. Create new API definition from the exported YAML
     let imported_api_definition = deps
         .worker_service()
-        .create_api_definition(
-            &admin.token,
-            &project,
-            CreateApiDefinitionRequest {
-                api_definition: Some(create_api_definition_request::ApiDefinition::Openapi(
-                    export_data.openapi_yaml,
-                )),
-            },
-        )
+        .create_api_definition_from_yaml(&admin.token, &project, &export_data.openapi_yaml)
         .await
         .unwrap();
 
     // 6. Compare both API definitions
-    check_equal_api_definitions(&original_api_definition, &imported_api_definition);
-}
-
-// Helper function to compare API definitions
-fn check_equal_api_definitions(expected: &ApiDefinition, actual: &ApiDefinition) {
-    check!(expected.id == actual.id);
-    check!(expected.version == actual.version);
-    check!(expected.draft == actual.draft);
-
-    let api_definition::Definition::Http(expected_api_def) = expected.definition.as_ref().unwrap();
-    let api_definition::Definition::Http(actual_api_def) = actual.definition.as_ref().unwrap();
-
-    check!(expected_api_def == actual_api_def);
+    check_equal_api_definition_request_and_response(&request, &imported_api_definition);
 }

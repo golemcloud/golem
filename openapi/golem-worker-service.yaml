@@ -2372,6 +2372,88 @@ paths:
       - Cookie: []
       - Token: []
       operationId: delete_definition
+  /v1/api/definitions/{project_id}/{id}/{version}/export:
+    get:
+      tags:
+      - ApiDefinition
+      summary: Export an API definition in OpenAPI format
+      description: Exports an API definition by its API definition ID and version in OpenAPI format.
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OpenApiHttpApiDefinitionResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: export_definition
   /v1/api/deployments/deploy:
     post:
       tags:
@@ -4226,6 +4308,7 @@ components:
       - file-server
       - http-handler
       - cors-preflight
+      - swagger-ui
     GetFilesResponse:
       type: object
       title: GetFilesResponse
@@ -4478,6 +4561,20 @@ components:
           type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
+    OpenApiHttpApiDefinitionResponse:
+      type: object
+      title: OpenApiHttpApiDefinitionResponse
+      required:
+      - id
+      - version
+      - openapi_yaml
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        openapi_yaml:
+          type: string
     OplogCursor:
       type: object
       title: OplogCursor

@@ -332,8 +332,12 @@ fn get_parameters(
                 }
             }
         }
-        // Other binding types don't have parameters
-        _ => {}
+        GatewayBindingCompiled::Static(_) => {
+            // Static bindings don't have parameters
+        }
+        GatewayBindingCompiled::SwaggerUi(_) => {
+            // SwaggerUi bindings don't have parameters
+        }
     }
 
     (path_parameters, query_parameters, header_parameters)
@@ -730,7 +734,12 @@ fn extract_binding_data(binding: &GatewayBindingCompiled) -> ExtractedBindingDat
                 ..Default::default()
             }
         }
-        _ => ExtractedBindingData::default(), // SwaggerUi, AuthCallBack need no extra fields
+        GatewayBindingCompiled::Static(StaticBinding::HttpAuthCallBack(_)) => {
+            ExtractedBindingData::default() // AuthCallBack needs no extra fields
+        }
+        GatewayBindingCompiled::SwaggerUi(_) => {
+            ExtractedBindingData::default() // SwaggerUi needs no extra fields
+        }
     }
 }
 
