@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common_next::config::DbConfig;
-use golem_common_next::tracing::init_tracing_with_default_env_filter;
+use golem_common::config::DbConfig;
+use golem_common::tracing::init_tracing_with_default_env_filter;
+use golem_registry_service::api::make_open_api_service;
 use golem_registry_service::bootstrap::Services;
-use golem_registry_service::config::{make_config_loader, RegistryServiceConfig};
+use golem_registry_service::config::{RegistryServiceConfig, make_config_loader};
 use golem_registry_service::metrics;
-use golem_service_base_next::db;
-use golem_service_base_next::migration::{Migrations, MigrationsDir};
+use golem_service_base::db;
+use golem_service_base::migration::{Migrations, MigrationsDir};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use prometheus::Registry;
@@ -57,14 +58,8 @@ fn main() -> Result<(), std::io::Error> {
 }
 
 async fn dump_openapi_yaml() -> Result<(), std::io::Error> {
-    // TODO
-    // let config = RegistryServiceConfig::default();
-    // let services = Services::new(&config).await.map_err(|e| {
-    //     error!("Services - init error: {}", e);
-    //     std::io::Error::other(e)
-    // })?;
-    // let open_api_service = make_open_api_service(&services);
-    // println!("{}", open_api_service.spec_yaml());
+    let open_api_service = make_open_api_service();
+    println!("{}", open_api_service.spec_yaml());
     Ok(())
 }
 

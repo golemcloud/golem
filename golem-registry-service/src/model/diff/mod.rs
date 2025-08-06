@@ -131,11 +131,7 @@ where
             }
         }
 
-        if diff.is_empty() {
-            None
-        } else {
-            Some(diff)
-        }
+        if diff.is_empty() { None } else { Some(diff) }
     }
 }
 
@@ -176,11 +172,7 @@ where
             }
         }
 
-        if diff.is_empty() {
-            None
-        } else {
-            Some(diff)
-        }
+        if diff.is_empty() { None } else { Some(diff) }
     }
 }
 
@@ -194,11 +186,11 @@ mod test {
     };
     use crate::model::diff::http_api_deployment::{HttpApiDeployment, NO_SUBDOMAIN};
     use crate::model::diff::ser::{
-        to_json_pretty_with_mode, to_json_with_mode, to_yaml_with_mode, SerializeMode,
-        ToSerializableWithModeExt,
+        SerializeMode, ToSerializableWithModeExt, to_json_pretty_with_mode, to_json_with_mode,
+        to_yaml_with_mode,
     };
     use crate::model::diff::{ComponentMetadata, Diffable};
-    use golem_common_next::model::{ComponentFilePermissions, ComponentType};
+    use golem_common::model::{ComponentFilePermissions, ComponentType};
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
 
