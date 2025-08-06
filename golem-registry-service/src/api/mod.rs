@@ -22,9 +22,6 @@ pub mod api_domains;
 pub mod applications;
 pub mod certificates;
 pub mod components;
-pub mod deployment_api_definitions;
-pub mod deployment_api_deployments;
-pub mod deployment_components;
 pub mod environment_api_definitions;
 pub mod environment_api_deployments;
 pub mod environment_api_domains;
@@ -48,9 +45,6 @@ use self::api_domains::ApiDomainsApi;
 use self::applications::ApplicationsApi;
 use self::certificates::CertificatesApi;
 use self::components::ComponentsApi;
-use self::deployment_api_definitions::DeploymentApiDefinitionsApi;
-use self::deployment_api_deployments::DeploymentApiDeploymentsApi;
-use self::deployment_components::DeploymentComponentsApi;
 use self::environment_api_definitions::EnvironmentApiDefinitionsApi;
 use self::environment_api_deployments::EnvironmentApiDeploymentsApi;
 use self::environment_api_domains::EnvironmentApiDomainsApi;
@@ -83,11 +77,6 @@ pub type Apis = (
     CertificatesApi,
     ComponentsApi,
     (
-        DeploymentApiDefinitionsApi,
-        DeploymentApiDeploymentsApi,
-        DeploymentComponentsApi,
-    ),
-    (
         EnvironmentApiDefinitionsApi,
         EnvironmentApiDeploymentsApi,
         EnvironmentApiDomainsApi,
@@ -118,11 +107,6 @@ pub fn make_open_api_service() -> OpenApiService<Apis, ()> {
             ApplicationsApi {},
             CertificatesApi {},
             ComponentsApi {},
-            (
-                DeploymentApiDefinitionsApi {},
-                DeploymentApiDeploymentsApi {},
-                DeploymentComponentsApi {},
-            ),
             (
                 EnvironmentApiDefinitionsApi {},
                 EnvironmentApiDeploymentsApi {},

@@ -17,6 +17,7 @@ use super::model::CreateComponentRequest;
 use golem_common::api::Page;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::{Component, ComponentName};
+use golem_common::model::deployment::DeploymentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -133,6 +134,89 @@ impl EnvironmentComponentsApi {
     async fn get_environment_component_internal(
         &self,
         _environment_id: EnvironmentId,
+        _component_name: ComponentName,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Component>> {
+        todo!()
+    }
+
+    /// Get all components in a specific deployment
+    #[oai(
+        path = "/:environment_id/deployments/:deployment_id/components",
+        method = "get",
+        operation_id = "get_deployment_components",
+        tag = ApiTags::Deployment
+    )]
+    async fn get_deployment_components(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<Component>>> {
+        let record = recorded_http_api_request!(
+            "get_deployment_components",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.0.to_string(),
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .get_deployment_components_internal(environment_id.0, deployment_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_deployment_components_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _deployment_id: DeploymentId,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Page<Component>>> {
+        todo!()
+    }
+
+    /// Get component in a deployment by name
+    #[oai(
+        path = "/:environment_id/deployments/:deployment_id/components/:component_name",
+        method = "get",
+        operation_id = "get_deployment_component",
+        tag = ApiTags::Deployment
+    )]
+    async fn get_deployment_component(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentId>,
+        component_name: Path<ComponentName>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Component>> {
+        let record = recorded_http_api_request!(
+            "get_deployment_component",
+            deployment_id = deployment_id.0.0.to_string(),
+            component_name = component_name.0.to_string()
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .get_deployment_component_internal(
+                environment_id.0,
+                deployment_id.0,
+                component_name.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_deployment_component_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _deployment_id: DeploymentId,
         _component_name: ComponentName,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
