@@ -586,7 +586,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         http_api_definition_id: &Uuid,
         revision_id: i64,
     ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
-        self.with_ro("get_staged_by_id")
+        self.with_ro("get_by_id_and_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT d.name, d.environment_id,
@@ -609,7 +609,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         name: &str,
         revision_id: i64,
     ) -> repo::Result<Option<HttpApiDefinitionExtRevisionRecord>> {
-        self.with_ro("get_deployed_by_name")
+        self.with_ro("get_by_name_and_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT had.name, had.environment_id,
