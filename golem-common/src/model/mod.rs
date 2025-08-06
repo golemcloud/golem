@@ -56,7 +56,6 @@ use golem_wasm_rpc::{IntoValue, Value};
 use golem_wasm_rpc_derive::IntoValue;
 use http::Uri;
 use rand::prelude::IteratorRandom;
-use serde::de::Unexpected;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -1971,6 +1970,7 @@ pub struct ComponentFileSystemNode {
     pub details: ComponentFileSystemNodeDetails,
 }
 
+// Custom Deserialize is replaced with Simple Deserialize
 #[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Default)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 #[serde(rename_all = "kebab-case")]
@@ -1981,38 +1981,7 @@ pub enum GatewayBindingType {
     FileServer,
     HttpHandler,
     CorsPreflight,
-}
-
-// To keep backward compatibility as we documented wit-worker to be default
-impl<'de> Deserialize<'de> for GatewayBindingType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct GatewayBindingTypeVisitor;
-
-        impl de::Visitor<'_> for GatewayBindingTypeVisitor {
-            type Value = GatewayBindingType;
-
-            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-                formatter.write_str("a string representing the binding type")
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                match value {
-                    "default" | "wit-worker" => Ok(GatewayBindingType::Default),
-                    "file-server" => Ok(GatewayBindingType::FileServer),
-                    "cors-preflight" => Ok(GatewayBindingType::CorsPreflight),
-                    _ => Err(de::Error::invalid_value(Unexpected::Str(value), &self)),
-                }
-            }
-        }
-
-        deserializer.deserialize_str(GatewayBindingTypeVisitor)
-    }
+    SwaggerUi,
 }
 
 impl TryFrom<String> for GatewayBindingType {
