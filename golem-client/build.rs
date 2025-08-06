@@ -103,6 +103,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "WorkerBindingType",
                 "golem_common::model::WorkerBindingType",
             ),
+            (
+                "WorkerResourceDescription",
+                "golem_common::model::WorkerResourceDescription",
+            ),
             ("WorkerStatus", "golem_common::model::WorkerStatus"),
         ],
         &["/v1/components/{component_id}/workers/{worker_name}/connect"],

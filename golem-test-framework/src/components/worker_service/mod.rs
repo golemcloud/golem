@@ -56,11 +56,11 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_api_grpc::proto::golem::worker::worker_filter::Filter;
 use golem_api_grpc::proto::golem::worker::{
     file_system_node, update_record, Cursor, DirectoryFileSystemNode, FailedUpdate,
-    FileFileSystemNode, FileSystemNode, IdempotencyKey, IndexedResourceMetadata, InvocationContext,
-    InvokeParameters, InvokeResult, InvokeResultTyped, LogEvent, OplogCursor, OplogEntry,
-    OplogEntryWithIndex, PendingUpdate, ResourceMetadata, SuccessfulUpdate, TargetWorkerId,
-    UpdateMode, UpdateRecord, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerMetadata,
-    WorkerNameFilter, WorkerStatusFilter, WorkerVersionFilter, WorkerWasiConfigVarsFilter,
+    FileFileSystemNode, FileSystemNode, IdempotencyKey, InvocationContext, InvokeParameters,
+    InvokeResult, InvokeResultTyped, LogEvent, OplogCursor, OplogEntry, OplogEntryWithIndex,
+    PendingUpdate, SuccessfulUpdate, TargetWorkerId, UpdateMode, UpdateRecord,
+    WorkerCreatedAtFilter, WorkerEnvFilter, WorkerMetadata, WorkerNameFilter, WorkerStatusFilter,
+    WorkerVersionFilter, WorkerWasiConfigVarsFilter,
 };
 use golem_client::api::ApiDefinitionClient as ApiDefinitionServiceHttpClient;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionServiceHttpClientLive;
@@ -1475,18 +1475,7 @@ fn http_worker_metadata_to_grpc(
         owned_resources: worker_metadata
             .owned_resources
             .into_iter()
-            .map(|(k, v)| {
-                (
-                    k.parse().unwrap(),
-                    ResourceMetadata {
-                        created_at: Some(SystemTime::from(v.created_at).into()),
-                        indexed: v.indexed.map(|indexed| IndexedResourceMetadata {
-                            resource_name: indexed.resource_name,
-                            resource_params: indexed.resource_params,
-                        }),
-                    },
-                )
-            })
+            .map(|(k, v)| (k.parse().unwrap(), v.into()))
             .collect(),
         active_plugins: worker_metadata
             .active_plugins

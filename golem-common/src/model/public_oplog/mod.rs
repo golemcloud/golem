@@ -472,7 +472,8 @@ pub struct GrowMemoryParameters {
 pub struct ResourceParameters {
     pub timestamp: Timestamp,
     pub id: WorkerResourceId,
-    pub name: Option<String>,
+    pub name: String,
+    pub owner: String
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]

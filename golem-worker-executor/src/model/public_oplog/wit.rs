@@ -202,23 +202,30 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                     delta,
                 })
             }
-            PublicOplogEntry::CreateResource(ResourceParameters { timestamp, id }) => {
-                Self::CreateResource(oplog::CreateResourceParameters {
-                    timestamp: timestamp.into(),
-                    resource_id: id.0,
-                })
-            }
-            PublicOplogEntry::DropResource(ResourceParameters { timestamp, id }) => {
-                Self::DropResource(oplog::DropResourceParameters {
-                    timestamp: timestamp.into(),
-                    resource_id: id.0,
-                })
-            }
+            PublicOplogEntry::CreateResource(ResourceParameters {
+                timestamp,
+                id,
+                name,
+                owner,
+            }) => Self::CreateResource(oplog::CreateResourceParameters {
+                timestamp: timestamp.into(),
+                resource_id: id.0,
+            }),
+            PublicOplogEntry::DropResource(ResourceParameters {
+                timestamp,
+                id,
+                name,
+                owner,
+            }) => Self::DropResource(oplog::DropResourceParameters {
+                timestamp: timestamp.into(),
+                resource_id: id.0,
+            }),
             PublicOplogEntry::DescribeResource(DescribeResourceParameters {
                 timestamp,
                 id,
                 resource_name,
                 resource_params,
+                resource_owner,
             }) => Self::DescribeResource(oplog::DescribeResourceParameters {
                 timestamp: timestamp.into(),
                 resource_id: id.0,

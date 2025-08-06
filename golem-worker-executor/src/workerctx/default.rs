@@ -60,11 +60,10 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
-use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{
     CancellationTokenEntry, ComponentId, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
 };
-use rib::ParsedFunctionSite;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use tracing::debug;
@@ -392,15 +391,15 @@ impl ResourceStore for Context {
         self.durable_ctx.self_uri()
     }
 
-    async fn add(&mut self, resource: ResourceAny) -> u64 {
-        self.durable_ctx.add(resource).await
+    async fn add(&mut self, resource: ResourceAny, name: ResourceTypeId) -> u64 {
+        self.durable_ctx.add(resource, name).await
     }
 
-    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+    async fn get(&mut self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         ResourceStore::get(&mut self.durable_ctx, resource_id).await
     }
 
-    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+    async fn borrow(&self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         self.durable_ctx.borrow(resource_id).await
     }
 }
@@ -441,7 +440,7 @@ impl UpdateManagement for Context {
 impl IndexedResourceStore for Context {
     fn get_indexed_resource(
         &self,
-        resource_owner: &ParsedFunctionSite,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
     ) -> Option<WorkerResourceId> {
@@ -451,7 +450,7 @@ impl IndexedResourceStore for Context {
 
     async fn store_indexed_resource(
         &mut self,
-        resource_owner: &ParsedFunctionSite,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
         resource: WorkerResourceId,
@@ -463,7 +462,7 @@ impl IndexedResourceStore for Context {
 
     fn drop_indexed_resource(
         &mut self,
-        resource_owner: &ParsedFunctionSite,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
     ) {

@@ -54,7 +54,10 @@ message SuccessfulUpdate {
 
 message ResourceMetadata {
   google.protobuf.Timestamp created_at = 1;
-  optional IndexedResourceMetadata indexed = 2;
+  string resource_owner = 2;
+  string resource_name = 3;
+  bool is_indexed = 4;
+  repeated string resource_params = 5;
 }
 
 message IndexedResourceMetadata {

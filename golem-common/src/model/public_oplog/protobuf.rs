@@ -363,6 +363,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .ok_or("Missing timestamp field")?
                         .into(),
                     id: WorkerResourceId(create_resource.resource_id),
+                    name: create_resource.name,
+                    owner: create_resource.owner,
                 }))
             }
             oplog_entry::Entry::DropResource(drop_resource) => {
@@ -372,6 +374,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .ok_or("Missing timestamp field")?
                         .into(),
                     id: WorkerResourceId(drop_resource.resource_id),
+                    name: drop_resource.name,
+                    owner: drop_resource.owner,
                 }))
             }
             oplog_entry::Entry::DescribeResource(describe_resource) => Ok(
@@ -387,6 +391,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into_iter()
                         .map(TryInto::try_into)
                         .collect::<Result<Vec<ValueAndType>, String>>()?,
+                    resource_owner: describe_resource.resource_owner,
                 }),
             ),
             oplog_entry::Entry::Log(log) => Ok(PublicOplogEntry::Log(LogParameters {
@@ -728,6 +733,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::CreateResourceParameters {
                             timestamp: Some(create_resource.timestamp.into()),
                             resource_id: create_resource.id.0,
+                            name: create_resource.name,
+                            owner: create_resource.owner,
                         },
                     )),
                 }
@@ -738,6 +745,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::DropResourceParameters {
                             timestamp: Some(drop_resource.timestamp.into()),
                             resource_id: drop_resource.id.0,
+                            name: drop_resource.name,
+                            owner: drop_resource.owner,
                         },
                     )),
                 }
@@ -754,6 +763,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                                 .into_iter()
                                 .map(|value| value.into())
                                 .collect(),
+                            resource_owner: describe_resource.resource_owner,
                         },
                     )),
                 }

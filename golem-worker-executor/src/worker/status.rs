@@ -616,12 +616,18 @@ fn calculate_owned_resources(
         }
 
         match entry {
-            OplogEntry::CreateResource { id, timestamp } => {
+            OplogEntry::CreateResource {
+                id,
+                timestamp,
+                resource_type_id,
+            } => {
                 result.insert(
                     *id,
                     WorkerResourceDescription {
                         created_at: *timestamp,
-                        indexed_resource_key: None,
+                        resource_owner: resource_type_id.owner.clone(),
+                        resource_name: resource_type_id.name.clone(),
+                        resource_params: None,
                     },
                 );
             }
@@ -630,11 +636,11 @@ fn calculate_owned_resources(
             }
             OplogEntry::DescribeResource {
                 id,
-                indexed_resource,
+                indexed_resource_parameters,
                 ..
             } => {
                 if let Some(description) = result.get_mut(id) {
-                    description.indexed_resource_key = Some(indexed_resource.clone());
+                    description.resource_params = Some(indexed_resource_parameters.clone());
                 }
             }
             _ => {}

@@ -9108,6 +9108,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         cases:
           type: array
           items:
@@ -9126,6 +9128,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         names:
           type: array
           items:
@@ -9137,6 +9141,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         resource_id:
           type: integer
@@ -9152,6 +9158,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -9162,6 +9170,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -9171,6 +9181,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         fields:
           type: array
@@ -9183,6 +9195,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
@@ -9209,6 +9223,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         items:
           type: array
           items:
@@ -9232,6 +9248,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         cases:
           type: array
@@ -9547,6 +9565,8 @@ components:
         id:
           type: integer
           format: uint64
+        resourceOwner:
+          type: string
         resourceName:
           type: string
         resourceParams:
@@ -9556,6 +9576,7 @@ components:
       required:
       - timestamp
       - id
+      - resourceOwner
       - resourceName
       - resourceParams
     DomainRequest:
@@ -9955,19 +9976,6 @@ components:
       - request
       - response
       - durableFunctionType
-    IndexedWorkerMetadata:
-      title: IndexedWorkerMetadata
-      type: object
-      properties:
-        resourceName:
-          type: string
-        resourceParams:
-          type: array
-          items:
-            type: string
-      required:
-      - resourceName
-      - resourceParams
     InterruptResponse:
       title: InterruptResponse
       type: object
@@ -11016,17 +11024,6 @@ components:
       required:
       - name
       - version
-    ResourceMetadata:
-      title: ResourceMetadata
-      type: object
-      properties:
-        createdAt:
-          type: string
-          format: date-time
-        indexed:
-          $ref: '#/components/schemas/IndexedWorkerMetadata'
-      required:
-      - createdAt
     ResourceParameters:
       title: ResourceParameters
       type: object
@@ -11037,6 +11034,8 @@ components:
         id:
           type: integer
           format: uint64
+        name:
+          type: string
       required:
       - timestamp
       - id
@@ -11679,7 +11678,7 @@ components:
         ownedResources:
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/ResourceMetadata'
+            $ref: '#/components/schemas/WorkerResourceDescription'
         activePlugins:
           type: array
           items:
@@ -11746,6 +11745,25 @@ components:
             $ref: '#/components/schemas/WorkerFilter'
       required:
       - filters
+    WorkerResourceDescription:
+      title: WorkerResourceDescription
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        resourceOwner:
+          type: string
+        resourceName:
+          type: string
+        resourceParams:
+          type: array
+          items:
+            type: string
+      required:
+      - createdAt
+      - resourceOwner
+      - resourceName
     WorkerStatus:
       description: |-
         Represents last known status of a worker

@@ -3921,6 +3921,7 @@ components:
       required:
       - timestamp
       - id
+      - resourceOwner
       - resourceName
       - resourceParams
       properties:
@@ -3930,6 +3931,8 @@ components:
         id:
           type: integer
           format: uint64
+        resourceOwner:
+          type: string
         resourceName:
           type: string
         resourceParams:
@@ -4357,19 +4360,6 @@ components:
           $ref: '#/components/schemas/ValueAndType'
         durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
-    IndexedWorkerMetadata:
-      type: object
-      title: IndexedWorkerMetadata
-      required:
-      - resourceName
-      - resourceParams
-      properties:
-        resourceName:
-          type: string
-        resourceParams:
-          type: array
-          items:
-            type: string
     InterruptResponse:
       type: object
       title: InterruptResponse
@@ -5439,17 +5429,6 @@ components:
         version:
           type: integer
           format: uint64
-    ResourceMetadata:
-      type: object
-      title: ResourceMetadata
-      required:
-      - createdAt
-      properties:
-        createdAt:
-          type: string
-          format: date-time
-        indexed:
-          $ref: '#/components/schemas/IndexedWorkerMetadata'
     ResourceParameters:
       type: object
       title: ResourceParameters
@@ -5463,6 +5442,8 @@ components:
         id:
           type: integer
           format: uint64
+        name:
+          type: string
     ResumeResponse:
       type: object
       title: ResumeResponse
@@ -5744,6 +5725,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         cases:
           type: array
           items:
@@ -5762,6 +5745,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         names:
           type: array
           items:
@@ -5774,6 +5759,8 @@ components:
       - mode
       properties:
         name:
+          type: string
+        owner:
           type: string
         resource_id:
           type: integer
@@ -5788,6 +5775,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
     TypeOption:
@@ -5797,6 +5786,8 @@ components:
       - inner
       properties:
         name:
+          type: string
+        owner:
           type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
@@ -5808,6 +5799,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         fields:
           type: array
           items:
@@ -5817,6 +5810,8 @@ components:
       title: TypeResult
       properties:
         name:
+          type: string
+        owner:
           type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
@@ -5845,6 +5840,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         items:
           type: array
           items:
@@ -5868,6 +5865,8 @@ components:
       - cases
       properties:
         name:
+          type: string
+        owner:
           type: string
         cases:
           type: array
@@ -6272,7 +6271,7 @@ components:
         ownedResources:
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/ResourceMetadata'
+            $ref: '#/components/schemas/WorkerResourceDescription'
         activePlugins:
           type: array
           items:
@@ -6320,6 +6319,25 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/WorkerFilter'
+    WorkerResourceDescription:
+      type: object
+      title: WorkerResourceDescription
+      required:
+      - createdAt
+      - resourceOwner
+      - resourceName
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        resourceOwner:
+          type: string
+        resourceName:
+          type: string
+        resourceParams:
+          type: array
+          items:
+            type: string
     WorkerStatus:
       type: string
       description: |-

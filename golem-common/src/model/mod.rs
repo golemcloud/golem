@@ -36,7 +36,7 @@ pub mod worker;
 
 pub use crate::base_model::*;
 use crate::model::invocation_context::InvocationContextStack;
-use crate::model::oplog::{IndexedResourceKey, TimestampedUpdateDescription, WorkerResourceId};
+use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
@@ -562,11 +562,15 @@ impl IntoValue for WorkerMetadata {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 pub struct WorkerResourceDescription {
     pub created_at: Timestamp,
-    pub type_name: Option<String>,
-    pub indexed_resource_key: Option<IndexedResourceKey>,
+    pub resource_owner: String,
+    pub resource_name: String,
+    pub resource_params: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]

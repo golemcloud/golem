@@ -17,9 +17,11 @@ use crate::gateway_api_deployment::ApiSite;
 use derive_more::FromStr;
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::WasiConfigVars;
-use golem_common::model::{AccountId, PluginInstallationId, ScanCursor, WorkerId};
+use golem_common::model::{
+    AccountId, PluginInstallationId, ScanCursor, WorkerId, WorkerResourceDescription,
+};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
-use golem_service_base::model::{ResourceMetadata, UpdateRecord};
+use golem_service_base::model::UpdateRecord;
 use poem_openapi::{NewType, Object};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -45,7 +47,7 @@ pub struct WorkerMetadata {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub owned_resources: HashMap<u64, ResourceMetadata>,
+    pub owned_resources: HashMap<u64, WorkerResourceDescription>,
     pub active_plugins: HashSet<PluginInstallationId>,
     /// Oplog regions that are skipped during the worker's state recovery, but describe
     /// the history of the worker. For example if an atomic region gets restarted, its partially

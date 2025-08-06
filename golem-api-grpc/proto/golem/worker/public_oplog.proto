@@ -204,11 +204,15 @@ message GrowMemoryParameters {
 message CreateResourceParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 resource_id = 2;
+  string name = 3;
+  string owner = 4;
 }
 
 message DropResourceParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 resource_id = 2;
+  string name = 3;
+  string owner = 4;
 }
 
 message DescribeResourceParameters {
@@ -216,6 +220,7 @@ message DescribeResourceParameters {
   uint64 resource_id = 2;
   string resource_name = 3;
   repeated wasm.rpc.ValueAndType resource_params = 4;
+  string resource_owner = 5;
 }
 
 message TimestampParameter {
@@ -292,7 +297,7 @@ message OplogEntryWithIndex {
 }
 
 enum PersistenceLevel {
-    PERSIST_NOTHING = 0;
-    PERSIST_REMOTE_SIDE_EFFECTS = 1;
-    SMART = 2;
+  PERSIST_NOTHING = 0;
+  PERSIST_REMOTE_SIDE_EFFECTS = 1;
+  SMART = 2;
 }

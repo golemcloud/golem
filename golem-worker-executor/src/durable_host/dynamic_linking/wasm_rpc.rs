@@ -19,8 +19,9 @@ use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::DynamicLinkedWasmRpc;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
-use golem_wasm_rpc::wasmtime::{decode_param, encode_output, ResourceStore};
+use golem_wasm_rpc::wasmtime::{decode_param, encode_output, ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{CancellationTokenEntry, HostWasmRpc, Uri, Value, WasmRpcEntry, WitValue};
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
@@ -531,7 +532,16 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             let handle: Resource<FutureInvokeResult> = handle.try_into_resource(&mut store)?;
             let pollable = store.data_mut().subscribe(handle).await?;
             let pollable_any = pollable.try_into_resource_any(&mut store)?;
-            let resource_id = store.data_mut().add(pollable_any).await;
+            let resource_id = store
+                .data_mut()
+                .add(
+                    pollable_any,
+                    ResourceTypeId {
+                        owner: "wasi:io@0.2.3/poll".to_string(), // TODO: move this to some constant so it's easier to get updated
+                        name: "pollable".to_string(),
+                    },
+                )
+                .await;
 
             let value_result = Value::Tuple(vec![Value::Handle {
                 uri: store.data().self_uri().value,
@@ -643,11 +653,18 @@ async fn drop_linked_resource<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRes
 async fn encode_parameters<Ctx: ResourceStore + Send>(
     params: &[Val],
     param_types: &[Type],
+    analysed_parameter_types: &[&AnalysedType],
     store: &mut StoreContextMut<'_, Ctx>,
 ) -> anyhow::Result<Vec<WitValue>> {
     let mut wit_value_params = Vec::new();
-    for (idx, (param, typ)) in params.iter().zip(param_types).enumerate().skip(1) {
-        let value: Value = encode_output(param, typ, store.data_mut())
+    for (idx, ((param, typ), analysed_type)) in params
+        .iter()
+        .zip(param_types)
+        .zip(analysed_parameter_types)
+        .enumerate()
+        .skip(1)
+    {
+        let value: Value = encode_output(param, typ, analysed_type, store.data_mut())
             .await
             .map_err(|err| anyhow!(format!("Failed to encode parameter {idx}: {err}")))?;
         let wit_value: WitValue = value.into();
@@ -660,10 +677,11 @@ async fn remote_invoke_and_await<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvoke
     target_function_name: &ParsedFunctionName,
     params: &[Val],
     param_types: &[Type],
+    analysed_param_types: &[&AnalysedType],
     store: &mut StoreContextMut<'_, Ctx>,
     handle: Resource<WasmRpcEntry>,
 ) -> anyhow::Result<Value> {
-    let wit_value_params = encode_parameters(params, param_types, store)
+    let wit_value_params = encode_parameters(params, param_types, analysed_param_types, store)
         .await
         .context(format!("Encoding parameters of {target_function_name}"))?;
 
@@ -693,7 +711,16 @@ async fn remote_async_invoke_and_await<Ctx: WorkerCtx + HostWasmRpc + HostFuture
         .await?;
 
     let invoke_result_resource_any = invoke_result_resource.try_into_resource_any(&mut *store)?;
-    let resource_id = store.data_mut().add(invoke_result_resource_any).await;
+    let resource_id = store
+        .data_mut()
+        .add(
+            invoke_result_resource_any,
+            ResourceTypeId {
+                owner: "golem:rpc@0.2.2/future-invoke-result".to_string(), // TODO: move this to some constant so it's easier to get updated
+                name: "future-invoke-result".to_string(),
+            },
+        )
+        .await;
 
     let value_result: Value = Value::Tuple(vec![Value::Handle {
         uri: store.data().self_uri().value,

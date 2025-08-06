@@ -53,7 +53,6 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Value, ValueAndType};
-use rib::ParsedFunctionSite;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Component, Instance, Linker};
@@ -350,20 +349,20 @@ pub trait UpdateManagement {
 pub trait IndexedResourceStore {
     fn get_indexed_resource(
         &self,
-        resource_owner: &ParsedFunctionSite,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
     ) -> Option<WorkerResourceId>;
     async fn store_indexed_resource(
         &mut self,
-        resource_owner: &ParsedFunctionSite,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
         resource: WorkerResourceId,
     );
     fn drop_indexed_resource(
         &mut self,
-        resource_owner: &ParsedFunctionSite,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
     );

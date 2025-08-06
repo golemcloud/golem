@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::WorkerWasiConfigVarsFilter;
+use super::{WorkerResourceDescription, WorkerWasiConfigVarsFilter};
 use crate::model::oplog::OplogIndex;
 use crate::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
@@ -755,5 +755,34 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
             }),
             None => Err(anyhow::anyhow!("Missing value")),
         }
+    }
+}
+
+impl From<WorkerResourceDescription> for golem::worker::ResourceMetadata {
+    fn from(value: WorkerResourceDescription) -> Self {
+        Self {
+            created_at: Some(value.created_at.into()),
+            resource_owner: value.resource_owner,
+            resource_name: value.resource_name,
+            is_indexed: value.resource_params.is_some(),
+            resource_params: value.resource_params.unwrap_or_default(),
+        }
+    }
+}
+
+impl TryFrom<golem::worker::ResourceMetadata> for WorkerResourceDescription {
+    type Error = String;
+
+    fn try_from(value: golem::worker::ResourceMetadata) -> Result<Self, Self::Error> {
+        Ok(Self {
+            created_at: value.created_at.ok_or("Missing created_at")?.into(),
+            resource_owner: value.resource_owner,
+            resource_name: value.resource_name,
+            resource_params: if value.is_indexed {
+                Some(value.resource_params)
+            } else {
+                None
+            },
+        })
     }
 }

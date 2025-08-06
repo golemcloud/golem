@@ -600,22 +600,31 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     delta,
                 }))
             }
-            OplogEntry::CreateResource { timestamp, id } => {
-                Ok(PublicOplogEntry::CreateResource(ResourceParameters {
-                    timestamp,
-                    id,
-                }))
-            }
-            OplogEntry::DropResource { timestamp, id } => {
-                Ok(PublicOplogEntry::DropResource(ResourceParameters {
-                    timestamp,
-                    id,
-                }))
-            }
+            OplogEntry::CreateResource {
+                timestamp,
+                id,
+                resource_type_id,
+            } => Ok(PublicOplogEntry::CreateResource(ResourceParameters {
+                timestamp,
+                id,
+                name: resource_type_id.name,
+                owner: resource_type_id.owner,
+            })),
+            OplogEntry::DropResource {
+                timestamp,
+                id,
+                resource_type_id,
+            } => Ok(PublicOplogEntry::DropResource(ResourceParameters {
+                timestamp,
+                id,
+                name: resource_type_id.name,
+                owner: resource_type_id.owner,
+            })),
             OplogEntry::DescribeResource {
                 timestamp,
                 id,
-                indexed_resource,
+                resource_type_id,
+                indexed_resource_parameters,
             } => {
                 let metadata = components
                     .get_metadata(
@@ -626,7 +635,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let resource_name = indexed_resource.resource_name.clone();
+                let resource_name = resource_type_id.name.clone();
+                let resource_owner = resource_type_id.owner.clone();
                 let resource_constructor_name = ParsedFunctionName::new(
                     find_resource_site(&metadata.metadata.exports, &resource_name).ok_or(
                         format!(
@@ -645,8 +655,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     )?;
 
                 let mut resource_params = Vec::new();
-                for (value_str, param) in indexed_resource
-                    .resource_params
+                for (value_str, param) in indexed_resource_parameters
                     .iter()
                     .zip(constructor_def.parameters)
                 {
@@ -659,6 +668,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         id,
                         resource_name,
                         resource_params,
+                        resource_owner,
                     },
                 ))
             }

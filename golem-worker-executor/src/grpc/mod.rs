@@ -1746,7 +1746,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 resource_id.0,
                 ResourceMetadata {
                     created_at: Some(resource.created_at.into()),
-                    indexed: resource.indexed_resource_key.map(|t| t.into()),
+                    resource_owner: resource.resource_owner,
+                    resource_name: resource.resource_name,
+                    is_indexed: resource.resource_params.is_some(),
+                    resource_params: resource.resource_params.unwrap_or_default(),
                 },
             );
         }

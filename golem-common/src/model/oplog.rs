@@ -26,9 +26,9 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
+use golem_wasm_rpc::wasmtime::ResourceTypeId;
 use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
-use rib::ParsedFunctionSite;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
@@ -199,7 +199,7 @@ impl Display for WorkerResourceId {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct IndexedResourceKey {
-    pub resource_owner: ParsedFunctionSite,
+    pub resource_owner: String,
     pub resource_name: String,
     pub resource_params: Vec<String>,
 }
@@ -360,18 +360,20 @@ pub enum OplogEntry {
     CreateResource {
         timestamp: Timestamp,
         id: WorkerResourceId,
-        name: Option<String>,
+        resource_type_id: ResourceTypeId,
     },
     /// Dropped a resource instance
     DropResource {
         timestamp: Timestamp,
         id: WorkerResourceId,
+        resource_type_id: ResourceTypeId,
     },
     /// Adds additional information for a created resource instance
     DescribeResource {
         timestamp: Timestamp,
         id: WorkerResourceId,
-        indexed_resource: IndexedResourceKey,
+        resource_type_id: ResourceTypeId,
+        indexed_resource_parameters: Vec<String>,
     },
     /// The worker emitted a log message
     Log {
@@ -612,28 +614,32 @@ impl OplogEntry {
         }
     }
 
-    pub fn create_resource(id: WorkerResourceId) -> OplogEntry {
+    pub fn create_resource(id: WorkerResourceId, resource_type_id: ResourceTypeId) -> OplogEntry {
         OplogEntry::CreateResource {
             timestamp: Timestamp::now_utc(),
             id,
+            resource_type_id,
         }
     }
 
-    pub fn drop_resource(id: WorkerResourceId) -> OplogEntry {
+    pub fn drop_resource(id: WorkerResourceId, resource_type_id: ResourceTypeId) -> OplogEntry {
         OplogEntry::DropResource {
             timestamp: Timestamp::now_utc(),
             id,
+            resource_type_id,
         }
     }
 
     pub fn describe_resource(
         id: WorkerResourceId,
-        indexed_resource: IndexedResourceKey,
+        resource_type_id: ResourceTypeId,
+        indexed_resource_parameters: Vec<String>,
     ) -> OplogEntry {
         OplogEntry::DescribeResource {
             timestamp: Timestamp::now_utc(),
             id,
-            indexed_resource,
+            resource_type_id,
+            indexed_resource_parameters,
         }
     }
 
@@ -953,13 +959,13 @@ impl WorkerError {
 mod protobuf {
     use super::WorkerError;
     use crate::model::oplog::{IndexedResourceKey, PersistenceLevel};
-    use rib::ParsedFunctionSite;
 
     impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
         fn from(value: IndexedResourceKey) -> Self {
             golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
                 resource_name: value.resource_name,
                 resource_params: value.resource_params,
+                resource_owner: value.resource_owner,
             }
         }
     }
@@ -971,7 +977,7 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata,
         ) -> Result<Self, Self::Error> {
             Ok(IndexedResourceKey {
-                resource_owner: ParsedFunctionSite::parse(&value.resource_owner)?,
+                resource_owner: value.resource_owner,
                 resource_name: value.resource_name,
                 resource_params: value.resource_params,
             })

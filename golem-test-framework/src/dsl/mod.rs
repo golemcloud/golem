@@ -56,7 +56,7 @@ use golem_common::model::{
     ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
     IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ScanCursor,
     SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerResourceDescription, WorkerStatusRecord,
+    WorkerStatusRecord,
 };
 use golem_common::widen_infallible;
 use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex, RevertWorkerTarget};
@@ -2142,14 +2142,7 @@ pub fn to_worker_metadata(
                     .map(|(k, v)| {
                         (
                             WorkerResourceId(*k),
-                            WorkerResourceDescription {
-                                created_at: (*v
-                                    .created_at
-                                    .as_ref()
-                                    .expect("no timestamp on resource metadata"))
-                                .into(),
-                                indexed_resource_key: v.indexed.clone().map(|i| i.into()),
-                            },
+                            v.clone().try_into().expect("invalid resource metadata"),
                         )
                     })
                     .collect(),

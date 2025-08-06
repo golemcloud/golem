@@ -360,39 +360,10 @@ impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct ResourceMetadata {
-    pub created_at: Timestamp,
-    pub indexed: Option<IndexedWorkerMetadata>,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::ResourceMetadata> for ResourceMetadata {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::ResourceMetadata,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            created_at: value.created_at.ok_or("Missing created_at")?.into(),
-            indexed: value.indexed.map(|i| i.into()),
-        })
-    }
-}
-
-impl From<ResourceMetadata> for golem_api_grpc::proto::golem::worker::ResourceMetadata {
-    fn from(value: ResourceMetadata) -> Self {
-        Self {
-            created_at: Some(value.created_at.into()),
-            indexed: value.indexed.map(|i| i.into()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
 pub struct IndexedWorkerMetadata {
     pub resource_name: String,
     pub resource_params: Vec<String>,
+    pub resource_owner: String,
 }
 
 impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedWorkerMetadata {
@@ -400,6 +371,7 @@ impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for Ind
         Self {
             resource_name: value.resource_name,
             resource_params: value.resource_params,
+            resource_owner: value.resource_owner,
         }
     }
 }
@@ -409,6 +381,7 @@ impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::Index
         Self {
             resource_name: value.resource_name,
             resource_params: value.resource_params,
+            resource_owner: value.resource_owner,
         }
     }
 }

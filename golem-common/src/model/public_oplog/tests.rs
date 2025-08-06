@@ -432,6 +432,8 @@ fn create_resource_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::CreateResource(ResourceParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
         id: WorkerResourceId(100),
+        name: "test".to_string(),
+        owner: "owner".to_string(),
     });
 
     let serialized = entry.to_json_string();
@@ -445,6 +447,8 @@ fn drop_resource_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::DropResource(ResourceParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
         id: WorkerResourceId(100),
+        name: "test".to_string(),
+        owner: "owner".to_string(),
     });
 
     let serialized = entry.to_json_string();
@@ -469,6 +473,7 @@ fn describe_resource_serialization_poem_serde_equivalence() {
                 typ: record(vec![field("x", s16()), field("y", s16())]),
             },
         ],
+        resource_owner: "owner".to_string(),
     });
 
     let serialized = entry.to_json_string();
