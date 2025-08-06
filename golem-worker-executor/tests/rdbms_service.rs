@@ -15,15 +15,13 @@
 use assert2::check;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
-use golem_common::model::{ComponentId, WorkerId};
+use golem_common::model::{ComponentId, TransactionId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use golem_worker_executor::services::rdbms::mysql::{types as mysql_types, MysqlType};
 use golem_worker_executor::services::rdbms::postgres::{types as postgres_types, PostgresType};
-use golem_worker_executor::services::rdbms::{
-    DbResult, DbRow, Error, RdbmsTransactionId, RdbmsTransactionStatus,
-};
+use golem_worker_executor::services::rdbms::{DbResult, DbRow, Error, RdbmsTransactionStatus};
 use golem_worker_executor::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
 use golem_worker_executor::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use mac_address::MacAddress;
@@ -2444,12 +2442,12 @@ async fn execute_rdbms_test<T: RdbmsType + 'static>(
     worker_id: &WorkerId,
     test: RdbmsTest<T>,
 ) -> (
-    Option<RdbmsTransactionId>,
+    Option<TransactionId>,
     Vec<Result<StatementResult<T>, Error>>,
 ) {
     let mut results: Vec<Result<StatementResult<T>, Error>> =
         Vec::with_capacity(test.statements.len());
-    let mut transaction_id: Option<RdbmsTransactionId> = None;
+    let mut transaction_id: Option<TransactionId> = None;
     if let Some(te) = test.transaction_end {
         let transaction = rdbms
             .begin_transaction(pool_key, worker_id)
@@ -2565,7 +2563,7 @@ async fn check_transaction<T: RdbmsType + 'static>(
     pool_key: &RdbmsPoolKey,
     worker_id: &WorkerId,
     transaction_end: Option<TransactionEnd>,
-    transaction_id: Option<RdbmsTransactionId>,
+    transaction_id: Option<TransactionId>,
 ) {
     if let Some(te) = transaction_end {
         check!(
@@ -3055,7 +3053,7 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
     let mut workers_results: HashMap<WorkerId, Vec<Result<StatementResult<T>, Error>>> =
         HashMap::new();
     let mut workers_pools: HashMap<WorkerId, RdbmsPoolKey> = HashMap::new();
-    let mut workers_transactions: HashMap<WorkerId, Option<RdbmsTransactionId>> = HashMap::new();
+    let mut workers_transactions: HashMap<WorkerId, Option<TransactionId>> = HashMap::new();
 
     while let Some(res) = fibers.join_next().await {
         let (worker_id, pool_key, transaction_id, result_execute) = res.unwrap();

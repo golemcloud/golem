@@ -23,13 +23,13 @@ use crate::services::rdbms::sqlx_common::{
     SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms, TransactionSupport,
 };
 use crate::services::rdbms::{
-    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionId,
-    RdbmsTransactionStatus,
+    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionStatus,
 };
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use futures::stream::BoxStream;
+use golem_common::model::TransactionId;
 use mac_address::MacAddress;
 use serde_json::json;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
@@ -90,7 +90,7 @@ impl BeginTransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
             .await
             .map_err(Error::query_execution_failure)?;
         let id: i64 = row.try_get(0).map_err(Error::query_response_failure)?;
-        let transaction_id = RdbmsTransactionId::new(id);
+        let transaction_id = TransactionId::new(id);
 
         let db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>> = Arc::new(
             SqlxDbTransaction::new(transaction_id, key.clone(), connection, pool, query_config),
@@ -118,9 +118,9 @@ impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
 
     async fn get_transaction_status(
         pool: &Pool<sqlx::Postgres>,
-        id: &RdbmsTransactionId,
+        id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, Error> {
-        let query = sqlx::query("SELECT txid_status($1::bigint)").bind(id.0.clone());
+        let query = sqlx::query("SELECT txid_status($1::bigint)").bind(id.to_string());
         let row = pool
             .fetch_optional(query)
             .await
@@ -142,7 +142,7 @@ impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
 
     async fn cleanup_transaction(
         _pool: &Pool<sqlx::Postgres>,
-        _id: &RdbmsTransactionId,
+        _id: &TransactionId,
     ) -> Result<(), Error> {
         Ok(())
     }

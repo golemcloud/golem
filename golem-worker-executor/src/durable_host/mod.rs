@@ -91,7 +91,7 @@ use golem_common::model::oplog::{
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{exports, AccountId, PluginInstallationId, ProjectId};
+use golem_common::model::{exports, AccountId, PluginInstallationId, ProjectId, TransactionId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
@@ -3280,11 +3280,14 @@ pub trait RemoteTransactionHandler<Tx, Err>
 where
     Err: From<WorkerExecutorError>,
 {
-    async fn create_new(&self) -> Result<(String, Tx), Err>;
+    async fn create_new(&self) -> Result<(TransactionId, Tx), Err>;
 
-    async fn create_replay(&self, transaction_id: &str) -> Result<(String, Tx), Err>;
+    async fn create_replay(
+        &self,
+        transaction_id: &TransactionId,
+    ) -> Result<(TransactionId, Tx), Err>;
 
-    async fn is_committed(&self, transaction_id: &str) -> Result<bool, Err>;
+    async fn is_committed(&self, transaction_id: &TransactionId) -> Result<bool, Err>;
 
-    async fn is_rolled_back(&self, transaction_id: &str) -> Result<bool, Err>;
+    async fn is_rolled_back(&self, transaction_id: &TransactionId) -> Result<bool, Err>;
 }

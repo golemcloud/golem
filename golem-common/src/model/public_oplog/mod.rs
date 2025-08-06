@@ -28,7 +28,8 @@ use crate::model::oplog::{
 use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
+    AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp,
+    TransactionId, WorkerId,
 };
 use crate::model::{ProjectId, RetryConfig};
 use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str};
@@ -621,7 +622,7 @@ pub struct RemoteTransactionParameters {
 #[serde(rename_all = "camelCase")]
 pub struct BeginRemoteTransactionParameters {
     pub timestamp: Timestamp,
-    pub transaction_id: String,
+    pub transaction_id: TransactionId,
 }
 
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.

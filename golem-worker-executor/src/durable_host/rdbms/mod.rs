@@ -16,15 +16,14 @@ use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, RemoteTransactionHandler};
 use crate::services::rdbms::{
-    Error as RdbmsError, RdbmsService, RdbmsTransactionId, RdbmsTransactionStatus, RdbmsTypeService,
+    Error as RdbmsError, RdbmsService, RdbmsTransactionStatus, RdbmsTypeService,
 };
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::base_model::OplogIndex;
 use golem_common::model::oplog::DurableFunctionType;
-use golem_common::model::WorkerId;
+use golem_common::model::{OplogIndex, TransactionId, WorkerId};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -846,7 +845,7 @@ impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
         }
     }
 
-    fn transaction_id(&self) -> RdbmsTransactionId {
+    fn transaction_id(&self) -> TransactionId {
         match &self.state {
             RdbmsTransactionState::Open(transaction) => transaction.deref().transaction_id(),
             RdbmsTransactionState::Closed(id) => id.clone(),
@@ -857,7 +856,7 @@ impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
 #[derive(Clone)]
 pub enum RdbmsTransactionState<T: RdbmsType + 'static> {
     Open(Arc<dyn crate::services::rdbms::DbTransaction<T> + Send + Sync>),
-    Closed(RdbmsTransactionId),
+    Closed(TransactionId),
 }
 
 fn get_db_transaction<Ctx, T>(
@@ -1262,15 +1261,11 @@ where
 
     async fn get_transaction_status(
         &self,
-        transaction_id: &str,
+        transaction_id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, RdbmsError> {
         self.rdbms_service
             .rdbms_type_service()
-            .get_transaction_status(
-                &self.pool_key,
-                &self.worker_id,
-                &RdbmsTransactionId::new(transaction_id),
-            )
+            .get_transaction_status(&self.pool_key, &self.worker_id, transaction_id)
             .await
     }
 }
@@ -1282,7 +1277,7 @@ where
     T: RdbmsType + Send + Sync + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
-    async fn create_new(&self) -> Result<(String, RdbmsTransactionState<T>), RdbmsError> {
+    async fn create_new(&self) -> Result<(TransactionId, RdbmsTransactionState<T>), RdbmsError> {
         let transaction = self
             .rdbms_service
             .deref()
@@ -1292,28 +1287,25 @@ where
 
         let transaction_id = transaction.transaction_id();
 
-        Ok((
-            transaction_id.to_string(),
-            RdbmsTransactionState::Open(transaction),
-        ))
+        Ok((transaction_id, RdbmsTransactionState::Open(transaction)))
     }
 
     async fn create_replay(
         &self,
-        transaction_id: &str,
-    ) -> Result<(String, RdbmsTransactionState<T>), RdbmsError> {
+        transaction_id: &TransactionId,
+    ) -> Result<(TransactionId, RdbmsTransactionState<T>), RdbmsError> {
         Ok((
-            transaction_id.to_string(),
-            RdbmsTransactionState::Closed(RdbmsTransactionId::new(transaction_id)),
+            transaction_id.clone(),
+            RdbmsTransactionState::Closed(transaction_id.clone()),
         ))
     }
 
-    async fn is_committed(&self, transaction_id: &str) -> Result<bool, RdbmsError> {
+    async fn is_committed(&self, transaction_id: &TransactionId) -> Result<bool, RdbmsError> {
         let transaction_status = self.get_transaction_status(transaction_id).await?;
         Ok(transaction_status == RdbmsTransactionStatus::Committed)
     }
 
-    async fn is_rolled_back(&self, transaction_id: &str) -> Result<bool, RdbmsError> {
+    async fn is_rolled_back(&self, transaction_id: &TransactionId) -> Result<bool, RdbmsError> {
         let transaction_status = self.get_transaction_status(transaction_id).await?;
         Ok(transaction_status == RdbmsTransactionStatus::RolledBack)
     }

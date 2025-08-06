@@ -16,7 +16,7 @@ use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig, RdbmsQueryConf
 use crate::services::rdbms::metrics::record_rdbms_metrics;
 use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus,
-    RdbmsTransactionId, RdbmsTransactionStatus, RdbmsType,
+    RdbmsTransactionStatus, RdbmsType,
 };
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -24,7 +24,7 @@ use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::WorkerId;
+use golem_common::model::{TransactionId, WorkerId};
 use itertools::Either;
 use sqlx::pool::PoolConnection;
 use sqlx::{Database, Describe, Execute, Pool, Row, TransactionManager};
@@ -361,7 +361,7 @@ where
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
-        transaction_id: &RdbmsTransactionId,
+        transaction_id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, Error> {
         let start = Instant::now();
         debug!(
@@ -394,7 +394,7 @@ where
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
-        transaction_id: &RdbmsTransactionId,
+        transaction_id: &TransactionId,
     ) -> Result<(), Error> {
         let start = Instant::now();
         debug!(
@@ -508,7 +508,7 @@ where
     DB: Database,
 {
     rdbms_type: T,
-    transaction_id: RdbmsTransactionId,
+    transaction_id: TransactionId,
     pool_key: RdbmsPoolKey,
     tx_connection: SqlxDbTransactionConnection<DB>,
     pool: Arc<Pool<DB>>,
@@ -532,7 +532,7 @@ where
     DB: Database,
 {
     pub(crate) fn new(
-        transaction_id: RdbmsTransactionId,
+        transaction_id: TransactionId,
         pool_key: RdbmsPoolKey,
         connection: PoolConnection<DB>,
         pool: Arc<Pool<DB>>,
@@ -643,7 +643,7 @@ where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
 {
-    fn transaction_id(&self) -> RdbmsTransactionId {
+    fn transaction_id(&self) -> TransactionId {
         self.transaction_id.clone()
     }
 
@@ -1077,7 +1077,7 @@ where
             .await
             .map_err(Error::connection_failure)?;
 
-        let id = RdbmsTransactionId::generate();
+        let id = TransactionId::generate();
 
         <T as GolemTransactionRepo<DB>>::create_transaction(&id, pool.deref()).await?;
 
@@ -1111,10 +1111,10 @@ pub(crate) trait TransactionSupport<T: RdbmsType, DB: Database> {
 
     async fn get_transaction_status(
         pool: &Pool<DB>,
-        id: &RdbmsTransactionId,
+        id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, Error>;
 
-    async fn cleanup_transaction(pool: &Pool<DB>, id: &RdbmsTransactionId) -> Result<(), Error>;
+    async fn cleanup_transaction(pool: &Pool<DB>, id: &TransactionId) -> Result<(), Error>;
 }
 
 #[async_trait]
@@ -1168,12 +1168,12 @@ where
 
     async fn get_transaction_status(
         pool: &Pool<DB>,
-        id: &RdbmsTransactionId,
+        id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, Error> {
         <T as GolemTransactionRepo<DB>>::get_transaction_status(id, pool).await
     }
 
-    async fn cleanup_transaction(pool: &Pool<DB>, id: &RdbmsTransactionId) -> Result<(), Error> {
+    async fn cleanup_transaction(pool: &Pool<DB>, id: &TransactionId) -> Result<(), Error> {
         <T as GolemTransactionRepo<DB>>::delete_transaction(id, pool).await?;
         Ok(())
     }
@@ -1185,16 +1185,16 @@ pub(crate) trait GolemTransactionRepo<DB: Database> {
     where
         E: sqlx::Executor<'c, Database = DB>;
 
-    async fn create_transaction<'c, E>(id: &RdbmsTransactionId, executor: E) -> Result<(), Error>
+    async fn create_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<(), Error>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
-    async fn delete_transaction<'c, E>(id: &RdbmsTransactionId, executor: E) -> Result<bool, Error>
+    async fn delete_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<bool, Error>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
     async fn update_transaction_status<'c, E>(
-        id: &RdbmsTransactionId,
+        id: &TransactionId,
         status: RdbmsTransactionStatus,
         executor: E,
     ) -> Result<bool, Error>
@@ -1202,7 +1202,7 @@ pub(crate) trait GolemTransactionRepo<DB: Database> {
         E: sqlx::Executor<'c, Database = DB>;
 
     async fn get_transaction_status<'c, E>(
-        id: &RdbmsTransactionId,
+        id: &TransactionId,
         executor: E,
     ) -> Result<RdbmsTransactionStatus, Error>
     where

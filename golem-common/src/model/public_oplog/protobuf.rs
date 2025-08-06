@@ -490,7 +490,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             oplog_entry::Entry::BeginRemoteTransaction(value) => Ok(
                 PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParameters {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
-                    transaction_id: value.transaction_id,
+                    transaction_id: value.transaction_id.into(),
                 }),
             ),
             oplog_entry::Entry::PreCommitRemoteTransaction(value) => Ok(
@@ -908,7 +908,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::BeginRemoteTransaction(
                         golem_api_grpc::proto::golem::worker::BeginRemoteTransactionParameters {
                             timestamp: Some(begin_remote_write.timestamp.into()),
-                            transaction_id: begin_remote_write.transaction_id,
+                            transaction_id: begin_remote_write.transaction_id.into(),
                         },
                     )),
                 }

@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::{RdbmsIntoValueAndType, RdbmsPoolKey, RdbmsTransactionId, RdbmsType};
+use crate::services::rdbms::{RdbmsIntoValueAndType, RdbmsPoolKey, RdbmsType};
 use bincode::Encode;
+use golem_common::model::TransactionId;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 
@@ -22,7 +23,7 @@ pub struct RdbmsRequest<T: RdbmsType + 'static> {
     pub pool_key: RdbmsPoolKey,
     pub statement: String,
     pub params: Vec<T::DbValue>,
-    pub transaction_id: Option<RdbmsTransactionId>,
+    pub transaction_id: Option<TransactionId>,
 }
 
 impl<T: RdbmsType + 'static> bincode::Decode<()> for RdbmsRequest<T>
@@ -62,7 +63,7 @@ impl<T: RdbmsType> RdbmsRequest<T> {
         pool_key: RdbmsPoolKey,
         statement: String,
         params: Vec<T::DbValue>,
-        transaction_id: Option<RdbmsTransactionId>,
+        transaction_id: Option<TransactionId>,
     ) -> Self {
         Self {
             pool_key,
@@ -79,7 +80,7 @@ impl<T: RdbmsType> RdbmsRequest<T> {
             analysed_type::field("params", params_type),
             analysed_type::field(
                 "transaction-id",
-                analysed_type::option(RdbmsTransactionId::get_type()),
+                analysed_type::option(TransactionId::get_type()),
             ),
         ])
     }

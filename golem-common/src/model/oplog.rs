@@ -16,8 +16,8 @@ pub use crate::base_model::OplogIndex;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
-    WorkerInvocation,
+    AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, TransactionId,
+    WorkerId, WorkerInvocation,
 };
 use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;
@@ -466,7 +466,7 @@ pub enum OplogEntry {
     },
     BeginRemoteTransaction {
         timestamp: Timestamp,
-        transaction_id: String,
+        transaction_id: TransactionId,
     },
     PreCommitRemoteTransaction {
         timestamp: Timestamp,
@@ -736,7 +736,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn begin_remote_transaction(transaction_id: String) -> OplogEntry {
+    pub fn begin_remote_transaction(transaction_id: TransactionId) -> OplogEntry {
         OplogEntry::BeginRemoteTransaction {
             timestamp: Timestamp::now_utc(),
             transaction_id,

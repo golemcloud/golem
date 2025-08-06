@@ -17,7 +17,8 @@ use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, GetFileSystemNodeResult,
     IdempotencyKey, OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, RetryConfig,
-    TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    TargetWorkerId, TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -65,7 +66,7 @@ use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::{
-    DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsTransactionId,
+    DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsPoolKey, RdbmsStatus,
     RdbmsTransactionStatus, RdbmsType,
 };
 use golem_worker_executor::services::resource_limits::ResourceLimits;
@@ -1431,7 +1432,7 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
-        transaction_id: &RdbmsTransactionId,
+        transaction_id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, rdbms::Error> {
         let r = self.check_rdbms_tx(worker_id, "GetTransactionStatusNotFound");
         if r.is_err() {
@@ -1448,7 +1449,7 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
-        transaction_id: &RdbmsTransactionId,
+        transaction_id: &TransactionId,
     ) -> Result<(), rdbms::Error> {
         self.check_rdbms_tx(worker_id, "CleanupTransaction")?;
         self.rdbms

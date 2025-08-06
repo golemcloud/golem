@@ -22,6 +22,7 @@ use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
 use bincode::{BorrowDecode, Decode, Encode};
+use golem_common::model::TransactionId;
 use golem_common::model::WorkerId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
@@ -78,7 +79,7 @@ impl Display for RdbmsStatus {
 
 #[async_trait]
 pub trait DbTransaction<T: RdbmsType> {
-    fn transaction_id(&self) -> RdbmsTransactionId;
+    fn transaction_id(&self) -> TransactionId;
 
     async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>
     where
@@ -155,14 +156,14 @@ pub trait Rdbms<T: RdbmsType> {
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
-        transaction_id: &RdbmsTransactionId,
+        transaction_id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, Error>;
 
     async fn cleanup_transaction(
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
-        transaction_id: &RdbmsTransactionId,
+        transaction_id: &TransactionId,
     ) -> Result<(), Error>;
 
     fn status(&self) -> RdbmsStatus;
@@ -669,35 +670,6 @@ fn get_bound_analysed_type(base_type: AnalysedType) -> AnalysedType {
         analysed_type::case("excluded", base_type.clone()),
         analysed_type::unit_case("unbounded"),
     ])
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode)]
-pub struct RdbmsTransactionId(String);
-
-impl Display for RdbmsTransactionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl RdbmsTransactionId {
-    pub fn new<Id: Display>(id: Id) -> Self {
-        Self(id.to_string())
-    }
-
-    pub fn generate() -> Self {
-        Self::new(uuid::Uuid::new_v4())
-    }
-}
-
-impl IntoValue for RdbmsTransactionId {
-    fn into_value(self) -> Value {
-        Value::String(self.0)
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::str()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
