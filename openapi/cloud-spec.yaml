@@ -15,6 +15,7 @@ tags:
 - name: Application
 - name: Component
 - name: Debugging
+- name: Deployment
 - name: Environment
 - name: Grant
 - name: HealthCheck
