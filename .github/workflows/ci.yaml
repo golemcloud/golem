@@ -20,13 +20,20 @@ env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
   VCPKG_DEFAULT_TRIPLET: "x64-mingw-dynamic"
   VCPKG_ENABLE_METRICS: 0
+  MINGW_PACKAGE: "https://github.com/niXman/mingw-builds-binaries/releases/download/14.2.0-rt_v12-rev2/x86_64-14.2.0-release-posix-seh-ucrt-rt_v12-rev2.7z"
 
 jobs:
   build:
     env:
       CARGO_BUILD_JOBS: 10
+      PROTOC: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/tools/protobuf/protoc.exe"
+      PROTOC_INCLUDE: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/include"
+      PATH: "${{ github.workspace }}/mingw64/bin;${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/bin/;${{ env.PATH }}"
 #    runs-on: blacksmith-16vcpu-ubuntu-2204
     runs-on: self-hosted
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,12 +42,13 @@ jobs:
           submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
-      - name: Set up MinGW
-        uses: egor-tensin/setup-mingw@v2
-        with:
-          platform: x64
-          static: false
-          version: 14.2.0
+        
+      - name: Download MinGW # TODO CACHE
+        run: |
+          Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
+          "C:\Program Files\7-Zip\7z.exe" x "mingw-w64.7z" "-omingw64" -aoa -r
+          gcc --version
+        
       - name: Setup Rust
         run: |
           rustup install stable-gnu
@@ -63,9 +71,6 @@ jobs:
         env:
           QUIET: true
         run: |
-          $env:PROTOC="$PWD/vcpkg_installed/x64-mingw-dynamic/tools/protobuf/protoc.exe"
-          $env:PROTOC_INCLUDE = "$PWD/vcpkg_installed/x64-mingw-dynamic/include"
-          $env:PATH="$PWD/vcpkg_installed/x64-mingw-dynamic/bin/;" + $env:PATH
           cargo make --profile ci build
         timeout-minutes: 180
 
