@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use super::ApiResult;
-use golem_common::api::environment::UpdateEnvironmentRequest;
+use golem_common::api::Page;
+use golem_common::api::environment::{DeployEnvironmentRequest, UpdateEnvironmentRequest};
 use golem_common::model::auth::AuthCtx;
+use golem_common::model::deployment::Deployment;
 use golem_common::model::environment::*;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -62,7 +64,7 @@ impl EnvironmentsApi {
         todo!()
     }
 
-    /// Update application by id.
+    /// Update environment by id.
     #[oai(
         path = "/:environment_id",
         method = "patch",
@@ -95,6 +97,180 @@ impl EnvironmentsApi {
         _payload: UpdateEnvironmentRequest,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
+        todo!()
+    }
+
+    /// Get hash of the currently deployed environment
+    #[oai(
+        path = "/:environment_id/current-deployment/hash",
+        method = "get",
+        operation_id = "get_deployed_environment_hash"
+    )]
+    async fn get_deployed_environment_hash(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<EnvironmentHash>> {
+        let record = recorded_http_api_request!(
+            "get_deployed_environment_hash",
+            environment_id = environment_id.0.to_string(),
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .get_deployed_environment_hash_internal(environment_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_deployed_environment_hash_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _token: AuthCtx,
+    ) -> ApiResult<Json<EnvironmentHash>> {
+        todo!()
+    }
+
+    /// Get summary of the currently deployed environment
+    #[oai(
+        path = "/:environment_id/current-deployment/summary",
+        method = "get",
+        operation_id = "get_deployed_environment_summary"
+    )]
+    async fn get_deployed_environment_summary(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<EnvironmentSummary>> {
+        let record = recorded_http_api_request!(
+            "get_deployed_environment_summary",
+            environment_id = environment_id.0.to_string(),
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .get_deployed_environment_summary_internal(environment_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_deployed_environment_summary_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _token: AuthCtx,
+    ) -> ApiResult<Json<EnvironmentSummary>> {
+        todo!()
+    }
+
+    /// Get the current deployment plan. This is equivalent to a summary of the current staging area.
+    #[oai(
+        path = "/:environment_id/plan",
+        method = "get",
+        operation_id = "get_environment_deployment_plan"
+    )]
+    async fn get_environment_deployment_plan(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<EnvironmentSummary>> {
+        let record = recorded_http_api_request!(
+            "get_environment_deployment_plan",
+            environment_id = environment_id.0.to_string(),
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .get_environment_deployment_plan_internal(environment_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_environment_deployment_plan_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _token: AuthCtx,
+    ) -> ApiResult<Json<EnvironmentSummary>> {
+        todo!()
+    }
+
+    /// Get all deployments in this environment
+    #[oai(
+        path = "/:environment_id/deployments",
+        method = "get",
+        operation_id = "get_deployments",
+        tag = ApiTags::Deployment
+    )]
+    async fn get_deployments(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<Deployment>>> {
+        let record = recorded_http_api_request!(
+            "get_deployments",
+            environment_id = environment_id.0.to_string(),
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .get_deployments_internal(environment_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_deployments_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _token: AuthCtx,
+    ) -> ApiResult<Json<Page<Deployment>>> {
+        todo!()
+    }
+
+    /// Deploy the current staging area of this environment
+    #[oai(
+        path = "/:environment_id/deployments",
+        method = "post",
+        operation_id = "deploy_environment",
+        tag = ApiTags::Deployment
+    )]
+    async fn deploy_environment(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        payload: Json<DeployEnvironmentRequest>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Deployment>> {
+        let record = recorded_http_api_request!(
+            "deploy_environment",
+            environment_id = environment_id.0.to_string(),
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .deploy_environment_internal(environment_id.0, payload.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn deploy_environment_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _payload: DeployEnvironmentRequest,
+        _token: AuthCtx,
+    ) -> ApiResult<Json<Deployment>> {
         todo!()
     }
 }

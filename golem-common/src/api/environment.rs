@@ -27,8 +27,4 @@ declare_structs! {
     pub struct DeployEnvironmentRequest {
 
     }
-
-    pub struct DeployEnvironmentResponse {
-
-    }
 }

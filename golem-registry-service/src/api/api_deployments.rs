@@ -14,6 +14,7 @@
 
 use super::ApiResult;
 use golem_common::api::{Page, UpdateApiDeploymentRequest};
+use golem_common::model::Revision;
 use golem_common::model::api_deployment::{ApiDeployment, ApiDeploymentId};
 use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;
@@ -93,6 +94,43 @@ impl ApiDeploymentsApi {
         _api_deployment_id: ApiDeploymentId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<ApiDeployment>>> {
+        todo!()
+    }
+
+    /// Get specific revision an api-deployment
+    #[oai(
+        path = "/:api_deployment_id/revisions/:revision",
+        method = "get",
+        operation_id = "get_api_deployment_revision"
+    )]
+    async fn get_api_deployment_revision(
+        &self,
+        api_deployment_id: Path<ApiDeploymentId>,
+        revision: Path<Revision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<ApiDeployment>> {
+        let record = recorded_http_api_request!(
+            "get_api_deployment_revision",
+            api_deployment_id = api_deployment_id.0.to_string(),
+            revision = revision.0.to_string()
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .get_api_deployment_revision_internal(api_deployment_id.0, revision.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_api_deployment_revision_internal(
+        &self,
+        _api_deployment_id: ApiDeploymentId,
+        _revision: Revision,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<ApiDeployment>> {
         todo!()
     }
 

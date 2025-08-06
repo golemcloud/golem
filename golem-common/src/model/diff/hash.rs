@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::diff::ser::{to_json_with_mode, SerializeMode, ToSerializableWithMode};
 use crate::model::diff::Diffable;
-use crate::model::diff::ser::{SerializeMode, ToSerializableWithMode, to_json_with_mode};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use std::fmt::{Display, Formatter};
