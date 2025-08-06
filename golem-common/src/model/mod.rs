@@ -24,6 +24,7 @@ pub mod certificate;
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
+pub mod deployment;
 pub mod diff;
 pub mod environment;
 pub mod error;

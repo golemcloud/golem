@@ -14,6 +14,7 @@
 
 use super::environment::EnvironmentId;
 use crate::model::api_definition::ApiDefinitionId;
+use crate::model::Revision;
 use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
 use chrono::DateTime;
 
@@ -25,6 +26,8 @@ declare_transparent_newtypes! {
 
 declare_structs! {
     pub struct ApiDeployment {
+        pub id: ApiDeploymentId,
+        pub revision: Revision,
         pub api_definitions: Vec<ApiDefinitionId>,
         pub environment_id: EnvironmentId,
         pub site: ApiSiteString,

@@ -97,6 +97,80 @@ impl ComponentsApi {
         todo!()
     }
 
+    /// Get specific revision of a component
+    #[oai(
+        path = "/:component_id/revisions/:revision",
+        method = "get",
+        operation_id = "get_component_revision"
+    )]
+    async fn get_component_revision(
+        &self,
+        component_id: Path<ComponentId>,
+        revision: Path<Revision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Component>> {
+        let record = recorded_http_api_request!(
+            "get_component_revision",
+            component_id = component_id.0.to_string(),
+            revision = revision.0.to_string()
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .get_component_revision_internal(component_id.0, revision.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_component_revision_internal(
+        &self,
+        _component_id: ComponentId,
+        _revision: Revision,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Component>> {
+        todo!()
+    }
+
+    /// Get the component wasm binary of a specific revision
+    #[oai(
+        path = "/:component_id/revisions/:revision/wasm",
+        method = "get",
+        operation_id = "get_component_wasm"
+    )]
+    async fn get_component_wasm(
+        &self,
+        component_id: Path<ComponentId>,
+        revision: Path<Revision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Binary<Body>> {
+        let record = recorded_http_api_request!(
+            "get_component_wasm",
+            component_id = component_id.0.to_string(),
+            revision = revision.0.to_string()
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .get_component_wasm_internal(component_id.0, revision.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_component_wasm_internal(
+        &self,
+        _component_id: ComponentId,
+        _revision: Revision,
+        _auth: AuthCtx,
+    ) -> ApiResult<Binary<Body>> {
+        todo!()
+    }
+
     /// Update a component
     ///
     /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
@@ -132,43 +206,6 @@ impl ComponentsApi {
         _payload: UpdateComponentRequest,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        todo!()
-    }
-
-    /// Get the component wasm binary
-    #[oai(
-        path = "/:component_id/revisions/:revision/wasm",
-        method = "get",
-        operation_id = "get_component_wasm"
-    )]
-    async fn get_component_wasm(
-        &self,
-        component_id: Path<ComponentId>,
-        revision: Path<Revision>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Binary<Body>> {
-        let record = recorded_http_api_request!(
-            "get_component_wasm",
-            component_id = component_id.0.to_string(),
-            revision = revision.0.to_string()
-        );
-
-        let auth = AuthCtx::new(token.secret());
-
-        let response = self
-            .get_component_wasm_internal(component_id.0, revision.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_component_wasm_internal(
-        &self,
-        _component_id: ComponentId,
-        _revision: Revision,
-        _auth: AuthCtx,
-    ) -> ApiResult<Binary<Body>> {
         todo!()
     }
 }
