@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction};
 
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite};
-
 
 pub fn find_resource_site(
     exports: &[AnalysedExport],

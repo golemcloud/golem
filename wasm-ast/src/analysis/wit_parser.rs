@@ -414,12 +414,8 @@ impl ToAnalysedType for Type {
 fn follow_aliases(resolve: &Resolve, type_id: &TypeId) -> TypeId {
     let mut current_id = *type_id;
     while let Some(type_def) = resolve.types.get(current_id) {
-        if let TypeDefKind::Type(alias) = &type_def.kind {
-            if let Type::Id(alias_type_id) = alias {
-                current_id = *alias_type_id;
-            } else {
-                break;
-            }
+        if let TypeDefKind::Type(Type::Id(alias_type_id)) = &type_def.kind {
+            current_id = *alias_type_id;
         } else {
             break;
         }

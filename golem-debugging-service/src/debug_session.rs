@@ -48,7 +48,6 @@ use golem_worker_executor::durable_host::wasm_rpc::serialized::{
 };
 use golem_worker_executor::services::blob_store::ObjectMetadata;
 use golem_worker_executor::services::rpc::RpcError;
-use rib::ParsedFunctionSite;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;

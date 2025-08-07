@@ -717,7 +717,7 @@ struct ExtractedBindingData<'a> {
     cors_preflight: Option<&'a HttpCors>,
 }
 
-fn extract_binding_data(binding: &GatewayBindingCompiled) -> ExtractedBindingData {
+fn extract_binding_data(binding: &GatewayBindingCompiled) -> ExtractedBindingData<'_> {
     match binding {
         GatewayBindingCompiled::Worker(w) => ExtractedBindingData {
             component_id: Some(&w.component_id),

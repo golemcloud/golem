@@ -473,7 +473,7 @@ pub struct ResourceParameters {
     pub timestamp: Timestamp,
     pub id: WorkerResourceId,
     pub name: String,
-    pub owner: String
+    pub owner: String,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]

@@ -265,7 +265,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     let metadata = component_metadata
         .find_parsed_function(&parsed)
-        .map_err(|err| WorkerExecutorError::runtime(err))?
+        .map_err(WorkerExecutorError::runtime)?
         .ok_or_else(|| {
             WorkerExecutorError::invalid_request(format!(
                 "Could not find exported function: {parsed}"
@@ -477,7 +477,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
 
             let constructor_metadata = component_metadata
                 .find_parsed_function(&resource_constructor_name)
-                .map_err(|err| WorkerExecutorError::runtime(err))?
+                .map_err(WorkerExecutorError::runtime)?
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(format!(
                         "Could not find resource constructor: {resource_constructor_name}"

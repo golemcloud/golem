@@ -72,9 +72,9 @@ impl ComponentMetadata {
         parsed: &ParsedFunctionName,
     ) -> Result<Option<InvokableFunction>, String> {
         Ok(self
-            .find_analysed_function(&parsed)
+            .find_analysed_function(parsed)
             .map(|analysed_export| {
-                self.find_agent_method_or_constructor(&parsed)
+                self.find_agent_method_or_constructor(parsed)
                     .map(|agent_method_or_constructor| {
                         (analysed_export, agent_method_or_constructor)
                     })
@@ -138,7 +138,7 @@ impl ComponentMetadata {
                     version: self
                         .root_package_version
                         .as_ref()
-                        .map(|v| SemVer::parse(&v))
+                        .map(|v| SemVer::parse(v))
                         .transpose()?,
                 };
 
@@ -161,7 +161,7 @@ impl ComponentMetadata {
 
                         Ok(method.map(AgentMethodOrConstructor::Method))
                     } else if let Some(resource_name) = parsed.is_static_method() {
-                        if parsed.function().function_name() == "create".to_string() {
+                        if parsed.function().function_name() == "create" {
                             // this can be an agent constructor
                             let agent = self
                                 .agent_types
