@@ -816,7 +816,30 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         environment_id: &Uuid,
         deployment_revision_id: i64,
     ) -> repo::Result<Vec<HttpApiDeploymentExtRevisionRecord>> {
-        todo!()
+        let revisions = self.with_ro("list_by_deployment")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT had.environment_id, had.host, had.subdomain,
+                           hadr.http_api_deployment_id, hadr.revision_id, hadr.hash,
+                           hadr.created_at, hadr.created_by, hadr.deleted
+                    FROM http_api_deployments had
+                    JOIN http_api_deployment_revisions hadr ON had.http_api_deployment_id = hadr.http_api_deployment_id
+                    JOIN deployment_http_api_definition_revisions dhadr
+                        ON dhadr.http_api_definition_id = hadr.http_api_deployment_id
+                            AND dhadr.http_api_definition_revision_id = hadr.revision_id
+                    WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
+                        AND hadr.deleted = FALSE
+                    ORDER BY had.host, had.subdomain
+                "#})
+                    .bind(environment_id)
+                    .bind(deployment_revision_id),
+            )
+            .await?;
+
+        stream::iter(revisions)
+            .then(|revision| self.with_http_api_definitions(revision))
+            .try_collect()
+            .await
     }
 }
 
