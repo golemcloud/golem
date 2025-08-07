@@ -627,7 +627,7 @@ async fn test_default_plugin_repo(
 
     let all1 = plugin_repo.get_all(&plugin_owner_row).await?;
     let scoped1 = plugin_repo
-        .get_for_scope(&plugin_owner_row, &[scope1.clone()])
+        .get_for_scope(&plugin_owner_row, std::slice::from_ref(&scope1))
         .await?;
     let named1 = plugin_repo
         .get_all_with_name(&plugin_owner_row, "plugin1")
@@ -676,7 +676,7 @@ async fn test_default_plugin_repo(
 
     let all2 = plugin_repo.get_all(&plugin_owner_row).await?;
     let scoped2 = plugin_repo
-        .get_for_scope(&plugin_owner_row, &[scope1.clone()])
+        .get_for_scope(&plugin_owner_row, std::slice::from_ref(&scope1))
         .await?;
     let named2 = plugin_repo
         .get_all_with_name(&plugin_owner_row, "plugin1")
