@@ -23,6 +23,7 @@ pub mod hash;
 pub mod http_api_definition;
 pub mod http_api_deployment;
 pub mod plan;
+pub mod token;
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::datetime::SqlDateTime;
