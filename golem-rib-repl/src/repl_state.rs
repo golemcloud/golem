@@ -80,11 +80,11 @@ impl ReplState {
         *self.last_executed_instruction.write().unwrap() = None;
     }
 
-    pub fn rib_script(&self) -> RwLockReadGuard<RawRibScript> {
+    pub fn rib_script(&self) -> RwLockReadGuard<'_, RawRibScript> {
         self.rib_script.read().unwrap()
     }
 
-    pub fn rib_compiler(&self) -> RwLockReadGuard<RibCompiler> {
+    pub fn rib_compiler(&self) -> RwLockReadGuard<'_, RibCompiler> {
         self.rib_compiler.read().unwrap()
     }
 

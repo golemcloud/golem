@@ -38,16 +38,23 @@ pub struct VariantType(pub Vec<(String, Option<InferredType>)>);
 #[derive(Clone, PartialEq, Debug)]
 pub struct StringType;
 
+#[allow(dead_code)]
 #[derive(Clone, PartialEq, Debug)]
 pub struct NumberType;
 
+#[allow(dead_code)]
 #[derive(Clone, PartialEq, Debug)]
 pub struct CharType;
+
+#[allow(dead_code)]
 #[derive(Clone, PartialEq, Debug)]
 pub struct BoolType;
 
+#[allow(dead_code)]
 #[derive(Clone, PartialEq, Debug)]
 pub struct FlagsType(pub Vec<String>);
+
+#[allow(dead_code)]
 #[derive(Clone, PartialEq, Debug)]
 pub struct EnumType(pub Vec<String>);
 
