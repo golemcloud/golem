@@ -26,7 +26,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo;
-use golem_service_base::repo::{RepoError, ResultExt};
+use golem_service_base::repo::ResultExt;
 use indoc::indoc;
 use sqlx::{Database, Row};
 use tracing::{Instrument, Span, info_span};

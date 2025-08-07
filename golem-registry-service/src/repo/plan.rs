@@ -19,7 +19,6 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo;
-use golem_service_base::repo::RepoError;
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;

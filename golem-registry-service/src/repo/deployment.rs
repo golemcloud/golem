@@ -33,7 +33,6 @@ use golem_service_base::db::{
     LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi, ToBusiness, TxError,
 };
 use golem_service_base::repo;
-use golem_service_base::repo::RepoError;
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::collections::HashSet;

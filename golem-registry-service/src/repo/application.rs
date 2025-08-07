@@ -39,10 +39,7 @@ pub trait ApplicationRepo: Send + Sync {
 
     async fn get_by_id(&self, application_id: &Uuid) -> repo::Result<Option<ApplicationRecord>>;
 
-    async fn list_by_owner(
-        &self,
-        owner_account_id: &Uuid,
-    ) -> repo::Result<Vec<ApplicationRecord>>;
+    async fn list_by_owner(&self, owner_account_id: &Uuid) -> repo::Result<Vec<ApplicationRecord>>;
 
     async fn get_revisions(
         &self,
@@ -103,10 +100,7 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
             .await
     }
 
-    async fn list_by_owner(
-        &self,
-        owner_account_id: &Uuid,
-    ) -> repo::Result<Vec<ApplicationRecord>> {
+    async fn list_by_owner(&self, owner_account_id: &Uuid) -> repo::Result<Vec<ApplicationRecord>> {
         self.repo
             .list_by_owner(owner_account_id)
             .instrument(Self::span_owner_id(owner_account_id))
@@ -211,10 +205,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
             .await
     }
 
-    async fn list_by_owner(
-        &self,
-        owner_account_id: &Uuid,
-    ) -> repo::Result<Vec<ApplicationRecord>> {
+    async fn list_by_owner(&self, owner_account_id: &Uuid) -> repo::Result<Vec<ApplicationRecord>> {
         self.with_ro("list_by_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
