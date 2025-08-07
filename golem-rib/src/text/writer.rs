@@ -569,7 +569,7 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_expr_type(expr: &Expr) -> ExprType {
+    pub(crate) fn get_expr_type(expr: &Expr) -> ExprType<'_> {
         match expr {
             Expr::Literal { value, .. } => ExprType::Text(value),
             Expr::Concat { .. } => ExprType::StringInterpolated,
