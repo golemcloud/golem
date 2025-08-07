@@ -6441,6 +6441,85 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/api/definitions/{project_id}/{id}/{version}/export:
+    get:
+      tags:
+      - ApiDefinition
+      summary: Export an API definition in OpenAPI format
+      description: Exports an API definition by its API definition ID and version in OpenAPI format.
+      operationId: export_definition
+      parameters:
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OpenApiHttpApiDefinitionResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/api/deployments/deploy:
     post:
       tags:
@@ -7812,6 +7891,7 @@ components:
       - CreatePluginDefinition
       - UpdatePluginDefinition
       - DeletePluginDefinition
+      - ExportApiDefinition
     ProjectPolicy:
       title: ProjectPolicy
       type: object
@@ -9837,6 +9917,7 @@ components:
       - file-server
       - http-handler
       - cors-preflight
+      - swagger-ui
     GetFilesResponse:
       title: GetFilesResponse
       type: object
@@ -10065,6 +10146,20 @@ components:
       - Options
       - Trace
       - Head
+    OpenApiHttpApiDefinitionResponse:
+      title: OpenApiHttpApiDefinitionResponse
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        openapi_yaml:
+          type: string
+      required:
+      - id
+      - version
+      - openapi_yaml
     OplogCursor:
       title: OplogCursor
       type: object

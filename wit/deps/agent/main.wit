@@ -1,1 +1,5 @@
-package unused:agentic;
+package golem:agent-guest;
+
+world agent-guest {
+  include golem:agent/agent-guest;
+}
