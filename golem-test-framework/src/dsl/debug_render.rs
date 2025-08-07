@@ -64,6 +64,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 "{pad}input:             {}",
                 value_to_string(&params.request)
             );
+            println!("{:#?}", params);
             let _ = writeln!(
                 result,
                 "{pad}result:            {}",

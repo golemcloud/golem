@@ -21,8 +21,8 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogPayload, SpanData,
-    UpdateDescription, WorkerError, WorkerResourceId,
+    DurableFunctionType, LogLevel, OplogEntry, OplogPayload, SpanData, UpdateDescription,
+    WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
@@ -30,8 +30,8 @@ use golem_common::model::{
     WorkerInvocation, WorkerResourceDescription,
 };
 use golem_common::serialization::deserialize;
+use golem_wasm_rpc::wasmtime::ResourceTypeId;
 use golem_wasm_rpc::Value;
-use rib::ParsedFunctionSite;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
@@ -211,20 +211,29 @@ pub fn oplog_entry() {
     let oe21 = OplogEntry::CreateResource {
         timestamp: Timestamp::from(1724701938466),
         id: WorkerResourceId(1),
+        resource_type_id: ResourceTypeId {
+            name: "name".to_string(),
+            owner: "owner".to_string(),
+        },
     };
 
     let oe22 = OplogEntry::DropResource {
         timestamp: Timestamp::from(1724701938466),
         id: WorkerResourceId(1),
+        resource_type_id: ResourceTypeId {
+            name: "name".to_string(),
+            owner: "owner".to_string(),
+        },
     };
 
     let oe23 = OplogEntry::DescribeResource {
         timestamp: Timestamp::from(1724701938466),
         id: WorkerResourceId(1),
-        indexed_resource: IndexedResourceKey {
-            resource_name: "r1".to_string(),
-            resource_params: vec!["a".to_string(), "b".to_string()],
+        resource_type_id: ResourceTypeId {
+            name: "name".to_string(),
+            owner: "owner".to_string(),
         },
+        indexed_resource_parameters: vec!["a".to_string(), "b".to_string()],
     };
 
     let oe24 = OplogEntry::Log {
@@ -445,20 +454,15 @@ pub fn oplog_entry() {
 pub fn worker_resource_description() {
     let wrd1 = WorkerResourceDescription {
         created_at: Timestamp::from(1724701938466),
-        indexed_resource_key: None,
+        resource_owner: "owner".to_string(),
+        resource_name: "name".to_string(),
+        resource_params: None,
     };
     let wrd2 = WorkerResourceDescription {
         created_at: Timestamp::from(1724701938466),
-        indexed_resource_key: Some(IndexedResourceKey {
-            resource_owner: ParsedFunctionSite::PackagedInterface {
-                namespace: "rpc".to_string(),
-                package: "counters-export".to_string(),
-                interface: "api".to_string(),
-                version: None,
-            },
-            resource_name: "r1".to_string(),
-            resource_params: vec!["a".to_string(), "b".to_string()],
-        }),
+        resource_owner: "rpc:counters-export/api".to_string(),
+        resource_name: "counter".to_string(),
+        resource_params: Some(vec!["a".to_string(), "b".to_string()]),
     };
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_resource_description", &mut mint, wrd1);
