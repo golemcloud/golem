@@ -761,7 +761,11 @@ async fn test_export_openapi_spec_simple(deps: &EnvBasedTestDependencies) {
     let admin = deps.admin().await;
     let project = admin.default_project().await;
 
-    let (_component_id, component_name) = admin.component("counters").unique().store_and_get_name().await;
+    let (_component_id, component_name) = admin
+        .component("counters")
+        .unique()
+        .store_and_get_name()
+        .await;
 
     // Create an API definition with a specific route
     let api_id = Uuid::new_v4().to_string();
@@ -849,7 +853,11 @@ async fn test_roundtrip_api_definition(deps: &EnvBasedTestDependencies) {
     let admin = deps.admin().await;
     let project = admin.default_project().await;
 
-    let (_component_id, component_name) = admin.component("counters").unique().store_and_get_name().await;
+    let (_component_id, component_name) = admin
+        .component("counters")
+        .unique()
+        .store_and_get_name()
+        .await;
 
     // 1. Create an API definition request with a specific route
     let api_id = Uuid::new_v4().to_string();
