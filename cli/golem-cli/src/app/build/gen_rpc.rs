@@ -221,7 +221,7 @@ async fn create_generated_base_wit(
                             {
                                 ctx.component_base_output_wit_deps(dep_component_name)?
                                     .add_packages_with_transitive_deps_to_wit_dir(
-                                        &[dep_exports_package_name.clone()],
+                                        std::slice::from_ref(dep_exports_package_name),
                                         &component_generated_base_wit,
                                     )?;
                             }
