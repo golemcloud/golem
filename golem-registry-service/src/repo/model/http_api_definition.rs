@@ -72,6 +72,14 @@ impl HttpApiDefinitionRevisionRecord {
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct HttpApiDefinitionExtRevisionRecord {
+    pub name: String,
+    pub environment_id: Uuid,
+    #[sqlx(flatten)]
+    pub revision: HttpApiDefinitionRevisionRecord,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDefinitionRevisionIdentityRecord {
     pub http_api_definition_id: Uuid,
     pub name: String,

@@ -33,7 +33,6 @@ use golem_service_base::db::{
     LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi, ToBusiness, TxError,
 };
 use golem_service_base::repo;
-use golem_service_base::repo::RepoError;
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::collections::HashSet;
@@ -50,9 +49,10 @@ pub trait DeploymentRepo: Send + Sync {
 
     async fn get_staged_identity(&self, environment_id: &Uuid) -> repo::Result<DeploymentIdentity>;
 
-    async fn get_deployed_identity(
+    async fn get_deployment_identity(
         &self,
         environment_id: &Uuid,
+        revision_id: Option<i64>,
     ) -> repo::Result<Option<DeployedDeploymentIdentity>>;
 
     async fn deploy(
@@ -80,6 +80,14 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
         info_span!(
             SPAN_NAME,
             environment_id = %environment_id,
+        )
+    }
+
+    fn span_env_and_revision(environment_id: &Uuid, revision_id: i64) -> Span {
+        info_span!(
+            SPAN_NAME,
+            environment_id = %environment_id,
+            revision_id
         )
     }
 
@@ -111,13 +119,17 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .await
     }
 
-    async fn get_deployed_identity(
+    async fn get_deployment_identity(
         &self,
         environment_id: &Uuid,
+        revision_id: Option<i64>,
     ) -> repo::Result<Option<DeployedDeploymentIdentity>> {
         self.repo
-            .get_deployed_identity(environment_id)
-            .instrument(Self::span_env(environment_id))
+            .get_deployment_identity(environment_id, revision_id)
+            .instrument(match revision_id {
+                Some(revision_id) => Self::span_env_and_revision(environment_id, revision_id),
+                None => Self::span_env(environment_id),
+            })
             .await
     }
 
@@ -207,11 +219,20 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         }
     }
 
-    async fn get_deployed_identity(
+    async fn get_deployment_identity(
         &self,
         environment_id: &Uuid,
+        revision_id: Option<i64>,
     ) -> repo::Result<Option<DeployedDeploymentIdentity>> {
-        let Some(deployment_revision) = self.get_deployed_revision(environment_id).await? else {
+        let deployment_revision = match revision_id {
+            Some(revision_id) => {
+                self.get_deployment_revision(environment_id, revision_id)
+                    .await?
+            }
+            None => self.get_deployed_revision(environment_id).await?,
+        };
+
+        let Some(deployment_revision) = deployment_revision else {
             return Ok(None);
         };
 
@@ -255,7 +276,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
         let actual_current_staged_revision_id: Option<i64> =
             match actual_current_staged_revision_id_row {
-                Some(row) => Some(row.try_get(0)?),
+                Some(row) => Some(row.try_get("revision_id")?),
                 None => None,
             };
 
@@ -320,7 +341,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .to_business_error_on_unique_violation(|| DeployError::DeploymentConcurrentRevisionCreation)
+        .to_business_result_on_unique_violation(|| {
+            DeployError::DeploymentConcurrentRevisionCreation
+        })
     }
 }
 
@@ -329,6 +352,12 @@ trait DeploymentRepoInternal: DeploymentRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
+    async fn get_deployment_revision(
+        &self,
+        environment_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::Result<Option<DeploymentRevisionRecord>>;
+
     async fn create_deployment_revision(
         tx: &mut Self::Tx,
         user_account_id: Uuid,
@@ -336,7 +365,7 @@ trait DeploymentRepoInternal: DeploymentRepo {
         revision_id: i64,
         version: String,
         hash: SqlBlake3Hash,
-    ) -> Result<DeploymentRevisionRecord, RepoError>;
+    ) -> repo::Result<DeploymentRevisionRecord>;
 
     async fn get_staged_deployment(
         tx: &mut Self::Tx,
@@ -346,17 +375,17 @@ trait DeploymentRepoInternal: DeploymentRepo {
     async fn get_staged_components(
         tx: &mut Self::Tx,
         environment_id: &Uuid,
-    ) -> Result<Vec<ComponentRevisionIdentityRecord>, RepoError>;
+    ) -> repo::Result<Vec<ComponentRevisionIdentityRecord>>;
 
     async fn get_staged_http_api_definitions(
         tx: &mut Self::Tx,
         environment_id: &Uuid,
-    ) -> Result<Vec<HttpApiDefinitionRevisionIdentityRecord>, RepoError>;
+    ) -> repo::Result<Vec<HttpApiDefinitionRevisionIdentityRecord>>;
 
     async fn get_staged_http_api_deployments(
         tx: &mut Self::Tx,
         environment_id: &Uuid,
-    ) -> Result<Vec<HttpApiDeploymentRevisionIdentityRecord>, RepoError>;
+    ) -> repo::Result<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
 
     fn validate_stage(stage: &DeploymentIdentity) -> Vec<DeployValidationError> {
         let http_api_definition_ids = stage
@@ -424,25 +453,25 @@ trait DeploymentRepoInternal: DeploymentRepo {
         user_account_id: &Uuid,
         environment_id: &Uuid,
         deployment_revision_id: i64,
-    ) -> Result<CurrentDeploymentRevisionRecord, RepoError>;
+    ) -> repo::Result<CurrentDeploymentRevisionRecord>;
 
     async fn get_deployed_components(
         &self,
         environment_id: &Uuid,
         revision_id: i64,
-    ) -> Result<Vec<ComponentRevisionIdentityRecord>, RepoError>;
+    ) -> repo::Result<Vec<ComponentRevisionIdentityRecord>>;
 
     async fn get_deployed_http_api_definitions(
         &self,
         environment_id: &Uuid,
         revision_id: i64,
-    ) -> Result<Vec<HttpApiDefinitionRevisionIdentityRecord>, RepoError>;
+    ) -> repo::Result<Vec<HttpApiDefinitionRevisionIdentityRecord>>;
 
     async fn get_deployed_http_api_deployments(
         &self,
         environment_id: &Uuid,
         revision_id: i64,
-    ) -> Result<Vec<HttpApiDeploymentRevisionIdentityRecord>, RepoError>;
+    ) -> repo::Result<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -451,6 +480,24 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
+    async fn get_deployment_revision(
+        &self,
+        environment_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::Result<Option<DeploymentRevisionRecord>> {
+        self.with_ro("get_deployment_revision")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT environment_id, revision_id, version, hash, created_at, created_by
+                    FROM deployment_revisions
+                    WHERE environment_id = $1 AND revision_id = $2
+                "#})
+                .bind(environment_id)
+                .bind(revision_id),
+            )
+            .await
+    }
+
     async fn create_deployment_revision(
         tx: &mut Self::Tx,
         user_account_id: Uuid,
@@ -458,7 +505,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         revision_id: i64,
         version: String,
         hash: SqlBlake3Hash,
-    ) -> Result<DeploymentRevisionRecord, RepoError> {
+    ) -> repo::Result<DeploymentRevisionRecord> {
         let revision = DeploymentRevisionRecord {
             environment_id,
             revision_id,
@@ -497,12 +544,12 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     async fn get_staged_components(
         tx: &mut Self::Tx,
         environment_id: &Uuid,
-    ) -> Result<Vec<ComponentRevisionIdentityRecord>, RepoError> {
+    ) -> repo::Result<Vec<ComponentRevisionIdentityRecord>> {
         tx.fetch_all_as(
             sqlx::query_as(indoc! { r#"
                 SELECT c.component_id, c.name, cr.revision_id, cr.revision_id, cr.version, cr.status, cr.hash
                 FROM components c
-                INNER JOIN component_revisions cr ON
+                JOIN component_revisions cr ON
                     cr.component_id = c.component_id
                         AND cr.revision_id = c.current_revision_id
                 WHERE c.environment_id = $1 AND c.deleted_at IS NULL
@@ -515,12 +562,12 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     async fn get_staged_http_api_definitions(
         tx: &mut Self::Tx,
         environment_id: &Uuid,
-    ) -> Result<Vec<HttpApiDefinitionRevisionIdentityRecord>, RepoError> {
+    ) -> repo::Result<Vec<HttpApiDefinitionRevisionIdentityRecord>> {
         tx.fetch_all_as(
             sqlx::query_as(indoc! { r#"
                 SELECT d.http_api_definition_id, d.name, dr.revision_id, dr.version, dr.hash
                 FROM http_api_definitions d
-                INNER JOIN http_api_definition_revisions dr ON
+                JOIN http_api_definition_revisions dr ON
                     d.http_api_definition_id = dr.http_api_definition_id
                         AND d.current_revision_id = dr.revision_id
                 WHERE d.environment_id = $1 AND d.deleted_at IS NULL
@@ -533,13 +580,13 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     async fn get_staged_http_api_deployments(
         tx: &mut Self::Tx,
         environment_id: &Uuid,
-    ) -> Result<Vec<HttpApiDeploymentRevisionIdentityRecord>, RepoError> {
+    ) -> repo::Result<Vec<HttpApiDeploymentRevisionIdentityRecord>> {
         let mut deployments: Vec<HttpApiDeploymentRevisionIdentityRecord> = tx
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT d.http_api_deployment_id, d.name, dr.revision_id, dr.hash
                     FROM http_api_deployments d
-                    INNER JOIN http_api_deployment_revisions dr ON
+                    JOIN http_api_deployment_revisions dr ON
                         d.http_api_deployment_id = dr.http_api_deployment_id
                             AND d.current_revision_id = dr.revision_id
                     WHERE d.environment_id = $1 AND d.deleted_at IS NULL
@@ -565,7 +612,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .await?;
             deployment.http_api_definitions = definitions
                 .iter()
-                .map(|row| row.try_get(0))
+                .map(|row| row.try_get("http_definition_id"))
                 .collect::<Result<_, _>>()?;
         }
 
@@ -680,7 +727,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         user_account_id: &Uuid,
         environment_id: &Uuid,
         deployment_revision_id: i64,
-    ) -> Result<CurrentDeploymentRevisionRecord, RepoError> {
+    ) -> repo::Result<CurrentDeploymentRevisionRecord> {
         let opt_row = tx
             .fetch_optional(
                 sqlx::query(indoc! { r#"
@@ -730,7 +777,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         &self,
         environment_id: &Uuid,
         revision_id: i64,
-    ) -> Result<Vec<ComponentRevisionIdentityRecord>, RepoError> {
+    ) -> repo::Result<Vec<ComponentRevisionIdentityRecord>> {
         self.with_ro("get_deployed_components")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -742,8 +789,8 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     WHERE dcr.environment_id = $1 AND dcr.deployment_revision_id = $2
                     ORDER BY c.name
                 "#})
-                .bind(environment_id)
-                .bind(revision_id),
+                    .bind(environment_id)
+                    .bind(revision_id),
             )
             .await
     }
@@ -752,7 +799,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         &self,
         environment_id: &Uuid,
         revision_id: i64,
-    ) -> Result<Vec<HttpApiDefinitionRevisionIdentityRecord>, RepoError> {
+    ) -> repo::Result<Vec<HttpApiDefinitionRevisionIdentityRecord>> {
         self.with_ro("get_deployed_http_api_definitions")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -765,8 +812,8 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
                     ORDER BY had.name
                 "#})
-                .bind(environment_id)
-                .bind(revision_id),
+                    .bind(environment_id)
+                    .bind(revision_id),
             )
             .await
     }
@@ -775,7 +822,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         &self,
         environment_id: &Uuid,
         revision_id: i64,
-    ) -> Result<Vec<HttpApiDeploymentRevisionIdentityRecord>, RepoError> {
+    ) -> repo::Result<Vec<HttpApiDeploymentRevisionIdentityRecord>> {
         let mut deployments: Vec<HttpApiDeploymentRevisionIdentityRecord> = self.with_ro("get_deployed_http_api_deployments - deployments")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -788,8 +835,8 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
                     ORDER BY had.host, had.subdomain
                 "#})
-                .bind(environment_id)
-                .bind(revision_id),
+                    .bind(environment_id)
+                    .bind(revision_id),
             )
             .await?;
 
@@ -808,7 +855,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .await?;
             deployment.http_api_definitions = definitions
                 .iter()
-                .map(|row| row.try_get(0))
+                .map(|row| row.try_get("http_definition_id"))
                 .collect::<Result<_, _>>()?;
         }
 

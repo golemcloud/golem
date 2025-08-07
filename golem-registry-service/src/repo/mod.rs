@@ -21,6 +21,7 @@ pub mod environment;
 pub mod http_api_definition;
 pub mod http_api_deployment;
 pub mod plan;
+pub mod token;
 
 // Model for SQL records and fields
 pub mod model;

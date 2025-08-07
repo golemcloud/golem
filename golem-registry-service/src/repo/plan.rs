@@ -19,14 +19,13 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo;
-use golem_service_base::repo::RepoError;
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 #[async_trait]
 pub trait PlanRepository: Send + Sync {
-    async fn create(&self, plan: PlanRecord) -> Result<PlanRecord, RepoError>;
+    async fn create(&self, plan: PlanRecord) -> repo::Result<PlanRecord>;
 }
 
 pub struct LoggedPlanRepository<Repo: PlanRepository> {
@@ -53,8 +52,8 @@ impl<Repo: PlanRepository> PlanRepository for LoggedPlanRepository<Repo> {
     }
 }
 
-pub struct DbPlanRepository<DB: Pool> {
-    db_pool: DB,
+pub struct DbPlanRepository<DBP: Pool> {
+    db_pool: DBP,
 }
 
 static METRICS_SVC_NAME: &str = "plan";
@@ -62,6 +61,13 @@ static METRICS_SVC_NAME: &str = "plan";
 impl<DBP: Pool> DbPlanRepository<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
+    }
+
+    pub fn logged(db_pool: DBP) -> LoggedPlanRepository<Self>
+    where
+        Self: PlanRepository,
+    {
+        LoggedPlanRepository::new(Self::new(db_pool))
     }
 
     fn with_rw(&self, api_name: &'static str) -> DBP::LabelledApi {

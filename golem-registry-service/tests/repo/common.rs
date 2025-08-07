@@ -16,18 +16,27 @@ use crate::repo::Deps;
 use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
+use golem_common::model::ComponentFilePermissions;
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_registry_service::repo::account::AccountRecord;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
-use golem_registry_service::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
-use uuid::Uuid;
+use golem_registry_service::repo::model::audit::{
+    AuditFields, DeletableRevisionAuditFields, RevisionAuditFields,
+};
+use golem_registry_service::repo::model::component::{
+    ComponentFileRecord, ComponentRevisionRecord, ComponentStatus,
+};
+use golem_registry_service::repo::model::new_repo_uuid;
+use std::collections::BTreeMap;
+use std::default::Default;
 // Common test cases -------------------------------------------------------------------------------
 
 pub async fn test_create_and_get_account(deps: &Deps) {
     let account = AccountRecord {
-        account_id: Uuid::new_v4(),
-        email: Uuid::new_v4().to_string(),
-        audit: AuditFields::new(Uuid::new_v4()),
-        name: Uuid::new_v4().to_string(),
+        account_id: new_repo_uuid(),
+        email: new_repo_uuid().to_string(),
+        audit: AuditFields::new(new_repo_uuid()),
+        name: new_repo_uuid().to_string(),
         plan_id: deps.test_plan_id(),
     };
 
@@ -38,10 +47,10 @@ pub async fn test_create_and_get_account(deps: &Deps) {
     let result_for_same_email = deps
         .account_repo
         .create(AccountRecord {
-            account_id: Uuid::new_v4(),
+            account_id: new_repo_uuid(),
             email: account.email.clone(),
-            audit: AuditFields::new(Uuid::new_v4()),
-            name: Uuid::new_v4().to_string(),
+            audit: AuditFields::new(new_repo_uuid()),
+            name: new_repo_uuid().to_string(),
             plan_id: deps.test_plan_id(),
         })
         .await
@@ -69,7 +78,7 @@ pub async fn test_application_ensure(deps: &Deps) {
     let now = Utc::now();
     let owner = deps.create_account().await;
     let user = deps.create_account().await;
-    let app_name = format!("app-name-{}", Uuid::new_v4());
+    let app_name = format!("app-name-{}", new_repo_uuid());
 
     let app = deps
         .application_repo
@@ -112,13 +121,12 @@ pub async fn test_application_ensure(deps: &Deps) {
 pub async fn test_application_ensure_concurrent(deps: &Deps) {
     let owner = deps.create_account().await;
     let user = deps.create_account().await;
-    let app_name = format!("app-name-{}", Uuid::new_v4());
+    let app_name = format!("app-name-{}", new_repo_uuid());
     let concurrency = 20;
 
     let results = join_all(
         (0..concurrency)
             .map(|_| {
-                let deps = deps.clone();
                 let app_name = app_name.clone();
                 async move {
                     deps.application_repo
@@ -191,7 +199,7 @@ pub async fn test_environment_create(deps: &Deps) {
     );
 
     let revision_0 = EnvironmentRevisionRecord {
-        environment_id: Uuid::new_v4(),
+        environment_id: new_repo_uuid(),
         revision_id: 0,
         audit: DeletableRevisionAuditFields::new(user.account_id),
         compatibility_check: false,
@@ -236,25 +244,22 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
 
     let results = join_all(
         (0..concurrency)
-            .map(|_| {
-                let deps = deps.clone();
-                async move {
-                    deps.environment_repo
-                        .create(
-                            &app.application_id,
-                            env_name,
-                            EnvironmentRevisionRecord {
-                                environment_id: Uuid::new_v4(),
-                                revision_id: 0,
-                                audit: DeletableRevisionAuditFields::new(user.account_id),
-                                compatibility_check: false,
-                                version_check: false,
-                                security_overrides: false,
-                                hash: blake3::hash("test".as_bytes()).into(),
-                            },
-                        )
-                        .await
-                }
+            .map(|_| async move {
+                deps.environment_repo
+                    .create(
+                        &app.application_id,
+                        env_name,
+                        EnvironmentRevisionRecord {
+                            environment_id: new_repo_uuid(),
+                            revision_id: 0,
+                            audit: DeletableRevisionAuditFields::new(user.account_id),
+                            compatibility_check: false,
+                            version_check: false,
+                            security_overrides: false,
+                            hash: blake3::hash("test".as_bytes()).into(),
+                        },
+                    )
+                    .await
             })
             .collect::<Vec<_>>(),
     )
@@ -386,24 +391,21 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
 
     let results = join_all(
         (0..concurrency)
-            .map(|_| {
-                let deps = deps.clone();
-                async move {
-                    deps.environment_repo
-                        .update(
-                            env_rev_0.revision.revision_id,
-                            EnvironmentRevisionRecord {
-                                environment_id: env_rev_0.revision.environment_id,
-                                revision_id: 0,
-                                audit: DeletableRevisionAuditFields::new(user.account_id),
-                                compatibility_check: false,
-                                version_check: false,
-                                security_overrides: false,
-                                hash: blake3::hash("test_2".as_bytes()).into(),
-                            },
-                        )
-                        .await
-                }
+            .map(|_| async move {
+                deps.environment_repo
+                    .update(
+                        env_rev_0.revision.revision_id,
+                        EnvironmentRevisionRecord {
+                            environment_id: env_rev_0.revision.environment_id,
+                            revision_id: 0,
+                            audit: DeletableRevisionAuditFields::new(user.account_id),
+                            compatibility_check: false,
+                            version_check: false,
+                            security_overrides: false,
+                            hash: blake3::hash("test_2".as_bytes()).into(),
+                        },
+                    )
+                    .await
             })
             .collect::<Vec<_>>(),
     )
@@ -419,4 +421,218 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
         .count();
     check!(created_count == 1);
     check!(skipped_count == concurrency - 1);
+}
+
+pub async fn test_component_stage(deps: &Deps) {
+    let user = deps.create_account().await;
+    let env = deps.create_env().await;
+    let component_name = "test-component";
+    let component_id = new_repo_uuid();
+
+    let revision_0 = ComponentRevisionRecord {
+        component_id,
+        revision_id: 0,
+        version: "1.0".to_string(),
+        hash: None,
+        audit: DeletableRevisionAuditFields::new(user.account_id),
+        component_type: 0,
+        size: 10,
+        metadata: ComponentMetadata {
+            exports: vec![],
+            producers: vec![],
+            memories: vec![],
+            binary_wit: Default::default(),
+            root_package_name: Some("test".to_string()),
+            root_package_version: Some("1.0".to_string()),
+            dynamic_linking: Default::default(),
+            agent_types: vec![],
+        }
+        .into(),
+        env: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
+        status: ComponentStatus::Created,
+        object_store_key: "xys".to_string(),
+        binary_hash: blake3::hash("test".as_bytes()).into(),
+        transformed_object_store_key: Some("xys-transformed".to_string()),
+        files: vec![ComponentFileRecord {
+            component_id,
+            revision_id: 0,
+            file_path: "file".to_string(),
+            hash: blake3::hash("test-2".as_bytes()).into(),
+            audit: RevisionAuditFields::new(user.account_id),
+            file_key: "xdxd".to_string(),
+            file_permissions: ComponentFilePermissions::ReadWrite.into(),
+        }],
+    };
+
+    let created_revision_0 = deps
+        .component_repo
+        .create(
+            &env.revision.environment_id,
+            component_name,
+            revision_0.clone(),
+        )
+        .await
+        .unwrap();
+    let_assert!(Some(created_revision_0) = created_revision_0);
+    assert!(revision_0 == created_revision_0.revision);
+    assert!(created_revision_0.environment_id == env.revision.environment_id);
+    assert!(created_revision_0.name == component_name);
+
+    let recreate = deps
+        .component_repo
+        .create(
+            &env.revision.environment_id,
+            component_name,
+            revision_0.clone(),
+        )
+        .await
+        .unwrap();
+    assert!(recreate.is_none());
+
+    let get_revision_0 = deps
+        .component_repo
+        .get_staged_by_id(&component_id)
+        .await
+        .unwrap();
+    let_assert!(Some(get_revision_0) = get_revision_0);
+    assert!(revision_0 == get_revision_0.revision);
+    assert!(get_revision_0.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.name == component_name);
+
+    let get_revision_0 = deps
+        .component_repo
+        .get_staged_by_name(&env.revision.environment_id, component_name)
+        .await
+        .unwrap();
+    let_assert!(Some(get_revision_0) = get_revision_0);
+    assert!(revision_0 == get_revision_0.revision);
+    assert!(get_revision_0.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.name == component_name);
+
+    let components = deps
+        .component_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+    assert!(components.len() == 1);
+    assert!(components[0].revision == revision_0);
+    assert!(components[0].environment_id == env.revision.environment_id);
+    assert!(components[0].name == component_name);
+
+    let revision_1 = ComponentRevisionRecord {
+        revision_id: 1,
+        size: 12345,
+        env: Default::default(),
+        binary_hash: blake3::hash("test-222".as_bytes()).into(),
+        transformed_object_store_key: None,
+        files: revision_0
+            .files
+            .iter()
+            .map(|file| ComponentFileRecord {
+                revision_id: 1,
+                ..file.clone()
+            })
+            .collect(),
+        ..revision_0.clone()
+    };
+
+    let created_revision_1 = deps
+        .component_repo
+        .update(0, revision_1.clone())
+        .await
+        .unwrap();
+    let_assert!(Some(created_revision_1) = created_revision_1);
+    assert!(revision_1 == created_revision_1.revision);
+    assert!(created_revision_1.environment_id == env.revision.environment_id);
+    assert!(created_revision_1.name == component_name);
+
+    let recreated_revision_1 = deps
+        .component_repo
+        .update(0, revision_1.clone())
+        .await
+        .unwrap();
+    assert!(recreated_revision_1.is_none());
+
+    let components = deps
+        .component_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+    assert!(components.len() == 1);
+    assert!(components[0].revision == revision_1);
+
+    let other_component_id = new_repo_uuid();
+    let other_component_name = "test-component-other";
+    let other_component_revision_0 = ComponentRevisionRecord {
+        component_id: other_component_id,
+        files: Default::default(),
+        ..revision_0.clone()
+    };
+
+    let created_other_component_0 = deps
+        .component_repo
+        .create(
+            &env.revision.environment_id,
+            other_component_name,
+            other_component_revision_0.clone(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(created_other_component_0.revision == other_component_revision_0);
+
+    let components = deps
+        .component_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(components.len() == 2);
+    assert!(components[0].revision == revision_1);
+    assert!(components[1].revision == other_component_revision_0);
+
+    let delete_with_old_revision = deps
+        .component_repo
+        .delete(&user.account_id, &component_id, 0)
+        .await
+        .unwrap();
+    assert!(delete_with_old_revision == false);
+
+    let delete_with_current_revision = deps
+        .component_repo
+        .delete(&user.account_id, &component_id, 1)
+        .await
+        .unwrap();
+    assert!(delete_with_current_revision == true);
+
+    let components = deps
+        .component_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(components.len() == 1);
+    assert!(components[0].revision == other_component_revision_0);
+
+    let revision_after_delete = ComponentRevisionRecord {
+        component_id: new_repo_uuid(),
+        files: Default::default(),
+        ..revision_0.clone()
+    };
+    let created_after_delete = deps
+        .component_repo
+        .create(
+            &env.revision.environment_id,
+            component_name,
+            revision_after_delete.clone(),
+        )
+        .await
+        .unwrap();
+    let revision_after_delete = ComponentRevisionRecord {
+        component_id: revision_0.component_id,
+        revision_id: 3,
+        ..revision_after_delete
+    };
+    let_assert!(Some(created_after_delete) = created_after_delete);
+    assert!(created_after_delete.revision == revision_after_delete);
 }

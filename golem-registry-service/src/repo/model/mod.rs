@@ -23,6 +23,7 @@ pub mod hash;
 pub mod http_api_definition;
 pub mod http_api_deployment;
 pub mod plan;
+pub mod token;
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::datetime::SqlDateTime;
@@ -32,6 +33,10 @@ use sqlx::query::{Query, QueryAs};
 use uuid::Uuid;
 
 // TODO: typed revision_id and entity UUIDs
+
+pub fn new_repo_uuid() -> Uuid {
+    Uuid::now_v7()
+}
 
 /// BindFields is used to extract binding of common field sets, e.g., audit fields
 pub trait BindFields {

@@ -70,7 +70,7 @@ impl EnvironmentRevisionRecord {
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct EnvironmentCurrentRevisionRecord {
+pub struct EnvironmentExtRevisionRecord {
     pub name: String,
     pub application_id: Uuid,
     #[sqlx(flatten)]

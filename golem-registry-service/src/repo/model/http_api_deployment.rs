@@ -74,6 +74,15 @@ impl HttpApiDeploymentRevisionRecord {
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct HttpApiDeploymentExtRevisionRecord {
+    pub environment_id: Uuid,
+    pub host: String,
+    pub subdomain: Option<String>,
+    #[sqlx(flatten)]
+    pub revision: HttpApiDeploymentRevisionRecord,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDeploymentDefinitionRecord {
     pub http_api_deployment_id: Uuid,
     pub revision_id: i64,

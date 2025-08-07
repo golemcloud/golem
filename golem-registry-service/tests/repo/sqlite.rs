@@ -15,18 +15,20 @@
 use crate::Tracing;
 use crate::repo::Deps;
 use golem_common::config::DbSqliteConfig;
-use golem_registry_service::repo::account::{DbAccountRepo, LoggedAccountRepo};
-use golem_registry_service::repo::application::{DbApplicationRepo, LoggedApplicationRepo};
-use golem_registry_service::repo::environment::{DbEnvironmentRepo, LoggedEnvironmentRepo};
-use golem_registry_service::repo::plan::{DbPlanRepository, LoggedPlanRepository};
+use golem_registry_service::repo::account::DbAccountRepo;
+use golem_registry_service::repo::application::DbApplicationRepo;
+use golem_registry_service::repo::component::DbComponentRepo;
+use golem_registry_service::repo::environment::DbEnvironmentRepo;
+use golem_registry_service::repo::http_api_definition::DbHttpApiDefinitionRepo;
+use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
+use golem_registry_service::repo::model::new_repo_uuid;
+use golem_registry_service::repo::plan::DbPlanRepository;
 use golem_service_base::db;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
-use std::sync::Arc;
 use test_r::test;
 use test_r::{inherit_test_dep, test_dep};
 use tracing::info;
-use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
@@ -40,7 +42,7 @@ pub struct SqliteDb {
 impl SqliteDb {
     pub async fn new() -> Self {
         tempfile::tempfile().unwrap();
-        let db_path = format!("/tmp/golem-registry-{}.db", Uuid::new_v4());
+        let db_path = format!("/tmp/golem-registry-{}.db", new_repo_uuid());
         let db_config = DbSqliteConfig {
             database: db_path.clone(),
             max_connections: 3,
@@ -77,16 +79,14 @@ async fn db_pool(_tracing: &Tracing) -> SqliteDb {
 #[test_dep]
 async fn deps(db: &SqliteDb) -> Deps {
     let deps = Deps {
-        account_repo: Arc::new(LoggedAccountRepo::new(DbAccountRepo::new(db.pool.clone()))),
-        application_repo: Arc::new(LoggedApplicationRepo::new(DbApplicationRepo::new(
-            db.pool.clone(),
-        ))),
-        environment_repo: Arc::new(LoggedEnvironmentRepo::new(DbEnvironmentRepo::new(
-            db.pool.clone(),
-        ))),
-        plan_repo: Arc::new(LoggedPlanRepository::new(DbPlanRepository::new(
-            db.pool.clone(),
-        ))),
+        account_repo: Box::new(DbAccountRepo::logged(db.pool.clone())),
+        application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
+        environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
+        plan_repo: Box::new(DbPlanRepository::logged(db.pool.clone())),
+        component_repo: Box::new(DbComponentRepo::logged(db.pool.clone())),
+        http_api_definition_repo: Box::new(DbHttpApiDefinitionRepo::logged(db.pool.clone())),
+        http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
+        deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
     };
     deps.setup().await;
     deps
@@ -132,4 +132,9 @@ async fn test_environment_update(deps: &Deps) {
 #[test]
 async fn test_environment_update_concurrently(deps: &Deps) {
     crate::repo::common::test_environment_update_concurrently(deps).await;
+}
+
+#[test]
+async fn test_component_create_and_get(deps: &Deps) {
+    crate::repo::common::test_component_stage(deps).await;
 }

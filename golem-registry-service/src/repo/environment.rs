@@ -14,7 +14,7 @@
 
 use crate::repo::model::BindFields;
 pub use crate::repo::model::environment::{
-    EnvironmentCurrentRevisionRecord, EnvironmentRecord, EnvironmentRevisionRecord,
+    EnvironmentExtRevisionRecord, EnvironmentRecord, EnvironmentRevisionRecord,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -24,7 +24,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo;
-use golem_service_base::repo::RepoError;
+use golem_service_base::repo::ResultExt;
 use indoc::indoc;
 use sqlx::Database;
 use tracing::{Instrument, Span, info_span};
@@ -36,25 +36,30 @@ pub trait EnvironmentRepo: Send + Sync {
         &self,
         application_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>>;
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>>;
 
     async fn get_by_id(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>>;
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>>;
+
+    async fn list_by_app(
+        &self,
+        application_id: &Uuid,
+    ) -> repo::Result<Vec<EnvironmentExtRevisionRecord>>;
 
     async fn create(
         &self,
         application_id: &Uuid,
         name: &str,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>>;
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>>;
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>>;
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>>;
 
     async fn delete(
         &self,
@@ -79,11 +84,11 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
         info_span!(SPAN_NAME, application_id = %application_id, name)
     }
 
-    fn span_env_id(environment_id: &Uuid) -> Span {
+    fn span_env(environment_id: &Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id)
     }
 
-    fn span_app_id(application_id: &Uuid) -> Span {
+    fn span_id(application_id: &Uuid) -> Span {
         info_span!(SPAN_NAME, application_id = %application_id)
     }
 }
@@ -94,7 +99,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         application_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
         self.repo
             .get_by_name(application_id, name)
             .instrument(Self::span_name(application_id, name))
@@ -104,10 +109,20 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn get_by_id(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
         self.repo
             .get_by_id(environment_id)
-            .instrument(Self::span_env_id(environment_id))
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn list_by_app(
+        &self,
+        application_id: &Uuid,
+    ) -> repo::Result<Vec<EnvironmentExtRevisionRecord>> {
+        self.repo
+            .list_by_app(application_id)
+            .instrument(Self::span_env(application_id))
             .await
     }
 
@@ -116,10 +131,10 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         application_id: &Uuid,
         name: &str,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
         self.repo
             .create(application_id, name, revision)
-            .instrument(Self::span_app_id(application_id))
+            .instrument(Self::span_id(application_id))
             .await
     }
 
@@ -127,8 +142,8 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
-        let span = Self::span_env_id(&revision.environment_id);
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
+        let span = Self::span_env(&revision.environment_id);
         self.repo
             .update(current_revision_id, revision)
             .instrument(span)
@@ -141,7 +156,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         environment_id: &Uuid,
         current_revision_id: i64,
     ) -> repo::Result<bool> {
-        let span = Self::span_env_id(user_account_id);
+        let span = Self::span_env(user_account_id);
         self.repo
             .delete(user_account_id, environment_id, current_revision_id)
             .instrument(span)
@@ -160,16 +175,23 @@ impl<DBP: Pool> DbEnvironmentRepo<DBP> {
         Self { db_pool }
     }
 
+    pub fn logged(db_pool: DBP) -> LoggedEnvironmentRepo<Self>
+    where
+        Self: EnvironmentRepo,
+    {
+        LoggedEnvironmentRepo::new(Self::new(db_pool))
+    }
+
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> Result<R, RepoError>
+    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> repo::Result<R>
     where
         R: Send,
         F: for<'f> FnOnce(
                 &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, Result<R, RepoError>>
+            ) -> BoxFuture<'f, repo::Result<R>>
             + Send,
     {
         self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
@@ -183,7 +205,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         application_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
         self.with_ro("get_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -193,7 +215,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides
                     FROM environments e
-                    INNER JOIN environment_revisions r
+                    JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
                     WHERE e.application_id = $1 AND e.name = $2 AND e.deleted_at IS NULL
                 "# })
@@ -206,7 +228,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -216,11 +238,29 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides
                     FROM environments e
-                    INNER JOIN environment_revisions r
+                    JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
                     WHERE e.environment_id = $1 AND e.deleted_at IS NULL
                 "# })
                     .bind(environment_id),
+            )
+            .await
+    }
+
+    async fn list_by_app(
+        &self,
+        application_id: &Uuid,
+    ) -> repo::Result<Vec<EnvironmentExtRevisionRecord>> {
+        self.with_ro("list_by_owner")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                    FROM environments e
+                    JOIN environment_revisions r ON r.environment_id = e.environment_id
+                    WHERE e.application_id = $1
+                    ORDER BY e.name
+                "#})
+                .bind(application_id),
             )
             .await
     }
@@ -230,13 +270,12 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         application_id: &Uuid,
         name: &str,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
         let application_id = *application_id;
         let name = name.to_owned();
         let revision = revision.ensure_first();
 
-        let result: repo::Result<EnvironmentCurrentRevisionRecord> =
-            self.with_tx("create", |tx| async move {
+        self.with_tx("create", |tx| async move {
                 tx.execute(
                     sqlx::query(indoc! { r#"
                         INSERT INTO environments
@@ -253,25 +292,19 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                 let revision = Self::insert_revision(tx, revision).await?;
 
-                Ok(EnvironmentCurrentRevisionRecord {
+                Ok(EnvironmentExtRevisionRecord {
                     name,
                     application_id,
                     revision,
                 })
-            }.boxed()).await;
-
-        match result {
-            Ok(env) => Ok(Some(env)),
-            Err(err) if err.is_unique_violation() => Ok(None),
-            Err(err) => Err(err),
-        }
+            }.boxed()).await.none_on_unique_violation()
     }
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentCurrentRevisionRecord>> {
+    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
         let Some(checked_env) = self
             .check_current_revision(&revision.environment_id, current_revision_id)
             .await?
@@ -279,40 +312,34 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             return Ok(None);
         };
 
-        let result: repo::Result<EnvironmentCurrentRevisionRecord> = self
-            .with_tx("update", |tx| {
-                async move {
-                    let revision: EnvironmentRevisionRecord =
-                        Self::insert_revision(tx, revision.ensure_new(current_revision_id)).await?;
+        self.with_tx("update", |tx| {
+            async move {
+                let revision: EnvironmentRevisionRecord =
+                    Self::insert_revision(tx, revision.ensure_new(current_revision_id)).await?;
 
-                    tx.execute(
-                        sqlx::query(indoc! { r#"
-                            UPDATE environments
-                            SET updated_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE environment_id = $4
-                        "#})
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by)
-                        .bind(revision.revision_id)
-                        .bind(revision.environment_id),
-                    )
-                    .await?;
+                tx.execute(
+                    sqlx::query(indoc! { r#"
+                        UPDATE environments
+                        SET updated_at = $1, modified_by = $2, current_revision_id = $3
+                        WHERE environment_id = $4
+                    "#})
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+                    .bind(revision.revision_id)
+                    .bind(revision.environment_id),
+                )
+                .await?;
 
-                    Ok(EnvironmentCurrentRevisionRecord {
-                        name: checked_env.name,
-                        application_id: checked_env.application_id,
-                        revision,
-                    })
-                }
-                .boxed()
-            })
-            .await;
-
-        match result {
-            Ok(env) => Ok(Some(env)),
-            Err(err) if err.is_unique_violation() => Ok(None),
-            Err(err) => Err(err),
-        }
+                Ok(EnvironmentExtRevisionRecord {
+                    name: checked_env.name,
+                    application_id: checked_env.application_id,
+                    revision,
+                })
+            }
+            .boxed()
+        })
+        .await
+        .none_on_unique_violation()
     }
 
     async fn delete(
@@ -331,43 +358,37 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             return Ok(false);
         };
 
-        let result: repo::Result<()> = self
-            .with_tx("delete", |tx| {
-                async move {
-                    let revision: EnvironmentRevisionRecord = Self::insert_revision(
-                        tx,
-                        EnvironmentRevisionRecord::deletion(
-                            user_account_id,
-                            environment_id,
-                            current_revision_id,
-                        ),
-                    )
-                    .await?;
+        self.with_tx("delete", |tx| {
+            async move {
+                let revision: EnvironmentRevisionRecord = Self::insert_revision(
+                    tx,
+                    EnvironmentRevisionRecord::deletion(
+                        user_account_id,
+                        environment_id,
+                        current_revision_id,
+                    ),
+                )
+                .await?;
 
-                    tx.execute(
-                        sqlx::query(indoc! { r#"
-                            UPDATE environments
-                            SET deleted_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE environment_id = $4
-                        "#})
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by)
-                        .bind(revision.revision_id)
-                        .bind(revision.environment_id),
-                    )
-                    .await?;
+                tx.execute(
+                    sqlx::query(indoc! { r#"
+                        UPDATE environments
+                        SET deleted_at = $1, modified_by = $2, current_revision_id = $3
+                        WHERE environment_id = $4
+                    "#})
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+                    .bind(revision.revision_id)
+                    .bind(revision.environment_id),
+                )
+                .await?;
 
-                    Ok(())
-                }
-                .boxed()
-            })
-            .await;
-
-        match result {
-            Ok(()) => Ok(true),
-            Err(err) if err.is_unique_violation() => Ok(false),
-            Err(err) => Err(err),
-        }
+                Ok(())
+            }
+            .boxed()
+        })
+        .await
+        .false_on_unique_violation()
     }
 }
 

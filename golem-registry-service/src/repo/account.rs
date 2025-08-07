@@ -20,6 +20,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo;
+use golem_service_base::repo::ResultExt;
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
@@ -73,8 +74,8 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     }
 }
 
-pub struct DbAccountRepo<DB: Pool> {
-    db_pool: DB,
+pub struct DbAccountRepo<DBP: Pool> {
+    db_pool: DBP,
 }
 
 static METRICS_SVC_NAME: &str = "account";
@@ -82,6 +83,13 @@ static METRICS_SVC_NAME: &str = "account";
 impl<DBP: Pool> DbAccountRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
+    }
+
+    pub fn logged(db_pool: DBP) -> LoggedAccountRepo<Self>
+    where
+        Self: AccountRepo,
+    {
+        LoggedAccountRepo::new(Self::new(db_pool))
     }
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
@@ -97,7 +105,7 @@ impl<DBP: Pool> DbAccountRepo<DBP> {
 #[async_trait]
 impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn create(&self, account: AccountRecord) -> repo::Result<Option<AccountRecord>> {
-        let result = self
+        self
             .with_rw("create")
             .fetch_one_as(
                 sqlx::query_as(indoc! {r#"
@@ -111,13 +119,8 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                     .bind(account.name)
                     .bind(account.plan_id),
             )
-            .await;
-
-        match result {
-            Ok(account) => Ok(Some(account)),
-            Err(err) if err.is_unique_violation() => Ok(None),
-            Err(err) => Err(err),
-        }
+            .await
+            .none_on_unique_violation()
     }
 
     async fn get_by_id(&self, account_id: &Uuid) -> repo::Result<Option<AccountRecord>> {

@@ -51,7 +51,10 @@ impl<E: Display> From<RepoError> for TxError<E> {
 
 pub trait ToBusiness<T, E> {
     fn to_business_result(self) -> BusinessResult<T, E>;
-    fn to_business_error_on_unique_violation<F>(self, to_business_error: F) -> BusinessResult<T, E>
+    fn to_business_result_on_unique_violation<F>(
+        self,
+        to_business_error: F,
+    ) -> BusinessResult<T, E>
     where
         F: FnOnce() -> E;
 }
@@ -70,7 +73,7 @@ where
         }
     }
 
-    fn to_business_error_on_unique_violation<F>(self, to_business_error: F) -> BusinessResult<T, E>
+    fn to_business_result_on_unique_violation<F>(self, to_business_error: F) -> BusinessResult<T, E>
     where
         F: FnOnce() -> E,
     {

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::BindFields;
 use crate::repo::model::application::{ApplicationRecord, ApplicationRevisionRecord};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
+use crate::repo::model::{BindFields, new_repo_uuid};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -23,7 +23,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo;
-use golem_service_base::repo::RepoError;
+use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
 use sqlx::Database;
 use tracing::{Instrument, Span, info_span};
@@ -39,10 +39,7 @@ pub trait ApplicationRepo: Send + Sync {
 
     async fn get_by_id(&self, application_id: &Uuid) -> repo::Result<Option<ApplicationRecord>>;
 
-    async fn get_all_by_owner(
-        &self,
-        owner_account_id: &Uuid,
-    ) -> repo::Result<Vec<ApplicationRecord>>;
+    async fn list_by_owner(&self, owner_account_id: &Uuid) -> repo::Result<Vec<ApplicationRecord>>;
 
     async fn get_revisions(
         &self,
@@ -56,7 +53,7 @@ pub trait ApplicationRepo: Send + Sync {
         name: &str,
     ) -> repo::Result<ApplicationRecord>;
 
-    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<()>;
+    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<bool>;
 }
 
 pub struct LoggedApplicationRepo<Repo: ApplicationRepo> {
@@ -103,12 +100,9 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
             .await
     }
 
-    async fn get_all_by_owner(
-        &self,
-        owner_account_id: &Uuid,
-    ) -> repo::Result<Vec<ApplicationRecord>> {
+    async fn list_by_owner(&self, owner_account_id: &Uuid) -> repo::Result<Vec<ApplicationRecord>> {
         self.repo
-            .get_all_by_owner(owner_account_id)
+            .list_by_owner(owner_account_id)
             .instrument(Self::span_owner_id(owner_account_id))
             .await
     }
@@ -135,7 +129,7 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
             .await
     }
 
-    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<()> {
+    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<bool> {
         self.repo
             .delete(user_account_id, application_id)
             .instrument(Self::span_app_id(application_id))
@@ -143,8 +137,8 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     }
 }
 
-pub struct DbApplicationRepo<DB: Pool> {
-    db_pool: DB,
+pub struct DbApplicationRepo<DBP: Pool> {
+    db_pool: DBP,
 }
 
 static METRICS_SVC_NAME: &str = "application";
@@ -152,6 +146,13 @@ static METRICS_SVC_NAME: &str = "application";
 impl<DBP: Pool> DbApplicationRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
+    }
+
+    pub fn logged(db_pool: DBP) -> LoggedApplicationRepo<Self>
+    where
+        Self: ApplicationRepo,
+    {
+        LoggedApplicationRepo::new(Self::new(db_pool))
     }
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
@@ -163,7 +164,7 @@ impl<DBP: Pool> DbApplicationRepo<DBP> {
         R: Send,
         F: for<'f> FnOnce(
                 &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, Result<R, RepoError>>
+            ) -> BoxFuture<'f, repo::Result<R>>
             + Send,
     {
         self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
@@ -204,11 +205,8 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
             .await
     }
 
-    async fn get_all_by_owner(
-        &self,
-        owner_account_id: &Uuid,
-    ) -> repo::Result<Vec<ApplicationRecord>> {
-        self.with_ro("get_all_by_owner")
+    async fn list_by_owner(&self, owner_account_id: &Uuid) -> repo::Result<Vec<ApplicationRecord>> {
+        self.with_ro("list_by_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
                     SELECT application_id, name, account_id, created_at, updated_at, deleted_at, modified_by
@@ -246,7 +244,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
             return Ok(app);
         }
 
-        let result: repo::Result<ApplicationRecord> = {
+        let result = {
             let user_id = *user_account_id;
             let owner_id = *owner_account_id;
             let name = name.to_owned();
@@ -258,7 +256,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                         VALUES ($1, $2, $3, $4, $5, $6, $7)
                         RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by
                     "#})
-                        .bind(Uuid::new_v4())
+                        .bind(new_repo_uuid())
                         .bind(&name)
                         .bind(owner_id)
                         .bind_audit(AuditFields::new(user_id))
@@ -277,14 +275,10 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
                 Ok(app)
             }.boxed()).await
-        };
+        }.none_on_unique_violation()?;
 
-        let result = match result {
-            Err(err) if err.is_unique_violation() => None,
-            result => Some(result),
-        };
         if let Some(result) = result {
-            return result;
+            return Ok(result);
         }
 
         match self.get_by_name(owner_account_id, name).await? {
@@ -295,10 +289,11 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         }
     }
 
-    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<()> {
+    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> repo::Result<bool> {
         let application_id = *application_id;
         let user_account_id = *user_account_id;
-        let result = self.with_tx("delete", |tx| async move {
+
+        self.with_tx("delete", |tx| async move {
             let latest_revision: Option<ApplicationRevisionRecord> =
                 tx.fetch_optional_as(
                     sqlx::query_as(indoc! {r#"
@@ -341,13 +336,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
             ).await?;
 
             Ok(())
-        }.boxed()).await;
-
-        match result {
-            Ok(()) => Ok(()),
-            Err(err) if err.is_unique_violation() => Ok(()),
-            Err(err) => Err(err),
-        }
+        }.boxed()).await.false_on_unique_violation()
     }
 }
 
