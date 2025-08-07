@@ -22,10 +22,11 @@ use chrono::{DateTime, Utc};
 use rib::{RibInputTypeInfo, RibOutputTypeInfo};
 declare_enums! {
     pub enum GatewayBindingType {
-        WitWorker,
+        Default,
         FileServer,
         HttpHandler,
         CorsPreflight,
+        SwaggerUi,
     }
 }
 

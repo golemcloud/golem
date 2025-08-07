@@ -761,7 +761,7 @@ async fn test_export_openapi_spec_simple(deps: &EnvBasedTestDependencies) {
     let admin = deps.admin().await;
     let project = admin.default_project().await;
 
-    let component_id = admin.component("counters").unique().store().await;
+    let (_component_id, component_name) = admin.component("counters").unique().store_and_get_name().await;
 
     // Create an API definition with a specific route
     let api_id = Uuid::new_v4().to_string();
@@ -775,7 +775,7 @@ async fn test_export_openapi_spec_simple(deps: &EnvBasedTestDependencies) {
             path: "/test-simple-export".to_string(),
             binding: GatewayBindingData {
                 component: Some(GatewayBindingComponent {
-                    name: component_id.0.to_string(),
+                    name: component_name.0,
                     version: Some(0),
                 }),
                 worker_name: None,
@@ -849,7 +849,7 @@ async fn test_roundtrip_api_definition(deps: &EnvBasedTestDependencies) {
     let admin = deps.admin().await;
     let project = admin.default_project().await;
 
-    let component_id = admin.component("counters").unique().store().await;
+    let (_component_id, component_name) = admin.component("counters").unique().store_and_get_name().await;
 
     // 1. Create an API definition request with a specific route
     let api_id = Uuid::new_v4().to_string();
@@ -863,7 +863,7 @@ async fn test_roundtrip_api_definition(deps: &EnvBasedTestDependencies) {
             path: "/test-fixed-export-path".to_string(),
             binding: GatewayBindingData {
                 component: Some(GatewayBindingComponent {
-                    name: component_id.0.to_string(),
+                    name: component_name.0,
                     version: Some(0),
                 }),
                 worker_name: None,

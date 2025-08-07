@@ -432,7 +432,15 @@ fn add_request_body(operation: &mut openapiv3::Operation, route: &CompiledRoute)
                 operation.request_body = Some(openapiv3::ReferenceOr::Item(request_body));
             }
         }
-        _ => {}
+        GatewayBindingCompiled::HttpHandler(_) => {
+            // HttpHandler bindings don't have request bodies
+        }
+        GatewayBindingCompiled::Static(_) => {
+            // Static bindings don't have request bodies
+        }
+        GatewayBindingCompiled::SwaggerUi(_) => {
+            // SwaggerUi bindings don't have request bodies
+        }
     }
 }
 
