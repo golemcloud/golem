@@ -170,7 +170,7 @@ impl<DBP: Pool> DbApplicationRepo<DBP> {
         R: Send,
         F: for<'f> FnOnce(
                 &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, Result<R, RepoError>>
+            ) -> BoxFuture<'f, repo::Result<R>>
             + Send,
     {
         self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await

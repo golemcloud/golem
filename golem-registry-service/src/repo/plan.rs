@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait PlanRepository: Send + Sync {
-    async fn create(&self, plan: PlanRecord) -> Result<PlanRecord, RepoError>;
+    async fn create(&self, plan: PlanRecord) -> repo::Result<PlanRecord>;
 }
 
 pub struct LoggedPlanRepository<Repo: PlanRepository> {

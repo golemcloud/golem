@@ -323,12 +323,12 @@ impl<DBP: Pool> DbHttpApiDeploymentRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> Result<R, RepoError>
+    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> repo::Result<R>
     where
         R: Send,
         F: for<'f> FnOnce(
                 &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, Result<R, RepoError>>
+            ) -> BoxFuture<'f, repo::Result<R>>
             + Send,
     {
         self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
