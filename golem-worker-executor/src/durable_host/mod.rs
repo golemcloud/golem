@@ -91,7 +91,7 @@ use golem_common::model::oplog::{
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{exports, AccountId, PluginInstallationId, ProjectId};
+use golem_common::model::{AccountId, PluginInstallationId, ProjectId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
@@ -102,7 +102,6 @@ use golem_common::model::{
 use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
@@ -626,6 +625,13 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 .set_current_idempotency_key(idempotency_key.clone())
                                 .await;
 
+                            let component_metadata = store
+                                .as_context()
+                                .data()
+                                .component_metadata()
+                                .metadata
+                                .clone();
+
                             store
                                 .as_context_mut()
                                 .data_mut()
@@ -635,7 +641,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
                                 store,
                                 instance,
-                                Some(&analysed_type::result_err(analysed_type::str())),
+                                &component_metadata,
                             )
                             .await;
                             store
@@ -1185,8 +1191,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         let id = self.state.add(resource, name.clone()).await;
         let resource_id = WorkerResourceId(id);
         if self.state.is_live() {
-            let entry =
-                OplogEntry::create_resource(resource_id, name.clone());
+            let entry = OplogEntry::create_resource(resource_id, name.clone());
             self.state.oplog.add(entry.clone()).await;
             self.update_worker_status(move |status| {
                 status.owned_resources.insert(
@@ -1209,7 +1214,10 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         if let Some((resource_type_id, _)) = &result {
             let id = WorkerResourceId(resource_id);
             if self.state.is_live() {
-                self.state.oplog.add(OplogEntry::drop_resource(id, resource_type_id.clone())).await;
+                self.state
+                    .oplog
+                    .add(OplogEntry::drop_resource(id, resource_type_id.clone()))
+                    .await;
                 self.update_worker_status(move |status| {
                     status.owned_resources.remove(&id);
                 })
@@ -1664,18 +1672,26 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .set_current_invocation_context(invocation_context)
                             .await?;
 
+                        let component_metadata = store
+                            .as_context()
+                            .data()
+                            .component_metadata()
+                            .metadata
+                            .clone();
+
                         let full_function_name = function_name.to_string();
                         let invoke_result = invoke_observed_and_traced(
                             full_function_name.clone(),
                             function_input.clone(),
                             store,
                             instance,
+                            &component_metadata,
                         )
                         .instrument(span)
                         .await;
 
                         // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
-                        // as it would add FinishSpan oplog entries without corersponding StartSpan ones. Instead,
+                        // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
                         // the oplog processor should assume that spans implicitly created by ExportedFunctionInvoked
                         // are finished at ExportedFunctionCompleted.
                         for span_id in local_span_ids {
@@ -1693,19 +1709,19 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 let component_metadata =
                                     store.as_context().data().component_metadata();
 
-                                match exports::function_by_name(
-                                    &component_metadata.metadata.exports,
-                                    &full_function_name,
-                                ) {
+                                match component_metadata
+                                    .metadata
+                                    .find_function(&full_function_name)
+                                {
                                     Ok(value) => {
                                         if let Some(value) = value {
-                                            let result =
-                                                interpret_function_result(output, value.result)
-                                                    .map_err(|e| {
-                                                        WorkerExecutorError::ValueMismatch {
-                                                            details: e.join(", "),
-                                                        }
-                                                    })?;
+                                            let result = interpret_function_result(
+                                                output,
+                                                value.analysed_export.result,
+                                            )
+                                            .map_err(|e| WorkerExecutorError::ValueMismatch {
+                                                details: e.join(", "),
+                                            })?;
                                             if let Err(err) = store
                                                 .as_context_mut()
                                                 .data_mut()

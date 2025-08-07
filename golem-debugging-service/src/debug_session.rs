@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use bincode::Encode;
 use golem_common::model::auth::Namespace;
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerError,
+    DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
 use golem_common::model::public_oplog::{
     CreateParameters, DescribeResourceParameters, ExportedFunctionCompletedParameters,
@@ -34,6 +34,7 @@ use golem_common::model::{
     WorkerMetadata,
 };
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::wasmtime::ResourceTypeId;
 use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor::durable_host::http::serialized::{
     SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
@@ -415,12 +416,26 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::GrowMemory(GrowMemoryParameters { timestamp, delta }) => {
             Ok(OplogEntry::GrowMemory { timestamp, delta })
         }
-        PublicOplogEntry::CreateResource(ResourceParameters { timestamp, id }) => {
-            Ok(OplogEntry::CreateResource { timestamp, id })
-        }
-        PublicOplogEntry::DropResource(ResourceParameters { timestamp, id }) => {
-            Ok(OplogEntry::DropResource { timestamp, id })
-        }
+        PublicOplogEntry::CreateResource(ResourceParameters {
+            timestamp,
+            id,
+            owner,
+            name,
+        }) => Ok(OplogEntry::CreateResource {
+            timestamp,
+            id,
+            resource_type_id: ResourceTypeId { owner, name },
+        }),
+        PublicOplogEntry::DropResource(ResourceParameters {
+            timestamp,
+            id,
+            owner,
+            name,
+        }) => Ok(OplogEntry::DropResource {
+            timestamp,
+            id,
+            resource_type_id: ResourceTypeId { owner, name },
+        }),
         PublicOplogEntry::DescribeResource(DescribeResourceParameters {
             timestamp,
             id,
@@ -433,16 +448,14 @@ fn get_oplog_entry_from_public_oplog_entry(
                 .map(|value_and_type| value_and_type.to_string()) // This will call to_string of wasm wave
                 .collect::<Vec<_>>();
 
-            let resource_owner = ParsedFunctionSite::parse(&resource_owner)?;
-
             Ok(OplogEntry::DescribeResource {
                 timestamp,
                 id,
-                indexed_resource: IndexedResourceKey {
-                    resource_owner,
-                    resource_name,
-                    resource_params,
+                resource_type_id: ResourceTypeId {
+                    owner: resource_owner,
+                    name: resource_name,
                 },
+                indexed_resource_parameters: resource_params,
             })
         }
         PublicOplogEntry::Log(LogParameters {

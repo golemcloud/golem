@@ -2739,7 +2739,9 @@ async fn counter_resource_test_1(
                 WorkerResourceId(0),
                 WorkerResourceDescription {
                     created_at: ts,
-                    indexed_resource_key: None
+                    resource_owner: "rpc:counters-export/api".to_string(),
+                    resource_name: "counter".to_string(),
+                    resource_params: Some(vec!["\"counter1\"".to_string()]),
                 }
             ),]
     );
@@ -2879,32 +2881,18 @@ async fn counter_resource_test_2(
                     WorkerResourceId(0),
                     WorkerResourceDescription {
                         created_at: ts,
-                        indexed_resource_key: Some(IndexedResourceKey {
-                            resource_owner: ParsedFunctionSite::PackagedInterface {
-                                namespace: "rpc".to_string(),
-                                package: "counters-export".to_string(),
-                                interface: "api".to_string(),
-                                version: None
-                            },
-                            resource_name: "counter".to_string(),
-                            resource_params: vec!["\"counter1\"".to_string()]
-                        })
+                        resource_owner: "rpc:counters-export/api".to_string(),
+                        resource_name: "counter".to_string(),
+                        resource_params: Some(vec!["\"counter1\"".to_string()])
                     }
                 ),
                 (
                     WorkerResourceId(1),
                     WorkerResourceDescription {
                         created_at: ts,
-                        indexed_resource_key: Some(IndexedResourceKey {
-                            resource_owner: ParsedFunctionSite::PackagedInterface {
-                                namespace: "rpc".to_string(),
-                                package: "counters-export".to_string(),
-                                interface: "api".to_string(),
-                                version: None
-                            },
-                            resource_name: "counter".to_string(),
-                            resource_params: vec!["\"counter2\"".to_string()]
-                        })
+                        resource_owner: "rpc:counters-export/api".to_string(),
+                        resource_name: "counter".to_string(),
+                        resource_params: Some(vec!["\"counter2\"".to_string()])
                     }
                 )
             ]

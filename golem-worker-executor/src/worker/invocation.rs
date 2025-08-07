@@ -17,13 +17,11 @@ use crate::model::TrapType;
 use crate::virtual_export_compat;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
+use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
 use golem_common::model::oplog::{WorkerError, WorkerResourceId};
 use golem_common::model::{IdempotencyKey, WorkerStatus};
 use golem_common::virtual_exports;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_ast::analysis::{
-    AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
-};
 use golem_wasm_rpc::wasmtime::{
     decode_param, encode_output, type_to_analysed_type, DecodeParamResult,
 };
@@ -49,7 +47,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    expected_result_type: Option<&AnalysedType>,
+    component_metadata: &ComponentMetadata,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
@@ -61,7 +59,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
         function_input,
         &mut store,
         instance,
-        expected_result_type,
+        component_metadata,
     )
     .await;
 
@@ -206,7 +204,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     mut function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    expected_result_type: Option<&AnalysedType>,
+    component_metadata: &ComponentMetadata,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -241,9 +239,14 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     let mut extra_fuel = 0;
 
     if parsed.function().is_indexed_resource() {
-        let resource_handle =
-            get_or_create_indexed_resource(&mut store, instance, &parsed, &full_function_name)
-                .await?;
+        let resource_handle = get_or_create_indexed_resource(
+            &mut store,
+            instance,
+            &parsed,
+            &full_function_name,
+            component_metadata,
+        )
+        .await?;
 
         match resource_handle {
             InvokeResult::Succeeded {
@@ -259,6 +262,15 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             }
         }
     }
+
+    let metadata = component_metadata
+        .find_parsed_function(&parsed)
+        .map_err(|err| WorkerExecutorError::runtime(err))?
+        .ok_or_else(|| {
+            WorkerExecutorError::invalid_request(format!(
+                "Could not find exported function: {parsed}"
+            ))
+        })?;
 
     let mut call_result = match function {
         FindFunctionResult::ExportedFunction(function) => {
@@ -279,7 +291,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
                 function,
                 final_decoded_params,
                 &full_function_name,
-                expected_result_type,
+                &metadata,
             )
             .await
         }
@@ -382,6 +394,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
     instance: &'a wasmtime::component::Instance,
     parsed_function_name: &ParsedFunctionName,
     raw_function_name: &str,
+    component_metadata: &ComponentMetadata,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let resource_name = parsed_function_name.function().resource_name().ok_or(
         WorkerExecutorError::invalid_request("Cannot extract resource name from function name"),
@@ -462,17 +475,21 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
 
             debug!("Creating new indexed resource with parameters {constructor_params:?}");
 
+            let constructor_metadata = component_metadata
+                .find_parsed_function(&resource_constructor_name)
+                .map_err(|err| WorkerExecutorError::runtime(err))?
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "Could not find resource constructor: {resource_constructor_name}"
+                    ))
+                })?;
+
             let constructor_result = invoke(
                 store,
                 resource_constructor,
                 decoded_constructor_params,
                 raw_function_name,
-                Some(&AnalysedType::Handle(TypeHandle {
-                    name: Some(resource_name.clone()),
-                    owner: Some(resource_owner.clone()),
-                    resource_id: AnalysedResourceId(u64::MAX), // NOTE: we don't know the resource ID here, but do not have to
-                    mode: AnalysedResourceMode::Owned,
-                })),
+                &constructor_metadata,
             )
             .await?;
 
@@ -505,7 +522,7 @@ async fn invoke<Ctx: WorkerCtx>(
     function: Func,
     decoded_function_input: Vec<DecodeParamResult>,
     raw_function_name: &str,
-    expected_result_type: Option<&AnalysedType>,
+    metadata: &InvokableFunction,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -536,7 +553,7 @@ async fn invoke<Ctx: WorkerCtx>(
                 match results
                     .iter()
                     .zip(types.iter())
-                    .zip(expected_result_type)
+                    .zip(metadata.analysed_export.result.as_ref().map(|r| &r.typ))
                     .next()
                 {
                     Some(((val, typ), analysed_type)) => {
@@ -673,7 +690,10 @@ async fn drop_resource<Ctx: WorkerCtx>(
             "Dropping indexed resource {resource:?} with params {resource_params:?} in {raw_function_name}"
         );
         store.data_mut().drop_indexed_resource(
-            &parsed_function_name.site().interface_name().unwrap_or_default(),
+            &parsed_function_name
+                .site()
+                .interface_name()
+                .unwrap_or_default(),
             resource,
             resource_params,
         );

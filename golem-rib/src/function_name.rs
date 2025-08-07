@@ -25,6 +25,14 @@ use std::fmt::Display;
 #[derive(PartialEq, Hash, Eq, Clone, Ord, PartialOrd)]
 pub struct SemVer(pub semver::Version);
 
+impl SemVer {
+    pub fn parse(version: &str) -> Result<Self, String> {
+        semver::Version::parse(version)
+            .map(SemVer)
+            .map_err(|e| format!("Invalid semver string: {e}"))
+    }
+}
+
 impl std::fmt::Debug for SemVer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)

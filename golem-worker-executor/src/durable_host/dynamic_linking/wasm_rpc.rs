@@ -287,6 +287,20 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 }
             };
 
+            let remote_component_metadata = store
+                .data()
+                .component_service()
+                .get_metadata(
+                    &remote_worker_id.project_id,
+                    &remote_worker_id.worker_id.component_id,
+                    None,
+                )
+                .await?
+                .metadata;
+            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name)
+                .map_err(|e| anyhow!("Failed to get target constructor metadata: {e}"))?
+                .ok_or_else(|| anyhow!("Target constructor {target_constructor_name} not found in component metadata"))?;
+
             let span =
                 create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
 
@@ -303,6 +317,12 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 target_constructor_name,
                 params,
                 param_types,
+                &constructor
+                    .analysed_export
+                    .parameters
+                    .iter()
+                    .map(|p| &p.typ)
+                    .collect::<Vec<_>>(),
                 &mut store,
                 handle,
             )
@@ -368,6 +388,20 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 }
             };
 
+            let remote_component_metadata = store
+                .data()
+                .component_service()
+                .get_metadata(
+                    &remote_worker_id.project_id,
+                    &remote_worker_id.worker_id.component_id,
+                    None,
+                )
+                .await?
+                .metadata;
+            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name)
+                .map_err(|e| anyhow!("Failed to get target constructor metadata: {e}"))?
+                .ok_or_else(|| anyhow!("Target constructor {target_constructor_name} not found in component metadata"))?;
+
             let span =
                 create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
 
@@ -384,6 +418,12 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 target_constructor_name,
                 params,
                 param_types,
+                &constructor
+                    .analysed_export
+                    .parameters
+                    .iter()
+                    .map(|p| &p.typ)
+                    .collect::<Vec<_>>(),
                 &mut store,
                 handle,
             )
@@ -436,10 +476,43 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             };
             let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
+            let target_component_metadata = {
+                let remote_worker_id = {
+                    let mut wasi = store.data_mut().as_wasi_view();
+                    let entry = wasi.table().get(&handle)?;
+                    let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+                    payload.remote_worker_id().clone()
+                };
+                store
+                    .data()
+                    .component_service()
+                    .get_metadata(
+                        &remote_worker_id.project_id,
+                        &remote_worker_id.worker_id.component_id,
+                        None,
+                    )
+                    .await?
+                    .metadata
+            };
+            let target_function_metadata = target_component_metadata
+                .find_parsed_function(target_function_name)
+                .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Target function {target_function_name} not found in component metadata"
+                    )
+                })?;
+
             let result = remote_invoke_and_await(
                 target_function_name,
                 params,
                 param_types,
+                &target_function_metadata
+                    .analysed_export
+                    .parameters
+                    .iter()
+                    .map(|p| &p.typ)
+                    .collect::<Vec<_>>(),
                 &mut store,
                 handle,
             )
@@ -459,10 +532,43 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             };
             let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
+            let target_component_metadata = {
+                let remote_worker_id = {
+                    let mut wasi = store.data_mut().as_wasi_view();
+                    let entry = wasi.table().get(&handle)?;
+                    let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+                    payload.remote_worker_id().clone()
+                };
+                store
+                    .data()
+                    .component_service()
+                    .get_metadata(
+                        &remote_worker_id.project_id,
+                        &remote_worker_id.worker_id.component_id,
+                        None,
+                    )
+                    .await?
+                    .metadata
+            };
+            let target_function_metadata = target_component_metadata
+                .find_parsed_function(target_function_name)
+                .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Target function {target_function_name} not found in component metadata"
+                    )
+                })?;
+
             remote_invoke(
                 target_function_name,
                 params,
                 param_types,
+                &target_function_metadata
+                    .analysed_export
+                    .parameters
+                    .iter()
+                    .map(|p| &p.typ)
+                    .collect::<Vec<_>>(),
                 &mut store,
                 handle,
             )
@@ -479,6 +585,39 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             };
             let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
+            let target_component_metadata = {
+                let remote_worker_id = {
+                    let mut wasi = store.data_mut().as_wasi_view();
+                    let entry = wasi.table().get(&handle)?;
+                    let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+                    payload.remote_worker_id().clone()
+                };
+                store
+                    .data()
+                    .component_service()
+                    .get_metadata(
+                        &remote_worker_id.project_id,
+                        &remote_worker_id.worker_id.component_id,
+                        None,
+                    )
+                    .await?
+                    .metadata
+            };
+            let target_function_metadata = target_component_metadata
+                .find_parsed_function(target_function_name)
+                .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Target function {target_function_name} not found in component metadata"
+                    )
+                })?;
+            let analysed_param_types = &target_function_metadata
+                .analysed_export
+                .parameters
+                .iter()
+                .map(|p| &p.typ)
+                .collect::<Vec<_>>();
+
             // function should have at least one parameter for the scheduled_for datetime.
             if !(!params.is_empty() && !param_types.is_empty()) {
                 Err(anyhow!(
@@ -493,6 +632,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 target_function_name,
                 &params[..params.len() - 1],
                 &param_types[..param_types.len() - 1],
+                &analysed_param_types[..param_types.len() - 1],
                 &mut store,
                 handle,
             )
@@ -511,10 +651,43 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             };
             let handle: Resource<WasmRpcEntry> = handle.try_into_resource(&mut store)?;
 
+            let target_component_metadata = {
+                let remote_worker_id = {
+                    let mut wasi = store.data_mut().as_wasi_view();
+                    let entry = wasi.table().get(&handle)?;
+                    let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+                    payload.remote_worker_id().clone()
+                };
+                store
+                    .data()
+                    .component_service()
+                    .get_metadata(
+                        &remote_worker_id.project_id,
+                        &remote_worker_id.worker_id.component_id,
+                        None,
+                    )
+                    .await?
+                    .metadata
+            };
+            let target_function_metadata = target_component_metadata
+                .find_parsed_function(target_function_name)
+                .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Target function {target_function_name} not found in component metadata"
+                    )
+                })?;
+
             let result = remote_async_invoke_and_await(
                 target_function_name,
                 params,
                 param_types,
+                &target_function_metadata
+                    .analysed_export
+                    .parameters
+                    .iter()
+                    .map(|p| &p.typ)
+                    .collect::<Vec<_>>(),
                 &mut store,
                 handle,
             )
@@ -698,10 +871,11 @@ async fn remote_async_invoke_and_await<Ctx: WorkerCtx + HostWasmRpc + HostFuture
     target_function_name: &ParsedFunctionName,
     params: &[Val],
     param_types: &[Type],
+    analysed_param_types: &[&AnalysedType],
     store: &mut StoreContextMut<'_, Ctx>,
     handle: Resource<WasmRpcEntry>,
 ) -> anyhow::Result<Value> {
-    let wit_value_params = encode_parameters(params, param_types, store)
+    let wit_value_params = encode_parameters(params, param_types, analysed_param_types, store)
         .await
         .context(format!("Encoding parameters of {target_function_name}"))?;
 
@@ -733,10 +907,11 @@ async fn remote_invoke<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
     target_function_name: &ParsedFunctionName,
     params: &[Val],
     param_types: &[Type],
+    analysed_param_types: &[&AnalysedType],
     store: &mut StoreContextMut<'_, Ctx>,
     handle: Resource<WasmRpcEntry>,
 ) -> anyhow::Result<()> {
-    let wit_value_params = encode_parameters(params, param_types, store)
+    let wit_value_params = encode_parameters(params, param_types, analysed_param_types, store)
         .await
         .context(format!("Encoding parameters of {target_function_name}"))?;
 
@@ -753,10 +928,11 @@ async fn schedule_remote_invocation<Ctx: WorkerCtx + HostWasmRpc + HostFutureInv
     target_function_name: &ParsedFunctionName,
     params: &[Val],
     param_types: &[Type],
+    analysed_param_types: &[&AnalysedType],
     store: &mut StoreContextMut<'_, Ctx>,
     handle: Resource<WasmRpcEntry>,
 ) -> anyhow::Result<Resource<CancellationTokenEntry>> {
-    let wit_value_params = encode_parameters(params, param_types, store)
+    let wit_value_params = encode_parameters(params, param_types, analysed_param_types, store)
         .await
         .context(format!("Encoding parameters of {target_function_name}"))?;
 

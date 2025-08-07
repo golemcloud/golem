@@ -109,6 +109,7 @@ dashmap = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true, optional = true }
 fred = { workspace = true, optional = true }
+heck = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 iso8601-timestamp = { workspace = true }

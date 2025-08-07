@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::AgentType;
+use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
 use crate::model::base64::Base64;
 use crate::model::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
@@ -26,7 +26,8 @@ use golem_wasm_ast::{
     component::Component,
     IgnoreAllButMetadata,
 };
-use rib::ParsedFunctionSite;
+use heck::ToKebabCase;
+use rib::{ParsedFunctionName, ParsedFunctionSite, SemVer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -60,6 +61,132 @@ impl ComponentMetadata {
         let raw = RawComponentMetadata::analyse_component(data)?;
         Ok(raw.into_metadata(dynamic_linking, agent_types))
     }
+
+    pub fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
+        let parsed = ParsedFunctionName::parse(name)?;
+        self.find_parsed_function(&parsed)
+    }
+
+    pub fn find_parsed_function(
+        &self,
+        parsed: &ParsedFunctionName,
+    ) -> Result<Option<InvokableFunction>, String> {
+        Ok(self
+            .find_analysed_function(&parsed)
+            .map(|analysed_export| {
+                self.find_agent_method_or_constructor(&parsed)
+                    .map(|agent_method_or_constructor| {
+                        (analysed_export, agent_method_or_constructor)
+                    })
+            })
+            .transpose()?
+            .map(
+                |(analysed_export, agent_method_or_constructor)| InvokableFunction {
+                    name: parsed.clone(),
+                    analysed_export,
+                    agent_method_or_constructor,
+                },
+            ))
+    }
+
+    fn find_analysed_function(&self, parsed: &ParsedFunctionName) -> Option<AnalysedFunction> {
+        match &parsed.site().interface_name() {
+            None => self.exports.iter().find_map(|f| match f {
+                AnalysedExport::Function(f) if f.name == parsed.function().function_name() => {
+                    Some(f.clone())
+                }
+                _ => None,
+            }),
+            Some(interface_name) => self
+                .exports
+                .iter()
+                .find_map(|instance| match instance {
+                    AnalysedExport::Instance(inst) if inst.name == *interface_name => Some(inst),
+                    _ => None,
+                })
+                .and_then(|instance| {
+                    match instance
+                        .functions
+                        .iter()
+                        .find(|f| f.name == parsed.function().function_name())
+                        .cloned()
+                    {
+                        Some(function) => Some(function),
+                        None => match parsed.method_as_static() {
+                            Some(parsed_static) => instance
+                                .functions
+                                .iter()
+                                .find(|f| f.name == parsed_static.function().function_name())
+                                .cloned(),
+                            None => None,
+                        },
+                    }
+                }),
+        }
+    }
+
+    fn find_agent_method_or_constructor(
+        &self,
+        parsed: &ParsedFunctionName,
+    ) -> Result<Option<AgentMethodOrConstructor>, String> {
+        if let Some(root_package_name) = &self.root_package_name {
+            if let Some((root_namespace, root_package)) = root_package_name.split_once(':') {
+                let static_agent_interface = ParsedFunctionSite::PackagedInterface {
+                    namespace: root_namespace.to_string(),
+                    package: root_package.to_string(),
+                    interface: "agent".to_string(),
+                    version: self
+                        .root_package_version
+                        .as_ref()
+                        .map(|v| SemVer::parse(&v))
+                        .transpose()?,
+                };
+
+                if parsed.site() == &static_agent_interface {
+                    if let Some(resource_name) = parsed.is_method() {
+                        let agent = self
+                            .agent_types
+                            .iter()
+                            .find(|agent| agent.type_name.to_kebab_case() == resource_name);
+
+                        let method = agent.and_then(|agent| {
+                            agent
+                                .methods
+                                .iter()
+                                .find(|method| {
+                                    method.name.to_kebab_case() == parsed.function().function_name()
+                                })
+                                .cloned()
+                        });
+
+                        Ok(method.map(AgentMethodOrConstructor::Method))
+                    } else if let Some(resource_name) = parsed.is_static_method() {
+                        if parsed.function().function_name() == "create".to_string() {
+                            // this can be an agent constructor
+                            let agent = self
+                                .agent_types
+                                .iter()
+                                .find(|agent| agent.type_name.to_kebab_case() == resource_name);
+
+                            Ok(agent.map(|agent| {
+                                AgentMethodOrConstructor::Constructor(agent.constructor.clone())
+                            }))
+                        } else {
+                            Ok(None) // Not the agent constructor
+                        }
+                    } else {
+                        Ok(None) // Not a method or static method
+                    }
+                } else {
+                    Ok(None) // Not belonging to the static agent wrapper interface
+                }
+            } else {
+                Ok(None) // Not a valid root package name
+            }
+        } else {
+            Ok(None) // No root package name
+        }
+    }
 }
 
 impl Debug for ComponentMetadata {
@@ -72,8 +199,23 @@ impl Debug for ComponentMetadata {
             .field("root_package_name", &self.root_package_name)
             .field("root_package_version", &self.root_package_version)
             .field("dynamic_linking", &self.dynamic_linking)
+            .field("agent_types", &self.agent_types)
             .finish()
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum AgentMethodOrConstructor {
+    Method(AgentMethod),
+    Constructor(AgentConstructor),
+}
+
+/// Describes an exported function that can be invoked on a worker
+#[derive(Debug, Clone)]
+pub struct InvokableFunction {
+    pub name: ParsedFunctionName,
+    pub analysed_export: AnalysedFunction,
+    pub agent_method_or_constructor: Option<AgentMethodOrConstructor>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
@@ -187,7 +329,7 @@ impl From<Mem> for LinearMemory {
     }
 }
 
-// Metadata of Component in terms of golem_wasm_ast types
+/// Metadata of Component in terms of golem_wasm_ast types
 #[derive(Default)]
 pub struct RawComponentMetadata {
     pub exports: Vec<AnalysedExport>,

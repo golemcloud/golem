@@ -39,7 +39,7 @@ use crate::services::rpc::RpcError;
 use async_trait::async_trait;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
-use golem_common::model::exports::{find_resource_site, function_by_name};
+use golem_common::model::exports::find_resource_site;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
@@ -354,16 +354,16 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let function = function_by_name(&metadata.metadata.exports, &function_name)?.ok_or(
+                let function = metadata.metadata.find_function(&function_name)?.ok_or(
                     format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                 )?;
 
                 let parsed = ParsedFunctionName::parse(&function_name)?;
                 let param_types: Box<dyn Iterator<Item = &AnalysedFunctionParameter>> =
                     if parsed.function().is_indexed_resource() {
-                        Box::new(function.parameters.iter().skip(1))
+                        Box::new(function.analysed_export.parameters.iter().skip(1))
                     } else {
-                        Box::new(function.parameters.iter())
+                        Box::new(function.analysed_export.parameters.iter())
                     };
 
                 let request = param_types
@@ -476,8 +476,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                             .await
                             .map_err(|err| err.to_string())?;
 
-                        let function =
-                            function_by_name(&metadata.metadata.exports, &full_function_name)?;
+                        let function = metadata.metadata.find_function(&full_function_name)?;
 
                         // It is not guaranteed that we can resolve the enqueued invocation's parameter types because
                         // we only know the current component version. If the client enqueued an update earlier and assumes
@@ -486,9 +485,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         // If we cannot resolve the type, we leave the `function_input` field empty in the public oplog.
                         let mut params = None;
                         if let Some(function) = function {
-                            if function.parameters.len() == function_input.len() {
+                            if function.analysed_export.parameters.len() == function_input.len() {
                                 params = Some(
                                     function
+                                        .analysed_export
                                         .parameters
                                         .iter()
                                         .zip(function_input)
@@ -650,14 +650,14 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         resource: resource_name.clone(),
                     },
                 );
-                let constructor_def = function_by_name(&metadata.metadata.exports, &resource_constructor_name.to_string())?.ok_or(
+                let constructor_def = metadata.metadata.find_function(&resource_constructor_name.to_string())?.ok_or(
                         format!("Resource constructor {resource_constructor_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                     )?;
 
                 let mut resource_params = Vec::new();
                 for (value_str, param) in indexed_resource_parameters
                     .iter()
-                    .zip(constructor_def.parameters)
+                    .zip(constructor_def.analysed_export.parameters)
                 {
                     let value_and_type = parse_value_and_type(&param.typ, value_str)?;
                     resource_params.push(value_and_type);

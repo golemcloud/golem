@@ -31,12 +31,12 @@ use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
-    exports, ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
-};
-use golem_common::model::{
     invocation_context::{AttributeValue, InvocationContextStack},
     GetFileSystemNodeResult,
+};
+use golem_common::model::{
+    ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+    TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -505,6 +505,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .set_current_idempotency_key(idempotency_key.clone())
             .await;
 
+        let component_metadata = self.store.data().component_metadata().metadata.clone();
+
         Self::extend_invocation_context(
             &mut invocation_context,
             &idempotency_key,
@@ -536,6 +538,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             function_input.to_owned(),
             self.store,
             self.instance,
+            &component_metadata,
         )
         .await;
 
@@ -567,12 +570,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ) -> CommandOutcome {
         let component_metadata = self.store.as_context().data().component_metadata();
 
-        let function_results =
-            exports::function_by_name(&component_metadata.metadata.exports, &full_function_name);
+        let function_results = component_metadata
+            .metadata
+            .find_function(&full_function_name);
 
         match function_results {
-            Ok(Some(export_function)) => {
-                let function_results = export_function.result.clone();
+            Ok(Some(invokable_function)) => {
+                let function_results = invokable_function.analysed_export.result.clone();
 
                 match self
                     .exported_function_invocation_finished_with_type(
@@ -722,8 +726,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         ) {
             self.store.data_mut().begin_call_snapshotting_function();
 
-            let result =
-                invoke_observed_and_traced(save_snapshot, vec![], self.store, self.instance).await;
+            let component_metadata = self.store.data().component_metadata().metadata.clone();
+
+            let result = invoke_observed_and_traced(
+                save_snapshot,
+                vec![],
+                self.store,
+                self.instance,
+                &component_metadata,
+            )
+            .await;
             self.store.data_mut().end_call_snapshotting_function();
 
             match result {
