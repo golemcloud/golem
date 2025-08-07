@@ -2609,20 +2609,6 @@ impl PrivateDurableWorkerState {
                 )
                 .await;
 
-            let jumped = self
-                .replay_state
-                .is_in_skipped_region(begin_index.next())
-                .await;
-
-            // if there was jump, we need to get the begin transaction entry
-            let begin_entry = if jumped {
-                let (_, entry) =
-                    crate::get_oplog_entry!(self.replay_state, OplogEntry::BeginRemoteTransaction)?;
-                entry
-            } else {
-                begin_entry
-            };
-
             let tx_id = try_match!(
                 begin_entry,
                 OplogEntry::BeginRemoteTransaction {
@@ -2667,7 +2653,7 @@ impl PrivateDurableWorkerState {
                 // and later we replay it, we need to skip the first attempt and only replay the second.
                 // Se we add a Jump entry to the oplog that registers a deleted region.
                 let deleted_region = OplogRegion {
-                    start: begin_index.next(), // need to keep the BeginAtomicRegion entry
+                    start: begin_index, // need to keep the BeginAtomicRegion entry
                     end: self.replay_state.replay_target().next(), // skipping the Jump entry too
                 };
                 self.replay_state
@@ -2678,7 +2664,8 @@ impl PrivateDurableWorkerState {
                     .await;
 
                 let (tx_id, tx) = handler.create_new().await?;
-                self.oplog
+                let begin_index = self
+                    .oplog
                     .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
                     .await
                     .map_err(WorkerExecutorError::runtime)?;

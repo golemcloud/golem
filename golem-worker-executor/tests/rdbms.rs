@@ -2051,7 +2051,7 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
                 assert!(pre_entry.is_none() || end_entry.is_none());
                 (
                     end_index,
-                    jump_entry.jump.start.previous(),
+                    jump_entry.jump.start,
                     TransactionOplogBlockEnd::Jump,
                 )
             } else {
