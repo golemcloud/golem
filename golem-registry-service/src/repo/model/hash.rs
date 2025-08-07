@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use sqlx::Database;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
-use sqlx::Database;
 use std::fmt::Display;
 use std::ops::Deref;
 

@@ -464,10 +464,13 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         let component_metadata_dictionary =
             ComponentMetadataDictionary::from_components(&components);
 
+        let conversion_context = self.conversion_context(namespace, auth_ctx);
+
         let compiled_http_api_definition = CompiledHttpApiDefinition::from_http_api_definition(
             &definition,
             &component_metadata_dictionary,
             namespace,
+            &conversion_context,
         )?;
 
         let record = ApiDefinitionRecord::new(compiled_http_api_definition.clone(), created_at)
@@ -536,10 +539,13 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         let component_metadata_dictionary =
             ComponentMetadataDictionary::from_components(&components);
 
+        let conversion_context = self.conversion_context(namespace, auth_ctx);
+
         let compiled_http_api_definition = CompiledHttpApiDefinition::from_http_api_definition(
             &definition,
             &component_metadata_dictionary,
             namespace,
+            &conversion_context,
         )?;
 
         let record = ApiDefinitionRecord::new(compiled_http_api_definition.clone(), created_at)

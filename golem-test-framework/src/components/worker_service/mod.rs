@@ -72,7 +72,7 @@ use golem_client::api::WorkerClient as WorkerServiceHttpClient;
 use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
 use golem_client::model::{
     ApiDeployment, ApiDeploymentRequest, HttpApiDefinitionRequest, HttpApiDefinitionResponseData,
-    SecuritySchemeData,
+    OpenApiHttpApiDefinitionResponse, SecuritySchemeData,
 };
 use golem_client::{Context, Security};
 use golem_common::model::worker::WasiConfigVars;
@@ -1245,6 +1245,27 @@ pub trait WorkerService: Send + Sync {
                 client.delete_deployment(&project_id.0, site).await?;
 
                 Ok(())
+            }
+        }
+    }
+
+    async fn export_openapi_spec(
+        &self,
+        token: &Uuid,
+        project_id: &ProjectId,
+        api_definition_id: &str,
+        api_definition_version: &str,
+    ) -> crate::Result<OpenApiHttpApiDefinitionResponse> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => not_available_on_grpc_api("export_openapi_spec"),
+            GolemClientProtocol::Http => {
+                let client = self.api_definition_http_client(token).await;
+
+                let result = client
+                    .export_definition(&project_id.0, api_definition_id, api_definition_version)
+                    .await?;
+
+                Ok(result)
             }
         }
     }

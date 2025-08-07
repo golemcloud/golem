@@ -50,7 +50,8 @@ use golem_common::model::plugin::PluginWasmFileKey;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AccountId, ComponentFilePermissions, PluginInstallationId, ProjectId, WorkerStatus,
+    AccountId, ComponentFilePath, ComponentFilePermissions, PluginInstallationId, ProjectId,
+    WorkerStatus,
 };
 use golem_common::model::{
     ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
@@ -65,6 +66,7 @@ use golem_wasm_rpc::{Value, ValueAndType};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 use tempfile::Builder;
 use tokio::select;
@@ -263,7 +265,7 @@ pub trait TestDsl {
                 source.into(),
                 InitialComponentFile {
                     key: self.add_initial_component_file(Path::new(source)).await,
-                    path: (*target).try_into().unwrap(),
+                    path: ComponentFilePath::from_str(target).unwrap(),
                     permissions: *permissions,
                 },
             ))

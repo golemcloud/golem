@@ -255,7 +255,7 @@ impl<'a> MergeTaskStack<'a> {
         }
     }
 
-    pub fn get(&self, task_index: TaskIndex) -> Option<&MergeTask> {
+    pub fn get(&self, task_index: TaskIndex) -> Option<&MergeTask<'_>> {
         self.tasks.get(task_index)
     }
 
@@ -462,7 +462,7 @@ impl MergeTask<'_> {
         task_index: TaskIndex,
         inferred_type: &InferredType,
         init: bool,
-    ) -> MergeTask {
+    ) -> MergeTask<'_> {
         MergeTask::Inspect(Inspect {
             path,
             task_index,

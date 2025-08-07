@@ -12,15 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod account;
 pub mod agent;
+pub mod api_definition;
+pub mod api_deployment;
+pub mod api_domain;
+pub mod application;
 pub mod auth;
 pub mod base64;
+pub mod certificate;
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
+pub mod environment;
 pub mod error;
 pub mod exports;
 pub mod invocation_context;
+pub mod login;
 pub mod lucene;
 pub mod oplog;
 pub mod plugin;
@@ -48,7 +56,6 @@ use golem_wasm_rpc::{IntoValue, Value};
 use golem_wasm_rpc_derive::IntoValue;
 use http::Uri;
 use rand::prelude::IteratorRandom;
-use serde::de::Unexpected;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -1862,10 +1869,10 @@ impl<'de> Deserialize<'de> for ComponentFilePath {
     }
 }
 
-impl TryFrom<&str> for ComponentFilePath {
-    type Error = String;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::from_either_str(value)
+impl FromStr for ComponentFilePath {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_either_str(s)
     }
 }
 
@@ -1968,7 +1975,8 @@ pub struct ComponentFileSystemNode {
     pub details: ComponentFileSystemNodeDetails,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Default)]
+// Custom Deserialize is replaced with Simple Deserialize
+#[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Default, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 #[serde(rename_all = "kebab-case")]
 #[cfg_attr(feature = "poem", oai(rename_all = "kebab-case"))]
@@ -1978,38 +1986,7 @@ pub enum GatewayBindingType {
     FileServer,
     HttpHandler,
     CorsPreflight,
-}
-
-// To keep backward compatibility as we documented wit-worker to be default
-impl<'de> Deserialize<'de> for GatewayBindingType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct GatewayBindingTypeVisitor;
-
-        impl de::Visitor<'_> for GatewayBindingTypeVisitor {
-            type Value = GatewayBindingType;
-
-            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-                formatter.write_str("a string representing the binding type")
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                match value {
-                    "default" | "wit-worker" => Ok(GatewayBindingType::Default),
-                    "file-server" => Ok(GatewayBindingType::FileServer),
-                    "cors-preflight" => Ok(GatewayBindingType::CorsPreflight),
-                    _ => Err(de::Error::invalid_value(Unexpected::Str(value), &self)),
-                }
-            }
-        }
-
-        deserializer.deserialize_str(GatewayBindingTypeVisitor)
-    }
+    SwaggerUi,
 }
 
 impl TryFrom<String> for GatewayBindingType {
