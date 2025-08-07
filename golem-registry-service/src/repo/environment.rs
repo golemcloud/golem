@@ -43,6 +43,11 @@ pub trait EnvironmentRepo: Send + Sync {
         environment_id: &Uuid,
     ) -> repo::Result<Option<EnvironmentExtRevisionRecord>>;
 
+    async fn list_by_app(
+        &self,
+        application_id: &Uuid,
+    ) -> repo::Result<Vec<EnvironmentExtRevisionRecord>>;
+
     async fn create(
         &self,
         application_id: &Uuid,
@@ -79,11 +84,11 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
         info_span!(SPAN_NAME, application_id = %application_id, name)
     }
 
-    fn span_env_id(environment_id: &Uuid) -> Span {
+    fn span_env(environment_id: &Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id)
     }
 
-    fn span_app_id(application_id: &Uuid) -> Span {
+    fn span_id(application_id: &Uuid) -> Span {
         info_span!(SPAN_NAME, application_id = %application_id)
     }
 }
@@ -107,7 +112,17 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
         self.repo
             .get_by_id(environment_id)
-            .instrument(Self::span_env_id(environment_id))
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn list_by_app(
+        &self,
+        application_id: &Uuid,
+    ) -> repo::Result<Vec<EnvironmentExtRevisionRecord>> {
+        self.repo
+            .list_by_app(application_id)
+            .instrument(Self::span_env(application_id))
             .await
     }
 
@@ -119,7 +134,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
         self.repo
             .create(application_id, name, revision)
-            .instrument(Self::span_app_id(application_id))
+            .instrument(Self::span_id(application_id))
             .await
     }
 
@@ -128,7 +143,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
     ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
-        let span = Self::span_env_id(&revision.environment_id);
+        let span = Self::span_env(&revision.environment_id);
         self.repo
             .update(current_revision_id, revision)
             .instrument(span)
@@ -141,7 +156,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         environment_id: &Uuid,
         current_revision_id: i64,
     ) -> repo::Result<bool> {
-        let span = Self::span_env_id(user_account_id);
+        let span = Self::span_env(user_account_id);
         self.repo
             .delete(user_account_id, environment_id, current_revision_id)
             .instrument(span)
@@ -200,7 +215,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides
                     FROM environments e
-                    INNER JOIN environment_revisions r
+                    JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
                     WHERE e.application_id = $1 AND e.name = $2 AND e.deleted_at IS NULL
                 "# })
@@ -223,11 +238,29 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides
                     FROM environments e
-                    INNER JOIN environment_revisions r
+                    JOIN environment_revisions r
                         ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
                     WHERE e.environment_id = $1 AND e.deleted_at IS NULL
                 "# })
                     .bind(environment_id),
+            )
+            .await
+    }
+
+    async fn list_by_app(
+        &self,
+        application_id: &Uuid,
+    ) -> repo::Result<Vec<EnvironmentExtRevisionRecord>> {
+        self.with_ro("list_by_owner")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                    FROM environments e
+                    JOIN environment_revisions r ON r.environment_id = e.environment_id
+                    WHERE e.application_id = $1
+                    ORDER BY e.name
+                "#})
+                .bind(application_id),
             )
             .await
     }

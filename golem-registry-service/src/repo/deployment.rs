@@ -550,7 +550,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             sqlx::query_as(indoc! { r#"
                 SELECT c.component_id, c.name, cr.revision_id, cr.revision_id, cr.version, cr.status, cr.hash
                 FROM components c
-                INNER JOIN component_revisions cr ON
+                JOIN component_revisions cr ON
                     cr.component_id = c.component_id
                         AND cr.revision_id = c.current_revision_id
                 WHERE c.environment_id = $1 AND c.deleted_at IS NULL
@@ -568,7 +568,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             sqlx::query_as(indoc! { r#"
                 SELECT d.http_api_definition_id, d.name, dr.revision_id, dr.version, dr.hash
                 FROM http_api_definitions d
-                INNER JOIN http_api_definition_revisions dr ON
+                JOIN http_api_definition_revisions dr ON
                     d.http_api_definition_id = dr.http_api_definition_id
                         AND d.current_revision_id = dr.revision_id
                 WHERE d.environment_id = $1 AND d.deleted_at IS NULL
@@ -587,7 +587,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT d.http_api_deployment_id, d.name, dr.revision_id, dr.hash
                     FROM http_api_deployments d
-                    INNER JOIN http_api_deployment_revisions dr ON
+                    JOIN http_api_deployment_revisions dr ON
                         d.http_api_deployment_id = dr.http_api_deployment_id
                             AND d.current_revision_id = dr.revision_id
                     WHERE d.environment_id = $1 AND d.deleted_at IS NULL

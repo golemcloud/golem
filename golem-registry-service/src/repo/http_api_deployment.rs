@@ -998,7 +998,7 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
             sqlx::query_as(indoc! { r#"
                 SELECT d.http_api_definition_id, d.name, dr.revision_id, dr.version, dr.hash
                 FROM http_api_definitions d
-                INNER JOIN http_api_definition_revisions dr ON
+                JOIN http_api_definition_revisions dr ON
                     d.http_api_definition_id = dr.http_api_definition_id AND
                     d.current_revision_id = dr.revision_id
                 WHERE dr.http_api_definition_id = $1
