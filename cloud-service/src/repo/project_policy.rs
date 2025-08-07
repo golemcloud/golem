@@ -57,6 +57,7 @@ pub struct ProjectPolicyRecord {
     pub create_plugin_definition: bool,
     pub update_plugin_definition: bool,
     pub delete_plugin_definition: bool,
+    pub export_api_definition: bool,
 }
 
 impl From<ProjectPolicyRecord> for ProjectPolicy {
@@ -153,7 +154,9 @@ impl From<ProjectPolicyRecord> for ProjectPolicy {
         if value.delete_plugin_definition {
             project_actions.insert(ProjectPermission::DeletePluginDefinition);
         }
-
+        if value.export_api_definition {
+            project_actions.insert(ProjectPermission::ExportApiDefinition);
+        }
         ProjectPolicy {
             id: ProjectPolicyId(value.project_policy_id),
             name: value.name,
@@ -289,6 +292,10 @@ impl From<ProjectPolicy> for ProjectPolicyRecord {
                 .project_actions
                 .actions
                 .contains(&ProjectPermission::DeletePluginDefinition),
+            export_api_definition: value
+                .project_actions
+                .actions
+                .contains(&ProjectPermission::ExportApiDefinition),
         }
     }
 }
@@ -336,7 +343,8 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
                 delete_api_definition, delete_project, view_plugin_installations, create_plugin_installation,
                 update_plugin_installation, delete_plugin_installation, upsert_api_deployment, view_api_deployment,
                 delete_api_deployment, upsert_api_domain, view_api_domain, delete_api_domain,
-                view_plugin_definition, create_plugin_definition, update_plugin_definition, delete_plugin_definition
+                view_plugin_definition, create_plugin_definition, update_plugin_definition, delete_plugin_definition,
+                export_api_definition
                 )
               VALUES
                 (
@@ -347,7 +355,8 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
                  $17, $18, $19, $20,
                  $21, $22, $23, $24,
                  $25, $26, $27, $28,
-                 $29, $30, $31, $32
+                 $29, $30, $31, $32,
+                 $33
                 )
             "#,
              )
@@ -382,7 +391,8 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
             .bind(project_policy.view_plugin_definition)
             .bind(project_policy.create_plugin_definition)
             .bind(project_policy.update_plugin_definition)
-            .bind(project_policy.delete_plugin_definition);
+            .bind(project_policy.delete_plugin_definition)
+            .bind(project_policy.export_api_definition);
 
         self.db_pool
             .with_rw("project_policy", "create")
