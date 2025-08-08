@@ -89,50 +89,50 @@ impl S3BlobStorage {
 
     fn prefix_of(&self, namespace: &BlobStorageNamespace) -> PathBuf {
         match namespace {
-            BlobStorageNamespace::CompilationCache { project_id }
-            | BlobStorageNamespace::CustomStorage { project_id }
-            | BlobStorageNamespace::InitialComponentFiles { project_id }
-            | BlobStorageNamespace::Components { project_id } => {
-                let project_id_string = project_id.to_string();
+            BlobStorageNamespace::CompilationCache { environment_id }
+            | BlobStorageNamespace::CustomStorage { environment_id }
+            | BlobStorageNamespace::InitialComponentFiles { environment_id }
+            | BlobStorageNamespace::Components { environment_id } => {
+                let environment_id_string = environment_id.to_string();
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&project_id_string).to_path_buf()
+                    Path::new(&environment_id_string).to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
-                        .join(project_id_string)
+                        .join(environment_id_string)
                         .to_path_buf()
                 }
             }
             BlobStorageNamespace::OplogPayload {
-                project_id,
+                environment_id,
                 worker_id,
             } => {
-                let project_id_string = project_id.to_string();
+                let environment_id_string = environment_id.to_string();
                 let worker_id_string = worker_id.to_string();
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&project_id_string)
+                    Path::new(&environment_id_string)
                         .join(worker_id_string)
                         .to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
-                        .join(project_id_string)
+                        .join(environment_id_string)
                         .join(worker_id_string)
                         .to_path_buf()
                 }
             }
             BlobStorageNamespace::CompressedOplog {
-                project_id,
+                environment_id,
                 component_id,
                 ..
             } => {
-                let project_id_string = project_id.to_string();
+                let environment_id_string = environment_id.to_string();
                 let component_id_string = component_id.to_string();
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&project_id_string)
+                    Path::new(&environment_id_string)
                         .join(component_id_string)
                         .to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
-                        .join(project_id_string)
+                        .join(environment_id_string)
                         .join(component_id_string)
                         .to_path_buf()
                 }

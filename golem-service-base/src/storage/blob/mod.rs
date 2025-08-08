@@ -21,6 +21,7 @@ use golem_common::model::{AccountId, ComponentId, ProjectId, Timestamp, WorkerId
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
+use golem_common::model::environment::EnvironmentId;
 
 pub mod fs;
 pub mod memory;
@@ -175,11 +176,11 @@ pub trait BlobStorage: Debug + Send + Sync {
     }
 }
 
-pub trait BlobStorageLabelledApi<S: BlobStorage + ?Sized + Sync> {
+pub trait BlobStorageLabelledApi<S: BlobStorage + ?Sized> {
     fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledBlobStorage<'_, S>;
 }
 
-impl<S: BlobStorage + ?Sized + Sync> BlobStorageLabelledApi<S> for S {
+impl<S: BlobStorage + ?Sized> BlobStorageLabelledApi<S> for S {
     fn with(
         &self,
         svc_name: &'static str,
@@ -189,7 +190,7 @@ impl<S: BlobStorage + ?Sized + Sync> BlobStorageLabelledApi<S> for S {
     }
 }
 
-pub struct LabelledBlobStorage<'a, S: BlobStorage + ?Sized + Sync> {
+pub struct LabelledBlobStorage<'a, S: BlobStorage + ?Sized> {
     svc_name: &'static str,
     api_name: &'static str,
     storage: &'a S,
@@ -349,25 +350,25 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BlobStorageNamespace {
     CompilationCache {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
     },
     InitialComponentFiles {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
     },
     CustomStorage {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
     },
     OplogPayload {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         worker_id: WorkerId,
     },
     CompressedOplog {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         component_id: ComponentId,
         level: usize,
     },
     Components {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
     },
     PluginWasmFiles {
         account_id: AccountId,

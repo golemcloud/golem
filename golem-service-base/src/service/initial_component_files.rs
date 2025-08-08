@@ -18,8 +18,9 @@ use crate::replayable_stream::{ContentHash, ReplayableStream};
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::{InitialComponentFileKey, ProjectId};
+use golem_common::model::{InitialComponentFileKey};
 use tracing::debug;
+use golem_common::model::environment::EnvironmentId;
 
 const INITIAL_COMPONENT_FILES_LABEL: &str = "initial_component_files";
 
@@ -36,7 +37,7 @@ impl InitialComponentFilesService {
 
     pub async fn exists(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         key: &InitialComponentFileKey,
     ) -> Result<bool, String> {
         let path = PathBuf::from(key.0.clone());
@@ -47,7 +48,7 @@ impl InitialComponentFilesService {
                 INITIAL_COMPONENT_FILES_LABEL,
                 "exists",
                 BlobStorageNamespace::InitialComponentFiles {
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
                 &path,
             )
@@ -59,7 +60,7 @@ impl InitialComponentFilesService {
 
     pub async fn get(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         key: &InitialComponentFileKey,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
         self.blob_storage
@@ -67,7 +68,7 @@ impl InitialComponentFilesService {
                 INITIAL_COMPONENT_FILES_LABEL,
                 "get",
                 BlobStorageNamespace::InitialComponentFiles {
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
                 &PathBuf::from(key.0.clone()),
             )
@@ -76,7 +77,7 @@ impl InitialComponentFilesService {
 
     pub async fn put_if_not_exists(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         data: impl ReplayableStream<Item = Result<Bytes, String>, Error = String>,
     ) -> Result<InitialComponentFileKey, String> {
         let hash = data.content_hash().await?;
@@ -89,7 +90,7 @@ impl InitialComponentFilesService {
                 INITIAL_COMPONENT_FILES_LABEL,
                 "get_metadata",
                 BlobStorageNamespace::InitialComponentFiles {
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
                 &key,
             )
@@ -104,7 +105,7 @@ impl InitialComponentFilesService {
                     INITIAL_COMPONENT_FILES_LABEL,
                     "put",
                     BlobStorageNamespace::InitialComponentFiles {
-                        project_id: project_id.clone(),
+                        environment_id: environment_id.clone(),
                     },
                     &key,
                     &data.erased(),

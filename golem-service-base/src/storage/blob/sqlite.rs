@@ -56,25 +56,25 @@ impl SqliteBlobStorage {
 
     fn namespace(namespace: BlobStorageNamespace) -> String {
         match namespace {
-            BlobStorageNamespace::CompilationCache { project_id } => {
-                format!("compilation_cache-{project_id}")
+            BlobStorageNamespace::CompilationCache { environment_id } => {
+                format!("compilation_cache-{environment_id}")
             }
-            BlobStorageNamespace::CustomStorage { project_id } => {
-                format!("custom_data-{project_id}")
+            BlobStorageNamespace::CustomStorage { environment_id } => {
+                format!("custom_data-{environment_id}")
             }
             BlobStorageNamespace::OplogPayload {
-                project_id,
+                environment_id,
                 worker_id,
-            } => format!("oplog_payload-{}-{}", project_id, worker_id.worker_name),
+            } => format!("oplog_payload-{environment_id}-{}", worker_id.worker_name),
             BlobStorageNamespace::CompressedOplog {
-                project_id,
+                environment_id,
                 component_id,
                 level,
-            } => format!("compressed_oplog-{project_id}-{component_id}-{level}"),
-            BlobStorageNamespace::InitialComponentFiles { project_id } => {
-                format!("initial_component_files-{project_id}")
+            } => format!("compressed_oplog-{environment_id}-{component_id}-{level}"),
+            BlobStorageNamespace::InitialComponentFiles { environment_id } => {
+                format!("initial_component_files-{environment_id}")
             }
-            BlobStorageNamespace::Components { project_id } => format!("components-{project_id}"),
+            BlobStorageNamespace::Components { environment_id } => format!("components-{environment_id}"),
             BlobStorageNamespace::PluginWasmFiles { account_id } => {
                 format!("plugin_wasm_files-{account_id}")
             }

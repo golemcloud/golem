@@ -42,6 +42,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
 use testcontainers_modules::minio::MinIO;
 use uuid::Uuid;
+use golem_common::model::environment::EnvironmentId;
 
 #[async_trait]
 trait GetBlobStorage: Debug {
@@ -405,14 +406,14 @@ async fn sqlite() -> Arc<dyn GetBlobStorage + Send + Sync> {
 #[test_dep(tagged_as = "cc")]
 fn compilation_cache() -> BlobStorageNamespace {
     BlobStorageNamespace::CompilationCache {
-        project_id: ProjectId(Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap()),
+        environment_id: EnvironmentId(Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap()),
     }
 }
 
 #[test_dep(tagged_as = "co")]
 fn compressed_oplog() -> BlobStorageNamespace {
     BlobStorageNamespace::CompressedOplog {
-        project_id: ProjectId(Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap()),
+        environment_id: EnvironmentId(Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap()),
         component_id: ComponentId(Uuid::new_v4()),
         level: 0,
     }
