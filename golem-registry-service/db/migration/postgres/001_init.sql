@@ -461,8 +461,8 @@ CREATE TABLE http_api_deployment_revisions
 
     CONSTRAINT http_api_deployment_revisions_pk
         PRIMARY KEY (http_api_deployment_id, revision_id),
-    CONSTRAINT http_api_deployment_revisions_components_fk
-        FOREIGN KEY (http_api_deployment_id) REFERENCES components
+    CONSTRAINT http_api_deployment_revisions_deployments_fk
+        FOREIGN KEY (http_api_deployment_id) REFERENCES http_api_deployments
 );
 
 CREATE INDEX http_api_deployment_revisions_latest_revision_by_id_idx
