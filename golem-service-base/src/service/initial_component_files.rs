@@ -18,9 +18,9 @@ use crate::replayable_stream::{ContentHash, ReplayableStream};
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::{InitialComponentFileKey};
-use tracing::debug;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::InitialComponentFileKey;
+use tracing::debug;
 
 const INITIAL_COMPONENT_FILES_LABEL: &str = "initial_component_files";
 

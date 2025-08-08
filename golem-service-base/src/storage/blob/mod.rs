@@ -17,11 +17,11 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::{AccountId, ComponentId, ProjectId, Timestamp, WorkerId};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{AccountId, ComponentId, Timestamp, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
-use golem_common::model::environment::EnvironmentId;
 
 pub mod fs;
 pub mod memory;

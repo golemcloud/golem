@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use anyhow::{Error, anyhow};
-use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use golem_common::model::ProjectId;
+use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use golem_service_base::stream::LoggedByteStream;
 use std::fmt::Debug;
@@ -24,121 +23,37 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, debug_span, error};
 use tracing_futures::Instrument;
-use golem_common::model::environment::EnvironmentId;
 
 const COMPONENT_FILES_LABEL: &str = "component_files";
 
-#[async_trait]
-pub trait ComponentObjectStore: Debug + Send + Sync {
-    async fn get(&self, environment_id: &EnvironmentId, object_key: &str) -> Result<Vec<u8>, Error>;
-
-    async fn get_stream(
-        &self,
-        environment_id: &EnvironmentId,
-        object_key: &str,
-    ) -> Result<BoxStream<'static, Result<Vec<u8>, Error>>, Error>;
-
-    async fn put(
-        &self,
-        environment_id: &EnvironmentId,
-        object_key: &str,
-        data: Vec<u8>,
-    ) -> Result<(), Error>;
-
-    async fn delete(&self, environment_id: &EnvironmentId, object_key: &str) -> Result<(), Error>;
-}
-
 #[derive(Debug)]
-pub struct LoggedComponentObjectStore<Store> {
-    store: Store,
+pub struct ComponentObjectStore {
+    blob_storage: Arc<dyn BlobStorage>,
 }
 
-impl<Store: ComponentObjectStore> LoggedComponentObjectStore<Store> {
-    pub fn new(store: Store) -> Self {
-        Self { store }
+impl ComponentObjectStore {
+    pub fn new(blob_storage: Arc<dyn BlobStorage>) -> Self {
+        Self { blob_storage }
     }
 
-    fn logged<R>(
+    pub async fn get(
         &self,
-        message: &'static str,
         environment_id: &EnvironmentId,
-        key: &str,
-        result: Result<R, Error>,
-    ) -> Result<R, Error> {
-        match &result {
-            Ok(_) => debug!(environment_id=%environment_id, key = key, "{message}"),
-            Err(error) => {
-                error!(environment_id=%environment_id, key = key, error = error.to_string(), "{message}")
-            }
-        }
-        result
-    }
-}
-
-#[async_trait]
-impl<Store: ComponentObjectStore + Sync> ComponentObjectStore
-    for LoggedComponentObjectStore<Store>
-{
-    async fn get(&self, environment_id: &EnvironmentId, object_key: &str) -> Result<Vec<u8>, Error> {
+        object_key: &str,
+    ) -> Result<Vec<u8>, Error> {
         self.logged(
             "Getting component",
             environment_id,
             object_key,
-            self.store.get(environment_id, object_key).await,
+            self.get_internal(environment_id, object_key).await,
         )
     }
 
-    async fn get_stream(
+    async fn get_internal(
         &self,
         environment_id: &EnvironmentId,
         object_key: &str,
-    ) -> Result<BoxStream<'static, Result<Vec<u8>, Error>>, Error> {
-        let span =
-            debug_span!("Getting component stream", environment_id=%environment_id, key = object_key);
-        let inner_stream = self.store.get_stream(environment_id, object_key).await?;
-        let logging_stream = LoggedByteStream::new(inner_stream);
-        let instrumented_stream = logging_stream.instrument(span);
-        Ok(Box::pin(instrumented_stream))
-    }
-
-    async fn put(
-        &self,
-        environment_id: &EnvironmentId,
-        object_key: &str,
-        data: Vec<u8>,
-    ) -> Result<(), Error> {
-        self.logged(
-            "Putting object",
-            environment_id,
-            object_key,
-            self.store.put(environment_id, object_key, data).await,
-        )
-    }
-
-    async fn delete(&self, environment_id: &EnvironmentId, object_key: &str) -> Result<(), Error> {
-        self.logged(
-            "Deleting object",
-            environment_id,
-            object_key,
-            self.store.delete(environment_id, object_key).await,
-        )
-    }
-}
-
-#[derive(Debug)]
-pub struct BlobStorageComponentObjectStore {
-    blob_storage: Arc<dyn BlobStorage>,
-}
-
-impl BlobStorageComponentObjectStore {
-    pub fn new(blob_storage: Arc<dyn BlobStorage>) -> Self {
-        Self { blob_storage }
-    }
-}
-
-#[async_trait]
-impl ComponentObjectStore for BlobStorageComponentObjectStore {
-    async fn get(&self, environment_id: &EnvironmentId, object_key: &str) -> Result<Vec<u8>, Error> {
+    ) -> Result<Vec<u8>, Error> {
         let result = self
             .blob_storage
             .get_raw(
@@ -157,7 +72,19 @@ impl ComponentObjectStore for BlobStorageComponentObjectStore {
         Ok(result)
     }
 
-    async fn get_stream(
+    pub async fn get_stream(
+        &self,
+        environment_id: &EnvironmentId,
+        object_key: &str,
+    ) -> Result<BoxStream<'static, Result<Vec<u8>, Error>>, Error> {
+        let span = debug_span!("Getting component stream", environment_id=%environment_id, key = object_key);
+        let inner_stream = self.get_stream_internal(environment_id, object_key).await?;
+        let logging_stream = LoggedByteStream::new(inner_stream);
+        let instrumented_stream = logging_stream.instrument(span);
+        Ok(Box::pin(instrumented_stream))
+    }
+
+    async fn get_stream_internal(
         &self,
         environment_id: &EnvironmentId,
         object_key: &str,
@@ -180,7 +107,21 @@ impl ComponentObjectStore for BlobStorageComponentObjectStore {
         Ok(Box::pin(result))
     }
 
-    async fn put(
+    pub async fn put(
+        &self,
+        environment_id: &EnvironmentId,
+        object_key: &str,
+        data: Vec<u8>,
+    ) -> Result<(), Error> {
+        self.logged(
+            "Putting object",
+            environment_id,
+            object_key,
+            self.put_internal(environment_id, object_key, data).await,
+        )
+    }
+
+    async fn put_internal(
         &self,
         environment_id: &EnvironmentId,
         object_key: &str,
@@ -200,7 +141,24 @@ impl ComponentObjectStore for BlobStorageComponentObjectStore {
             .map_err(|e| anyhow!(e))
     }
 
-    async fn delete(&self, environment_id: &EnvironmentId, object_key: &str) -> Result<(), Error> {
+    pub async fn delete(
+        &self,
+        environment_id: &EnvironmentId,
+        object_key: &str,
+    ) -> Result<(), Error> {
+        self.logged(
+            "Deleting object",
+            environment_id,
+            object_key,
+            self.delete_internal(environment_id, object_key).await,
+        )
+    }
+
+    async fn delete_internal(
+        &self,
+        environment_id: &EnvironmentId,
+        object_key: &str,
+    ) -> Result<(), Error> {
         self.blob_storage
             .delete(
                 COMPONENT_FILES_LABEL,
@@ -212,5 +170,21 @@ impl ComponentObjectStore for BlobStorageComponentObjectStore {
             )
             .await
             .map_err(|e| anyhow!(e))
+    }
+
+    fn logged<R>(
+        &self,
+        message: &'static str,
+        environment_id: &EnvironmentId,
+        key: &str,
+        result: Result<R, Error>,
+    ) -> Result<R, Error> {
+        match &result {
+            Ok(_) => debug!(environment_id=%environment_id, key = key, "{message}"),
+            Err(error) => {
+                error!(environment_id=%environment_id, key = key, error = error.to_string(), "{message}")
+            }
+        }
+        result
     }
 }
