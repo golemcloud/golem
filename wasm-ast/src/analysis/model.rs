@@ -444,6 +444,25 @@ impl AnalysedType {
     pub fn owned(self, owner: impl AsRef<str>) -> Self {
         self.with_optional_owner(Some(owner.as_ref().to_string()))
     }
+
+    pub fn contains_handle(&self) -> bool {
+        match self {
+            AnalysedType::Handle(_) => true,
+            AnalysedType::Variant(typ) => typ
+                .cases
+                .iter()
+                .any(|case| case.typ.as_ref().map_or(false, |t| t.contains_handle())),
+            AnalysedType::Result(typ) => {
+                typ.ok.as_ref().map_or(false, |t| t.contains_handle())
+                    || typ.err.as_ref().map_or(false, |t| t.contains_handle())
+            }
+            AnalysedType::Option(typ) => typ.inner.contains_handle(),
+            AnalysedType::Record(typ) => typ.fields.iter().any(|f| f.typ.contains_handle()),
+            AnalysedType::Tuple(typ) => typ.items.iter().any(|t| t.contains_handle()),
+            AnalysedType::List(typ) => typ.inner.contains_handle(),
+            _ => false,
+        }
+    }
 }
 
 pub mod analysed_type {

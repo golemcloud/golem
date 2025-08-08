@@ -65,9 +65,7 @@ use crate::services::{
 };
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
-use crate::worker::invocation::{
-    find_first_available_function, invoke_observed_and_traced, InvokeResult,
-};
+use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
 use crate::worker::status::calculate_last_known_status;
 use crate::worker::{interpret_function_result, is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
@@ -279,7 +277,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .expect("ResourceTable mutex must never fail")
     }
 
-    fn is_read_only(&mut self, fd: &Resource<Descriptor>) -> Result<bool, ResourceTableError> {
+    fn check_if_file_is_readonly(
+        &mut self,
+        fd: &Resource<Descriptor>,
+    ) -> Result<bool, ResourceTableError> {
         let table = Arc::get_mut(&mut self.table)
             .expect("ResourceTable is shared and cannot be borrowed mutably")
             .get_mut()
@@ -296,7 +297,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     fn fail_if_read_only(&mut self, fd: &Resource<Descriptor>) -> FsResult<()> {
-        if self.is_read_only(fd)? {
+        if self.check_if_file_is_readonly(fd)? {
             Err(wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted.into())
         } else {
             Ok(())
@@ -609,81 +610,82 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                     .await
                 {
                     Ok(Some(data)) => {
-                        let failed = if let Some(load_snapshot) = find_first_available_function(
-                            store,
-                            instance,
-                            vec![
-                                "golem:api/load-snapshot@1.1.0.{load}".to_string(),
-                                "golem:api/load-snapshot@0.2.0.{load}".to_string(),
-                            ],
-                        ) {
-                            let idempotency_key = IdempotencyKey::fresh();
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .durable_ctx_mut()
-                                .set_current_idempotency_key(idempotency_key.clone())
+                        let component_metadata = store
+                            .as_context()
+                            .data()
+                            .component_metadata()
+                            .metadata
+                            .clone();
+
+                        let failed = match component_metadata.load_snapshot() {
+                            Ok(Some(load_snapshot)) => {
+                                let idempotency_key = IdempotencyKey::fresh();
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .durable_ctx_mut()
+                                    .set_current_idempotency_key(idempotency_key.clone())
+                                    .await;
+
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .begin_call_snapshotting_function();
+                                let load_result = invoke_observed_and_traced(
+                                    load_snapshot.name.to_string(),
+                                    vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
+                                    store,
+                                    instance,
+                                    &component_metadata,
+                                )
                                 .await;
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .end_call_snapshotting_function();
 
-                            let component_metadata = store
-                                .as_context()
-                                .data()
-                                .component_metadata()
-                                .metadata
-                                .clone();
-
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .begin_call_snapshotting_function();
-                            let load_result = invoke_observed_and_traced(
-                                load_snapshot,
-                                vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
-                                store,
-                                instance,
-                                &component_metadata,
-                            )
-                            .await;
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .end_call_snapshotting_function();
-
-                            match load_result {
-                                Err(error) => {
-                                    Some(format!("Manual update failed to load snapshot: {error}"))
-                                }
-                                Ok(InvokeResult::Failed { error, .. }) => {
-                                    let stderr = store
-                                        .as_context()
-                                        .data()
-                                        .get_public_state()
-                                        .event_service()
-                                        .get_last_invocation_errors();
-                                    let error = error.to_string(&stderr);
-                                    Some(format!("Manual update failed to load snapshot: {error}"))
-                                }
-                                Ok(InvokeResult::Succeeded { output, .. }) => {
-                                    if let Some(output) = output {
-                                        match output {
-                                            Value::Result(Err(Some(boxed_error_value))) => {
-                                                match &*boxed_error_value {
-                                                    Value::String(error) =>
-                                                        Some(format!("Manual update failed to load snapshot: {error}")),
-                                                    _ =>
-                                                        Some("Unexpected result value from the snapshot load function".to_string())
-                                                }
-                                            }
-                                            _ => None
-                                        }
-                                    } else {
-                                        Some("Unexpected result value from the snapshot load function".to_string())
+                                match load_result {
+                                    Err(error) => Some(format!(
+                                        "Manual update failed to load snapshot: {error}"
+                                    )),
+                                    Ok(InvokeResult::Failed { error, .. }) => {
+                                        let stderr = store
+                                            .as_context()
+                                            .data()
+                                            .get_public_state()
+                                            .event_service()
+                                            .get_last_invocation_errors();
+                                        let error = error.to_string(&stderr);
+                                        Some(format!(
+                                            "Manual update failed to load snapshot: {error}"
+                                        ))
                                     }
+                                    Ok(InvokeResult::Succeeded { output, .. }) => {
+                                        if let Some(output) = output {
+                                            match output {
+                                                Value::Result(Err(Some(boxed_error_value))) => {
+                                                    match &*boxed_error_value {
+                                                        Value::String(error) =>
+                                                            Some(format!("Manual update failed to load snapshot: {error}")),
+                                                        _ =>
+                                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                                    }
+                                                }
+                                                _ => None
+                                            }
+                                        } else {
+                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                        }
+                                    }
+                                    _ => None,
                                 }
-                                _ => None,
                             }
-                        } else {
-                            Some("Failed to find exported load-snapshot function".to_string())
+                            Ok(None) => {
+                                Some("Failed to find exported load-snapshot function".to_string())
+                            }
+                            Err(err) => Some(format!(
+                                "Failed to find exported load-snapshot function: {err}"
+                            )),
                         };
 
                         if let Some(error) = failed {
@@ -842,10 +844,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        (*self.state.read_only_paths.write().unwrap()) = compute_read_only_paths(&current_files);
+        let mut read_only_paths = self.state.read_only_paths.write().unwrap();
+        *read_only_paths = compute_read_only_paths(&current_files);
 
         // TODO: take config vars from component metadata
-        (*self.state.wasi_config_vars.write().unwrap()) = effective_wasi_config_vars(
+        let mut wasi_config_vars = self.state.wasi_config_vars.write().unwrap();
+        *wasi_config_vars = effective_wasi_config_vars(
             self.state.initial_wasi_config_vars.clone(),
             BTreeMap::new(),
         );
@@ -2975,7 +2979,7 @@ async fn update_filesystem(
                     let exists = tokio::fs::try_exists(&path).map_err(|e| WorkerExecutorError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
 
                     if exists {
-                        // Try removing it if it's an empty directory, this will fail otherwise and we can report the error.
+                        // Try removing it if it's an empty directory; this will fail otherwise, and we can report the error.
                         tokio::fs::remove_dir(&path).await.map_err(|e|
                             WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),

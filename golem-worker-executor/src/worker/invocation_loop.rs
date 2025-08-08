@@ -16,9 +16,7 @@ use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
-use crate::worker::invocation::{
-    find_first_available_function, invoke_observed_and_traced, InvokeResult,
-};
+use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
 use crate::worker::{
     interpret_function_result, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker,
     WorkerCommand,
@@ -715,113 +713,118 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await;
             idempotency_key
         };
+        let component_metadata = self.store.data().component_metadata().metadata.clone();
 
-        if let Some(save_snapshot) = find_first_available_function(
-            self.store,
-            self.instance,
-            vec![
-                "golem:api/save-snapshot@1.1.0.{save}".to_string(),
-                "golem:api/save-snapshot@0.2.0.{save}".to_string(),
-            ],
-        ) {
-            self.store.data_mut().begin_call_snapshotting_function();
+        match component_metadata.save_snapshot() {
+            Ok(Some(save_snapshot)) => {
+                self.store.data_mut().begin_call_snapshotting_function();
 
-            let component_metadata = self.store.data().component_metadata().metadata.clone();
+                let result = invoke_observed_and_traced(
+                    save_snapshot.name.to_string(),
+                    vec![],
+                    self.store,
+                    self.instance,
+                    &component_metadata,
+                )
+                .await;
+                self.store.data_mut().end_call_snapshotting_function();
 
-            let result = invoke_observed_and_traced(
-                save_snapshot,
-                vec![],
-                self.store,
-                self.instance,
-                &component_metadata,
-            )
-            .await;
-            self.store.data_mut().end_call_snapshotting_function();
+                match result {
+                    Ok(InvokeResult::Succeeded { output, .. }) => {
+                        if let Some(bytes) = Self::decode_snapshot_result(output) {
+                            match self
+                                .store
+                                .data()
+                                .get_public_state()
+                                .oplog()
+                                .create_snapshot_based_update_description(target_version, &bytes)
+                                .await
+                            {
+                                Ok(update_description) => {
+                                    // Enqueue the update
+                                    self.parent.enqueue_update(update_description).await;
 
-            match result {
-                Ok(InvokeResult::Succeeded { output, .. }) => {
-                    if let Some(bytes) = Self::decode_snapshot_result(output) {
-                        match self
+                                    // Make sure to update the pending updates queue
+                                    self.store.data().update_pending_updates().await;
+
+                                    // Reactivate the worker
+                                    CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+                                    // Stop processing the queue to avoid race conditions
+                                }
+                                Err(error) => {
+                                    self.fail_update(
+                                        target_version,
+                                        format!(
+                                            "failed to store the snapshot for manual update: {error}"
+                                        ),
+                                    )
+                                        .await
+                                }
+                            }
+                        } else {
+                            self.fail_update(
+                                target_version,
+                                "failed to get a snapshot for manual update: invalid snapshot result"
+                                    .to_string(),
+                            )
+                                .await
+                        }
+                    }
+                    Ok(InvokeResult::Failed { error, .. }) => {
+                        let stderr = self
                             .store
                             .data()
                             .get_public_state()
-                            .oplog()
-                            .create_snapshot_based_update_description(target_version, &bytes)
-                            .await
-                        {
-                            Ok(update_description) => {
-                                // Enqueue the update
-                                self.parent.enqueue_update(update_description).await;
-
-                                // Make sure to update the pending updates queue
-                                self.store.data().update_pending_updates().await;
-
-                                // Reactivate the worker
-                                CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-                                // Stop processing the queue to avoid race conditions
-                            }
-                            Err(error) => {
-                                self.fail_update(
-                                    target_version,
-                                    format!(
-                                        "failed to store the snapshot for manual update: {error}"
-                                    ),
-                                )
-                                .await
-                            }
-                        }
-                    } else {
+                            .event_service()
+                            .get_last_invocation_errors();
+                        let error = error.to_string(&stderr);
                         self.fail_update(
                             target_version,
-                            "failed to get a snapshot for manual update: invalid snapshot result"
+                            format!("failed to get a snapshot for manual update: {error}"),
+                        )
+                        .await
+                    }
+                    Ok(InvokeResult::Exited { .. }) => {
+                        self.fail_update(
+                            target_version,
+                            "failed to get a snapshot for manual update: it called exit"
                                 .to_string(),
                         )
                         .await
                     }
-                }
-                Ok(InvokeResult::Failed { error, .. }) => {
-                    let stderr = self
-                        .store
-                        .data()
-                        .get_public_state()
-                        .event_service()
-                        .get_last_invocation_errors();
-                    let error = error.to_string(&stderr);
-                    self.fail_update(
-                        target_version,
-                        format!("failed to get a snapshot for manual update: {error}"),
-                    )
-                    .await
-                }
-                Ok(InvokeResult::Exited { .. }) => {
-                    self.fail_update(
-                        target_version,
-                        "failed to get a snapshot for manual update: it called exit".to_string(),
-                    )
-                    .await
-                }
-                Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                    self.fail_update(
-                        target_version,
-                        format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
-                    )
-                    .await
-                }
-                Err(error) => {
-                    self.fail_update(
-                        target_version,
-                        format!("failed to get a snapshot for manual update: {error:?}"),
-                    )
-                    .await
+                    Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                        self.fail_update(
+                            target_version,
+                            format!(
+                                "failed to get a snapshot for manual update: {interrupt_kind:?}"
+                            ),
+                        )
+                        .await
+                    }
+                    Err(error) => {
+                        self.fail_update(
+                            target_version,
+                            format!("failed to get a snapshot for manual update: {error:?}"),
+                        )
+                        .await
+                    }
                 }
             }
-        } else {
-            self.fail_update(
-                target_version,
-                "failed to get a snapshot for manual update: save-snapshot is not exported"
-                    .to_string(),
-            )
-            .await
+            Ok(None) => {
+                self.fail_update(
+                    target_version,
+                    "failed to get a snapshot for manual update: save-snapshot is not exported"
+                        .to_string(),
+                )
+                .await
+            }
+            Err(error) => {
+                self.fail_update(
+                    target_version,
+                    format!("failed to get a snapshot for manual update: error while finding the exported save-snapshot function: {error}"),
+                )
+                .await
+            }
         }
     }
 

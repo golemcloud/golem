@@ -64,7 +64,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 "{pad}input:             {}",
                 value_to_string(&params.request)
             );
-            println!("{:#?}", params);
             let _ = writeln!(
                 result,
                 "{pad}result:            {}",
@@ -383,5 +382,5 @@ fn log_plugin_description(output: &mut String, pad: &str, value: &PluginInstalla
 }
 
 fn value_to_string(value: &ValueAndType) -> String {
-    print_value_and_type(value).expect("Failed to convert value to string")
+    print_value_and_type(value).unwrap_or_else(|_| format!("{value:?}"))
 }

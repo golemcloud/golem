@@ -18,7 +18,7 @@ use crate::model::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
-use golem_wasm_ast::analysis::AnalysedFunctionParameter;
+use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedInstance};
 use golem_wasm_ast::core::Mem;
 use golem_wasm_ast::metadata::Producers as WasmAstProducers;
 use golem_wasm_ast::{
@@ -27,7 +27,7 @@ use golem_wasm_ast::{
     IgnoreAllButMetadata,
 };
 use heck::ToKebabCase;
-use rib::{ParsedFunctionName, ParsedFunctionSite, SemVer};
+use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -62,6 +62,34 @@ impl ComponentMetadata {
         Ok(raw.into_metadata(dynamic_linking, agent_types))
     }
 
+    pub fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
+        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
+            ParsedFunctionSite::PackagedInterface {
+                namespace: "golem".to_string(),
+                package: "api".to_string(),
+                interface: "load-snapshot".to_string(),
+                version: None,
+            },
+            ParsedFunctionReference::Function {
+                function: "load".to_string(),
+            },
+        ))
+    }
+
+    pub fn save_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
+        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
+            ParsedFunctionSite::PackagedInterface {
+                namespace: "golem".to_string(),
+                package: "api".to_string(),
+                interface: "save-snapshot".to_string(),
+                version: None,
+            },
+            ParsedFunctionReference::Function {
+                function: "save".to_string(),
+            },
+        ))
+    }
+
     pub fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
         let parsed = ParsedFunctionName::parse(name)?;
         self.find_parsed_function(&parsed)
@@ -73,6 +101,45 @@ impl ComponentMetadata {
     ) -> Result<Option<InvokableFunction>, String> {
         Ok(self
             .find_analysed_function(parsed)
+            .map(|analysed_export| {
+                self.find_agent_method_or_constructor(parsed)
+                    .map(|agent_method_or_constructor| {
+                        (analysed_export, agent_method_or_constructor)
+                    })
+            })
+            .transpose()?
+            .map(
+                |(analysed_export, agent_method_or_constructor)| InvokableFunction {
+                    name: parsed.clone(),
+                    analysed_export,
+                    agent_method_or_constructor,
+                },
+            ))
+    }
+
+    /// Finds a function ignoring the function site's version. Returns None if it was not found.
+    fn find_parsed_function_ignoring_version(
+        &self,
+        parsed: &ParsedFunctionName,
+    ) -> Result<Option<InvokableFunction>, String> {
+        Ok(self
+            .exports
+            .iter()
+            .find_map(|export| {
+                if let AnalysedExport::Instance(instance) = export {
+                    if let Ok(site) = ParsedFunctionSite::parse(&instance.name) {
+                        if &site.unversioned() == parsed.site() {
+                            Self::find_function_in_instance(parsed, instance)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
             .map(|analysed_export| {
                 self.find_agent_method_or_constructor(parsed)
                     .map(|agent_method_or_constructor| {
@@ -104,24 +171,29 @@ impl ComponentMetadata {
                     AnalysedExport::Instance(inst) if inst.name == *interface_name => Some(inst),
                     _ => None,
                 })
-                .and_then(|instance| {
-                    match instance
-                        .functions
-                        .iter()
-                        .find(|f| f.name == parsed.function().function_name())
-                        .cloned()
-                    {
-                        Some(function) => Some(function),
-                        None => match parsed.method_as_static() {
-                            Some(parsed_static) => instance
-                                .functions
-                                .iter()
-                                .find(|f| f.name == parsed_static.function().function_name())
-                                .cloned(),
-                            None => None,
-                        },
-                    }
-                }),
+                .and_then(|instance| Self::find_function_in_instance(parsed, instance)),
+        }
+    }
+
+    fn find_function_in_instance(
+        parsed: &ParsedFunctionName,
+        instance: &AnalysedInstance,
+    ) -> Option<AnalysedFunction> {
+        match instance
+            .functions
+            .iter()
+            .find(|f| f.name == parsed.function().function_name())
+            .cloned()
+        {
+            Some(function) => Some(function),
+            None => match parsed.method_as_static() {
+                Some(parsed_static) => instance
+                    .functions
+                    .iter()
+                    .find(|f| f.name == parsed_static.function().function_name())
+                    .cloned(),
+                None => None,
+            },
         }
     }
 

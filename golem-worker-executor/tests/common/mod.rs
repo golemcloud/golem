@@ -85,7 +85,6 @@ use golem_worker_executor::workerctx::{
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
-use rib::ParsedFunctionSite;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::Ordering;

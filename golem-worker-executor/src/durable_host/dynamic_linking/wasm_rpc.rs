@@ -19,7 +19,7 @@ use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::DynamicLinkedWasmRpc;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, TargetWorkerId, WorkerId};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{CancellationTokenEntry, HostWasmRpc, Uri, Value, WasmRpcEntry, WitValue};
@@ -611,12 +611,19 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                         "Target function {target_function_name} not found in component metadata"
                     )
                 })?;
-            let analysed_param_types = &target_function_metadata
+            let mut analysed_param_types = target_function_metadata
                 .analysed_export
                 .parameters
                 .iter()
                 .map(|p| &p.typ)
                 .collect::<Vec<_>>();
+
+            analysed_param_types.insert(0, &AnalysedType::Handle(TypeHandle {
+                name: None,
+                owner: None,
+                resource_id: AnalysedResourceId(u64::MAX), // TODO
+                mode: AnalysedResourceMode::Borrowed
+            }));
 
             // function should have at least one parameter for the scheduled_for datetime.
             if !(!params.is_empty() && !param_types.is_empty()) {

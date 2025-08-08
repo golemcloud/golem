@@ -140,6 +140,26 @@ impl ParsedFunctionSite {
             } => Some(format!("{namespace}:{package}/{interface}@{}", version.0)),
         }
     }
+
+    pub fn unversioned(&self) -> ParsedFunctionSite {
+        match self {
+            ParsedFunctionSite::Global => ParsedFunctionSite::Global,
+            ParsedFunctionSite::Interface { name } => {
+                ParsedFunctionSite::Interface { name: name.clone() }
+            }
+            ParsedFunctionSite::PackagedInterface {
+                namespace,
+                package,
+                interface,
+                version: _,
+            } => ParsedFunctionSite::PackagedInterface {
+                namespace: namespace.clone(),
+                package: package.clone(),
+                interface: interface.clone(),
+                version: None,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]

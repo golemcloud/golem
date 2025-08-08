@@ -23,7 +23,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
-use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
+use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
 use golem_common::model::{
     ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
     StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
@@ -39,7 +39,6 @@ use golem_wasm_ast::analysis::{analysed_type, AnalysedType, TypeStr};
 use golem_wasm_rpc::{IntoValue, Record};
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use redis::Commands;
-use rib::ParsedFunctionSite;
 use std::collections::HashMap;
 use std::env;
 use std::io::Write;
@@ -2739,7 +2738,7 @@ async fn counter_resource_test_1(
                 WorkerResourceId(0),
                 WorkerResourceDescription {
                     created_at: ts,
-                    resource_owner: "rpc:counters-export/api".to_string(),
+                    resource_owner: "rpc:counters-exports/api".to_string(),
                     resource_name: "counter".to_string(),
                     resource_params: Some(vec!["\"counter1\"".to_string()]),
                 }
@@ -2874,28 +2873,28 @@ async fn counter_resource_test_2(
         })
         .collect::<Vec<_>>();
     resources1.sort_by_key(|(k, _v)| *k);
-    check!(
-        resources1
-            == vec![
-                (
-                    WorkerResourceId(0),
-                    WorkerResourceDescription {
-                        created_at: ts,
-                        resource_owner: "rpc:counters-export/api".to_string(),
-                        resource_name: "counter".to_string(),
-                        resource_params: Some(vec!["\"counter1\"".to_string()])
-                    }
-                ),
-                (
-                    WorkerResourceId(1),
-                    WorkerResourceDescription {
-                        created_at: ts,
-                        resource_owner: "rpc:counters-export/api".to_string(),
-                        resource_name: "counter".to_string(),
-                        resource_params: Some(vec!["\"counter2\"".to_string()])
-                    }
-                )
-            ]
+    assert_eq!(
+        resources1,
+        vec![
+            (
+                WorkerResourceId(0),
+                WorkerResourceDescription {
+                    created_at: ts,
+                    resource_owner: "rpc:counters-exports/api".to_string(),
+                    resource_name: "counter".to_string(),
+                    resource_params: Some(vec!["\"counter1\"".to_string()])
+                }
+            ),
+            (
+                WorkerResourceId(1),
+                WorkerResourceDescription {
+                    created_at: ts,
+                    resource_owner: "rpc:counters-exports/api".to_string(),
+                    resource_name: "counter".to_string(),
+                    resource_params: Some(vec!["\"counter2\"".to_string()])
+                }
+            )
+        ]
     );
 
     let resources2 = metadata2

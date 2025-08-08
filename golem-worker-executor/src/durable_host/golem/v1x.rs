@@ -20,7 +20,7 @@ use crate::model::public_oplog::{
 };
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
-    ForkResult, GetWorkers, Host, HostGetWorkers, WorkerAnyFilter,
+    ForkResult, GetWorkers, Host, HostGetWorkers, WitValue, WorkerAnyFilter,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
@@ -38,6 +38,7 @@ use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use std::future::Future;
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
@@ -783,6 +784,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             durability.replay(self).await
         }
+    }
+
+    async fn register_resource(
+        &mut self,
+        parameters: Vec<WitValue>,
+        handle: WitValue,
+    ) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    async fn unregister_resource(&mut self, parameters: Vec<WitValue>) -> anyhow::Result<()> {
+        todo!()
     }
 }
 
