@@ -86,7 +86,7 @@ tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tracing = { workspace = true }
-tracing-futures = { workspace = true }
+tracing-futures = { workspace = true, features = ["futures-03"] }
 tracing-subscriber = { workspace = true }
 tryhard = { workspace = true }
 url = { workspace = true }

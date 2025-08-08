@@ -15,6 +15,7 @@
 use super::component_metadata::ComponentMetadata;
 use super::{ComponentType, InitialComponentFile, PluginInstallationId, ProjectId};
 use crate::base_model::{ComponentId, ComponentVersion};
+use crate::declare_transparent_newtypes;
 use crate::model::AccountId;
 use bincode::{Decode, Encode};
 use core::fmt;
@@ -22,6 +23,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
+
+declare_transparent_newtypes! {
+    // TODO: Add validations (non-empty, no "/", no " ", ...)
+    pub struct ComponentName(pub String);
+}
+
+impl Display for ComponentName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,17 +96,6 @@ pub struct PluginInstallation {
     pub registered: bool,
     pub priority: i32,
     pub parameters: HashMap<String, String>,
-}
-
-// TODO: Add validations (non-empty, no "/", no " ", ...)
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-pub struct ComponentName(pub String);
-
-impl Display for ComponentName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
 }
 
 #[derive(Debug, Clone)]

@@ -14,8 +14,8 @@
 
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
-use golem_common::model::Empty;
 use golem_common::model::auth::Role;
+use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -33,9 +33,9 @@ pub struct RegistryServiceConfig {
     pub db: DbConfig,
     pub login: LoginConfig,
     pub cors_origin_regex: String,
-    // TODO:
-    // pub plans: PlansConfig,
-    // pub accounts: AccountsConfig,
+    pub component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig, // TODO:
+                                                                                     // pub plans: PlansConfig,
+                                                                                     // pub accounts: AccountsConfig,
 }
 
 impl Default for RegistryServiceConfig {
@@ -49,6 +49,7 @@ impl Default for RegistryServiceConfig {
             db: DbConfig::default(),
             login: LoginConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
+            component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig::default(),
         }
     }
 }
@@ -148,6 +149,11 @@ pub struct AccountConfig {
     pub email: String,
     pub token: Uuid,
     pub role: Role,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ComponentTransformerPluginCallerConfig {
+    pub retries: RetryConfig,
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

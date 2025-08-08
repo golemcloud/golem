@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::ComponentName;
-use golem_common::model::component::VersionedComponentId;
+use golem_common::model::component::{ComponentName, VersionedComponentId};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{
     plugin as common_plugin_model, AccountId, ComponentType, InitialComponentFile,

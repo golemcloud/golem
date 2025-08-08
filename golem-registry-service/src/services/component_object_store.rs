@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use async_trait::async_trait;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use golem_common::model::ProjectId;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use golem_service_base::stream::LoggedByteStream;
