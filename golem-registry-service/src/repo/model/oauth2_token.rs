@@ -12,18 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Repos
-pub mod account;
-pub mod application;
-pub mod component;
-pub mod deployment;
-pub mod environment;
-pub mod http_api_definition;
-pub mod http_api_deployment;
-pub mod oauth2_token;
-pub mod oauth2_webflow_state;
-pub mod plan;
-pub mod token;
+use uuid::Uuid;
 
-// Model for SQL records and fields
-pub mod model;
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct OAuth2TokenRecord {
+    pub provider: String,
+    pub external_id: String,
+    pub token_id: Option<Uuid>,
+    pub account_id: Uuid,
+}
