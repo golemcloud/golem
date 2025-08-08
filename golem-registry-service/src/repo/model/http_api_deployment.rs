@@ -33,7 +33,7 @@ pub struct HttpApiDeploymentRecord {
 pub struct HttpApiDeploymentRevisionRecord {
     pub http_api_deployment_id: Uuid,
     pub revision_id: i64,
-    pub hash: Option<SqlBlake3Hash>,
+    pub hash: SqlBlake3Hash,
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
 
@@ -66,7 +66,7 @@ impl HttpApiDeploymentRevisionRecord {
         Self {
             http_api_deployment_id,
             revision_id: current_revision_id + 1,
-            hash: None,
+            hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
             http_api_definitions: vec![],
         }

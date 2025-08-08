@@ -79,6 +79,18 @@ pub struct HttpApiDefinitionExtRevisionRecord {
     pub revision: HttpApiDefinitionRevisionRecord,
 }
 
+impl HttpApiDefinitionExtRevisionRecord {
+    pub fn to_identity(self) -> HttpApiDefinitionRevisionIdentityRecord {
+        HttpApiDefinitionRevisionIdentityRecord {
+            http_api_definition_id: self.revision.http_api_definition_id,
+            name: self.name,
+            revision_id: self.revision.revision_id,
+            version: self.revision.version,
+            hash: self.revision.hash,
+        }
+    }
+}
+
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDefinitionRevisionIdentityRecord {
     pub http_api_definition_id: Uuid,

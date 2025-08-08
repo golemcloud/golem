@@ -152,3 +152,13 @@ async fn test_environment_update_concurrently(deps: &Deps) {
 async fn test_component_create_and_get(deps: &Deps) {
     crate::repo::common::test_component_stage(deps).await;
 }
+
+#[test]
+async fn test_http_api_definition_stage(deps: &Deps) {
+    crate::repo::common::test_http_api_definition_stage(deps).await;
+}
+
+#[test]
+async fn test_http_api_deployment_stage(deps: &Deps) {
+    crate::repo::common::test_http_api_deployment_stage(deps).await;
+}

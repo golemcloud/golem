@@ -26,6 +26,9 @@ use golem_registry_service::repo::model::audit::{
 use golem_registry_service::repo::model::component::{
     ComponentFileRecord, ComponentRevisionRecord, ComponentStatus,
 };
+use golem_registry_service::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
+use golem_registry_service::repo::model::http_api_definition::HttpApiDefinitionRevisionRecord;
+use golem_registry_service::repo::model::http_api_deployment::HttpApiDeploymentRevisionRecord;
 use golem_registry_service::repo::model::new_repo_uuid;
 use std::collections::BTreeMap;
 use std::default::Default;
@@ -630,6 +633,389 @@ pub async fn test_component_stage(deps: &Deps) {
         .unwrap();
     let revision_after_delete = ComponentRevisionRecord {
         component_id: revision_0.component_id,
+        revision_id: 3,
+        ..revision_after_delete
+    };
+    let_assert!(Some(created_after_delete) = created_after_delete);
+    assert!(created_after_delete.revision == revision_after_delete);
+}
+
+pub async fn test_http_api_definition_stage(deps: &Deps) {
+    let user = deps.create_account().await;
+    let env = deps.create_env().await;
+    let definition_name = "test-api-definition";
+    let definition_id = new_repo_uuid();
+
+    let revision_0 = HttpApiDefinitionRevisionRecord {
+        http_api_definition_id: definition_id,
+        revision_id: 0,
+        version: "1.0".to_string(),
+        hash: blake3::hash("test-api-definition".as_bytes()).into(),
+        audit: DeletableRevisionAuditFields::new(user.account_id),
+        definition: "test-definition".as_bytes().to_vec(),
+    };
+
+    let created_revision_0 = deps
+        .http_api_definition_repo
+        .create(
+            &env.revision.environment_id,
+            definition_name,
+            revision_0.clone(),
+        )
+        .await
+        .unwrap();
+    let_assert!(Some(created_revision_0) = created_revision_0);
+    assert!(revision_0 == created_revision_0.revision);
+    assert!(created_revision_0.environment_id == env.revision.environment_id);
+    assert!(created_revision_0.name == definition_name);
+
+    let recreate = deps
+        .http_api_definition_repo
+        .create(
+            &env.revision.environment_id,
+            definition_name,
+            revision_0.clone(),
+        )
+        .await
+        .unwrap();
+    assert!(recreate.is_none());
+
+    let get_revision_0 = deps
+        .http_api_definition_repo
+        .get_staged_by_id(&definition_id)
+        .await
+        .unwrap();
+    let_assert!(Some(get_revision_0) = get_revision_0);
+    assert!(revision_0 == get_revision_0.revision);
+    assert!(get_revision_0.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.name == definition_name);
+
+    let get_revision_0 = deps
+        .http_api_definition_repo
+        .get_staged_by_name(&env.revision.environment_id, definition_name)
+        .await
+        .unwrap();
+    let_assert!(Some(get_revision_0) = get_revision_0);
+    assert!(revision_0 == get_revision_0.revision);
+    assert!(get_revision_0.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.name == definition_name);
+
+    let definitions = deps
+        .http_api_definition_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+    assert!(definitions.len() == 1);
+    assert!(definitions[0].revision == revision_0);
+    assert!(definitions[0].environment_id == env.revision.environment_id);
+    assert!(definitions[0].name == definition_name);
+
+    let revision_1 = HttpApiDefinitionRevisionRecord {
+        revision_id: 1,
+        version: "1.1".to_string(),
+        hash: blake3::hash("test-api-definition-updated".as_bytes()).into(),
+        definition: "test-definition-updated".as_bytes().to_vec(),
+        ..revision_0.clone()
+    };
+
+    let created_revision_1 = deps
+        .http_api_definition_repo
+        .update(0, revision_1.clone())
+        .await
+        .unwrap();
+    let_assert!(Some(created_revision_1) = created_revision_1);
+    assert!(revision_1 == created_revision_1.revision);
+    assert!(created_revision_1.environment_id == env.revision.environment_id);
+    assert!(created_revision_1.name == definition_name);
+
+    let recreated_revision_1 = deps
+        .http_api_definition_repo
+        .update(0, revision_1.clone())
+        .await
+        .unwrap();
+    assert!(recreated_revision_1.is_none());
+
+    let definitions = deps
+        .http_api_definition_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+    assert!(definitions.len() == 1);
+    assert!(definitions[0].revision == revision_1);
+
+    let other_definition_id = new_repo_uuid();
+    let other_definition_name = "test-api-definition-other";
+    let other_definition_revision_0 = HttpApiDefinitionRevisionRecord {
+        http_api_definition_id: other_definition_id,
+        ..revision_0.clone()
+    };
+
+    let created_other_definition_0 = deps
+        .http_api_definition_repo
+        .create(
+            &env.revision.environment_id,
+            other_definition_name,
+            other_definition_revision_0.clone(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(created_other_definition_0.revision == other_definition_revision_0);
+
+    let definitions = deps
+        .http_api_definition_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(definitions.len() == 2);
+    assert!(definitions[0].revision == revision_1);
+    assert!(definitions[1].revision == other_definition_revision_0);
+
+    let delete_with_old_revision = deps
+        .http_api_definition_repo
+        .delete(&user.account_id, &definition_id, 0)
+        .await
+        .unwrap();
+    assert!(delete_with_old_revision == false);
+
+    let delete_with_current_revision = deps
+        .http_api_definition_repo
+        .delete(&user.account_id, &definition_id, 1)
+        .await
+        .unwrap();
+    assert!(delete_with_current_revision == true);
+
+    let definitions = deps
+        .http_api_definition_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(definitions.len() == 1);
+    assert!(definitions[0].revision == other_definition_revision_0);
+
+    let revision_after_delete = HttpApiDefinitionRevisionRecord {
+        http_api_definition_id: new_repo_uuid(),
+        ..revision_0.clone()
+    };
+    let created_after_delete = deps
+        .http_api_definition_repo
+        .create(
+            &env.revision.environment_id,
+            definition_name,
+            revision_after_delete.clone(),
+        )
+        .await
+        .unwrap();
+    let revision_after_delete = HttpApiDefinitionRevisionRecord {
+        http_api_definition_id: revision_0.http_api_definition_id,
+        revision_id: 3,
+        ..revision_after_delete
+    };
+    let_assert!(Some(created_after_delete) = created_after_delete);
+    assert!(created_after_delete.revision == revision_after_delete);
+}
+
+pub async fn test_http_api_deployment_stage(deps: &Deps) {
+    let user = deps.create_account().await;
+    let env = deps.create_env().await;
+    let host = "test-host-1.com";
+    let subdomain = Some("api".to_string());
+    let deployment_id = new_repo_uuid();
+
+    let definition_id = new_repo_uuid();
+    let definition_name = "test-api-definition";
+    let definition_revision = HttpApiDefinitionRevisionRecord {
+        http_api_definition_id: definition_id,
+        revision_id: 0,
+        version: "1.0".to_string(),
+        hash: blake3::hash("test-api-definition".as_bytes()).into(),
+        audit: DeletableRevisionAuditFields::new(user.account_id),
+        definition: "test-definition".as_bytes().to_vec(),
+    };
+
+    let created_definition = deps
+        .http_api_definition_repo
+        .create(
+            &env.revision.environment_id,
+            definition_name,
+            definition_revision.clone(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    let revision_0 = HttpApiDeploymentRevisionRecord {
+        http_api_deployment_id: deployment_id,
+        revision_id: 0,
+        hash: blake3::hash("test-deployment".as_bytes()).into(),
+        audit: DeletableRevisionAuditFields::new(user.account_id),
+        http_api_definitions: vec![created_definition.to_identity()],
+    };
+
+    let created_revision_0 = deps
+        .http_api_deployment_repo
+        .create(
+            &env.revision.environment_id,
+            host,
+            subdomain.as_deref(),
+            revision_0.clone(),
+        )
+        .await
+        .unwrap();
+    let_assert!(Some(created_revision_0) = created_revision_0);
+    assert!(revision_0 == created_revision_0.revision);
+    assert!(created_revision_0.environment_id == env.revision.environment_id);
+    assert!(created_revision_0.host == host);
+    assert!(created_revision_0.subdomain == subdomain);
+
+    let recreate = deps
+        .http_api_deployment_repo
+        .create(
+            &env.revision.environment_id,
+            host,
+            subdomain.as_deref(),
+            revision_0.clone(),
+        )
+        .await
+        .unwrap();
+    assert!(recreate.is_none());
+
+    let get_revision_0 = deps
+        .http_api_deployment_repo
+        .get_staged_by_id(&deployment_id)
+        .await
+        .unwrap();
+    let_assert!(Some(get_revision_0) = get_revision_0);
+    assert!(revision_0 == get_revision_0.revision);
+    assert!(get_revision_0.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.host == host);
+    assert!(get_revision_0.subdomain == subdomain);
+
+    let get_revision_0 = deps
+        .http_api_deployment_repo
+        .get_staged_by_name(&env.revision.environment_id, host, subdomain.as_deref())
+        .await
+        .unwrap();
+    let_assert!(Some(get_revision_0) = get_revision_0);
+    assert!(revision_0 == get_revision_0.revision);
+    assert!(get_revision_0.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.host == host);
+    assert!(get_revision_0.subdomain == subdomain);
+
+    let deployments = deps
+        .http_api_deployment_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+    assert!(deployments.len() == 1);
+    assert!(deployments[0].revision == revision_0);
+    assert!(deployments[0].environment_id == env.revision.environment_id);
+    assert!(deployments[0].host == host);
+    assert!(deployments[0].subdomain == subdomain);
+
+    let revision_1 = HttpApiDeploymentRevisionRecord {
+        revision_id: 1,
+        hash: blake3::hash("test-deployment-updated".as_bytes()).into(),
+        ..revision_0.clone()
+    };
+
+    let created_revision_1 = deps
+        .http_api_deployment_repo
+        .update(0, revision_1.clone())
+        .await
+        .unwrap();
+    let_assert!(Some(created_revision_1) = created_revision_1);
+    assert!(revision_1 == created_revision_1.revision);
+    assert!(created_revision_1.environment_id == env.revision.environment_id);
+    assert!(created_revision_1.host == host);
+    assert!(created_revision_1.subdomain == subdomain);
+
+    let recreated_revision_1 = deps
+        .http_api_deployment_repo
+        .update(0, revision_1.clone())
+        .await
+        .unwrap();
+    assert!(recreated_revision_1.is_none());
+
+    let deployments = deps
+        .http_api_deployment_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+    assert!(deployments.len() == 1);
+    assert!(deployments[0].revision == revision_1);
+
+    let other_deployment_id = new_repo_uuid();
+    let other_host = "test-host-2.com";
+    let other_deployment_revision_0 = HttpApiDeploymentRevisionRecord {
+        http_api_deployment_id: other_deployment_id,
+        ..revision_0.clone()
+    };
+
+    let created_other_deployment_0 = deps
+        .http_api_deployment_repo
+        .create(
+            &env.revision.environment_id,
+            other_host,
+            subdomain.as_deref(),
+            other_deployment_revision_0.clone(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(created_other_deployment_0.revision == other_deployment_revision_0);
+
+    let deployments = deps
+        .http_api_deployment_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(deployments.len() == 2);
+    assert!(deployments[0].revision == revision_1);
+    assert!(deployments[1].revision == other_deployment_revision_0);
+
+    let delete_with_old_revision = deps
+        .http_api_deployment_repo
+        .delete(&user.account_id, &deployment_id, 0)
+        .await
+        .unwrap();
+    assert!(delete_with_old_revision == false);
+
+    let delete_with_current_revision = deps
+        .http_api_deployment_repo
+        .delete(&user.account_id, &deployment_id, 1)
+        .await
+        .unwrap();
+    assert!(delete_with_current_revision == true);
+
+    let deployments = deps
+        .http_api_deployment_repo
+        .list_staged(&env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(deployments.len() == 1);
+    assert!(deployments[0].revision == other_deployment_revision_0);
+
+    let revision_after_delete = HttpApiDeploymentRevisionRecord {
+        http_api_deployment_id: new_repo_uuid(),
+        ..revision_0.clone()
+    };
+    let created_after_delete = deps
+        .http_api_deployment_repo
+        .create(
+            &env.revision.environment_id,
+            host,
+            subdomain.as_deref(),
+            revision_after_delete.clone(),
+        )
+        .await
+        .unwrap();
+    let revision_after_delete = HttpApiDeploymentRevisionRecord {
+        http_api_deployment_id: revision_0.http_api_deployment_id,
         revision_id: 3,
         ..revision_after_delete
     };
