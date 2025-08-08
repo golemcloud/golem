@@ -14,18 +14,17 @@
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::componentcompilation::v1::{
-    component_compilation_service_client::ComponentCompilationServiceClient,
     ComponentCompilationRequest,
+    component_compilation_service_client::ComponentCompilationServiceClient,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentId, RetryConfig};
 use http::Uri;
 use std::fmt::{Debug, Formatter};
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use golem_common::model::environment::EnvironmentId;
 
 #[async_trait]
 pub trait ComponentCompilationService: Debug + Send + Sync {
@@ -46,8 +45,8 @@ impl GrpcComponentCompilationService {
     pub fn new(
         uri: Uri,
         retries: RetryConfig,
-        connect_timeout: Duration
-
+        connect_timeout: Duration,
+        component_service_port: u16,
     ) -> Self {
         let client = GrpcClient::new(
             "component-compilation-service",
@@ -64,7 +63,7 @@ impl GrpcComponentCompilationService {
         );
         Self {
             client,
-            component_service_port: AtomicU16::new(0),
+            component_service_port,
         }
     }
 }
@@ -86,11 +85,7 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
     ) {
         let component_id_clone = component_id.clone();
         let environment_id_clone = environment_id.clone();
-
-        let component_service_port = match self.component_service_port.load(Ordering::Acquire) {
-            0 => None,
-            port => Some(port as u32),
-        };
+        let component_service_port = self.component_service_port;
 
         let result = self
             .client
@@ -101,7 +96,7 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
                     let request = ComponentCompilationRequest {
                         component_id: Some(component_id_clone.into()),
                         component_version,
-                        component_service_port,
+                        component_service_port: Some(component_service_port.into()),
                         environment_id: Some(environment_id_clone.into()),
                     };
 
