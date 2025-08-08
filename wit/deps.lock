@@ -1,7 +1,7 @@
 [agent]
 url = "https://github.com/golemcloud/golem-agentic/archive/main.tar.gz"
-sha256 = "860bbac7d96cfcdfb2c31bbb8c8d8430e55f87300042ee94228228c37d554872"
-sha512 = "cb3d758b6b8c834131479ebd17e63a83ac9f376e33183bb00947e269da0ffefbeb1c945be5a51fc30497d8f6e833e20124f3f1ff6a63e9b67afeed094cfa8961"
+sha256 = "92738a15004db69c4c7dd4c7d531d3fb40d10779ff130d2c0d008d3984d2f73f"
+sha512 = "b37e4979adfe4f35c44786a1b79db9455ab56a02f28dfc6ae1cfb8d658bd92793d87e6aef98fa8b21c5ffdef1016893887199011953cae6744e74efefbd186af"
 deps = ["blobstore", "cli", "clocks", "config", "filesystem", "golem-1.x", "golem-agent", "golem-durability", "golem-rpc", "http", "io", "keyvalue", "logging", "random", "sockets"]
 
 [all]

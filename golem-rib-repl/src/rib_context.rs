@@ -47,7 +47,7 @@ impl<'a> ReplContext<'a> {
         result
     }
 
-    pub fn get_rib_compiler(&self) -> RwLockReadGuard<RibCompiler> {
+    pub fn get_rib_compiler(&self) -> RwLockReadGuard<'_, RibCompiler> {
         self.repl_state.rib_compiler()
     }
 }

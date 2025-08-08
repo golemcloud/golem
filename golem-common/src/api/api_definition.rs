@@ -22,10 +22,11 @@ use chrono::{DateTime, Utc};
 use rib::{RibInputTypeInfo, RibOutputTypeInfo};
 declare_enums! {
     pub enum GatewayBindingType {
-        WitWorker,
+        Default,
         FileServer,
         HttpHandler,
         CorsPreflight,
+        SwaggerUi,
     }
 }
 
@@ -72,6 +73,7 @@ declare_structs! {
         pub idempotency_key_input: Option<RibInputTypeInfo>, // If bindingType is Default or FilerServer
         pub cors_preflight: Option<CorsConfiguration>, // If bindingType is CorsPreflight (internally, a static binding)
         pub response_mapping_output: Option<RibOutputTypeInfo>, // If bindingType is Default or FileServer
+        pub openapi_spec_json: Option<String>, // If bindingType is SwaggerUi
     }
 
     pub struct CreateSecuritySchemeRequest {

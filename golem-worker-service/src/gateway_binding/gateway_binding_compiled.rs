@@ -24,6 +24,31 @@ use rib::RibOutputTypeInfo;
 use super::http_handler_binding::HttpHandlerBindingCompiled;
 use super::HttpHandlerBinding;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwaggerUiBinding {
+    pub openapi_spec_json: Option<String>,
+}
+
+impl Default for SwaggerUiBinding {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SwaggerUiBinding {
+    pub fn new() -> Self {
+        Self {
+            openapi_spec_json: None,
+        }
+    }
+
+    pub fn update_openapi_spec(openapi_spec_json: String) -> Self {
+        Self {
+            openapi_spec_json: Some(openapi_spec_json),
+        }
+    }
+}
+
 // A compiled binding is a binding with all existence of Rib Expr
 // get replaced with their compiled form - RibByteCode.
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +57,7 @@ pub enum GatewayBindingCompiled {
     Static(StaticBinding),
     FileServer(Box<FileServerBindingCompiled>),
     HttpHandler(Box<HttpHandlerBindingCompiled>),
+    SwaggerUi(SwaggerUiBinding),
 }
 
 impl GatewayBindingCompiled {
@@ -40,6 +66,7 @@ impl GatewayBindingCompiled {
             GatewayBindingCompiled::Worker(_) => false,
             GatewayBindingCompiled::FileServer(_) => false,
             GatewayBindingCompiled::HttpHandler(_) => false,
+            GatewayBindingCompiled::SwaggerUi(_) => false,
             GatewayBindingCompiled::Static(static_binding) => match static_binding {
                 StaticBinding::HttpCorsPreflight(_) => false,
                 StaticBinding::HttpAuthCallBack(_) => true,
@@ -74,6 +101,9 @@ impl From<GatewayBindingCompiled> for GatewayBinding {
                 let worker_binding = HttpHandlerBinding::from(*http_handler_binding);
 
                 GatewayBinding::HttpHandler(Box::new(worker_binding))
+            }
+            GatewayBindingCompiled::SwaggerUi(swagger_binding) => {
+                GatewayBinding::SwaggerUi(swagger_binding)
             }
         }
     }
@@ -135,9 +165,33 @@ impl TryFrom<GatewayBindingCompiled>
                         invocation_context: None,
                         compiled_invocation_context_expr: None,
                         invocation_context_rib_input: None,
+                        openapi_spec_json: None,
                     },
                 )
             }
+
+            GatewayBindingCompiled::SwaggerUi(swagger_binding) => Ok(
+                golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
+                    component: None,
+                    worker_name: None,
+                    compiled_worker_name_expr: None,
+                    worker_name_rib_input: None,
+                    idempotency_key: None,
+                    compiled_idempotency_key_expr: None,
+                    idempotency_key_rib_input: None,
+                    response: None,
+                    compiled_response_expr: None,
+                    response_rib_input: None,
+                    worker_functions_in_response: None,
+                    binding_type: Some(ProtoGatewayBindingType::SwaggerUi.into()),
+                    static_binding: None,
+                    response_rib_output: None,
+                    invocation_context: None,
+                    compiled_invocation_context_expr: None,
+                    invocation_context_rib_input: None,
+                    openapi_spec_json: swagger_binding.openapi_spec_json.clone(),
+                },
+            ),
         }
     }
 }
@@ -323,6 +377,11 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
 
                 Ok(GatewayBindingCompiled::Static(static_binding.try_into()?))
             }
+            ProtoGatewayBindingType::SwaggerUi => {
+                Ok(GatewayBindingCompiled::SwaggerUi(SwaggerUiBinding {
+                    openapi_spec_json: value.openapi_spec_json,
+                }))
+            }
         }
     }
 }
@@ -400,6 +459,7 @@ mod internal {
             GatewayBindingType::FileServer => 1,
             GatewayBindingType::CorsPreflight => 2,
             GatewayBindingType::HttpHandler => 4,
+            GatewayBindingType::SwaggerUi => 5,
         };
 
         Ok(
@@ -421,6 +481,7 @@ mod internal {
                 invocation_context,
                 compiled_invocation_context_expr,
                 invocation_context_rib_input,
+                openapi_spec_json: None,
             },
         )
     }
@@ -478,6 +539,7 @@ mod internal {
             GatewayBindingType::FileServer => 1,
             GatewayBindingType::CorsPreflight => 2,
             GatewayBindingType::HttpHandler => 4,
+            GatewayBindingType::SwaggerUi => 5,
         };
 
         Ok(
@@ -499,6 +561,7 @@ mod internal {
                 invocation_context,
                 compiled_invocation_context_expr,
                 invocation_context_rib_input,
+                openapi_spec_json: None,
             },
         )
     }
@@ -534,6 +597,7 @@ mod internal {
             GatewayBindingType::FileServer => 1,
             GatewayBindingType::CorsPreflight => 2,
             GatewayBindingType::HttpHandler => 4,
+            GatewayBindingType::SwaggerUi => 5,
         };
 
         Ok(
@@ -555,6 +619,7 @@ mod internal {
                 invocation_context: None,
                 compiled_invocation_context_expr: None,
                 invocation_context_rib_input: None,
+                openapi_spec_json: None,
             },
         )
     }
