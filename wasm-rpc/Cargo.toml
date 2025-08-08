@@ -13,7 +13,6 @@ include = []
 
 [lib]
 path = "src/lib.rs"
-crate-type = ["cdylib", "rlib"]
 harness = false
 
 [dependencies]
