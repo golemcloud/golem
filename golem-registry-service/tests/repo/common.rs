@@ -876,7 +876,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         .create(
             &env.revision.environment_id,
             host,
-            subdomain.as_deref(),
+            subdomain,
             revision_0.clone(),
         )
         .await
@@ -892,7 +892,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         .create(
             &env.revision.environment_id,
             host,
-            subdomain.as_deref(),
+            subdomain,
             revision_0.clone(),
         )
         .await
@@ -912,7 +912,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
 
     let get_revision_0 = deps
         .http_api_deployment_repo
-        .get_staged_by_name(&env.revision.environment_id, host, subdomain.as_deref())
+        .get_staged_by_name(&env.revision.environment_id, host, subdomain)
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
@@ -978,7 +978,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         .create(
             &env.revision.environment_id,
             other_host,
-            subdomain.as_deref(),
+            subdomain,
             other_deployment_revision_0.clone(),
         )
         .await
@@ -1028,7 +1028,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         .create(
             &env.revision.environment_id,
             host,
-            subdomain.as_deref(),
+            subdomain,
             revision_after_delete.clone(),
         )
         .await
