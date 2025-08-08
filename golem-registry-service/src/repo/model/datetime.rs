@@ -20,7 +20,7 @@ use std::fmt::Display;
 use std::ops::{Deref, Sub};
 
 /// SqlDateTime is a wrapper around DateTime<Utc> which allows storing it as NaiveDateTime
-/// (e.g. TIMESTAMP WITHOUT TIME ZONE for Postgres). Doing so allows us to use the same queries
+/// (e.g., TIMESTAMP WITHOUT TIME ZONE for Postgres). Doing so allows us to use the same queries
 /// for Sqlite and Postgres without any custom casting for the specific database, while still
 /// using UTC times in our Repo Record types.
 ///

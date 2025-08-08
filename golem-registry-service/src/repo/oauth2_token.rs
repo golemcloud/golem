@@ -12,22 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::model::account::OAuth2TokenRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use futures::FutureExt;
-use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
+use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo;
-use golem_service_base::repo::{RepoError, ResultExt};
+use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 #[async_trait]
 pub trait OAuth2TokenRepo: Send + Sync {
-    // Repository methods will be added here
-    // Placeholder for future methods
+    async fn create_or_update(&self, token: OAuth2TokenRecord) -> repo::Result<OAuth2TokenRecord>;
+
+    async fn get_by_external_provider(
+        &self,
+        provider: &str,
+        external_id: &str,
+    ) -> repo::Result<Option<OAuth2TokenRecord>>;
+
+    async fn unset_token_id_by_external_provider(
+        &self,
+        provider: &str,
+        external_id: &str,
+    ) -> repo::Result<Option<OAuth2TokenRecord>>;
+
+    async fn get_by_token_id(&self, token_id: &Uuid) -> repo::Result<Option<OAuth2TokenRecord>>;
 }
 
 pub struct LoggedOAuth2TokenRepo<Repo: OAuth2TokenRepo> {
@@ -41,15 +53,53 @@ impl<Repo: OAuth2TokenRepo> LoggedOAuth2TokenRepo<Repo> {
         Self { repo }
     }
 
-    fn span() -> Span {
-        info_span!(SPAN_NAME)
+    fn span_oath2_token(token: &OAuth2TokenRecord) -> Span {
+        info_span!(SPAN_NAME, provider = token.provider, external_id = token.external_id, token_id = ?token.token_id)
+    }
+
+    fn span_provider(provider: &str, external_id: &str) -> Span {
+        info_span!(SPAN_NAME, provider, external_id)
+    }
+
+    fn span_token_id(token_id: &Uuid) -> Span {
+        info_span!(SPAN_NAME, token_id=%token_id)
     }
 }
 
 #[async_trait]
 impl<Repo: OAuth2TokenRepo> OAuth2TokenRepo for LoggedOAuth2TokenRepo<Repo> {
-    // Implementation of OAuth2TokenRepo methods will be added here
-    // Each method will call the underlying repo method with tracing instrumentation
+    async fn create_or_update(&self, token: OAuth2TokenRecord) -> repo::Result<OAuth2TokenRecord> {
+        let span = Self::span_oath2_token(&token);
+        self.repo.create_or_update(token).instrument(span).await
+    }
+
+    async fn get_by_external_provider(
+        &self,
+        provider: &str,
+        external_id: &str,
+    ) -> repo::Result<Option<OAuth2TokenRecord>> {
+        self.repo
+            .get_by_external_provider(provider, external_id)
+            .instrument(Self::span_provider(provider, external_id))
+            .await
+    }
+
+    async fn unset_token_id_by_external_provider(
+        &self,
+        provider: &str,
+        external_id: &str,
+    ) -> repo::Result<Option<OAuth2TokenRecord>> {
+        self.repo
+            .unset_token_id_by_external_provider(provider, external_id)
+            .instrument(Self::span_provider(provider, external_id))
+            .await
+    }
+
+    async fn get_by_token_id(&self, token_id: &Uuid) -> repo::Result<Option<OAuth2TokenRecord>> {
+        self.get_by_token_id(token_id)
+            .instrument(Self::span_token_id(token_id))
+            .await
+    }
 }
 
 pub struct DbOAuth2TokenRepo<DBP: Pool> {
@@ -74,20 +124,78 @@ impl<DBP: Pool> DbOAuth2TokenRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> repo::Result<R>
-    where
-        R: Send,
-        F: for<'f> FnOnce(
-                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, repo::Result<R>>
-            + Send,
-    {
-        self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
+    fn with_rw(&self, api_name: &'static str) -> DBP::LabelledApi {
+        self.db_pool.with_rw(METRICS_SVC_NAME, api_name)
     }
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl OAuth2TokenRepo for DbOAuth2TokenRepo<PostgresPool> {
+    async fn create_or_update(&self, token: OAuth2TokenRecord) -> repo::Result<OAuth2TokenRecord> {
+        self.with_rw("create_or_update")
+            .fetch_one_as(
+                sqlx::query_as(indoc! { r#"
+                    INSERT INTO oauth2_tokens (provider, external_id, token_id, account_id)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (provider, external_id) DO UPDATE SET token_id = $3, account_id = $4
+                    RETURNING provider, external_id, token_id, account_id
+                "#})
+                .bind(token.provider)
+                .bind(token.external_id)
+                .bind(token.token_id)
+                .bind(token.account_id),
+            )
+            .await
+    }
 
+    async fn get_by_external_provider(
+        &self,
+        provider: &str,
+        external_id: &str,
+    ) -> repo::Result<Option<OAuth2TokenRecord>> {
+        self.with_ro("get_by_external_provider")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                SELECT provider, external_id, token_id, account_id
+                FROM oauth2_tokens
+                WHERE provider = $1 AND external_id = $2
+            "#})
+                .bind(provider)
+                .bind(external_id),
+            )
+            .await
+    }
+
+    async fn unset_token_id_by_external_provider(
+        &self,
+        provider: &str,
+        external_id: &str,
+    ) -> repo::Result<Option<OAuth2TokenRecord>> {
+        self.with_rw("unset_token_id_by_external_provider")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    UPDATE oauth2_tokens
+                    SET token_id = NULL
+                    WHERE provider = $1 AND external_id = $2
+                    RETURNING provider, external_id, token_id, account_id
+                "#})
+                .bind(provider)
+                .bind(external_id),
+            )
+            .await
+    }
+
+    async fn get_by_token_id(&self, token_id: &Uuid) -> repo::Result<Option<OAuth2TokenRecord>> {
+        self.with_ro("get_by_token_id")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT provider, external_id, token_id, account_id
+                    FROM oauth2_tokens
+                    WHERE token_id = $1
+                "#})
+                .bind(token_id),
+            )
+            .await
+    }
 }

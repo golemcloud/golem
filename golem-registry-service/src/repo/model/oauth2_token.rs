@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(sqlx::FromRow, Debug, Clone)]
+#[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct OAuth2TokenRecord {
     pub provider: String,
     pub external_id: String,

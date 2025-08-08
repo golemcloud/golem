@@ -107,31 +107,31 @@ CREATE TABLE oauth2_tokens
 (
     provider    TEXT NOT NULL,
     external_id TEXT NOT NULL,
-    token_id    UUID NOT NULL,
+    token_id    UUID,
     account_id  UUID NOT NULL,
     CONSTRAINT oauth2_tokens_pk PRIMARY KEY (provider, external_id),
     CONSTRAINT oauth2_tokens_token_fk FOREIGN KEY (token_id) REFERENCES tokens,
     CONSTRAINT oauth2_tokens_account_fk FOREIGN KEY (account_id) REFERENCES accounts
 );
 
-CREATE INDEX oauth2_tokens_token_idx
+CREATE UNIQUE INDEX oauth2_tokens_token_idx
     ON oauth2_tokens (token_id);
 
 CREATE INDEX oauth2_tokens_account_idx
     ON oauth2_tokens (account_id);
 
-CREATE TABLE oauth2_web_flow_state
+CREATE TABLE oauth2_web_flow_states
 (
-    oauth2_state TEXT      NOT NULL,
-    metadata     BYTEA     NOT NULL,
-    token_id     UUID      NOT NULL,
-    created_at   TIMESTAMP NOT NULL,
-    CONSTRAINT oauth2_web_flow_state_pk PRIMARY KEY (oauth2_state),
-    CONSTRAINT oauth2_web_flow_state_token_fk FOREIGN KEY (token_id) REFERENCES tokens
+    state_id   UUID      NOT NULL,
+    metadata   BYTEA     NOT NULL,
+    token_id   UUID      NULL,
+    created_at TIMESTAMP NOT NULL,
+    CONSTRAINT oauth2_web_flow_states_pk PRIMARY KEY (state_id),
+    CONSTRAINT oauth2_web_flow_states_token_fk FOREIGN KEY (token_id) REFERENCES tokens
 );
 
-CREATE INDEX oauth2_web_flow_state_token_idx
-    ON oauth2_web_flow_state (token_id);
+CREATE INDEX oauth2_web_flow_states_token_idx
+    ON oauth2_web_flow_states (token_id);
 
 CREATE TABLE account_usage_stats
 (

@@ -15,7 +15,7 @@
 use crate::repo::token::TokenRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
-use golem_service_base::db::{Pool, PoolApi};
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
 use uuid::Uuid;
 
