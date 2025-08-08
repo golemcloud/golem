@@ -159,6 +159,11 @@ async fn test_http_api_definition_stage(deps: &Deps) {
 }
 
 #[test]
-async fn test_http_api_deployment_stage(deps: &Deps) {
-    crate::repo::common::test_http_api_deployment_stage(deps).await;
+async fn test_http_api_deployment_stage_no_sub(deps: &Deps) {
+    crate::repo::common::test_http_api_deployment_stage_no_sub(deps).await;
+}
+
+#[test]
+async fn test_http_api_deployment_stage_has_sub(deps: &Deps) {
+    crate::repo::common::test_http_api_deployment_stage_has_sub(deps).await;
 }

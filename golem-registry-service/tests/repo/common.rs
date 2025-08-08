@@ -817,11 +817,18 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
     assert!(created_after_delete.revision == revision_after_delete);
 }
 
-pub async fn test_http_api_deployment_stage(deps: &Deps) {
+pub async fn test_http_api_deployment_stage_no_sub(deps: &Deps) {
+    test_http_api_deployment_stage_with_subdomain(deps, None).await;
+}
+
+pub async fn test_http_api_deployment_stage_has_sub(deps: &Deps) {
+    test_http_api_deployment_stage_with_subdomain(deps, Some("api")).await;
+}
+
+async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: Option<&str>) {
     let user = deps.create_account().await;
     let env = deps.create_env().await;
     let host = "test-host-1.com";
-    let subdomain = Some("api".to_string());
     let deployment_id = new_repo_uuid();
 
     let definition_id = new_repo_uuid();
@@ -868,7 +875,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
     assert!(revision_0 == created_revision_0.revision);
     assert!(created_revision_0.environment_id == env.revision.environment_id);
     assert!(created_revision_0.host == host);
-    assert!(created_revision_0.subdomain == subdomain);
+    assert!(created_revision_0.subdomain.as_deref() == subdomain);
 
     let recreate = deps
         .http_api_deployment_repo
@@ -891,7 +898,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
     assert!(revision_0 == get_revision_0.revision);
     assert!(get_revision_0.environment_id == env.revision.environment_id);
     assert!(get_revision_0.host == host);
-    assert!(get_revision_0.subdomain == subdomain);
+    assert!(get_revision_0.subdomain.as_deref() == subdomain);
 
     let get_revision_0 = deps
         .http_api_deployment_repo
@@ -902,7 +909,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
     assert!(revision_0 == get_revision_0.revision);
     assert!(get_revision_0.environment_id == env.revision.environment_id);
     assert!(get_revision_0.host == host);
-    assert!(get_revision_0.subdomain == subdomain);
+    assert!(get_revision_0.subdomain.as_deref() == subdomain);
 
     let deployments = deps
         .http_api_deployment_repo
@@ -913,7 +920,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
     assert!(deployments[0].revision == revision_0);
     assert!(deployments[0].environment_id == env.revision.environment_id);
     assert!(deployments[0].host == host);
-    assert!(deployments[0].subdomain == subdomain);
+    assert!(deployments[0].subdomain.as_deref() == subdomain);
 
     let revision_1 = HttpApiDeploymentRevisionRecord {
         revision_id: 1,
@@ -930,7 +937,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
     assert!(revision_1 == created_revision_1.revision);
     assert!(created_revision_1.environment_id == env.revision.environment_id);
     assert!(created_revision_1.host == host);
-    assert!(created_revision_1.subdomain == subdomain);
+    assert!(created_revision_1.subdomain.as_deref() == subdomain);
 
     let recreated_revision_1 = deps
         .http_api_deployment_repo

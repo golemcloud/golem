@@ -567,7 +567,8 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                     }
                     None => {
                         sqlx::query_as(indoc! { r#"
-                            SELECT dr.http_api_deployment_id, dr.revision_id, dr.hash,
+                            SELECT d.environment_id, d.host, d.subdomain,
+                                   dr.http_api_deployment_id, dr.revision_id, dr.hash,
                                    dr.created_at, dr.created_by, dr.deleted
                             FROM http_api_deployments d
                             JOIN http_api_deployment_revisions dr
@@ -732,7 +733,8 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                     .bind(subdomain)
                     .bind(revision_id),
                 None => sqlx::query_as(indoc! { r#"
-                            SELECT dr.http_api_deployment_id, dr.revision_id, dr.hash,
+                            SELECT d.environment_id, d.host, d.subdomain,
+                                   dr.http_api_deployment_id, dr.revision_id, dr.hash,
                                    dr.created_at, dr.created_by, dr.deleted
                             FROM http_api_deployments d
                             JOIN http_api_deployment_revisions dr
