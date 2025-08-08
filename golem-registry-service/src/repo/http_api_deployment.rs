@@ -29,7 +29,7 @@ use golem_service_base::repo;
 use golem_service_base::repo::ResultExt;
 use indoc::indoc;
 use sqlx::{Database, Row};
-use tracing::{Instrument, Span, info_span, debug};
+use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 #[async_trait]
@@ -327,9 +327,9 @@ impl<DBP: Pool> DbHttpApiDeploymentRepo<DBP> {
     where
         R: Send,
         F: for<'f> FnOnce(
-            &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        ) -> BoxFuture<'f, repo::Result<R>>
-        + Send,
+                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+            ) -> BoxFuture<'f, repo::Result<R>>
+            + Send,
     {
         self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
     }
@@ -398,15 +398,15 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                             current_revision_id)
                         VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, 0)
                     "# })
-                        .bind(revision.http_api_deployment_id)
-                        .bind(environment_id)
-                        .bind(&host)
-                        .bind(&subdomain)
-                        .bind(&revision.audit.created_at)
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by),
+                    .bind(revision.http_api_deployment_id)
+                    .bind(environment_id)
+                    .bind(&host)
+                    .bind(&subdomain)
+                    .bind(&revision.audit.created_at)
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by),
                 )
-                    .await?;
+                .await?;
 
                 let revision = Self::insert_revision(tx, revision).await?;
 
@@ -417,10 +417,10 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                     revision,
                 })
             }
-                .boxed()
+            .boxed()
         })
-            .await
-            .none_on_unique_violation()
+        .await
+        .none_on_unique_violation()
     }
 
     async fn update(
@@ -448,10 +448,10 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                             WHERE http_api_deployment_id = $4
                             RETURNING environment_id, host, subdomain
                         "#})
-                            .bind(&revision.audit.created_at)
-                            .bind(revision.audit.created_by)
-                            .bind(revision.revision_id)
-                            .bind(revision.http_api_deployment_id),
+                        .bind(&revision.audit.created_at)
+                        .bind(revision.audit.created_by)
+                        .bind(revision.revision_id)
+                        .bind(revision.http_api_deployment_id),
                     )
                     .await?;
 
@@ -462,10 +462,10 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                     revision,
                 })
             }
-                .boxed()
+            .boxed()
         })
-            .await
-            .none_on_unique_violation()
+        .await
+        .none_on_unique_violation()
     }
 
     async fn delete(
@@ -494,7 +494,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                         current_revision_id,
                     ),
                 )
-                    .await?;
+                .await?;
 
                 tx.execute(
                     sqlx::query(indoc! { r#"
@@ -502,19 +502,19 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                         SET deleted_at = $1, modified_by = $2, current_revision_id = $3
                         WHERE http_api_deployment_id = $4
                     "#})
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by)
-                        .bind(revision.revision_id)
-                        .bind(revision.http_api_deployment_id),
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+                    .bind(revision.revision_id)
+                    .bind(revision.http_api_deployment_id),
                 )
-                    .await?;
+                .await?;
 
                 Ok(())
             }
-                .boxed()
+            .boxed()
         })
-            .await
-            .false_on_unique_violation()
+        .await
+        .false_on_unique_violation()
     }
 
     async fn get_staged_by_id(
@@ -719,32 +719,32 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .with_ro("get_by_name_and_revision")
             .fetch_optional_as(match subdomain {
                 Some(subdomain) => sqlx::query_as(indoc! { r#"
-                            SELECT d.environment_id, d.host, d.subdomain,
-                                   dr.http_api_deployment_id, dr.revision_id, dr.hash,
-                                   dr.created_at, dr.created_by, dr.deleted
-                            FROM http_api_deployments d
-                            JOIN http_api_deployment_revisions dr
-                                ON d.http_api_deployment_id = dr.http_api_deployment_id
-                            WHERE d.environment_id = $1 AND d.host = $2 AND d.subdomain = $3
-                                AND dr.revision_id = $4 AND dr.deleted = FALSE
-                        "#})
-                    .bind(environment_id)
-                    .bind(host)
-                    .bind(subdomain)
-                    .bind(revision_id),
+                    SELECT d.environment_id, d.host, d.subdomain,
+                           dr.http_api_deployment_id, dr.revision_id, dr.hash,
+                           dr.created_at, dr.created_by, dr.deleted
+                    FROM http_api_deployments d
+                    JOIN http_api_deployment_revisions dr
+                        ON d.http_api_deployment_id = dr.http_api_deployment_id
+                    WHERE d.environment_id = $1 AND d.host = $2 AND d.subdomain = $3
+                        AND dr.revision_id = $4 AND dr.deleted = FALSE
+                "#})
+                .bind(environment_id)
+                .bind(host)
+                .bind(subdomain)
+                .bind(revision_id),
                 None => sqlx::query_as(indoc! { r#"
-                            SELECT d.environment_id, d.host, d.subdomain,
-                                   dr.http_api_deployment_id, dr.revision_id, dr.hash,
-                                   dr.created_at, dr.created_by, dr.deleted
-                            FROM http_api_deployments d
-                            JOIN http_api_deployment_revisions dr
-                                ON d.http_api_deployment_id = dr.http_api_deployment_id
-                            WHERE d.environment_id = $1 AND d.host = $2 AND d.subdomain IS NULL
-                                AND dr.revision_id = $3 AND dr.deleted = FALSE
-                        "#})
-                    .bind(environment_id)
-                    .bind(host)
-                    .bind(revision_id),
+                    SELECT d.environment_id, d.host, d.subdomain,
+                           dr.http_api_deployment_id, dr.revision_id, dr.hash,
+                           dr.created_at, dr.created_by, dr.deleted
+                    FROM http_api_deployments d
+                    JOIN http_api_deployment_revisions dr
+                        ON d.http_api_deployment_id = dr.http_api_deployment_id
+                    WHERE d.environment_id = $1 AND d.host = $2 AND d.subdomain IS NULL
+                        AND dr.revision_id = $3 AND dr.deleted = FALSE
+                "#})
+                .bind(environment_id)
+                .bind(host)
+                .bind(revision_id),
             })
             .await?;
 
@@ -908,8 +908,8 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
                     FROM http_api_deployments
                     WHERE http_api_deployment_id = $1 AND current_revision_id = $2
                 "#})
-                    .bind(http_api_deployment_id)
-                    .bind(current_revision_id),
+                .bind(http_api_deployment_id)
+                .bind(current_revision_id),
             )
             .await
     }
@@ -952,10 +952,10 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
                     RETURNING http_api_deployment_id, revision_id, hash,
                         created_at, created_by, deleted
                 "# })
-                    .bind(revision.http_api_deployment_id)
-                    .bind(revision.revision_id)
-                    .bind(revision.hash)
-                    .bind_deletable_revision_audit(revision.audit),
+                .bind(revision.http_api_deployment_id)
+                .bind(revision.revision_id)
+                .bind(revision.hash)
+                .bind_deletable_revision_audit(revision.audit),
             )
             .await?;
 
@@ -969,7 +969,7 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
                         revision.revision_id,
                         &definition.http_api_definition_id,
                     )
-                        .await?,
+                    .await?,
                 );
             }
             inserted_definitions
@@ -990,11 +990,11 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
                 (http_api_deployment_id, revision_id, http_definition_id)
                 VALUES ($1, $2, $3)
             "#})
-                .bind(http_api_deployment_id)
-                .bind(revision_id)
-                .bind(http_definition_id),
+            .bind(http_api_deployment_id)
+            .bind(revision_id)
+            .bind(http_definition_id),
         )
-            .await?;
+        .await?;
 
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
@@ -1005,8 +1005,8 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
                     d.current_revision_id = dr.revision_id
                 WHERE dr.http_api_definition_id = $1
             "#})
-                .bind(http_definition_id),
+            .bind(http_definition_id),
         )
-            .await
+        .await
     }
 }
