@@ -12,13 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod api;
-pub mod bootstrap;
-pub mod config;
-pub mod metrics;
-pub mod model;
-pub mod repo;
-pub mod services;
-
-#[cfg(test)]
-test_r::enable!();
+pub mod component_object_store;
+pub mod component_compilation;

@@ -3710,6 +3710,7 @@ dependencies = [
 name = "golem-registry-service"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "assert2",
  "async-trait",
  "aws-config",
@@ -3767,6 +3768,7 @@ dependencies = [
  "tonic-health",
  "tonic-reflection",
  "tracing",
+ "tracing-futures",
  "tracing-subscriber",
  "tryhard",
  "url",

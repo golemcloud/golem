@@ -25,6 +25,7 @@ golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
 
+anyhow = { workspace = true}
 assert2 = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
@@ -85,6 +86,7 @@ tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tracing = { workspace = true }
+tracing-futures = { workspace = true }
 tracing-subscriber = { workspace = true }
 tryhard = { workspace = true }
 url = { workspace = true }
