@@ -129,9 +129,8 @@ impl Oplog for DebugOplog {
         self.inner.length().await
     }
 
-    async fn upload_payload(&self, _data: &[u8]) -> Result<OplogPayload, String> {
-        // in a debugging session we don't need to upload anything
-        Err("Workers in debug cannot upload any new data to oplog".to_string())
+    async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String> {
+        Ok(OplogPayload::Inline(data.to_vec()))
     }
 
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {

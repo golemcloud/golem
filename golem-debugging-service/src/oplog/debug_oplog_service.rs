@@ -52,25 +52,12 @@ impl Debug for DebugOplogService {
 impl OplogService for DebugOplogService {
     async fn create(
         &self,
-        owned_worker_id: &OwnedWorkerId,
-        initial_entry: OplogEntry,
-        initial_worker_metadata: WorkerMetadata,
-        execution_status: Arc<RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + 'static> {
-        self.oplogs
-            .get_or_open(
-                &owned_worker_id.worker_id,
-                CreateDebugOplogConstructor::new(
-                    owned_worker_id.clone(),
-                    Some(initial_entry),
-                    OplogIndex::INITIAL,
-                    self.inner.clone(),
-                    self.debug_session.clone(),
-                    execution_status,
-                    initial_worker_metadata,
-                ),
-            )
-            .await
+        _owned_worker_id: &OwnedWorkerId,
+        _initial_entry: OplogEntry,
+        _initial_worker_metadata: WorkerMetadata,
+        _execution_status: Arc<RwLock<ExecutionStatus>>,
+    ) -> Arc<dyn Oplog> {
+        panic!("Cannot create a new oplog when debugging")
     }
 
     async fn open(
@@ -79,7 +66,7 @@ impl OplogService for DebugOplogService {
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
                 &owned_worker_id.worker_id,
