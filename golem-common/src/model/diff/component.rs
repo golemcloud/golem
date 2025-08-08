@@ -59,13 +59,22 @@ impl Diffable for ComponentFile {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ComponentWasmRpcTarget {
+    pub interface_name: String,
+    pub component_name: String,
+    pub component_type: ComponentType,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ComponentMetadata {
     pub version: Option<String>,
     pub component_type: ComponentType,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub dynamic_linking_wasm_rpc: BTreeMap<String, BTreeMap<String, String>>,
+    pub dynamic_linking_wasm_rpc: BTreeMap<String, BTreeMap<String, ComponentWasmRpcTarget>>,
+    // TODO: agents
 }
 
 impl Hashable for ComponentMetadata {

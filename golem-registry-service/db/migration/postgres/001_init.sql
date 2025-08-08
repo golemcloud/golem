@@ -265,7 +265,7 @@ CREATE TABLE component_revisions
     revision_id                  BIGINT    NOT NULL,
     version                      TEXT      NOT NULL,
 
-    hash                         BYTEA,
+    hash                         BYTEA     NOT NULL,
 
     created_at                   TIMESTAMP NOT NULL,
     created_by                   UUID      NOT NULL,

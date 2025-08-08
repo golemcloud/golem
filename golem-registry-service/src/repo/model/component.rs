@@ -14,8 +14,11 @@
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
-use golem_common::model::ComponentFilePermissions;
-use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::component_metadata::{
+    ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
+};
+use golem_common::model::diff::Hashable;
+use golem_common::model::{ComponentFilePermissions, diff};
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::Json;
@@ -285,7 +288,7 @@ pub struct ComponentRevisionRecord {
     pub component_id: Uuid,
     pub revision_id: i64,
     pub version: String,
-    pub hash: Option<SqlBlake3Hash>,
+    pub hash: SqlBlake3Hash,
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
     pub component_type: i32,
@@ -302,14 +305,6 @@ pub struct ComponentRevisionRecord {
     // TODO:
     //#[sqlx(skip)]
     //pub installed_plugins: Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>,
-}
-
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct ComponentExtRevisionRecord {
-    pub name: String,
-    pub environment_id: Uuid,
-    #[sqlx(flatten)]
-    pub revision: ComponentRevisionRecord,
 }
 
 impl ComponentRevisionRecord {
@@ -334,7 +329,7 @@ impl ComponentRevisionRecord {
             component_id,
             revision_id: current_revision_id + 1,
             version: "".to_string(),
-            hash: None,
+            hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
             component_type: 0,
             size: 0,
@@ -357,6 +352,79 @@ impl ComponentRevisionRecord {
             files: vec![],
         }
     }
+
+    pub fn to_diffable(&self) -> diff::Component {
+        diff::Component {
+            metadata: diff::ComponentMetadata {
+                version: Some(self.version.clone()),
+                component_type: self
+                    .component_type
+                    .try_into()
+                    .expect("expected valid component type"),
+                env: self
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                dynamic_linking_wasm_rpc: self
+                    .metadata
+                    .dynamic_linking
+                    .iter()
+                    .map(|(name, link)| match link {
+                        DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc { targets }) => (
+                            name.clone(),
+                            targets
+                                .iter()
+                                .map(|(name, target)| {
+                                    (
+                                        name.clone(),
+                                        diff::ComponentWasmRpcTarget {
+                                            interface_name: target.interface_name.clone(),
+                                            component_name: target.component_name.clone(),
+                                            component_type: target.component_type,
+                                        },
+                                    )
+                                })
+                                .collect::<BTreeMap<_, _>>(),
+                        ),
+                    })
+                    .collect(),
+            }
+            .into(),
+            binary_hash: self.binary_hash.into_blake3_hash().into(),
+            files: self
+                .files
+                .iter()
+                .map(|file| {
+                    (
+                        file.file_path.clone(),
+                        diff::ComponentFile {
+                            hash: file.hash.into_blake3_hash().into(),
+                            permissions: file.file_permissions.into(),
+                        }
+                        .into(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub fn update_hash(&mut self) {
+        self.hash = self.to_diffable().hash().into_blake3().into()
+    }
+
+    pub fn with_updated_hash(mut self) -> Self {
+        self.update_hash();
+        self
+    }
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ComponentExtRevisionRecord {
+    pub name: String,
+    pub environment_id: Uuid,
+    #[sqlx(flatten)]
+    pub revision: ComponentRevisionRecord,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]

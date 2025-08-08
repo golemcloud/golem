@@ -749,6 +749,8 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
         tx: &mut Self::Tx,
         revision: HttpApiDefinitionRevisionRecord,
     ) -> repo::Result<HttpApiDefinitionRevisionRecord> {
+        let revision = revision.with_updated_hash();
+
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                 INSERT INTO http_api_definition_revisions

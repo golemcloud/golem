@@ -940,6 +940,9 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         tx: &mut Self::Tx,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> repo::Result<HttpApiDeploymentRevisionRecord> {
+        // TODO: get and set name for all the definitions, fail on missing ones
+        let revision = revision.with_updated_hash();
+
         let definitions = revision.http_api_definitions;
 
         let mut revision: HttpApiDeploymentRevisionRecord = tx

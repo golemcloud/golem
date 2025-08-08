@@ -15,6 +15,8 @@
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
+use golem_common::model::diff;
+use golem_common::model::diff::Hashable;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -70,6 +72,25 @@ impl HttpApiDeploymentRevisionRecord {
             audit: DeletableRevisionAuditFields::deletion(created_by),
             http_api_definitions: vec![],
         }
+    }
+
+    pub fn to_diffable(&self) -> diff::HttpApiDeployment {
+        diff::HttpApiDeployment {
+            apis: self
+                .http_api_definitions
+                .iter()
+                .map(|def| def.name.clone())
+                .collect(),
+        }
+    }
+
+    pub fn update_hash(&mut self) {
+        self.hash = self.to_diffable().hash().into_blake3().into()
+    }
+
+    pub fn with_updated_hash(mut self) -> Self {
+        self.update_hash();
+        self
     }
 }
 

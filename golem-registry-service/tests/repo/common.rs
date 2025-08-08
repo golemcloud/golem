@@ -26,7 +26,7 @@ use golem_registry_service::repo::model::audit::{
 use golem_registry_service::repo::model::component::{
     ComponentFileRecord, ComponentRevisionRecord, ComponentStatus,
 };
-use golem_registry_service::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
+use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_definition::HttpApiDefinitionRevisionRecord;
 use golem_registry_service::repo::model::http_api_deployment::HttpApiDeploymentRevisionRecord;
 use golem_registry_service::repo::model::new_repo_uuid;
@@ -208,8 +208,9 @@ pub async fn test_environment_create(deps: &Deps) {
         compatibility_check: false,
         version_check: false,
         security_overrides: false,
-        hash: blake3::hash("test".as_bytes()).into(),
-    };
+        hash: SqlBlake3Hash::empty(),
+    }
+    .with_updated_hash();
 
     let env = deps
         .environment_repo
@@ -259,7 +260,7 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
                             compatibility_check: false,
                             version_check: false,
                             security_overrides: false,
-                            hash: blake3::hash("test".as_bytes()).into(),
+                            hash: SqlBlake3Hash::empty(),
                         },
                     )
                     .await
@@ -292,8 +293,9 @@ pub async fn test_environment_update(deps: &Deps) {
         compatibility_check: true,
         version_check: true,
         security_overrides: false,
-        hash: blake3::hash("test".as_bytes()).into(),
-    };
+        hash: SqlBlake3Hash::empty(),
+    }
+    .with_updated_hash();
 
     let revision_1_created = deps
         .environment_repo
@@ -339,8 +341,9 @@ pub async fn test_environment_update(deps: &Deps) {
         compatibility_check: true,
         version_check: true,
         security_overrides: false,
-        hash: blake3::hash("test".as_bytes()).into(),
-    };
+        hash: SqlBlake3Hash::empty(),
+    }
+    .with_updated_hash();
 
     let revision_2_created = deps
         .environment_repo
@@ -405,7 +408,7 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
                             compatibility_check: false,
                             version_check: false,
                             security_overrides: false,
-                            hash: blake3::hash("test_2".as_bytes()).into(),
+                            hash: SqlBlake3Hash::empty(),
                         },
                     )
                     .await
@@ -436,7 +439,7 @@ pub async fn test_component_stage(deps: &Deps) {
         component_id,
         revision_id: 0,
         version: "1.0".to_string(),
-        hash: None,
+        hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.account_id),
         component_type: 0,
         size: 10,
@@ -465,7 +468,8 @@ pub async fn test_component_stage(deps: &Deps) {
             file_key: "xdxd".to_string(),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
         }],
-    };
+    }
+    .with_updated_hash();
 
     let created_revision_0 = deps
         .component_repo
@@ -526,7 +530,7 @@ pub async fn test_component_stage(deps: &Deps) {
         revision_id: 1,
         size: 12345,
         env: Default::default(),
-        binary_hash: blake3::hash("test-222".as_bytes()).into(),
+        binary_hash: SqlBlake3Hash::empty(),
         transformed_object_store_key: None,
         files: revision_0
             .files
@@ -537,7 +541,8 @@ pub async fn test_component_stage(deps: &Deps) {
             })
             .collect(),
         ..revision_0.clone()
-    };
+    }
+    .with_updated_hash();
 
     let created_revision_1 = deps
         .component_repo
@@ -570,7 +575,8 @@ pub async fn test_component_stage(deps: &Deps) {
         component_id: other_component_id,
         files: Default::default(),
         ..revision_0.clone()
-    };
+    }
+    .with_updated_hash();
 
     let created_other_component_0 = deps
         .component_repo
@@ -635,7 +641,8 @@ pub async fn test_component_stage(deps: &Deps) {
         component_id: revision_0.component_id,
         revision_id: 3,
         ..revision_after_delete
-    };
+    }
+    .with_updated_hash();
     let_assert!(Some(created_after_delete) = created_after_delete);
     assert!(created_after_delete.revision == revision_after_delete);
 }
@@ -650,10 +657,11 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
         http_api_definition_id: definition_id,
         revision_id: 0,
         version: "1.0".to_string(),
-        hash: blake3::hash("test-api-definition".as_bytes()).into(),
+        hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.account_id),
         definition: "test-definition".as_bytes().to_vec(),
-    };
+    }
+    .with_updated_hash();
 
     let created_revision_0 = deps
         .http_api_definition_repo
@@ -713,10 +721,11 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
     let revision_1 = HttpApiDefinitionRevisionRecord {
         revision_id: 1,
         version: "1.1".to_string(),
-        hash: blake3::hash("test-api-definition-updated".as_bytes()).into(),
+        hash: SqlBlake3Hash::empty(),
         definition: "test-definition-updated".as_bytes().to_vec(),
         ..revision_0.clone()
-    };
+    }
+    .with_updated_hash();
 
     let created_revision_1 = deps
         .http_api_definition_repo
@@ -837,7 +846,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         http_api_definition_id: definition_id,
         revision_id: 0,
         version: "1.0".to_string(),
-        hash: blake3::hash("test-api-definition".as_bytes()).into(),
+        hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.account_id),
         definition: "test-definition".as_bytes().to_vec(),
     };
@@ -856,10 +865,11 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
     let revision_0 = HttpApiDeploymentRevisionRecord {
         http_api_deployment_id: deployment_id,
         revision_id: 0,
-        hash: blake3::hash("test-deployment".as_bytes()).into(),
+        hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.account_id),
         http_api_definitions: vec![created_definition.to_identity()],
-    };
+    }
+    .with_updated_hash();
 
     let created_revision_0 = deps
         .http_api_deployment_repo
@@ -924,9 +934,10 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
 
     let revision_1 = HttpApiDeploymentRevisionRecord {
         revision_id: 1,
-        hash: blake3::hash("test-deployment-updated".as_bytes()).into(),
+        hash: SqlBlake3Hash::empty(),
         ..revision_0.clone()
-    };
+    }
+    .with_updated_hash();
 
     let created_revision_1 = deps
         .http_api_deployment_repo
@@ -959,7 +970,8 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
     let other_deployment_revision_0 = HttpApiDeploymentRevisionRecord {
         http_api_deployment_id: other_deployment_id,
         ..revision_0.clone()
-    };
+    }
+    .with_updated_hash();
 
     let created_other_deployment_0 = deps
         .http_api_deployment_repo

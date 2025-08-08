@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: move to golem-common (or some other common place)
-
 mod component;
 mod deployment;
+mod environment;
 mod hash;
 mod http_api_definition;
 mod http_api_deployment;
@@ -23,6 +22,7 @@ mod ser;
 
 pub use component::*;
 pub use deployment::*;
+pub use environment::*;
 pub use hash::*;
 pub use http_api_definition::*;
 pub use http_api_deployment::*;

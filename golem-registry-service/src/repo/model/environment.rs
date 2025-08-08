@@ -14,6 +14,8 @@
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use golem_common::model::diff;
+use golem_common::model::diff::Hashable;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -66,6 +68,23 @@ impl EnvironmentRevisionRecord {
             security_overrides: false,
             hash: SqlBlake3Hash::empty(),
         }
+    }
+
+    pub fn to_diffable(&self) -> diff::Environment {
+        diff::Environment {
+            compatibility_check: self.compatibility_check,
+            version_check: self.version_check,
+            security_overrides: self.security_overrides,
+        }
+    }
+
+    pub fn update_hash(&mut self) {
+        self.hash = self.to_diffable().hash().into_blake3().into()
+    }
+
+    pub fn with_updated_hash(mut self) -> Self {
+        self.update_hash();
+        self
     }
 }
 

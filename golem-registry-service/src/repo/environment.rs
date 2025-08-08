@@ -436,6 +436,8 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
         tx: &mut Self::Tx,
         revision: EnvironmentRevisionRecord,
     ) -> repo::Result<EnvironmentRevisionRecord> {
+        let revision = revision.with_updated_hash();
+
         tx.fetch_one_as(sqlx::query_as(indoc! { r#"
             INSERT INTO environment_revisions
             (environment_id, revision_id, hash, created_at, created_by, deleted, compatibility_check, version_check, security_overrides)
