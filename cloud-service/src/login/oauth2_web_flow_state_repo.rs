@@ -91,7 +91,6 @@ impl From<Option<MaybeToken>> for LinkedTokenState {
 #[async_trait]
 pub trait OAuth2WebFlowStateRepo: Send + Sync {
     async fn generate_temp_token_state(&self, metadata: &[u8]) -> Result<String, RepoError>;
-    async fn valid_temp_token(&self, state: &str) -> Result<bool, RepoError>;
     async fn link_temp_token(
         &self,
         token_id: &Uuid,
@@ -136,20 +135,6 @@ impl OAuth2WebFlowStateRepo for DbOAuth2FlowState<golem_service_base::db::postgr
             .await?;
 
         Ok(state)
-    }
-
-    async fn valid_temp_token(&self, state: &str) -> Result<bool, RepoError> {
-        let query =
-            sqlx::query_as("SELECT COUNT(*) FROM oauth2_web_flow_state WHERE oauth2_state = $1")
-                .bind(state);
-
-        let (count,): (i64,) = self
-            .db_pool
-            .with_ro("oauth2_web_flow_state", "valid_temp_token")
-            .fetch_one_as(query)
-            .await?;
-
-        Ok(count > 0)
     }
 
     #[when(golem_service_base::db::postgres::PostgresPool -> link_temp_token)]
