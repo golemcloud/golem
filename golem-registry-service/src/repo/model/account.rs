@@ -59,7 +59,7 @@ pub struct TokenRecord {
 pub struct OAuth2TokenRecord {
     pub provider: String,
     pub external_id: String,
-    pub token_id: Uuid,
+    pub token_id: Option<Uuid>,
     pub account_id: Uuid,
 }
 

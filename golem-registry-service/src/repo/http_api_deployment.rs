@@ -377,7 +377,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
 
         if let Some(deleted_revision) = opt_deleted_revision {
             let revision = HttpApiDeploymentRevisionRecord {
-                http_api_deployment_id: revision.http_api_deployment_id,
+                http_api_deployment_id: deleted_revision.http_api_deployment_id,
                 ..revision
             };
             return self.update(deleted_revision.revision_id, revision).await;
@@ -443,11 +443,11 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                 let ext = tx
                     .fetch_one(
                         sqlx::query(indoc! { r#"
-                        UPDATE http_api_deployments
-                        SET updated_at = $1, modified_by = $2, current_revision_id = $3
-                        WHERE http_api_deployment_id = $4
-                        RETURNING environment_id, host, subdomain
-                    "#})
+                            UPDATE http_api_deployments
+                            SET updated_at = $1, modified_by = $2, current_revision_id = $3
+                            WHERE http_api_deployment_id = $4
+                            RETURNING environment_id, host, subdomain
+                        "#})
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by)
                         .bind(revision.revision_id)
@@ -567,7 +567,8 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                     }
                     None => {
                         sqlx::query_as(indoc! { r#"
-                            SELECT dr.http_api_deployment_id, dr.revision_id, dr.hash,
+                            SELECT d.environment_id, d.host, d.subdomain,
+                                   dr.http_api_deployment_id, dr.revision_id, dr.hash,
                                    dr.created_at, dr.created_by, dr.deleted
                             FROM http_api_deployments d
                             JOIN http_api_deployment_revisions dr
@@ -718,28 +719,29 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .with_ro("get_by_name_and_revision")
             .fetch_optional_as(match subdomain {
                 Some(subdomain) => sqlx::query_as(indoc! { r#"
-                            SELECT d.environment_id, d.host, d.subdomain,
-                                   dr.http_api_deployment_id, dr.revision_id, dr.hash,
-                                   dr.created_at, dr.created_by, dr.deleted
-                            FROM http_api_deployments d
-                            JOIN http_api_deployment_revisions dr
-                                ON d.http_api_deployment_id = dr.http_api_deployment_id
-                            WHERE d.environment_id = $1 AND d.host = $2 AND d.subdomain = $3
-                                AND dr.revision_id = $4 AND dr.deleted = FALSE
-                        "#})
+                    SELECT d.environment_id, d.host, d.subdomain,
+                           dr.http_api_deployment_id, dr.revision_id, dr.hash,
+                           dr.created_at, dr.created_by, dr.deleted
+                    FROM http_api_deployments d
+                    JOIN http_api_deployment_revisions dr
+                        ON d.http_api_deployment_id = dr.http_api_deployment_id
+                    WHERE d.environment_id = $1 AND d.host = $2 AND d.subdomain = $3
+                        AND dr.revision_id = $4 AND dr.deleted = FALSE
+                "#})
                 .bind(environment_id)
                 .bind(host)
                 .bind(subdomain)
                 .bind(revision_id),
                 None => sqlx::query_as(indoc! { r#"
-                            SELECT dr.http_api_deployment_id, dr.revision_id, dr.hash,
-                                   dr.created_at, dr.created_by, dr.deleted
-                            FROM http_api_deployments d
-                            JOIN http_api_deployment_revisions dr
-                                ON d.http_api_deployment_id = dr.http_api_deployment_id
-                            WHERE d.environment_id = $1 AND d.host = $2 AND d.subdomain IS NULL
-                                AND dr.revision_id = $3 AND dr.deleted = FALSE
-                        "#})
+                    SELECT d.environment_id, d.host, d.subdomain,
+                           dr.http_api_deployment_id, dr.revision_id, dr.hash,
+                           dr.created_at, dr.created_by, dr.deleted
+                    FROM http_api_deployments d
+                    JOIN http_api_deployment_revisions dr
+                        ON d.http_api_deployment_id = dr.http_api_deployment_id
+                    WHERE d.environment_id = $1 AND d.host = $2 AND d.subdomain IS NULL
+                        AND dr.revision_id = $3 AND dr.deleted = FALSE
+                "#})
                 .bind(environment_id)
                 .bind(host)
                 .bind(revision_id),
@@ -904,10 +906,10 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
                            created_at, updated_at, deleted_at, modified_by,
                            current_revision_id
                     FROM http_api_deployments
-                    WHERE http_api_deployment_id = $1 AND current_revision_id = $2 and deleted_at IS NULL
+                    WHERE http_api_deployment_id = $1 AND current_revision_id = $2
                 "#})
-                    .bind(http_api_deployment_id)
-                    .bind(current_revision_id),
+                .bind(http_api_deployment_id)
+                .bind(current_revision_id),
             )
             .await
     }
@@ -938,6 +940,9 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         tx: &mut Self::Tx,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> repo::Result<HttpApiDeploymentRevisionRecord> {
+        // TODO: get and set name for all the definitions, fail on missing ones
+        let revision = revision.with_updated_hash();
+
         let definitions = revision.http_api_definitions;
 
         let mut revision: HttpApiDeploymentRevisionRecord = tx

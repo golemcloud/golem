@@ -22,6 +22,8 @@ pub mod environment;
 pub mod hash;
 pub mod http_api_definition;
 pub mod http_api_deployment;
+pub mod oauth2_token;
+pub mod oauth2_webflow_state;
 pub mod plan;
 pub mod token;
 

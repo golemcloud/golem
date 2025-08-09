@@ -847,6 +847,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         tx: &mut Self::Tx,
         revision: ComponentRevisionRecord,
     ) -> repo::Result<ComponentRevisionRecord> {
+        let revision = revision.with_updated_hash();
         let files = revision.files;
 
         let mut revision: ComponentRevisionRecord = {
