@@ -67,7 +67,8 @@ pub struct CurrentDeploymentRevisionRecord {
     pub revision_id: i64,
     #[sqlx(flatten)]
     pub audit: RevisionAuditFields,
-    pub current_revision_id: i64,
+    pub deployment_revision_id: i64,
+    pub deployment_version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]

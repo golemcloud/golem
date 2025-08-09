@@ -337,7 +337,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         self.with_ro("list_deployment_history")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                SELECT environment_id, revision_id, created_at, created_by, current_revision_id
+                SELECT environment_id, revision_id, created_at, created_by, deployment_revision_id, deployment_version
                 FROM current_deployment_revisions
                 WHERE environment_id = $1
                 ORDER BY revision_id
@@ -477,6 +477,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     &user_account_id,
                     &environment_id,
                     deployment_revision.revision_id,
+                    &deployment_revision.version,
                 )
                 .await?;
 
@@ -513,6 +514,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     &user_account_id,
                     &environment_id,
                     deployment_revision.revision_id,
+                    &deployment_revision.version,
                 )
                 .await
             }
@@ -552,6 +554,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     &user_account_id,
                     &environment_id,
                     deployment_revision.revision_id,
+                    &deployment_revision.version,
                 )
                 .await
             }
@@ -674,6 +677,7 @@ trait DeploymentRepoInternal: DeploymentRepo {
         user_account_id: &Uuid,
         environment_id: &Uuid,
         deployment_revision_id: i64,
+        deployment_version: &str,
     ) -> repo::Result<CurrentDeploymentRevisionRecord>;
 
     async fn get_deployed_components(
@@ -966,6 +970,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         user_account_id: &Uuid,
         environment_id: &Uuid,
         deployment_revision_id: i64,
+        deployment_version: &str,
     ) -> repo::Result<CurrentDeploymentRevisionRecord> {
         let opt_row = tx
             .fetch_optional(
@@ -987,13 +992,15 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"
                     INSERT INTO current_deployment_revisions
-                    (environment_id, revision_id, created_at, created_by, current_revision_id)
-                    VALUES ($1, $2, $3, $4, $5)
-                    RETURNING environment_id, revision_id, created_at, created_by, current_revision_id
+                    (environment_id, revision_id, created_at, created_by, deployment_revision_id, deployment_version)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING environment_id, revision_id, created_at, created_by, deployment_revision_id, deployment_version
                 "#})
                     .bind(environment_id)
                     .bind(revision_id)
-                    .bind_revision_audit(RevisionAuditFields::new(*user_account_id)),
+                    .bind_revision_audit(RevisionAuditFields::new(*user_account_id))
+                    .bind(deployment_revision_id)
+                    .bind(deployment_version),
             )
             .await?;
 
