@@ -33,6 +33,7 @@ use golem_service_base::db::{
     LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi, ToBusiness, TxError,
 };
 use golem_service_base::repo;
+use golem_service_base::repo::ResultExt;
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::collections::HashSet;
@@ -46,6 +47,16 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         environment_id: &Uuid,
     ) -> repo::Result<Option<DeploymentRevisionRecord>>;
+
+    async fn list_deployment_revisions(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<DeploymentRevisionRecord>>;
+
+    async fn list_deployment_history(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<CurrentDeploymentRevisionRecord>>;
 
     async fn get_staged_identity(&self, environment_id: &Uuid) -> repo::Result<DeploymentIdentity>;
 
@@ -62,6 +73,20 @@ pub trait DeploymentRepo: Send + Sync {
         current_staged_deployment_revision_id: Option<i64>,
         version: String,
         expected_deployment_hash: SqlBlake3Hash,
+    ) -> repo::BusinessResult<CurrentDeploymentRevisionRecord, DeployError>;
+
+    async fn deploy_by_revision_id(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::BusinessResult<CurrentDeploymentRevisionRecord, DeployError>;
+
+    async fn deploy_by_version(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        version: &str,
     ) -> repo::BusinessResult<CurrentDeploymentRevisionRecord, DeployError>;
 }
 
@@ -91,6 +116,28 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
         )
     }
 
+    fn span_user_env_revision(
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        revision_id: i64,
+    ) -> Span {
+        info_span!(
+            SPAN_NAME,
+            user_account_id = %user_account_id,
+            environment_id = %environment_id,
+            revision_id
+        )
+    }
+
+    fn span_user_env_version(user_account_id: &Uuid, environment_id: &Uuid, version: &str) -> Span {
+        info_span!(
+            SPAN_NAME,
+            user_account_id = %user_account_id,
+            environment_id = %environment_id,
+            version
+        )
+    }
+
     fn span_user_and_env(user_account_id: &Uuid, environment_id: &Uuid) -> Span {
         info_span!(
             SPAN_NAME,
@@ -108,6 +155,26 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     ) -> repo::Result<Option<DeploymentRevisionRecord>> {
         self.repo
             .get_deployed_revision(environment_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn list_deployment_revisions(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<DeploymentRevisionRecord>> {
+        self.repo
+            .list_deployment_revisions(environment_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn list_deployment_history(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<CurrentDeploymentRevisionRecord>> {
+        self.repo
+            .list_deployment_history(environment_id)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -152,6 +219,38 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .instrument(Self::span_user_and_env(user_account_id, environment_id))
             .await
     }
+
+    async fn deploy_by_revision_id(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::BusinessResult<CurrentDeploymentRevisionRecord, DeployError> {
+        self.repo
+            .deploy_by_revision_id(user_account_id, environment_id, revision_id)
+            .instrument(Self::span_user_env_revision(
+                user_account_id,
+                environment_id,
+                revision_id,
+            ))
+            .await
+    }
+
+    async fn deploy_by_version(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        version: &str,
+    ) -> repo::BusinessResult<CurrentDeploymentRevisionRecord, DeployError> {
+        self.repo
+            .deploy_by_version(user_account_id, environment_id, version)
+            .instrument(Self::span_user_env_version(
+                user_account_id,
+                environment_id,
+                version,
+            ))
+            .await
+    }
 }
 
 pub struct DbDeploymentRepo<DBP: Pool> {
@@ -167,6 +266,17 @@ impl<DBP: Pool> DbDeploymentRepo<DBP> {
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
+    }
+
+    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> repo::Result<R>
+    where
+        R: Send,
+        F: for<'f> FnOnce(
+                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+            ) -> BoxFuture<'f, repo::Result<R>>
+            + Send,
+    {
+        self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
     }
 
     async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> Result<R, TxError<E>>
@@ -201,6 +311,40 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             "#})
                 .bind(environment_id),
         ).await
+    }
+
+    async fn list_deployment_revisions(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<DeploymentRevisionRecord>> {
+        self.with_ro("list_deployment_revisions")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                SELECT environment_id, revision_id, version, hash, created_at, created_by
+                FROM deployment_revisions
+                WHERE environment_id = $1
+                ORDER BY revision_id
+            "#})
+                .bind(environment_id),
+            )
+            .await
+    }
+
+    async fn list_deployment_history(
+        &self,
+        environment_id: &Uuid,
+    ) -> repo::Result<Vec<CurrentDeploymentRevisionRecord>> {
+        self.with_ro("list_deployment_history")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                SELECT environment_id, revision_id, created_at, created_by, current_revision_id
+                FROM current_deployment_revisions
+                WHERE environment_id = $1
+                ORDER BY revision_id
+            "#})
+                .bind(environment_id),
+            )
+            .await
     }
 
     async fn get_staged_identity(&self, environment_id: &Uuid) -> repo::Result<DeploymentIdentity> {
@@ -281,7 +425,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             };
 
         if current_staged_deployment_revision_id != actual_current_staged_revision_id {
-            return Ok(Err(DeployError::DeploymentConcurrentRevisionCreation));
+            return Ok(Err(DeployError::DeploymentConcurrentModification));
         };
 
         let revision_id = current_staged_deployment_revision_id.unwrap_or(-1) + 1;
@@ -341,9 +485,80 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .to_business_result_on_unique_violation(|| {
-            DeployError::DeploymentConcurrentRevisionCreation
+        .to_business_result_on_unique_violation(|| DeployError::DeploymentConcurrentModification)
+    }
+
+    async fn deploy_by_revision_id(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        revision_id: i64,
+    ) -> repo::BusinessResult<CurrentDeploymentRevisionRecord, DeployError> {
+        let Some(deployment_revision) = self
+            .get_deployment_revision(environment_id, revision_id)
+            .await?
+        else {
+            return Ok(Err(DeployError::DeploymentNotFoundByRevision {
+                revision_id,
+            }));
+        };
+
+        let user_account_id = *user_account_id;
+        let environment_id = *environment_id;
+
+        self.with_tx("deploy_by_revision_id", |tx| {
+            async move {
+                Self::set_current_deployment(
+                    tx,
+                    &user_account_id,
+                    &environment_id,
+                    deployment_revision.revision_id,
+                )
+                .await
+            }
+            .boxed()
         })
+        .await
+        .to_business_result_on_unique_violation(|| DeployError::DeploymentConcurrentModification)
+    }
+
+    async fn deploy_by_version(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        version: &str,
+    ) -> repo::BusinessResult<CurrentDeploymentRevisionRecord, DeployError> {
+        let mut deployment_revisions = self
+            .get_deployment_revisions_by_version(environment_id, version)
+            .await?;
+        if deployment_revisions.len() > 1 {
+            return Ok(Err(DeployError::DeploymentIsNotUniqueByVersion {
+                version: version.to_string(),
+            }));
+        }
+        let Some(deployment_revision) = deployment_revisions.pop() else {
+            return Ok(Err(DeployError::DeploymentNotfoundByVersion {
+                version: version.to_string(),
+            }));
+        };
+
+        let user_account_id = *user_account_id;
+        let environment_id = *environment_id;
+
+        self.with_tx("deploy_by_version", |tx| {
+            async move {
+                Self::set_current_deployment(
+                    tx,
+                    &user_account_id,
+                    &environment_id,
+                    deployment_revision.revision_id,
+                )
+                .await
+            }
+            .boxed()
+        })
+        .await
+        .to_business_result_on_unique_violation(|| DeployError::DeploymentConcurrentModification)
     }
 }
 
@@ -357,6 +572,12 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: &Uuid,
         revision_id: i64,
     ) -> repo::Result<Option<DeploymentRevisionRecord>>;
+
+    async fn get_deployment_revisions_by_version(
+        &self,
+        environment_id: &Uuid,
+        version: &str,
+    ) -> repo::Result<Vec<DeploymentRevisionRecord>>;
 
     async fn create_deployment_revision(
         tx: &mut Self::Tx,
@@ -494,6 +715,24 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 "#})
                 .bind(environment_id)
                 .bind(revision_id),
+            )
+            .await
+    }
+
+    async fn get_deployment_revisions_by_version(
+        &self,
+        environment_id: &Uuid,
+        version: &str,
+    ) -> repo::Result<Vec<DeploymentRevisionRecord>> {
+        self.with_ro("get_deployment_revisions_by_version")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT environment_id, revision_id, version, hash, created_at, created_by
+                    FROM deployment_revisions
+                    WHERE environment_id = $1 AND version = $2
+                "#})
+                .bind(environment_id)
+                .bind(version),
             )
             .await
     }

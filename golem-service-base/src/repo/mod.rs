@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::db::TxError;
 use golem_common::SafeDisplay;
 use sqlx::error::ErrorKind;
 
@@ -64,6 +65,13 @@ pub trait ResultExt<T> {
     fn none_on_unique_violation(self) -> Result<Option<T>>;
 
     fn false_on_unique_violation(self) -> Result<bool>;
+
+    fn to_business_result_on_unique_violation<F, E>(
+        self,
+        to_business_error: F,
+    ) -> BusinessResult<T, E>
+    where
+        F: FnOnce() -> E;
 }
 
 impl<T> ResultExt<T> for Result<T> {
@@ -79,6 +87,20 @@ impl<T> ResultExt<T> for Result<T> {
         match self {
             Ok(_) => Ok(true),
             Err(err) if err.is_unique_violation() => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn to_business_result_on_unique_violation<F, E>(
+        self,
+        to_business_error: F,
+    ) -> BusinessResult<T, E>
+    where
+        F: FnOnce() -> E,
+    {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(err) if err.is_unique_violation() => Ok(Err(to_business_error())),
             Err(err) => Err(err),
         }
     }

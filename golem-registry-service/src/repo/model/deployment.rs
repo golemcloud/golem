@@ -24,7 +24,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum DeployError {
     #[error("Deployment concurrent revision creation")]
-    DeploymentConcurrentRevisionCreation,
+    DeploymentConcurrentModification,
     #[error(
         "Deployment hash mismatch: requested hash: {requested_hash:?}, actual hash: {actual_hash:?}."
     )]
@@ -36,6 +36,12 @@ pub enum DeployError {
     DeploymentVersionCheckFailed { version: String },
     #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]
     ValidationErrors(Vec<DeployValidationError>),
+    #[error("Deployment not found by revision: {revision_id}")]
+    DeploymentNotFoundByRevision { revision_id: i64 },
+    #[error("Deployment not found by version: {version}")]
+    DeploymentNotfoundByVersion { version: String },
+    #[error("Deployment is not unique by version: {version}")]
+    DeploymentIsNotUniqueByVersion { version: String },
 }
 
 fn format_validation_errors(errors: &[DeployValidationError]) -> String {
