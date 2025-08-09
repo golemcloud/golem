@@ -331,19 +331,20 @@ CREATE INDEX deployment_revisions_latest_idx
 
 CREATE TABLE current_deployment_revisions
 (
-    environment_id      UUID      NOT NULL,
-    revision_id         BIGINT    NOT NULL,
-    created_at          TIMESTAMP NOT NULL,
-    created_by          UUID      NOT NULL,
-    current_revision_id BIGINT    NOT NULL,
+    environment_id         UUID      NOT NULL,
+    revision_id            BIGINT    NOT NULL,
+    created_at             TIMESTAMP NOT NULL,
+    created_by             UUID      NOT NULL,
+    deployment_revision_id BIGINT    NOT NULL,
+    deployment_version     TEXT      NOT NULL,
     CONSTRAINT current_deployment_revisions_pk
         PRIMARY KEY (environment_id, revision_id),
     CONSTRAINT current_deployment_revisions_deployment_revisions_fk
-        FOREIGN KEY (environment_id, current_revision_id) REFERENCES deployment_revisions (environment_id, revision_id)
+        FOREIGN KEY (environment_id, deployment_revision_id) REFERENCES deployment_revisions (environment_id, revision_id)
 );
 
 CREATE INDEX current_deployment_revisions_current_idx
-    ON current_deployment_revisions (environment_id, current_revision_id);
+    ON current_deployment_revisions (environment_id, deployment_revision_id);
 
 CREATE INDEX current_deployment_revisions_latest_idx
     ON current_deployment_revisions (environment_id, revision_id DESC);
