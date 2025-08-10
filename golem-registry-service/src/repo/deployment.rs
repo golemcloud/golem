@@ -440,9 +440,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         if environment.revision.version_check
             && self.version_exists(environment_id, &version).await?
         {
-            return Ok(Err(DeployRepoError::VersionAlreadyExists {
-                version,
-            }));
+            return Ok(Err(DeployRepoError::VersionAlreadyExists { version }));
         }
 
         let user_account_id = *user_account_id;
