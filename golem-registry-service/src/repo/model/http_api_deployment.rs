@@ -20,6 +20,14 @@ use golem_common::model::diff::Hashable;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+pub enum HttpApiDeploymentRevisionRepoError {
+    #[error("Missing definitions: {missing_definitions:?}")]
+    MissingDefinitions { missing_definitions: Vec<String> },
+    #[error("Concurrent modification")]
+    ConcurrentModification,
+}
+
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDeploymentRecord {
     pub http_api_deployment_id: Uuid,
@@ -35,10 +43,11 @@ pub struct HttpApiDeploymentRecord {
 pub struct HttpApiDeploymentRevisionRecord {
     pub http_api_deployment_id: Uuid,
     pub revision_id: i64,
-    pub hash: SqlBlake3Hash,
+    pub hash: SqlBlake3Hash, // NOTE: set by repo during insert
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
 
+    // NOTE: see HttpApiDefinitionRevisionIdentityRecord::for_deployment_insert
     #[sqlx(skip)]
     pub http_api_definitions: Vec<HttpApiDefinitionRevisionIdentityRecord>,
 }

@@ -18,28 +18,28 @@ use conditional_trait_gen::trait_gen;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo;
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
+use golem_service_base::repo::RepoResult;
 
 #[async_trait]
 pub trait OAuth2TokenRepo: Send + Sync {
-    async fn create_or_update(&self, token: OAuth2TokenRecord) -> repo::Result<OAuth2TokenRecord>;
+    async fn create_or_update(&self, token: OAuth2TokenRecord) -> RepoResult<OAuth2TokenRecord>;
 
     async fn get_by_external_provider(
         &self,
         provider: &str,
         external_id: &str,
-    ) -> repo::Result<Option<OAuth2TokenRecord>>;
+    ) -> RepoResult<Option<OAuth2TokenRecord>>;
 
     async fn unset_token_id_by_external_provider(
         &self,
         provider: &str,
         external_id: &str,
-    ) -> repo::Result<Option<OAuth2TokenRecord>>;
+    ) -> RepoResult<Option<OAuth2TokenRecord>>;
 
-    async fn get_by_token_id(&self, token_id: &Uuid) -> repo::Result<Option<OAuth2TokenRecord>>;
+    async fn get_by_token_id(&self, token_id: &Uuid) -> RepoResult<Option<OAuth2TokenRecord>>;
 }
 
 pub struct LoggedOAuth2TokenRepo<Repo: OAuth2TokenRepo> {
@@ -68,7 +68,7 @@ impl<Repo: OAuth2TokenRepo> LoggedOAuth2TokenRepo<Repo> {
 
 #[async_trait]
 impl<Repo: OAuth2TokenRepo> OAuth2TokenRepo for LoggedOAuth2TokenRepo<Repo> {
-    async fn create_or_update(&self, token: OAuth2TokenRecord) -> repo::Result<OAuth2TokenRecord> {
+    async fn create_or_update(&self, token: OAuth2TokenRecord) -> RepoResult<OAuth2TokenRecord> {
         let span = Self::span_oath2_token(&token);
         self.repo.create_or_update(token).instrument(span).await
     }
@@ -77,7 +77,7 @@ impl<Repo: OAuth2TokenRepo> OAuth2TokenRepo for LoggedOAuth2TokenRepo<Repo> {
         &self,
         provider: &str,
         external_id: &str,
-    ) -> repo::Result<Option<OAuth2TokenRecord>> {
+    ) -> RepoResult<Option<OAuth2TokenRecord>> {
         self.repo
             .get_by_external_provider(provider, external_id)
             .instrument(Self::span_provider(provider, external_id))
@@ -88,14 +88,14 @@ impl<Repo: OAuth2TokenRepo> OAuth2TokenRepo for LoggedOAuth2TokenRepo<Repo> {
         &self,
         provider: &str,
         external_id: &str,
-    ) -> repo::Result<Option<OAuth2TokenRecord>> {
+    ) -> RepoResult<Option<OAuth2TokenRecord>> {
         self.repo
             .unset_token_id_by_external_provider(provider, external_id)
             .instrument(Self::span_provider(provider, external_id))
             .await
     }
 
-    async fn get_by_token_id(&self, token_id: &Uuid) -> repo::Result<Option<OAuth2TokenRecord>> {
+    async fn get_by_token_id(&self, token_id: &Uuid) -> RepoResult<Option<OAuth2TokenRecord>> {
         self.get_by_token_id(token_id)
             .instrument(Self::span_token_id(token_id))
             .await
@@ -132,7 +132,7 @@ impl<DBP: Pool> DbOAuth2TokenRepo<DBP> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl OAuth2TokenRepo for DbOAuth2TokenRepo<PostgresPool> {
-    async fn create_or_update(&self, token: OAuth2TokenRecord) -> repo::Result<OAuth2TokenRecord> {
+    async fn create_or_update(&self, token: OAuth2TokenRecord) -> RepoResult<OAuth2TokenRecord> {
         self.with_rw("create_or_update")
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"
@@ -153,7 +153,7 @@ impl OAuth2TokenRepo for DbOAuth2TokenRepo<PostgresPool> {
         &self,
         provider: &str,
         external_id: &str,
-    ) -> repo::Result<Option<OAuth2TokenRecord>> {
+    ) -> RepoResult<Option<OAuth2TokenRecord>> {
         self.with_ro("get_by_external_provider")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -171,7 +171,7 @@ impl OAuth2TokenRepo for DbOAuth2TokenRepo<PostgresPool> {
         &self,
         provider: &str,
         external_id: &str,
-    ) -> repo::Result<Option<OAuth2TokenRecord>> {
+    ) -> RepoResult<Option<OAuth2TokenRecord>> {
         self.with_rw("unset_token_id_by_external_provider")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -186,7 +186,7 @@ impl OAuth2TokenRepo for DbOAuth2TokenRepo<PostgresPool> {
             .await
     }
 
-    async fn get_by_token_id(&self, token_id: &Uuid) -> repo::Result<Option<OAuth2TokenRecord>> {
+    async fn get_by_token_id(&self, token_id: &Uuid) -> RepoResult<Option<OAuth2TokenRecord>> {
         self.with_ro("get_by_token_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"

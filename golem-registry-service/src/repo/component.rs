@@ -24,8 +24,7 @@ use futures::{FutureExt, StreamExt, TryStreamExt, stream};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo;
-use golem_service_base::repo::ResultExt;
+use golem_service_base::repo::{RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
 use tracing::{Instrument, Span, info_span};
@@ -38,71 +37,71 @@ pub trait ComponentRepo: Send + Sync {
         environment_id: &Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
     async fn delete(
         &self,
         user_account_id: &Uuid,
         component_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<bool>;
+    ) -> RepoResult<bool>;
 
     async fn get_staged_by_id(
         &self,
         component_id: &Uuid,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
     async fn get_staged_by_name(
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
     async fn get_deployed_by_id(
         &self,
         component_id: &Uuid,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
     async fn get_deployed_by_name(
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
     async fn get_by_id_and_revision(
         &self,
         component_id: &Uuid,
         revision_id: i64,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
     async fn get_by_name_and_revision(
         &self,
         environment_id: &Uuid,
         name: &str,
         revision_id: i64,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
     async fn list_staged(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>>;
 
     async fn list_deployed(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>>;
 
     async fn list_by_deployment(
         &self,
         environment_id: &Uuid,
         deployment_revision_id: i64,
-    ) -> repo::Result<Vec<ComponentExtRevisionRecord>>;
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>>;
 }
 
 pub struct LoggedComponentRepo<Repo: ComponentRepo> {
@@ -151,7 +150,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         environment_id: &Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         self.repo
             .create(environment_id, name, revision)
             .instrument(Self::span_name(environment_id, name))
@@ -162,7 +161,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         &self,
         current_revision_id: i64,
         revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         let span = Self::span_id(&revision.component_id);
         self.repo
             .update(current_revision_id, revision)
@@ -175,7 +174,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         user_account_id: &Uuid,
         component_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<bool> {
+    ) -> RepoResult<bool> {
         self.repo
             .delete(user_account_id, component_id, current_revision_id)
             .instrument(Self::span_id(component_id))
@@ -185,7 +184,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn get_staged_by_id(
         &self,
         component_id: &Uuid,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         self.repo
             .get_staged_by_id(component_id)
             .instrument(Self::span_id(component_id))
@@ -196,7 +195,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         self.repo
             .get_staged_by_name(environment_id, name)
             .instrument(Self::span_name(environment_id, name))
@@ -206,7 +205,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn get_deployed_by_id(
         &self,
         component_id: &Uuid,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         self.repo
             .get_deployed_by_id(component_id)
             .instrument(Self::span_id(component_id))
@@ -217,7 +216,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         self.repo
             .get_deployed_by_name(environment_id, name)
             .instrument(Self::span_name(environment_id, name))
@@ -228,7 +227,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         &self,
         component_id: &Uuid,
         revision_id: i64,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         self.repo
             .get_by_id_and_revision(component_id, revision_id)
             .instrument(Self::span_id_and_revision(component_id, revision_id))
@@ -240,7 +239,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         environment_id: &Uuid,
         name: &str,
         revision_id: i64,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         self.repo
             .get_by_name_and_revision(environment_id, name, revision_id)
             .instrument(Self::span_name_and_revision(
@@ -254,7 +253,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn list_staged(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>> {
         self.repo
             .list_staged(environment_id)
             .instrument(Self::span_env(environment_id))
@@ -264,7 +263,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn list_deployed(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>> {
         self.repo
             .list_deployed(environment_id)
             .instrument(Self::span_env(environment_id))
@@ -275,7 +274,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         &self,
         environment_id: &Uuid,
         deployment_revision_id: i64,
-    ) -> repo::Result<Vec<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>> {
         self.repo
             .list_by_deployment(environment_id, deployment_revision_id)
             .instrument(Self::span_env_and_deployment_revision(
@@ -308,12 +307,12 @@ impl<DBP: Pool> DbComponentRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> repo::Result<R>
+    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> RepoResult<R>
     where
         R: Send,
         F: for<'f> FnOnce(
                 &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, repo::Result<R>>
+            ) -> BoxFuture<'f, RepoResult<R>>
             + Send,
     {
         self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
@@ -328,7 +327,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         environment_id: &Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         let opt_deleted_revision: Option<ComponentRevisionIdentityRecord> = self.with_ro("create - get opt deleted").fetch_optional_as(
             sqlx::query_as(indoc! { r#"
                 SELECT c.component_id, c.name, cr.revision_id, cr.revision_id, cr.version, cr.status, cr.hash
@@ -389,7 +388,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         &self,
         current_revision_id: i64,
         revision: ComponentRevisionRecord,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         let Some(_checked_component) = self
             .check_current_revision(&revision.component_id, current_revision_id)
             .await?
@@ -436,7 +435,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         user_account_id: &Uuid,
         component_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<bool> {
+    ) -> RepoResult<bool> {
         let user_account_id = *user_account_id;
         let component_id = *component_id;
 
@@ -483,7 +482,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn get_staged_by_id(
         &self,
         component_id: &Uuid,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         let revision: Option<ComponentExtRevisionRecord> = self.with_ro("get_staged_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -510,7 +509,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         let revision = self.with_ro("get_staged_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -537,7 +536,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn get_deployed_by_id(
         &self,
         component_id: &Uuid,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         let revision = self.with_ro("get_deployed_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -570,7 +569,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         &self,
         environment_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         let revision = self.with_ro("get_deployed_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -604,7 +603,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         &self,
         component_id: &Uuid,
         revision_id: i64,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         let revision = self
             .with_ro("get_by_id_and_revision")
             .fetch_optional_as(
@@ -634,7 +633,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         environment_id: &Uuid,
         name: &str,
         revision_id: i64,
-    ) -> repo::Result<Option<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         let revision = self.with_ro("get_by_name_and_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -662,7 +661,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn list_staged(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>> {
         let revisions = self.with_ro("list_staged")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -689,7 +688,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn list_deployed(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>> {
         let revisions = self.with_ro("list_deployed")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -725,7 +724,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         &self,
         environment_id: &Uuid,
         deployment_revision_id: i64,
-    ) -> repo::Result<Vec<ComponentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>> {
         let revisions = self.with_ro("list_by_deployment")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -763,20 +762,20 @@ trait ComponentRepoInternal: ComponentRepo {
         &self,
         component_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<Option<ComponentRecord>>;
+    ) -> RepoResult<Option<ComponentRecord>>;
 
     async fn get_component_files(
         &self,
         component_id: &Uuid,
         revision_id: i64,
-    ) -> repo::Result<Vec<ComponentFileRecord>>;
+    ) -> RepoResult<Vec<ComponentFileRecord>>;
 
     // TODO: create a variant the accepts multiple component records, and which batches
     //       queries (e.g. with "IN")
     async fn with_component_files(
         &self,
         mut component: ComponentExtRevisionRecord,
-    ) -> repo::Result<ComponentExtRevisionRecord> {
+    ) -> RepoResult<ComponentExtRevisionRecord> {
         component.revision.files = self
             .get_component_files(
                 &component.revision.component_id,
@@ -789,12 +788,12 @@ trait ComponentRepoInternal: ComponentRepo {
     async fn insert_revision(
         tx: &mut Self::Tx,
         revision: ComponentRevisionRecord,
-    ) -> repo::Result<ComponentRevisionRecord>;
+    ) -> RepoResult<ComponentRevisionRecord>;
 
     async fn insert_file(
         tx: &mut Self::Tx,
         file: ComponentFileRecord,
-    ) -> repo::Result<ComponentFileRecord>;
+    ) -> RepoResult<ComponentFileRecord>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -807,7 +806,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         &self,
         component_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<Option<ComponentRecord>> {
+    ) -> RepoResult<Option<ComponentRecord>> {
         self.with_ro("check_current_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -827,7 +826,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         &self,
         component_id: &Uuid,
         revision_id: i64,
-    ) -> repo::Result<Vec<ComponentFileRecord>> {
+    ) -> RepoResult<Vec<ComponentFileRecord>> {
         self.with_ro("get_component_files")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -846,7 +845,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
     async fn insert_revision(
         tx: &mut Self::Tx,
         revision: ComponentRevisionRecord,
-    ) -> repo::Result<ComponentRevisionRecord> {
+    ) -> RepoResult<ComponentRevisionRecord> {
         let revision = revision.with_updated_hash();
         let files = revision.files;
 
@@ -907,7 +906,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
     async fn insert_file(
         tx: &mut Self::Tx,
         file: ComponentFileRecord,
-    ) -> repo::Result<ComponentFileRecord> {
+    ) -> RepoResult<ComponentFileRecord> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                 INSERT INTO component_files

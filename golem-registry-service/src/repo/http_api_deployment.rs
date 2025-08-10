@@ -17,6 +17,7 @@ use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRe
 use crate::repo::model::http_api_deployment::{
     HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRecord,
     HttpApiDeploymentRevisionIdentityRecord, HttpApiDeploymentRevisionRecord,
+    HttpApiDeploymentRevisionRepoError,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -24,11 +25,13 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt, stream};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo;
-use golem_service_base::repo::ResultExt;
+use golem_service_base::db::{
+    LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi, ToBusiness, TxError, TxResult,
+};
+use golem_service_base::repo::{BusinessResult, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
+use std::fmt::Display;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -40,50 +43,50 @@ pub trait HttpApiDeploymentRepo: Send + Sync {
         host: &str,
         subdomain: Option<&str>,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>;
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>;
 
     async fn delete(
         &self,
         user_account_id: &Uuid,
         http_api_deployment_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<bool>;
+    ) -> BusinessResult<(), HttpApiDeploymentRevisionRepoError>;
 
     async fn get_staged_by_id(
         &self,
         http_api_deployment_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn get_staged_by_name(
         &self,
         environment_id: &Uuid,
         host: &str,
         subdomain: Option<&str>,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn get_deployed_by_id(
         &self,
         http_api_deployment_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn get_deployed_by_name(
         &self,
         environment_id: &Uuid,
         host: &str,
         subdomain: Option<&str>,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn get_by_id_and_revision(
         &self,
         http_api_deployment_id: &Uuid,
         revision_id: i64,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn get_by_name_and_revision(
         &self,
@@ -91,23 +94,23 @@ pub trait HttpApiDeploymentRepo: Send + Sync {
         host: &str,
         subdomain: Option<&str>,
         revision_id: i64,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn list_staged(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn list_deployed(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>>;
 
     async fn list_by_deployment(
         &self,
         environment_id: &Uuid,
         deployment_revision_id: i64,
-    ) -> repo::Result<Vec<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>>;
 }
 
 pub struct LoggedHttpApiDeploymentRepo<Repo: HttpApiDeploymentRepo> {
@@ -159,7 +162,8 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         host: &str,
         subdomain: Option<&str>,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>
+    {
         self.repo
             .create(environment_id, host, subdomain, revision)
             .instrument(Self::span_name(environment_id, host, subdomain))
@@ -170,7 +174,8 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         &self,
         current_revision_id: i64,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>
+    {
         let span = Self::span_id(&revision.http_api_deployment_id);
         self.repo
             .update(current_revision_id, revision)
@@ -183,7 +188,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         user_account_id: &Uuid,
         http_api_deployment_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<bool> {
+    ) -> BusinessResult<(), HttpApiDeploymentRevisionRepoError> {
         self.repo
             .delete(user_account_id, http_api_deployment_id, current_revision_id)
             .instrument(Self::span_id(http_api_deployment_id))
@@ -193,7 +198,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
     async fn get_staged_by_id(
         &self,
         http_api_deployment_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .get_staged_by_id(http_api_deployment_id)
             .instrument(Self::span_id(http_api_deployment_id))
@@ -205,7 +210,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         environment_id: &Uuid,
         host: &str,
         subdomain: Option<&str>,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .get_staged_by_name(environment_id, host, subdomain)
             .instrument(Self::span_name(environment_id, host, subdomain))
@@ -215,7 +220,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
     async fn get_deployed_by_id(
         &self,
         http_api_deployment_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .get_deployed_by_id(http_api_deployment_id)
             .instrument(Self::span_id(http_api_deployment_id))
@@ -227,7 +232,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         environment_id: &Uuid,
         host: &str,
         subdomain: Option<&str>,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .get_deployed_by_name(environment_id, host, subdomain)
             .instrument(Self::span_name(environment_id, host, subdomain))
@@ -238,7 +243,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         &self,
         http_api_deployment_id: &Uuid,
         revision_id: i64,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .get_by_id_and_revision(http_api_deployment_id, revision_id)
             .instrument(Self::span_id_and_revision(
@@ -254,7 +259,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         host: &str,
         subdomain: Option<&str>,
         revision_id: i64,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .get_by_name_and_revision(environment_id, host, subdomain, revision_id)
             .instrument(Self::span_name_and_revision(
@@ -269,7 +274,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
     async fn list_staged(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .list_staged(environment_id)
             .instrument(Self::span_env(environment_id))
@@ -279,7 +284,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
     async fn list_deployed(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .list_deployed(environment_id)
             .instrument(Self::span_env(environment_id))
@@ -290,7 +295,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         &self,
         environment_id: &Uuid,
         deployment_revision_id: i64,
-    ) -> repo::Result<Vec<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .list_by_deployment(environment_id, deployment_revision_id)
             .instrument(Self::span_env_and_deployment(
@@ -323,15 +328,29 @@ impl<DBP: Pool> DbHttpApiDeploymentRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> repo::Result<R>
+    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> RepoResult<R>
     where
         R: Send,
         F: for<'f> FnOnce(
                 &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, repo::Result<R>>
+            ) -> BoxFuture<'f, RepoResult<R>>
             + Send,
     {
         self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
+    }
+
+    async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> TxResult<R, E>
+    where
+        R: Send,
+        E: Display + Send,
+        F: for<'f> FnOnce(
+                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+            ) -> BoxFuture<'f, TxResult<R, E>>
+            + Send,
+    {
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, api_name, f)
+            .await
     }
 }
 
@@ -344,7 +363,8 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         host: &str,
         subdomain: Option<&str>,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>
+    {
         let opt_deleted_revision: Option<HttpApiDeploymentRevisionIdentityRecord> =
             self.with_ro("create - get opt deleted").fetch_optional_as(
                 match subdomain {
@@ -388,7 +408,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         let subdomain = subdomain.map(|s| s.to_owned());
         let revision = revision.ensure_first();
 
-        self.with_tx("create", |tx| {
+        self.with_tx_err("create", |tx| {
             async move {
                 tx.execute(
                     sqlx::query(indoc! { r#"
@@ -399,7 +419,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                         VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, 0)
                     "# })
                     .bind(revision.http_api_deployment_id)
-                    .bind(environment_id)
+                    .bind(&environment_id)
                     .bind(&host)
                     .bind(&subdomain)
                     .bind(&revision.audit.created_at)
@@ -408,7 +428,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                 )
                 .await?;
 
-                let revision = Self::insert_revision(tx, revision).await?;
+                let revision = Self::insert_revision(tx, &environment_id, revision).await?;
 
                 Ok(HttpApiDeploymentExtRevisionRecord {
                     environment_id,
@@ -420,25 +440,34 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .none_on_unique_violation()
+        .to_business_result_on_unique_violation(|| {
+            HttpApiDeploymentRevisionRepoError::ConcurrentModification
+        })
     }
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
-        let Some(_checked_http_api_deployment) = self
+    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>
+    {
+        let Some(checked_current) = self
             .check_current_revision(&revision.http_api_deployment_id, current_revision_id)
             .await?
         else {
-            return Ok(None);
+            return Ok(Err(
+                HttpApiDeploymentRevisionRepoError::ConcurrentModification,
+            ));
         };
 
-        self.with_tx("update", |tx| {
+        self.with_tx_err("update", |tx| {
             async move {
-                let revision: HttpApiDeploymentRevisionRecord =
-                    Self::insert_revision(tx, revision.ensure_new(current_revision_id)).await?;
+                let revision: HttpApiDeploymentRevisionRecord = Self::insert_revision(
+                    tx,
+                    &checked_current.environment_id,
+                    revision.ensure_new(current_revision_id),
+                )
+                .await?;
 
                 let ext = tx
                     .fetch_one(
@@ -465,7 +494,9 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .none_on_unique_violation()
+        .to_business_result_on_unique_violation(|| {
+            HttpApiDeploymentRevisionRepoError::ConcurrentModification
+        })
     }
 
     async fn delete(
@@ -473,21 +504,24 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         user_account_id: &Uuid,
         http_api_deployment_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<bool> {
+    ) -> BusinessResult<(), HttpApiDeploymentRevisionRepoError> {
         let user_account_id = *user_account_id;
         let http_api_deployment_id = *http_api_deployment_id;
 
-        let Some(_checked_env) = self
+        let Some(checked_current) = self
             .check_current_revision(&http_api_deployment_id, current_revision_id)
             .await?
         else {
-            return Ok(false);
+            return Ok(Err(
+                HttpApiDeploymentRevisionRepoError::ConcurrentModification,
+            ));
         };
 
-        self.with_tx("delete", |tx| {
+        self.with_tx_err("delete", |tx| {
             async move {
                 let revision: HttpApiDeploymentRevisionRecord = Self::insert_revision(
                     tx,
+                    &checked_current.environment_id,
                     HttpApiDeploymentRevisionRecord::deletion(
                         user_account_id,
                         http_api_deployment_id,
@@ -514,13 +548,15 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .false_on_unique_violation()
+        .to_business_result_on_unique_violation(|| {
+            HttpApiDeploymentRevisionRepoError::ConcurrentModification
+        })
     }
 
     async fn get_staged_by_id(
         &self,
         http_api_deployment_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         let revision = self.with_ro("get_staged_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -547,7 +583,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         environment_id: &Uuid,
         host: &str,
         subdomain: Option<&str>,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         let revision = self.with_ro("get_staged_by_name")
             .fetch_optional_as(
                 match subdomain {
@@ -591,7 +627,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
     async fn get_deployed_by_id(
         &self,
         http_api_deployment_id: &Uuid,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         let revision = self.with_ro("get_deployed_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -625,7 +661,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         environment_id: &Uuid,
         host: &str,
         subdomain: Option<&str>,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         let revision = self.with_ro("get_deployed_by_name")
             .fetch_optional_as(
                 match subdomain {
@@ -685,7 +721,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         &self,
         http_api_deployment_id: &Uuid,
         revision_id: i64,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         let revision = self.with_ro("get_by_id_and_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -714,7 +750,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         host: &str,
         subdomain: Option<&str>,
         revision_id: i64,
-    ) -> repo::Result<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
         let revision = self
             .with_ro("get_by_name_and_revision")
             .fetch_optional_as(match subdomain {
@@ -757,7 +793,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
     async fn list_staged(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
         let revisions = self.with_ro("list_staged")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -783,7 +819,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
     async fn list_deployed(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Vec<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
         let revisions = self.with_ro("list_deployed")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -817,7 +853,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         &self,
         environment_id: &Uuid,
         deployment_revision_id: i64,
-    ) -> repo::Result<Vec<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
         let revisions = self.with_ro("list_by_deployment")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -854,18 +890,18 @@ trait HttpApiDeploymentRepoInternal: HttpApiDeploymentRepo {
         &self,
         http_api_deployment_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<Option<HttpApiDeploymentRecord>>;
+    ) -> RepoResult<Option<HttpApiDeploymentRecord>>;
 
     async fn get_http_api_definitions(
         &self,
         http_api_deployment_id: &Uuid,
         revision_id: i64,
-    ) -> repo::Result<Vec<HttpApiDefinitionRevisionIdentityRecord>>;
+    ) -> RepoResult<Vec<HttpApiDefinitionRevisionIdentityRecord>>;
 
     async fn with_http_api_definitions(
         &self,
         mut deployment: HttpApiDeploymentExtRevisionRecord,
-    ) -> repo::Result<HttpApiDeploymentExtRevisionRecord> {
+    ) -> RepoResult<HttpApiDeploymentExtRevisionRecord> {
         deployment.revision.http_api_definitions = self
             .get_http_api_definitions(
                 &deployment.revision.http_api_deployment_id,
@@ -877,15 +913,22 @@ trait HttpApiDeploymentRepoInternal: HttpApiDeploymentRepo {
 
     async fn insert_revision(
         tx: &mut Self::Tx,
+        environment_id: &Uuid,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> repo::Result<HttpApiDeploymentRevisionRecord>;
+    ) -> TxResult<HttpApiDeploymentRevisionRecord, HttpApiDeploymentRevisionRepoError>;
 
     async fn insert_definition(
         tx: &mut Self::Tx,
         http_api_deployment_id: &Uuid,
         revision_id: i64,
         http_definition_id: &Uuid,
-    ) -> repo::Result<HttpApiDefinitionRevisionIdentityRecord>;
+    ) -> RepoResult<HttpApiDefinitionRevisionIdentityRecord>;
+
+    async fn get_definition_id_by_name(
+        tx: &mut Self::Tx,
+        environment_id: &Uuid,
+        http_api_definition_name: &str,
+    ) -> RepoResult<Option<Uuid>>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -898,7 +941,7 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         &self,
         http_api_deployment_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<Option<HttpApiDeploymentRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentRecord>> {
         self.with_ro("check_current_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -918,7 +961,7 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         &self,
         http_api_deployment_id: &Uuid,
         revision_id: i64,
-    ) -> repo::Result<Vec<HttpApiDefinitionRevisionIdentityRecord>> {
+    ) -> RepoResult<Vec<HttpApiDefinitionRevisionIdentityRecord>> {
         self.with_ro("get_http_api_definitions")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -938,12 +981,32 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
 
     async fn insert_revision(
         tx: &mut Self::Tx,
+        environment_id: &Uuid,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> repo::Result<HttpApiDeploymentRevisionRecord> {
-        // TODO: get and set name for all the definitions, fail on missing ones
+    ) -> TxResult<HttpApiDeploymentRevisionRecord, HttpApiDeploymentRevisionRepoError> {
         let revision = revision.with_updated_hash();
 
-        let definitions = revision.http_api_definitions;
+        let definitions_ids = {
+            let mut definitions = Vec::with_capacity(revision.http_api_definitions.len());
+            let mut missing_definitions = vec![];
+
+            for definition in revision.http_api_definitions {
+                match Self::get_definition_id_by_name(tx, environment_id, &definition.name).await? {
+                    Some(id) => definitions.push(id),
+                    None => missing_definitions.push(definition.name.clone()),
+                }
+            }
+
+            if missing_definitions.len() > 0 {
+                return Err(TxError::Business(
+                    HttpApiDeploymentRevisionRepoError::MissingDefinitions {
+                        missing_definitions,
+                    },
+                ));
+            }
+
+            definitions
+        };
 
         let mut revision: HttpApiDeploymentRevisionRecord = tx
             .fetch_one_as(
@@ -963,14 +1026,14 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
             .await?;
 
         revision.http_api_definitions = {
-            let mut inserted_definitions = Vec::with_capacity(definitions.len());
-            for definition in definitions.iter() {
+            let mut inserted_definitions = Vec::with_capacity(definitions_ids.len());
+            for definition_id in definitions_ids {
                 inserted_definitions.push(
                     Self::insert_definition(
                         tx,
                         &revision.http_api_deployment_id,
                         revision.revision_id,
-                        &definition.http_api_definition_id,
+                        &definition_id,
                     )
                     .await?,
                 );
@@ -986,7 +1049,7 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         http_api_deployment_id: &Uuid,
         revision_id: i64,
         http_definition_id: &Uuid,
-    ) -> repo::Result<HttpApiDefinitionRevisionIdentityRecord> {
+    ) -> RepoResult<HttpApiDefinitionRevisionIdentityRecord> {
         tx.execute(
             sqlx::query(indoc! { r#"
                 INSERT INTO http_api_deployment_definitions
@@ -1011,5 +1074,28 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
             .bind(http_definition_id),
         )
         .await
+    }
+
+    async fn get_definition_id_by_name(
+        tx: &mut Self::Tx,
+        environment_id: &Uuid,
+        http_api_definition_name: &str,
+    ) -> RepoResult<Option<Uuid>> {
+        let row = tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT http_api_definition_id
+                    FROM http_api_definitions
+                    WHERE environment_id = $1 AND name = $2 AND deleted_at IS NULL
+                "#})
+                .bind(environment_id)
+                .bind(http_api_definition_name),
+            )
+            .await?;
+
+        match row {
+            Some(row) => Ok(Some(row.try_get("http_api_definition_id")?)),
+            None => Ok(None),
+        }
     }
 }

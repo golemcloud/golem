@@ -23,8 +23,7 @@ use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo;
-use golem_service_base::repo::ResultExt;
+use golem_service_base::repo::{RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::Database;
 use tracing::{Instrument, Span, info_span};
@@ -36,37 +35,37 @@ pub trait EnvironmentRepo: Send + Sync {
         &self,
         application_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>>;
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>>;
 
     async fn get_by_id(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>>;
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>>;
 
     async fn list_by_app(
         &self,
         application_id: &Uuid,
-    ) -> repo::Result<Vec<EnvironmentExtRevisionRecord>>;
+    ) -> RepoResult<Vec<EnvironmentExtRevisionRecord>>;
 
     async fn create(
         &self,
         application_id: &Uuid,
         name: &str,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>>;
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>>;
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>>;
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>>;
 
     async fn delete(
         &self,
         user_account_id: &Uuid,
         environment_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<bool>;
+    ) -> RepoResult<bool>;
 }
 
 pub struct LoggedEnvironmentRepo<Repo: EnvironmentRepo> {
@@ -99,7 +98,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         application_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>> {
         self.repo
             .get_by_name(application_id, name)
             .instrument(Self::span_name(application_id, name))
@@ -109,7 +108,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn get_by_id(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>> {
         self.repo
             .get_by_id(environment_id)
             .instrument(Self::span_env(environment_id))
@@ -119,7 +118,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn list_by_app(
         &self,
         application_id: &Uuid,
-    ) -> repo::Result<Vec<EnvironmentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<EnvironmentExtRevisionRecord>> {
         self.repo
             .list_by_app(application_id)
             .instrument(Self::span_env(application_id))
@@ -131,7 +130,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         application_id: &Uuid,
         name: &str,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>> {
         self.repo
             .create(application_id, name, revision)
             .instrument(Self::span_id(application_id))
@@ -142,7 +141,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>> {
         let span = Self::span_env(&revision.environment_id);
         self.repo
             .update(current_revision_id, revision)
@@ -155,7 +154,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         user_account_id: &Uuid,
         environment_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<bool> {
+    ) -> RepoResult<bool> {
         let span = Self::span_env(user_account_id);
         self.repo
             .delete(user_account_id, environment_id, current_revision_id)
@@ -186,12 +185,12 @@ impl<DBP: Pool> DbEnvironmentRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> repo::Result<R>
+    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> RepoResult<R>
     where
         R: Send,
         F: for<'f> FnOnce(
                 &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, repo::Result<R>>
+            ) -> BoxFuture<'f, RepoResult<R>>
             + Send,
     {
         self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
@@ -205,7 +204,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         application_id: &Uuid,
         name: &str,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>> {
         self.with_ro("get_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -228,7 +227,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         environment_id: &Uuid,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -250,7 +249,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn list_by_app(
         &self,
         application_id: &Uuid,
-    ) -> repo::Result<Vec<EnvironmentExtRevisionRecord>> {
+    ) -> RepoResult<Vec<EnvironmentExtRevisionRecord>> {
         self.with_ro("list_by_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -270,7 +269,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         application_id: &Uuid,
         name: &str,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>> {
         let application_id = *application_id;
         let name = name.to_owned();
         let revision = revision.ensure_first();
@@ -304,7 +303,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<Option<EnvironmentExtRevisionRecord>> {
+    ) -> RepoResult<Option<EnvironmentExtRevisionRecord>> {
         let Some(checked_env) = self
             .check_current_revision(&revision.environment_id, current_revision_id)
             .await?
@@ -347,7 +346,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         user_account_id: &Uuid,
         environment_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<bool> {
+    ) -> RepoResult<bool> {
         let user_account_id = *user_account_id;
         let environment_id = *environment_id;
 
@@ -401,12 +400,12 @@ trait EnvironmentRepoInternal: EnvironmentRepo {
         &self,
         environment_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<Option<EnvironmentRecord>>;
+    ) -> RepoResult<Option<EnvironmentRecord>>;
 
     async fn insert_revision(
         tx: &mut Self::Tx,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<EnvironmentRevisionRecord>;
+    ) -> RepoResult<EnvironmentRevisionRecord>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -419,7 +418,7 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
         &self,
         environment_id: &Uuid,
         current_revision_id: i64,
-    ) -> repo::Result<Option<EnvironmentRecord>> {
+    ) -> RepoResult<Option<EnvironmentRecord>> {
         self.with_ro("check_current_revision").fetch_optional_as(
             sqlx::query_as(indoc! { r#"
                 SELECT environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
@@ -435,7 +434,7 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
     async fn insert_revision(
         tx: &mut Self::Tx,
         revision: EnvironmentRevisionRecord,
-    ) -> repo::Result<EnvironmentRevisionRecord> {
+    ) -> RepoResult<EnvironmentRevisionRecord> {
         let revision = revision.with_updated_hash();
 
         tx.fetch_one_as(sqlx::query_as(indoc! { r#"

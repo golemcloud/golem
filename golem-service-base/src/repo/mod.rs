@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::db::TxError;
 use golem_common::SafeDisplay;
 use sqlx::error::ErrorKind;
 
@@ -57,14 +56,14 @@ impl SafeDisplay for RepoError {
     }
 }
 
-pub type Result<T> = std::result::Result<T, RepoError>;
+pub type RepoResult<T> = Result<T, RepoError>;
 
-pub type BusinessResult<T, E> = std::result::Result<std::result::Result<T, E>, RepoError>;
+pub type BusinessResult<T, E> = Result<Result<T, E>, RepoError>;
 
 pub trait ResultExt<T> {
-    fn none_on_unique_violation(self) -> Result<Option<T>>;
+    fn none_on_unique_violation(self) -> RepoResult<Option<T>>;
 
-    fn false_on_unique_violation(self) -> Result<bool>;
+    fn false_on_unique_violation(self) -> RepoResult<bool>;
 
     fn to_business_result_on_unique_violation<F, E>(
         self,
@@ -74,8 +73,8 @@ pub trait ResultExt<T> {
         F: FnOnce() -> E;
 }
 
-impl<T> ResultExt<T> for Result<T> {
-    fn none_on_unique_violation(self) -> Result<Option<T>> {
+impl<T> ResultExt<T> for RepoResult<T> {
+    fn none_on_unique_violation(self) -> RepoResult<Option<T>> {
         match self {
             Ok(value) => Ok(Some(value)),
             Err(err) if err.is_unique_violation() => Ok(None),
@@ -83,7 +82,7 @@ impl<T> ResultExt<T> for Result<T> {
         }
     }
 
-    fn false_on_unique_violation(self) -> Result<bool> {
+    fn false_on_unique_violation(self) -> RepoResult<bool> {
         match self {
             Ok(_) => Ok(true),
             Err(err) if err.is_unique_violation() => Ok(false),

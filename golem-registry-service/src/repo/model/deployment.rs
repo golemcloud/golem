@@ -22,9 +22,9 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
-pub enum DeployError {
-    #[error("Deployment concurrent revision creation")]
-    DeploymentConcurrentModification,
+pub enum DeployRepoError {
+    #[error("Concurrent modification")]
+    ConcurrentModification,
     #[error(
         "Deployment hash mismatch: requested hash: {requested_hash:?}, actual hash: {actual_hash:?}."
     )]

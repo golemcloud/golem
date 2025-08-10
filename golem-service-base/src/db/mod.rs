@@ -43,9 +43,17 @@ pub enum TxError<E: Display> {
     Business(E),
 }
 
+pub type TxResult<T, E> = Result<T, TxError<E>>;
+
 impl<E: Display> From<RepoError> for TxError<E> {
     fn from(value: RepoError) -> Self {
         TxError::Repo(value)
+    }
+}
+
+impl<E: Display> From<Error> for TxError<E> {
+    fn from(value: Error) -> Self {
+        TxError::Repo(value.into())
     }
 }
 
@@ -59,7 +67,7 @@ pub trait ToBusiness<T, E> {
         F: FnOnce() -> E;
 }
 
-impl<T, E> ToBusiness<T, E> for Result<T, TxError<E>>
+impl<T, E> ToBusiness<T, E> for TxResult<T, E>
 where
     E: Display,
 {
@@ -114,13 +122,13 @@ pub trait Pool: Debug + Sync {
         svc_name: &'static str,
         api_name: &'static str,
         f: F,
-    ) -> Result<R, TxError<E>>
+    ) -> TxResult<R, E>
     where
         R: Send,
         E: Display + Send,
         F: for<'f> FnOnce(
                 &'f mut <Self::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, Result<R, TxError<E>>>
+            ) -> BoxFuture<'f, TxResult<R, E>>
             + Send,
     {
         let mut tx = self.with_rw(svc_name, api_name).begin().await?;
