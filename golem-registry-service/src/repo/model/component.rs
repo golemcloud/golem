@@ -28,6 +28,14 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+pub enum ComponentRevisionRepoError {
+    #[error("Concurrent modification")]
+    ConcurrentModification,
+    #[error("Version already exists: {version}")]
+    VersionAlreadyExists { version: String },
+}
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, sqlx::Type)]
 #[sqlx(type_name = "integer")]

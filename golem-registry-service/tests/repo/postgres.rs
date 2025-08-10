@@ -149,7 +149,7 @@ async fn test_environment_update_concurrently(deps: &Deps) {
 }
 
 #[test]
-async fn test_component_create_and_get(deps: &Deps) {
+async fn test_component_stage(deps: &Deps) {
     crate::repo::common::test_component_stage(deps).await;
 }
 

@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::environment::{EnvironmentSharedQueries, EnvironmentSharedRepoImpl};
 use crate::repo::model::BindFields;
 use crate::repo::model::component::{
     ComponentExtRevisionRecord, ComponentFileRecord, ComponentRecord,
-    ComponentRevisionIdentityRecord, ComponentRevisionRecord,
+    ComponentRevisionIdentityRecord, ComponentRevisionRecord, ComponentRevisionRepoError,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -23,10 +24,13 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt, stream};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo::{RepoResult, ResultExt};
+use golem_service_base::db::{
+    LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi, ToBusiness, TxError, TxResult,
+};
+use golem_service_base::repo::{BusinessResult, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
+use std::fmt::Display;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -37,20 +41,20 @@ pub trait ComponentRepo: Send + Sync {
         environment_id: &Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
+    ) -> BusinessResult<ComponentExtRevisionRecord, ComponentRevisionRepoError>;
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: ComponentRevisionRecord,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
+    ) -> BusinessResult<ComponentExtRevisionRecord, ComponentRevisionRepoError>;
 
     async fn delete(
         &self,
         user_account_id: &Uuid,
         component_id: &Uuid,
         current_revision_id: i64,
-    ) -> RepoResult<bool>;
+    ) -> BusinessResult<(), ComponentRevisionRepoError>;
 
     async fn get_staged_by_id(
         &self,
@@ -150,7 +154,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         environment_id: &Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
+    ) -> BusinessResult<ComponentExtRevisionRecord, ComponentRevisionRepoError> {
         self.repo
             .create(environment_id, name, revision)
             .instrument(Self::span_name(environment_id, name))
@@ -161,7 +165,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         &self,
         current_revision_id: i64,
         revision: ComponentRevisionRecord,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
+    ) -> BusinessResult<ComponentExtRevisionRecord, ComponentRevisionRepoError> {
         let span = Self::span_id(&revision.component_id);
         self.repo
             .update(current_revision_id, revision)
@@ -174,7 +178,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         user_account_id: &Uuid,
         component_id: &Uuid,
         current_revision_id: i64,
-    ) -> RepoResult<bool> {
+    ) -> BusinessResult<(), ComponentRevisionRepoError> {
         self.repo
             .delete(user_account_id, component_id, current_revision_id)
             .instrument(Self::span_id(component_id))
@@ -287,13 +291,17 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
 
 pub struct DbComponentRepo<DBP: Pool> {
     db_pool: DBP,
+    environment: EnvironmentSharedRepoImpl<DBP>,
 }
 
 static METRICS_SVC_NAME: &str = "environment";
 
 impl<DBP: Pool> DbComponentRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
-        Self { db_pool }
+        Self {
+            db_pool: db_pool.clone(),
+            environment: EnvironmentSharedRepoImpl::new(db_pool),
+        }
     }
 
     pub fn logged(db_pool: DBP) -> LoggedComponentRepo<Self>
@@ -317,6 +325,20 @@ impl<DBP: Pool> DbComponentRepo<DBP> {
     {
         self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
     }
+
+    async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> TxResult<R, E>
+    where
+        R: Send,
+        E: Display + Send,
+        F: for<'f> FnOnce(
+                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+            ) -> BoxFuture<'f, TxResult<R, E>>
+            + Send,
+    {
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, api_name, f)
+            .await
+    }
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -327,7 +349,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         environment_id: &Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
+    ) -> BusinessResult<ComponentExtRevisionRecord, ComponentRevisionRepoError> {
         let opt_deleted_revision: Option<ComponentRevisionIdentityRecord> = self.with_ro("create - get opt deleted").fetch_optional_as(
             sqlx::query_as(indoc! { r#"
                 SELECT c.component_id, c.name, cr.revision_id, cr.revision_id, cr.version, cr.status, cr.hash
@@ -347,11 +369,13 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             return self.update(deleted_revision.revision_id, revision).await;
         }
 
+        let environment = self.environment.must_get_by_id(environment_id).await?;
+
         let environment_id = *environment_id;
         let name = name.to_owned();
         let revision = revision.ensure_first();
 
-        self.with_tx("create", |tx| {
+        self.with_tx_err("create", |tx| {
             async move {
                 tx.execute(
                     sqlx::query(indoc! { r#"
@@ -370,7 +394,13 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                 )
                 .await?;
 
-                let revision = Self::insert_revision(tx, revision).await?;
+                let revision = Self::insert_revision(
+                    tx,
+                    &environment.revision.environment_id,
+                    environment.revision.version_check,
+                    revision,
+                )
+                .await?;
 
                 Ok(ComponentExtRevisionRecord {
                     name,
@@ -381,36 +411,46 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .none_on_unique_violation()
+        .to_business_result_on_unique_violation(|| {
+            ComponentRevisionRepoError::ConcurrentModification
+        })
     }
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: ComponentRevisionRecord,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
-        let Some(_checked_component) = self
+    ) -> BusinessResult<ComponentExtRevisionRecord, ComponentRevisionRepoError> {
+        let Some(checked_current) = self
             .check_current_revision(&revision.component_id, current_revision_id)
             .await?
         else {
-            return Ok(None);
+            return Ok(Err(ComponentRevisionRepoError::ConcurrentModification));
         };
 
-        // TODO: if env requires check version name uniqueness (but comparing only to deployed ones!)
+        let environment = self
+            .environment
+            .must_get_by_id(&checked_current.environment_id)
+            .await?;
 
-        self.with_tx("update", |tx| {
+        self.with_tx_err("update", |tx| {
             async move {
-                let revision: ComponentRevisionRecord =
-                    Self::insert_revision(tx, revision.ensure_new(current_revision_id)).await?;
+                let revision: ComponentRevisionRecord = Self::insert_revision(
+                    tx,
+                    &environment.revision.environment_id,
+                    environment.revision.version_check,
+                    revision.ensure_new(current_revision_id),
+                )
+                .await?;
 
                 let ext = tx
                     .fetch_one(
                         sqlx::query(indoc! { r#"
-                        UPDATE components
-                        SET updated_at = $1, modified_by = $2, current_revision_id = $3
-                        WHERE component_id = $4
-                        RETURNING name, environment_id
-                    "#})
+                            UPDATE components
+                            SET updated_at = $1, modified_by = $2, current_revision_id = $3
+                            WHERE component_id = $4
+                            RETURNING name, environment_id
+                        "#})
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by)
                         .bind(revision.revision_id)
@@ -427,7 +467,9 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .none_on_unique_violation()
+        .to_business_result_on_unique_violation(|| {
+            ComponentRevisionRepoError::ConcurrentModification
+        })
     }
 
     async fn delete(
@@ -435,21 +477,23 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         user_account_id: &Uuid,
         component_id: &Uuid,
         current_revision_id: i64,
-    ) -> RepoResult<bool> {
+    ) -> BusinessResult<(), ComponentRevisionRepoError> {
         let user_account_id = *user_account_id;
         let component_id = *component_id;
 
-        let Some(_checked_env) = self
+        let Some(checked_current) = self
             .check_current_revision(&component_id, current_revision_id)
             .await?
         else {
-            return Ok(false);
+            return Ok(Err(ComponentRevisionRepoError::ConcurrentModification));
         };
 
-        self.with_tx("delete", |tx| {
+        self.with_tx_err("delete", |tx| {
             async move {
                 let revision: ComponentRevisionRecord = Self::insert_revision(
                     tx,
+                    &checked_current.environment_id,
+                    false,
                     ComponentRevisionRecord::deletion(
                         user_account_id,
                         component_id,
@@ -476,7 +520,9 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .false_on_unique_violation()
+        .to_business_result_on_unique_violation(|| {
+            ComponentRevisionRepoError::ConcurrentModification
+        })
     }
 
     async fn get_staged_by_id(
@@ -787,13 +833,22 @@ trait ComponentRepoInternal: ComponentRepo {
 
     async fn insert_revision(
         tx: &mut Self::Tx,
+        environment_id: &Uuid,
+        version_check: bool,
         revision: ComponentRevisionRecord,
-    ) -> RepoResult<ComponentRevisionRecord>;
+    ) -> TxResult<ComponentRevisionRecord, ComponentRevisionRepoError>;
 
     async fn insert_file(
         tx: &mut Self::Tx,
         file: ComponentFileRecord,
     ) -> RepoResult<ComponentFileRecord>;
+
+    async fn version_exists(
+        tx: &mut Self::Tx,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        version: &str,
+    ) -> RepoResult<bool>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -844,8 +899,26 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
 
     async fn insert_revision(
         tx: &mut Self::Tx,
+        environment_id: &Uuid,
+        version_check: bool,
         revision: ComponentRevisionRecord,
-    ) -> RepoResult<ComponentRevisionRecord> {
+    ) -> TxResult<ComponentRevisionRecord, ComponentRevisionRepoError> {
+        if version_check
+            && Self::version_exists(
+                tx,
+                environment_id,
+                &revision.component_id,
+                &revision.version,
+            )
+            .await?
+        {
+            return Err(TxError::Business(
+                ComponentRevisionRepoError::VersionAlreadyExists {
+                    version: revision.version.clone(),
+                },
+            ));
+        }
+
         let revision = revision.with_updated_hash();
         let files = revision.files;
 
@@ -922,5 +995,30 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 .bind(file.file_key)
                 .bind(file.file_permissions)
         ).await
+    }
+
+    async fn version_exists(
+        tx: &mut Self::Tx,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        version: &str,
+    ) -> RepoResult<bool> {
+        Ok(tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT 1
+                    FROM component_revisions r
+                    JOIN deployment_component_revisions dr
+                        ON dr.component_id = r.component_id AND dr.component_revision_id = r.revision_id
+                    WHERE dr.environment_id = $1 AND dr.component_id = $2 AND version = $3
+                    GROUP BY dr.component_id
+                    LIMIT 1
+                "#})
+                .bind(environment_id)
+                .bind(component_id)
+                .bind(version),
+            )
+            .await?
+            .is_some())
     }
 }
