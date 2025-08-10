@@ -32,8 +32,8 @@ pub enum DeployRepoError {
         requested_hash: SqlBlake3Hash,
         actual_hash: SqlBlake3Hash,
     },
-    #[error("Deployment version check failed, requested version: {version}")]
-    DeploymentVersionCheckFailed { version: String },
+    #[error("Deployment version already exists: {version}")]
+    VersionAlreadyExists { version: String },
     #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]
     ValidationErrors(Vec<DeployValidationError>),
     #[error("Deployment not found by revision: {revision_id}")]

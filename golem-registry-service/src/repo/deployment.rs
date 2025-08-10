@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use super::model::BindFields;
+use crate::repo::environment::{
+    EnvironmentExtRevisionRecord, EnvironmentSharedQueries, EnvironmentSharedRepoImpl,
+};
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::deployment::{
@@ -254,13 +257,17 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
 pub struct DbDeploymentRepo<DBP: Pool> {
     db_pool: DBP,
+    environment: EnvironmentSharedRepoImpl<DBP>,
 }
 
 static METRICS_SVC_NAME: &str = "deployment";
 
 impl<DBP: Pool> DbDeploymentRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
-        Self { db_pool }
+        Self {
+            db_pool: db_pool.clone(),
+            environment: EnvironmentSharedRepoImpl::new(db_pool),
+        }
     }
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
@@ -341,7 +348,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 WHERE environment_id = $1
                 ORDER BY revision_id
             "#})
-                .bind(environment_id),
+                    .bind(environment_id),
             )
             .await
     }
@@ -429,6 +436,15 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
         let revision_id = current_staged_deployment_revision_id.unwrap_or(-1) + 1;
 
+        let environment = self.environment.must_get_by_id(environment_id).await?;
+        if environment.revision.version_check
+            && self.version_exists(environment_id, &version).await?
+        {
+            return Ok(Err(DeployRepoError::VersionAlreadyExists {
+                version,
+            }));
+        }
+
         let user_account_id = *user_account_id;
         let environment_id = *environment_id;
 
@@ -446,7 +462,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
                 let staged_deployment = Self::get_staged_deployment(tx, &environment_id).await?;
 
-                let validation_errors = Self::validate_stage(&staged_deployment);
+                let validation_errors = Self::validate_stage(&environment, &staged_deployment);
                 if !validation_errors.is_empty() {
                     return Err(TxError::Business(DeployRepoError::ValidationErrors(
                         validation_errors,
@@ -610,39 +626,6 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: &Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
 
-    fn validate_stage(stage: &DeploymentIdentity) -> Vec<DeployValidationError> {
-        let http_api_definition_ids = stage
-            .http_api_definitions
-            .iter()
-            .map(|d| d.http_api_definition_id)
-            .collect::<HashSet<_>>();
-
-        let mut errors = Vec::new();
-
-        for http_api_deployment in &stage.http_api_deployments {
-            let mut missing_http_api_definition_ids = Vec::new();
-
-            for definition_id in &http_api_deployment.http_api_definitions {
-                if !http_api_definition_ids.contains(definition_id) {
-                    missing_http_api_definition_ids.push(*definition_id);
-                }
-            }
-
-            if !missing_http_api_definition_ids.is_empty() {
-                errors.push(
-                    DeployValidationError::HttpApiDeploymentMissingHttpApiDefinition {
-                        http_api_deployment_id: http_api_deployment.http_api_deployment_id,
-                        missing_http_api_definition_ids: vec![],
-                    },
-                )
-            }
-        }
-
-        // TODO: validate api def constraints on components
-
-        errors
-    }
-
     async fn create_deployment_relations(
         tx: &mut Self::Tx,
         environment_id: &Uuid,
@@ -696,6 +679,46 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: &Uuid,
         revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
+
+    async fn version_exists(&self, environment_id: &Uuid, version: &str) -> RepoResult<bool>;
+
+    fn validate_stage(
+        environment: &EnvironmentExtRevisionRecord,
+        stage: &DeploymentIdentity,
+    ) -> Vec<DeployValidationError> {
+        let http_api_definition_ids = stage
+            .http_api_definitions
+            .iter()
+            .map(|d| d.http_api_definition_id)
+            .collect::<HashSet<_>>();
+
+        let mut errors = Vec::new();
+
+        for http_api_deployment in &stage.http_api_deployments {
+            let mut missing_http_api_definition_ids = Vec::new();
+
+            for definition_id in &http_api_deployment.http_api_definitions {
+                if !http_api_definition_ids.contains(definition_id) {
+                    missing_http_api_definition_ids.push(*definition_id);
+                }
+            }
+
+            if !missing_http_api_definition_ids.is_empty() {
+                errors.push(
+                    DeployValidationError::HttpApiDeploymentMissingHttpApiDefinition {
+                        http_api_deployment_id: http_api_deployment.http_api_deployment_id,
+                        missing_http_api_definition_ids: vec![],
+                    },
+                )
+            }
+        }
+
+        if environment.revision.compatibility_check {
+            // TODO: validate api def constraints on components
+        }
+
+        errors
+    }
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -1105,5 +1128,21 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         }
 
         Ok(deployments)
+    }
+
+    async fn version_exists(&self, environment_id: &Uuid, version: &str) -> RepoResult<bool> {
+        Ok(self
+            .with_ro("version_exists")
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT 1 FROM deployment_revisions
+                    WHERE environment_id = $1 AND version = $2
+                    LIMIT 1
+                "#})
+                .bind(environment_id)
+                .bind(version),
+            )
+            .await?
+            .is_some())
     }
 }

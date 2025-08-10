@@ -452,3 +452,57 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
             .bind(revision.security_overrides)).await
     }
 }
+
+#[async_trait]
+pub(super) trait EnvironmentSharedQueries<DBP: Pool>: Send + Sync {
+    type Db: Database;
+    type Tx: LabelledPoolTransaction;
+
+    async fn must_get_by_id(
+        &self,
+        environment_id: &Uuid,
+    ) -> RepoResult<EnvironmentExtRevisionRecord>;
+}
+
+pub(super) struct EnvironmentSharedRepoImpl<DBP: Pool> {
+    db_pool: DBP,
+}
+
+impl<DBP: Pool> EnvironmentSharedRepoImpl<DBP> {
+    pub fn new(db_pool: DBP) -> Self {
+        Self { db_pool }
+    }
+
+    fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
+        self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
+    }
+}
+
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
+#[async_trait]
+impl EnvironmentSharedQueries<PostgresPool> for EnvironmentSharedRepoImpl<PostgresPool> {
+    type Db = <PostgresPool as Pool>::Db;
+    type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
+
+    async fn must_get_by_id(
+        &self,
+        environment_id: &Uuid,
+    ) -> RepoResult<EnvironmentExtRevisionRecord> {
+        self.with_ro("must_get_by_id")
+            .fetch_one_as(
+                sqlx::query_as(indoc! { r"
+                    SELECT
+                        e.name,e.application_id,
+                        r.environment_id, r.revision_id, r.hash,
+                        r.created_at, r.created_by, r.deleted,
+                        r.compatibility_check, r.version_check, r.security_overrides
+                    FROM environments e
+                    JOIN environment_revisions r
+                        ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
+                    WHERE e.environment_id = $1 AND e.deleted_at IS NULL
+                 "})
+                .bind(environment_id),
+            )
+            .await
+    }
+}
