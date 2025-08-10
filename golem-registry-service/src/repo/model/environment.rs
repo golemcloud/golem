@@ -33,7 +33,7 @@ pub struct EnvironmentRecord {
 pub struct EnvironmentRevisionRecord {
     pub environment_id: Uuid,
     pub revision_id: i64,
-    pub hash: SqlBlake3Hash,
+    pub hash: SqlBlake3Hash, // NOTE: set by repo during insert
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
     pub compatibility_check: bool,

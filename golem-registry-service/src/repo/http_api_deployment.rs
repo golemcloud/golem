@@ -419,7 +419,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                         VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, 0)
                     "# })
                     .bind(revision.http_api_deployment_id)
-                    .bind(&environment_id)
+                    .bind(environment_id)
                     .bind(&host)
                     .bind(&subdomain)
                     .bind(&revision.audit.created_at)
@@ -997,7 +997,7 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
                 }
             }
 
-            if missing_definitions.len() > 0 {
+            if !missing_definitions.is_empty() {
                 return Err(TxError::Business(
                     HttpApiDeploymentRevisionRepoError::MissingDefinitions {
                         missing_definitions,
