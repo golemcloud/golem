@@ -161,7 +161,7 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
     async fn delete(&self, token_id: &Uuid) -> RepoResult<()> {
         self.with_rw("delete")
             .execute(
-                sqlx::query(indoc! {r#"
+                sqlx::query(indoc! { r#"
                     DELETE FROM tokens WHERE token_id = $1
                 "#})
                 .bind(token_id),
