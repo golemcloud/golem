@@ -324,7 +324,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
             Self::insert_revision(tx, revision).await?;
 
             tx.execute(
-                sqlx::query(indoc! {r#"
+                sqlx::query(indoc! { r#"
                     UPDATE applications
                     SET deleted_at = $1, modified_by = $2
                     WHERE application_id = $3
@@ -361,7 +361,7 @@ impl ApplicationRepoInternal for DbApplicationRepo<PostgresPool> {
         revision: ApplicationRevisionRecord,
     ) -> RepoResult<()> {
         tx.execute(
-            sqlx::query(indoc! {r#"
+            sqlx::query(indoc! { r#"
                 INSERT INTO application_revisions (application_id, revision_id, name, account_id, created_at, created_by, deleted)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#})
