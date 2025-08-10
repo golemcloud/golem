@@ -28,7 +28,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{
     LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi, ToBusiness, TxError, TxResult,
 };
-use golem_service_base::repo::{BusinessResult, RepoResult, ResultExt};
+use golem_service_base::repo::{BusinessResult, RepoResult};
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::fmt::Display;
@@ -326,17 +326,6 @@ impl<DBP: Pool> DbHttpApiDeploymentRepo<DBP> {
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
-    }
-
-    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> RepoResult<R>
-    where
-        R: Send,
-        F: for<'f> FnOnce(
-                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, RepoResult<R>>
-            + Send,
-    {
-        self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
     }
 
     async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> TxResult<R, E>
