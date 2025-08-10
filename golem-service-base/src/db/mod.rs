@@ -93,7 +93,7 @@ where
 }
 
 #[async_trait]
-pub trait Pool: Debug + Sync {
+pub trait Pool: Debug + Sync + Clone {
     type LabelledApi: LabelledPoolApi;
     type QueryResult;
     type Db: Database + Sync;
@@ -112,7 +112,7 @@ pub trait Pool: Debug + Sync {
     /// rollback, this is ensured by only sharing a mut ref (given rollback and commit consumes the transaction).
     ///
     /// One reason to prefer using this function compared to direct usage of transactions is that
-    /// this style enforces calling labelled rollback on any error. In direct style, rollback is usually
+    /// this style enforces calling labeled rollback on any error. In direct style, rollback is usually
     /// only called on the sqlx::Transaction drop, unless explicitly handled by the code, which means
     /// that those rollbacks are not visible for metrics.
     ///
