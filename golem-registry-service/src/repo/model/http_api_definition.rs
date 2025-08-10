@@ -19,6 +19,14 @@ use golem_common::model::diff::Hashable;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+pub enum HttpApiDefinitionRevisionRepoError {
+    #[error("Concurrent modification")]
+    ConcurrentModification,
+    #[error("Version already exists: {version}")]
+    VersionAlreadyExists { version: String },
+}
+
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDefinitionRecord {
     pub http_api_definition_id: Uuid,
