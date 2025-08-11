@@ -12,34 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::application::ApplicationId;
-use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
-
-newtype_uuid!(
-    EnvironmentId,
-    golem_api_grpc::proto::golem::common::EnvironmentId
-);
-
-declare_transparent_newtypes! {
-    pub struct EnvironmentName(String);
-}
-
-declare_structs! {
-    pub struct Environment {
-        pub id: EnvironmentId,
-        pub application_id: ApplicationId,
-        pub name: EnvironmentName,
-    }
-
-    pub struct EnvironmentHash {
-
-    }
-
-    pub struct EnvironmentDeploymentPlan {
-
-    }
-
-    pub struct EnvironmentSummary {
-
-    }
-}
+pub mod component_compilation;
+pub mod component_object_store;
+pub mod component_transformer_plugin_caller;
+pub mod component;

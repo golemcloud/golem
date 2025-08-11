@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::limit::v1::{
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::RetryConfig;
-use golem_common::model::{AccountId, ComponentId, WorkerId};
+use golem_common::model::{ComponentId, WorkerId};
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use std::fmt::Display;
@@ -33,6 +33,7 @@ use tonic::transport::Channel;
 use tonic::Status;
 use tracing::info;
 use uuid::Uuid;
+use golem_common::model::account::AccountId;
 
 #[async_trait]
 pub trait LimitService: Send + Sync {

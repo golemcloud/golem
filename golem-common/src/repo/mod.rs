@@ -12,12 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod component;
-mod plugin;
 mod plugin_installation;
 
-pub use self::component::*;
-pub use self::plugin::*;
 pub use self::plugin_installation::*;
 use sqlx::query_builder::Separated;
 use sqlx::{Database, QueryBuilder};

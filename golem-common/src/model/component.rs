@@ -15,45 +15,41 @@
 use super::component_metadata::ComponentMetadata;
 use super::{ComponentType, InitialComponentFile, PluginInstallationId, ProjectId};
 use crate::base_model::{ComponentId, ComponentVersion};
-use crate::model::AccountId;
+use crate::declare_transparent_newtypes;
+use crate::model::account::AccountId;
 use bincode::{Decode, Encode};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
+use super::environment::EnvironmentId;
+
+declare_transparent_newtypes! {
+    // TODO: Add validations (non-empty, no "/", no " ", ...)
+    pub struct ComponentName(pub String);
+}
+
+impl Display for ComponentName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 pub struct ComponentOwner {
-    pub project_id: ProjectId,
     pub account_id: AccountId,
+    pub environment_id: EnvironmentId,
 }
 
 impl Display for ComponentOwner {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.account_id, self.project_id)
+        write!(f, "{}:{}", self.account_id, self.environment_id)
     }
 }
-
-impl FromStr for ComponentOwner {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 2 {
-            return Err(format!("Invalid namespace: {s}"));
-        }
-
-        Ok(Self {
-            project_id: ProjectId::try_from(parts[1])?,
-            account_id: AccountId::from(parts[0]),
-        })
-    }
-}
-
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
 )]
@@ -84,33 +80,6 @@ pub struct PluginInstallation {
     pub registered: bool,
     pub priority: i32,
     pub parameters: HashMap<String, String>,
-}
-
-// TODO: Add validations (non-empty, no "/", no " ", ...)
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-pub struct ComponentName(pub String);
-
-impl Display for ComponentName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct Component {
-    pub versioned_component_id: VersionedComponentId,
-    pub component_name: ComponentName,
-    pub component_size: u64,
-    pub metadata: ComponentMetadata,
-    pub project_id: ProjectId,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub component_type: ComponentType,
-    pub files: Vec<InitialComponentFile>,
-    pub installed_plugins: Vec<PluginInstallation>,
-    pub env: HashMap<String, String>,
 }
 
 #[cfg(feature = "protobuf")]

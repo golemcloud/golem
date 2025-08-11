@@ -16,7 +16,7 @@ use super::ApiResult;
 use super::model::UpdateComponentRequest;
 use golem_common::api::Page;
 use golem_common::model::auth::AuthCtx;
-use golem_common::model::component::Component;
+use crate::model::component::Component;
 use golem_common::model::{ComponentId, Revision};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;

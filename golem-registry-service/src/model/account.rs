@@ -13,15 +13,14 @@
 // limitations under the License.
 
 use golem_common::base_model::PlanId;
-use golem_common::model::AccountId;
 use poem_openapi_derive::Object;
 use serde::{Deserialize, Serialize};
+use golem_common::model::account::AccountId;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct Account {
-    // TODO: change AccountId to UUID in common
     pub id: AccountId,
     pub name: String,
     pub email: String,

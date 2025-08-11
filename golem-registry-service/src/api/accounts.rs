@@ -14,9 +14,9 @@
 
 use super::ApiResult;
 use golem_common::api::Page;
-use golem_common::model::account::{Account, AccountData, Plan};
+use golem_common::model::account::{Account, AccountData, AccountId, Plan};
 use golem_common::model::auth::AuthCtx;
-use golem_common::model::{AccountId, Empty};
+use golem_common::model::{Empty};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;

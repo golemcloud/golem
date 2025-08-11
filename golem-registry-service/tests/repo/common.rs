@@ -25,7 +25,7 @@ use golem_registry_service::repo::model::audit::{
     AuditFields, DeletableRevisionAuditFields, RevisionAuditFields,
 };
 use golem_registry_service::repo::model::component::{
-    ComponentFileRecord, ComponentRevisionRecord, ComponentRevisionRepoError, ComponentStatus,
+    ComponentFileRecord, ComponentRevisionRecord, ComponentRevisionRepoError,
 };
 use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
@@ -462,7 +462,6 @@ pub async fn test_component_stage(deps: &Deps) {
         }
         .into(),
         env: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
-        status: ComponentStatus::Created,
         object_store_key: "xys".to_string(),
         binary_hash: blake3::hash("test".as_bytes()).into(),
         transformed_object_store_key: Some("xys-transformed".to_string()),

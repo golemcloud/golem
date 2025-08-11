@@ -13,27 +13,23 @@
 // limitations under the License.
 
 pub mod auth;
+pub mod component;
 
-use applying::Apply;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
-use golem_common::model::component::{ComponentOwner, VersionedComponentId};
-use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::plugin::{PluginInstallation, PluginInstallationAction};
+use golem_common::model::plugin::PluginInstallationAction;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
-    ComponentType, ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter,
-    WorkerId,
+    ComponentVersion, ScanCursor, Timestamp, WorkerFilter, WorkerId,
 };
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
 use golem_wasm_rpc_derive::IntoValue;
-use poem_openapi::{Enum, NewType, Object, Union};
+use poem_openapi::{Enum, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
-use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -41,16 +37,6 @@ use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 pub struct WorkerCreationResponse {
     pub worker_id: WorkerId,
     pub component_version: ComponentVersion,
-}
-
-// TODO: Add validations (non-empty, no "/", no " ", ...)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
-pub struct ComponentName(pub String);
-
-impl Display for ComponentName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
@@ -418,84 +404,6 @@ impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::Index
 #[serde(rename_all = "camelCase")]
 pub struct InvokeResult {
     pub result: Option<ValueAndType>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Component {
-    pub owner: ComponentOwner,
-    pub versioned_component_id: VersionedComponentId,
-    pub component_name: ComponentName,
-    pub component_size: u64,
-    pub metadata: ComponentMetadata,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub component_type: ComponentType,
-    pub files: Vec<InitialComponentFile>,
-    pub installed_plugins: Vec<PluginInstallation>,
-    pub env: HashMap<String, String>,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::Component,
-    ) -> Result<Self, Self::Error> {
-        let account_id = value.account_id.ok_or("missing account_id")?.into();
-
-        let project_id = value
-            .project_id
-            .ok_or("missing project_id")?
-            .try_into()
-            .map_err(|_| "Failed to convert project_id".to_string())?;
-
-        let created_at = value
-            .created_at
-            .ok_or("missing created_at")?
-            .apply(SystemTime::try_from)
-            .map_err(|_| "Failed to convert timestamp".to_string())?
-            .into();
-
-        let component_type = value
-            .component_type
-            .ok_or("missing component_type")?
-            .try_into()
-            .map_err(|_| "Failed to convert component_type".to_string())?;
-
-        let files = value
-            .files
-            .into_iter()
-            .map(|f| f.try_into())
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let installed_plugins = value
-            .installed_plugins
-            .into_iter()
-            .map(|p| p.try_into())
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(Self {
-            owner: ComponentOwner {
-                account_id,
-                project_id,
-            },
-            versioned_component_id: value
-                .versioned_component_id
-                .ok_or("Missing versioned_component_id")?
-                .try_into()?,
-            component_name: ComponentName(value.component_name.clone()),
-            component_size: value.component_size,
-            metadata: value
-                .metadata
-                .clone()
-                .ok_or("Missing metadata")?
-                .try_into()?,
-            created_at,
-            component_type,
-            files,
-            installed_plugins,
-            env: value.env,
-        })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]

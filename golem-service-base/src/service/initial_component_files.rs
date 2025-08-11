@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use std::{path::PathBuf, sync::Arc};
-
 use crate::replayable_stream::{ContentHash, ReplayableStream};
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::{InitialComponentFileKey, ProjectId};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::InitialComponentFileKey;
 use tracing::debug;
+use anyhow::{anyhow, Context, Error};
 
 const INITIAL_COMPONENT_FILES_LABEL: &str = "initial_component_files";
 
@@ -36,9 +37,9 @@ impl InitialComponentFilesService {
 
     pub async fn exists(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         key: &InitialComponentFileKey,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Error> {
         let path = PathBuf::from(key.0.clone());
 
         let metadata = self
@@ -47,38 +48,39 @@ impl InitialComponentFilesService {
                 INITIAL_COMPONENT_FILES_LABEL,
                 "exists",
                 BlobStorageNamespace::InitialComponentFiles {
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
                 &path,
             )
             .await
-            .map_err(|err| format!("Failed to get metadata: {err}"))?;
+            .context("Failed getting metadata")?;
 
         Ok(metadata.is_some())
     }
 
     pub async fn get(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         key: &InitialComponentFileKey,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         self.blob_storage
             .get_stream(
                 INITIAL_COMPONENT_FILES_LABEL,
                 "get",
                 BlobStorageNamespace::InitialComponentFiles {
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
                 &PathBuf::from(key.0.clone()),
             )
             .await
+            .context("Failed getting data stream")
     }
 
     pub async fn put_if_not_exists(
         &self,
-        project_id: &ProjectId,
-        data: impl ReplayableStream<Item = Result<Bytes, String>, Error = String>,
-    ) -> Result<InitialComponentFileKey, String> {
+        environment_id: &EnvironmentId,
+        data: impl ReplayableStream<Item = Result<Bytes, Error>, Error = Error>,
+    ) -> Result<InitialComponentFileKey, Error> {
         let hash = data.content_hash().await?;
 
         let key = PathBuf::from(hash.clone());
@@ -89,12 +91,12 @@ impl InitialComponentFilesService {
                 INITIAL_COMPONENT_FILES_LABEL,
                 "get_metadata",
                 BlobStorageNamespace::InitialComponentFiles {
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
                 &key,
             )
             .await
-            .map_err(|err| format!("Failed to get metadata: {err}"))?;
+            .context("Failed getting metadata")?;
 
         if metadata.is_none() {
             debug!("Storing initial component file with hash: {}", hash);
@@ -104,12 +106,13 @@ impl InitialComponentFilesService {
                     INITIAL_COMPONENT_FILES_LABEL,
                     "put",
                     BlobStorageNamespace::InitialComponentFiles {
-                        project_id: project_id.clone(),
+                        environment_id: environment_id.clone(),
                     },
                     &key,
                     &data.erased(),
                 )
-                .await?;
+                .await
+                .context("Failed storing blob storage data")?;
         };
         Ok(InitialComponentFileKey(hash))
     }

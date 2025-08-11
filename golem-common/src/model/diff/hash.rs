@@ -15,45 +15,41 @@
 use crate::model::diff::ser::{to_json_with_mode, SerializeMode, ToSerializableWithMode};
 use crate::model::diff::Diffable;
 use serde::ser::SerializeStruct;
-use serde::{Serialize, Serializer};
-use std::fmt::{Display, Formatter};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt::{self, Display, Formatter};
 use std::sync::OnceLock;
+use serde::de::Visitor;
 
 #[derive(Clone, Copy, std::hash::Hash, PartialEq, Eq, Debug)]
-pub struct Hash {
-    hash: blake3::Hash,
-}
+pub struct Hash(blake3::Hash);
 
 impl Hash {
     pub fn new(hash: blake3::Hash) -> Self {
-        Self { hash }
+        Self(hash)
     }
 
     pub fn empty() -> Self {
-        Self {
-            // TODO: const?
-            hash: blake3::hash(&[]),
-        }
+        Self(blake3::hash(&[]))
     }
 
     pub fn as_blake3_hash(&self) -> &blake3::Hash {
-        &self.hash
+        &self.0
     }
 
     pub fn into_blake3(self) -> blake3::Hash {
-        self.hash
+        self.0
     }
 }
 
 impl Display for Hash {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.hash.to_hex().as_str())
+        f.write_str(self.0.to_hex().as_str())
     }
 }
 
 impl From<Hash> for blake3::Hash {
     fn from(hash: Hash) -> Self {
-        hash.hash
+        hash.0
     }
 }
 
@@ -68,7 +64,36 @@ impl Serialize for Hash {
     where
         S: Serializer,
     {
-        serializer.serialize_str(self.hash.to_hex().as_str())
+        // TODO: base64 would be more common and compact
+        serializer.serialize_str(self.0.to_hex().as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Hash {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct HashVisitor;
+
+        impl<'de> Visitor<'de> for HashVisitor {
+            type Value = Hash;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a hex string representing a hash")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Hash, E>
+            where
+                E: serde::de::Error,
+            {
+                blake3::Hash::from_hex(v)
+                    .map(Hash)
+                    .map_err(|e| E::custom(format!("invalid BLAKE3 hash: {}", e)))
+            }
+        }
+
+        deserializer.deserialize_str(HashVisitor)
     }
 }
 
@@ -198,11 +223,11 @@ impl<V: Hashable + Serialize> ToSerializableWithMode for HashOf<V> {
     fn to_serializable(&self, mode: SerializeMode) -> serde_json::Value {
         match mode {
             SerializeMode::HashOnly => {
-                serde_json::Value::String(self.hash().hash.to_hex().to_string())
+                serde_json::Value::String(self.hash().0.to_hex().to_string())
             }
             SerializeMode::ValueIfAvailable => match &self.0 {
                 HashOfKind::Precalculated(hash) => {
-                    serde_json::Value::String(hash.hash.to_hex().to_string())
+                    serde_json::Value::String(hash.0.to_hex().to_string())
                 }
                 HashOfKind::FromValue {
                     value,
@@ -221,4 +246,80 @@ pub fn hash_from_serialized_value<T: Serialize>(value: &T) -> Hash {
             .as_bytes(),
     )
     .into()
+}
+
+#[cfg(feature = "poem")]
+mod poem {
+    use super::Hash;
+    use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromMultipartField, ParseFromParameter, ParseResult, ToHeader, ToJSON};
+    use poem::web::Field;
+    use http::HeaderValue;
+    use serde_json::Value;
+
+    impl poem_openapi::types::Type for Hash {
+        const IS_REQUIRED: bool = true;
+        type RawValueType = Self;
+        type RawElementValueType = Self;
+
+        fn name() -> std::borrow::Cow<'static, str> {
+            std::borrow::Cow::from("string_hash")
+        }
+
+        fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+            poem_openapi::registry::MetaSchemaRef::Inline(Box::new(
+                poem_openapi::registry::MetaSchema::new_with_format("string", "hash"),
+            ))
+        }
+
+        fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+            Some(self)
+        }
+
+        fn raw_element_iter<'a>(
+            &'a self,
+        ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+            Box::new(self.as_raw_value().into_iter())
+        }
+    }
+
+    impl ParseFromJSON for Hash {
+        fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
+            let value = value.unwrap_or_default();
+            if let Value::String(value) = value {
+                Ok(Hash(blake3::Hash::from_hex(value)?))
+            } else {
+                Err(ParseError::expected_type(value))
+            }
+        }
+    }
+
+    impl ParseFromParameter for Hash {
+        fn parse_from_parameter(value: &str) -> ParseResult<Self> {
+            Ok(Hash(blake3::Hash::from_hex(value)?))
+        }
+    }
+
+    impl ParseFromMultipartField for Hash {
+        async fn parse_from_multipart(field: Option<Field>) -> ParseResult<Self> {
+            match field {
+                Some(field) => {
+                    let value = field.text().await?;
+                    Ok(Hash(blake3::Hash::from_hex(value)?))
+                },
+                None => Err(ParseError::expected_input()),
+            }
+        }
+    }
+
+    impl ToJSON for Hash {
+        fn to_json(&self) -> Option<Value> {
+            Some(Value::String(self.to_string()))
+        }
+    }
+
+    impl ToHeader for Hash {
+        fn to_header(&self) -> Option<HeaderValue> {
+            HeaderValue::from_str(&self.to_string()).ok()
+        }
+    }
 }

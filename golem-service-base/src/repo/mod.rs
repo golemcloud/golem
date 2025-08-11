@@ -15,8 +15,6 @@
 use golem_common::SafeDisplay;
 use sqlx::error::ErrorKind;
 
-pub mod plugin_installation;
-
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum RepoError {
     #[error("Internal repository error: {0}")]

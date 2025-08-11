@@ -28,7 +28,7 @@ pub trait ReplayableStream: Send + Sync {
         &self,
     ) -> impl Future<Output = Result<impl Stream<Item = Self::Item> + Send + 'static, Self::Error>> + Send;
 
-    fn length(&self) -> impl Future<Output = Result<u64, String>> + Send;
+    fn length(&self) -> impl Future<Output = Result<u64, Self::Error>> + Send;
 
     fn erased(self) -> internal::Erased<Self>
     where
@@ -79,7 +79,7 @@ impl<T: ReplayableStream + ?Sized> ReplayableStream for &'_ T {
         <T as ReplayableStream>::make_stream(*self)
     }
 
-    fn length(&self) -> impl Future<Output = Result<u64, String>> + Send {
+    fn length(&self) -> impl Future<Output = Result<u64, Self::Error>> + Send {
         <T as ReplayableStream>::length(*self)
     }
 }
@@ -93,7 +93,7 @@ pub trait ErasedReplayableStream: Send + Sync {
         &self,
     ) -> BoxFuture<'_, Result<BoxStream<'static, Self::Item>, Self::Error>>;
 
-    fn length_erased(&self) -> BoxFuture<'_, Result<u64, String>>;
+    fn length_erased(&self) -> BoxFuture<'_, Result<u64, Self::Error>>;
 }
 
 pub type BoxReplayableStream<'a, Item, Error> =
@@ -112,7 +112,7 @@ impl<Item: 'static, Error> ReplayableStream
         self.make_stream_erased().await
     }
 
-    async fn length(&self) -> Result<u64, String> {
+    async fn length(&self) -> Result<u64, Self::Error> {
         self.length_erased().await
     }
 }
@@ -128,7 +128,7 @@ impl<Item: 'static, Error> ReplayableStream for BoxReplayableStream<'_, Item, Er
         self.make_stream_erased().await
     }
 
-    async fn length(&self) -> Result<u64, String> {
+    async fn length(&self) -> Result<u64, Self::Error> {
         self.length_erased().await
     }
 }
@@ -144,7 +144,7 @@ impl ReplayableStream for Bytes {
         Ok(Box::pin(futures::stream::once(async move { Ok(data) })))
     }
 
-    async fn length(&self) -> Result<u64, String> {
+    async fn length(&self) -> Result<u64, Self::Error> {
         Ok(self.len() as u64)
     }
 }
@@ -204,7 +204,7 @@ pub mod internal {
             Box::pin(async move { self.0.make_stream().await.map(|s| s.boxed()) })
         }
 
-        fn length_erased(&self) -> BoxFuture<'_, Result<u64, String>> {
+        fn length_erased(&self) -> BoxFuture<'_, Result<u64, Self::Error>> {
             Box::pin(self.0.length())
         }
     }
@@ -230,7 +230,7 @@ pub mod internal {
             Ok(stream.map(self.map_item.clone()))
         }
 
-        async fn length(&self) -> Result<u64, String> {
+        async fn length(&self) -> Result<u64, Self::Error> {
             self.inner.length().await
         }
     }
@@ -254,8 +254,8 @@ pub mod internal {
             self.inner.make_stream().await.map_err(self.map_err.clone())
         }
 
-        async fn length(&self) -> Result<u64, String> {
-            self.inner.length().await
+        async fn length(&self) -> Result<u64, Self::Error> {
+            self.inner.length().await.map_err(self.map_err.clone())
         }
     }
 }

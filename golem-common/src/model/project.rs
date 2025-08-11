@@ -40,7 +40,7 @@ mod protobuf {
             } = value.data.ok_or("Missing data")?;
             Ok(Self {
                 id: value.id.ok_or("Missing id")?.try_into()?,
-                owner_account_id: owner_account_id.ok_or("Missing owner_account_id")?.into(),
+                owner_account_id: owner_account_id.ok_or("Missing owner_account_id")?.try_into()?,
                 name,
                 description,
             })

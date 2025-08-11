@@ -19,13 +19,14 @@ use golem_api_grpc::proto::golem::component::v1::component_error::Error;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plugin::PluginDefinition;
-use golem_common::model::{AccountId, PluginId, RetryConfig};
+use golem_common::model::{PluginId, RetryConfig};
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use std::fmt::Display;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
+use golem_common::model::account::AccountId;
 
 #[async_trait]
 pub trait PluginServiceClient: Send + Sync {

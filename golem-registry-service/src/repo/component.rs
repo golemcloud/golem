@@ -341,7 +341,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     ) -> BusinessResult<ComponentExtRevisionRecord, ComponentRevisionRepoError> {
         let opt_deleted_revision: Option<ComponentRevisionIdentityRecord> = self.with_ro("create - get opt deleted").fetch_optional_as(
             sqlx::query_as(indoc! { r#"
-                SELECT c.component_id, c.name, cr.revision_id, cr.revision_id, cr.version, cr.status, cr.hash
+                SELECT c.component_id, c.name, cr.revision_id, cr.revision_id, cr.version, cr.hash
                 FROM components c
                 JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
                 WHERE c.environment_id = $1 AND c.name = $2 AND c.deleted_at IS NOT NULL
@@ -524,7 +524,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.component_type, cr.size, cr.metadata, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -551,7 +551,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.component_type, cr.size, cr.metadata, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -578,7 +578,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.component_type, cr.size, cr.metadata, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -611,7 +611,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.component_type, cr.size, cr.metadata, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -646,7 +646,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.component_type, cr.size, cr.metadata, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -675,7 +675,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.component_type, cr.size, cr.metadata, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -703,7 +703,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.component_type, cr.size, cr.metadata, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -730,7 +730,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.component_type, cr.size, cr.metadata, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -766,7 +766,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.env, cr.status,
+                           cr.component_type, cr.size, cr.metadata, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -917,12 +917,12 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                     INSERT INTO component_revisions
                     (component_id, revision_id, version, hash,
                         created_at, created_by, deleted,
-                        component_type,size, metadata, env, status,
+                        component_type,size, metadata, env,
                         object_store_key, binary_hash, transformed_object_store_key)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                     RETURNING component_id, revision_id, version, hash,
                         created_at, created_by, deleted,
-                        component_type,size, metadata, env, status,
+                        component_type,size, metadata, env,
                         object_store_key, binary_hash, transformed_object_store_key
                 "# })
                 .bind(revision.component_id)
@@ -934,7 +934,6 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 .bind(revision.size)
                 .bind(revision.metadata)
                 .bind(revision.env)
-                .bind(revision.status)
                 .bind(revision.object_store_key)
                 .bind(revision.binary_hash)
                 .bind(revision.transformed_object_store_key),

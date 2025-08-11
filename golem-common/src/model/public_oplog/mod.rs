@@ -25,7 +25,6 @@ use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{
     DurableFunctionType, LogLevel, OplogIndex, PersistenceLevel, WorkerResourceId,
 };
-use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
 use crate::model::{
     AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
@@ -209,21 +208,6 @@ pub struct PluginInstallationDescription {
     pub plugin_version: String,
     pub registered: bool,
     pub parameters: BTreeMap<String, String>,
-}
-
-impl PluginInstallationDescription {
-    pub fn from_definition_and_installation(
-        definition: PluginDefinition,
-        installation: PluginInstallation,
-    ) -> Self {
-        Self {
-            installation_id: installation.id,
-            plugin_name: definition.name,
-            plugin_version: definition.version,
-            parameters: installation.parameters.into_iter().collect(),
-            registered: !definition.deleted,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
