@@ -548,6 +548,14 @@ pub async fn test_component_stage(deps: &Deps) {
         env: Default::default(),
         binary_hash: SqlBlake3Hash::empty(),
         transformed_object_store_key: "xys-transformed".to_string(),
+        original_files: revision_0
+            .original_files
+            .iter()
+            .map(|file| ComponentFileRecord {
+                revision_id: 1,
+                ..file.clone()
+            })
+            .collect(),
         files: revision_0
             .files
             .iter()
@@ -589,6 +597,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let other_component_name = "test-component-other";
     let other_component_revision_0 = ComponentRevisionRecord {
         component_id: other_component_id,
+        original_files: Default::default(),
         files: Default::default(),
         ..revision_0.clone()
     }
@@ -641,6 +650,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let revision_after_delete = ComponentRevisionRecord {
         component_id: new_repo_uuid(),
+        original_files: Default::default(),
         files: Default::default(),
         ..revision_0.clone()
     };
