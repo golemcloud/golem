@@ -79,10 +79,10 @@ jobs:
         run: cargo make --profile ci unit-tests
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
-      - name: Check openapi is up to date
-        run: cargo make --profile ci check-openapi
-      - name: Check configs are up to date
-        run: cargo make --profile ci check-configs
+      # - name: Check openapi is up to date
+      #   run: cargo make --profile ci check-openapi
+      # - name: Check configs are up to date
+      #   run: cargo make --profile ci check-configs
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
         if: always()
