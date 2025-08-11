@@ -16,13 +16,14 @@ use crate::Tracing;
 use crate::repo::Deps;
 use golem_common::config::DbSqliteConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
+use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
 use golem_registry_service::repo::http_api_definition::DbHttpApiDefinitionRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
-use golem_registry_service::repo::plan::DbPlanRepository;
+use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_service_base::db;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
@@ -80,9 +81,10 @@ async fn db_pool(_tracing: &Tracing) -> SqliteDb {
 async fn deps(db: &SqliteDb) -> Deps {
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(db.pool.clone())),
+        account_usage_repo: Box::new(DbAccountUsageRepo::logged(db.pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
-        plan_repo: Box::new(DbPlanRepository::logged(db.pool.clone())),
+        plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
         component_repo: Box::new(DbComponentRepo::logged(db.pool.clone())),
         http_api_definition_repo: Box::new(DbHttpApiDefinitionRepo::logged(db.pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
@@ -152,4 +154,9 @@ async fn test_http_api_deployment_stage_no_sub(deps: &Deps) {
 #[test]
 async fn test_http_api_deployment_stage_has_sub(deps: &Deps) {
     crate::repo::common::test_http_api_deployment_stage_has_sub(deps).await;
+}
+
+#[test]
+async fn test_account_usage(deps: &Deps) {
+    crate::repo::common::test_account_usage(deps).await;
 }

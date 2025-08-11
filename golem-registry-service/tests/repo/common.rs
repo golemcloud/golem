@@ -20,12 +20,14 @@ use golem_common::model::ComponentFilePermissions;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_registry_service::repo::account::AccountRecord;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
+use golem_registry_service::repo::model::account_usage::{UsageTracking, UsageType};
 use golem_registry_service::repo::model::audit::{
     AuditFields, DeletableRevisionAuditFields, RevisionAuditFields,
 };
 use golem_registry_service::repo::model::component::{
     ComponentFileRecord, ComponentRevisionRecord, ComponentRevisionRepoError, ComponentStatus,
 };
+use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_definition::{
     HttpApiDefinitionRevisionRecord, HttpApiDefinitionRevisionRepoError,
@@ -36,6 +38,7 @@ use golem_registry_service::repo::model::http_api_deployment::{
 use golem_registry_service::repo::model::new_repo_uuid;
 use std::collections::BTreeMap;
 use std::default::Default;
+use strum::IntoEnumIterator;
 // Common test cases -------------------------------------------------------------------------------
 
 pub async fn test_create_and_get_account(deps: &Deps) {
@@ -1053,4 +1056,173 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
     };
     let_assert!(Ok(created_after_delete) = created_after_delete);
     assert!(created_after_delete.revision == revision_after_delete);
+}
+
+pub async fn test_account_usage(deps: &Deps) {
+    let user = deps.create_account().await;
+    let now = SqlDateTime::now();
+
+    let mut usage = deps
+        .account_usage_repo
+        .get(&user.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+
+    for usage_type in UsageType::iter() {
+        let limit: i64 = match usage_type {
+            UsageType::TotalAppCount => 3,
+            UsageType::TotalEnvCount => 10,
+            UsageType::TotalComponentCount => 15,
+            UsageType::TotalWorkerCount => 20,
+            UsageType::TotalComponentStorageBytes => 1000,
+            UsageType::MonthlyGasLimit => 2000,
+            UsageType::MonthlyComponentUploadLimitBytes => 3000,
+        };
+        check!(
+            usage.plan.limit(usage_type) == Ok(Some(limit)),
+            "{usage_type:?}"
+        );
+        check!(usage.usage(usage_type) == 0, "{usage_type:?}");
+        assert!(usage.add_checked(usage_type, Some(1)).unwrap());
+        check!(usage.increase(usage_type) == 1, "{usage_type:?}");
+    }
+
+    let increased_usage = usage;
+
+    {
+        deps.account_usage_repo.add(&increased_usage).await.unwrap();
+        let usage = deps
+            .account_usage_repo
+            .get(&user.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        for usage_type in UsageType::iter() {
+            if usage_type.tracking() == UsageTracking::Stats {
+                check!(usage.usage(usage_type) == 1, "{usage_type:?}");
+            } else {
+                check!(usage.usage(usage_type) == 0, "{usage_type:?}");
+            }
+            check!(usage.increase(usage_type) == 0, "{usage_type:?}");
+        }
+    }
+
+    {
+        deps.account_usage_repo.rollback(&increased_usage).await.unwrap();
+        let usage = deps
+            .account_usage_repo
+            .get(&user.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        for usage_type in UsageType::iter() {
+            check!(usage.usage(usage_type) == 0, "{usage_type:?}");
+            check!(usage.increase(usage_type) == 0, "{usage_type:?}");
+        }
+    }
+
+    {
+        deps.account_usage_repo.add(&increased_usage).await.unwrap();
+        deps.account_usage_repo.add(&increased_usage).await.unwrap();
+        let usage = deps
+            .account_usage_repo
+            .get(&user.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+
+        for usage_type in UsageType::iter() {
+            if usage_type.tracking() == UsageTracking::Stats {
+                check!(usage.usage(usage_type) == 2, "{usage_type:?}");
+            } else {
+                check!(usage.usage(usage_type) == 0, "{usage_type:?}");
+            }
+            check!(usage.increase(usage_type) == 0, "{usage_type:?}");
+        }
+    }
+
+    {
+        let mut usage = deps
+            .account_usage_repo
+            .get(&user.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+
+        for usage_type in UsageType::iter() {
+            check!(!usage.add_checked(usage_type, Some(1000000)).unwrap());
+        }
+    }
+
+    {
+        let app = deps
+            .application_repo
+            .ensure(&user.account_id, &user.account_id, "test-app")
+            .await
+            .unwrap();
+        let env = deps
+            .environment_repo
+            .create(
+                &app.application_id,
+                "env",
+                EnvironmentRevisionRecord {
+                    environment_id: new_repo_uuid(),
+                    revision_id: 0,
+                    hash: SqlBlake3Hash::empty(),
+                    audit: DeletableRevisionAuditFields::new(user.account_id),
+                    compatibility_check: false,
+                    version_check: false,
+                    security_overrides: false,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let _component = deps
+            .component_repo
+            .create(
+                &env.revision.environment_id,
+                "component",
+                ComponentRevisionRecord {
+                    component_id: Default::default(),
+                    revision_id: 0,
+                    version: "".to_string(),
+                    hash: SqlBlake3Hash::empty(),
+                    audit: DeletableRevisionAuditFields::new(user.account_id),
+                    component_type: 0,
+                    size: 0,
+                    metadata: ComponentMetadata {
+                        exports: vec![],
+                        producers: vec![],
+                        memories: vec![],
+                        binary_wit: Default::default(),
+                        root_package_name: None,
+                        root_package_version: None,
+                        dynamic_linking: Default::default(),
+                        agent_types: vec![],
+                    }
+                    .into(),
+                    env: Default::default(),
+                    status: ComponentStatus::Created,
+                    object_store_key: "".to_string(),
+                    binary_hash: SqlBlake3Hash::empty(),
+                    transformed_object_store_key: None,
+                    files: vec![],
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        let usage = deps
+            .account_usage_repo
+            .get(&user.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        check!(usage.usage(UsageType::TotalAppCount) == 1);
+        check!(usage.usage(UsageType::TotalEnvCount) == 1);
+        check!(usage.usage(UsageType::TotalComponentCount) == 1);
+    }
 }

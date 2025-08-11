@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::environment::{EnvironmentSharedQueries, EnvironmentSharedRepoImpl};
+use crate::repo::environment::{EnvironmentSharedRepo, EnvironmentSharedRepoImpl};
 use crate::repo::model::BindFields;
 use crate::repo::model::http_api_definition::{
     HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRecord,
@@ -296,7 +296,7 @@ pub struct DbHttpApiDefinitionRepo<DBP: Pool> {
     environment: EnvironmentSharedRepoImpl<DBP>,
 }
 
-static METRICS_SVC_NAME: &str = "environment";
+static METRICS_SVC_NAME: &str = "http_api_definition";
 
 impl<DBP: Pool> DbHttpApiDefinitionRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {

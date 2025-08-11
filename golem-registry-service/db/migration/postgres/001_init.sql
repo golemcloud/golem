@@ -27,10 +27,9 @@ CREATE TABLE plan_usage_limits
 (
     plan_id    UUID   NOT NULL,
     usage_type INT    NOT NULL,
-    usage_key  TEXT   NOT NULL,
     value      BIGINT NOT NULL,
     CONSTRAINT plan_usage_limits_pk
-        PRIMARY KEY (plan_id, usage_type, usage_key),
+        PRIMARY KEY (plan_id, usage_type),
     CONSTRAINT plan_usage_limits_plans
         FOREIGN KEY (plan_id) REFERENCES plans,
     CONSTRAINT plan_usage_limits_usage_types
@@ -135,10 +134,11 @@ CREATE INDEX oauth2_web_flow_states_token_idx
 
 CREATE TABLE account_usage_stats
 (
-    account_id UUID   NOT NULL,
-    usage_type INT    NOT NULL,
-    usage_key  TEXT   NOT NULL,
-    value      BIGINT NOT NULL,
+    account_id UUID      NOT NULL,
+    usage_type INT       NOT NULL,
+    usage_key  TEXT      NOT NULL,
+    value      BIGINT    NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
     CONSTRAINT account_usage_stats_pk
         PRIMARY KEY (account_id, usage_type, usage_key),
     CONSTRAINT account_usage_stats_accounts_fk

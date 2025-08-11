@@ -130,7 +130,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                     FROM accounts
                     WHERE account_id = $1 AND deleted_at IS NULL
                 "#})
-                .bind(account_id),
+                    .bind(account_id),
             )
             .await
     }
@@ -143,7 +143,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                     FROM accounts
                     WHERE email = $1 AND deleted_at IS NULL
                 "#})
-                .bind(email),
+                    .bind(email),
             )
             .await
     }

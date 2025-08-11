@@ -14,6 +14,7 @@
 
 // Repos
 pub mod account;
+pub mod account_usage;
 pub mod application;
 pub mod component;
 pub mod deployment;

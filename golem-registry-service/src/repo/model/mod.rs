@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod account;
+pub mod account_usage;
 pub mod application;
 pub mod audit;
 pub mod component;

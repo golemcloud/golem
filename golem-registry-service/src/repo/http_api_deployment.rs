@@ -310,7 +310,7 @@ pub struct DbHttpApiDeploymentRepo<DBP: Pool> {
     db_pool: DBP,
 }
 
-static METRICS_SVC_NAME: &str = "environment";
+static METRICS_SVC_NAME: &str = "http_api_deployment_repo";
 
 impl<DBP: Pool> DbHttpApiDeploymentRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {

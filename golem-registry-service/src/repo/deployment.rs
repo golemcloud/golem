@@ -14,7 +14,7 @@
 
 use super::model::BindFields;
 use crate::repo::environment::{
-    EnvironmentExtRevisionRecord, EnvironmentSharedQueries, EnvironmentSharedRepoImpl,
+    EnvironmentExtRevisionRecord, EnvironmentSharedRepo, EnvironmentSharedRepoImpl,
 };
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;

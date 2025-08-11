@@ -454,7 +454,7 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
 }
 
 #[async_trait]
-pub(super) trait EnvironmentSharedQueries<DBP: Pool>: Send + Sync {
+pub(super) trait EnvironmentSharedRepo<DBP: Pool>: Send + Sync {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
@@ -480,7 +480,7 @@ impl<DBP: Pool> EnvironmentSharedRepoImpl<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
-impl EnvironmentSharedQueries<PostgresPool> for EnvironmentSharedRepoImpl<PostgresPool> {
+impl EnvironmentSharedRepo<PostgresPool> for EnvironmentSharedRepoImpl<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 

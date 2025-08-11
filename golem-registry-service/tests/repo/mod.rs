@@ -14,12 +14,14 @@
 
 use crate::Tracing;
 use golem_registry_service::repo::account::AccountRepo;
+use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
 use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
 use golem_registry_service::repo::http_api_definition::HttpApiDefinitionRepo;
 use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
 use golem_registry_service::repo::model::account::AccountRecord;
+use golem_registry_service::repo::model::account_usage::UsageType;
 use golem_registry_service::repo::model::application::ApplicationRecord;
 use golem_registry_service::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use golem_registry_service::repo::model::environment::{
@@ -27,7 +29,7 @@ use golem_registry_service::repo::model::environment::{
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
-use golem_registry_service::repo::plan::PlanRepository;
+use golem_registry_service::repo::plan::PlanRepo;
 use std::str::FromStr;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;
@@ -43,9 +45,10 @@ sequential_suite!(sqlite);
 
 pub struct Deps {
     pub account_repo: Box<dyn AccountRepo>,
+    pub account_usage_repo: Box<dyn AccountUsageRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Box<dyn EnvironmentRepo>,
-    pub plan_repo: Box<dyn PlanRepository>,
+    pub plan_repo: Box<dyn PlanRepo>,
     pub component_repo: Box<dyn ComponentRepo>,
     pub http_api_definition_repo: Box<dyn HttpApiDefinitionRepo>,
     pub http_api_deployment_repo: Box<dyn HttpApiDeploymentRepo>,
@@ -55,10 +58,20 @@ pub struct Deps {
 impl Deps {
     pub async fn setup(&self) {
         self.plan_repo
-            .create(PlanRecord {
-                plan_id: self.test_plan_id(),
-                name: "MAIN_TEST_PLAN".to_string(),
-            })
+            .create_or_update(
+                PlanRecord {
+                    plan_id: self.test_plan_id(),
+                    name: "MAIN_TEST_PLAN".to_string(),
+                    limits: Default::default(),
+                }
+                .with_limit(UsageType::TotalAppCount, 3)
+                .with_limit(UsageType::TotalEnvCount, 10)
+                .with_limit(UsageType::TotalComponentCount, 15)
+                .with_limit(UsageType::TotalWorkerCount, 20)
+                .with_limit(UsageType::TotalComponentStorageBytes, 1000)
+                .with_limit(UsageType::MonthlyGasLimit, 2000)
+                .with_limit(UsageType::MonthlyComponentUploadLimitBytes, 3000),
+            )
             .await
             .unwrap();
     }

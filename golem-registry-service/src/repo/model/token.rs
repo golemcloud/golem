@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::model::datetime::SqlDateTime;
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
@@ -21,8 +22,8 @@ pub struct TokenRecord {
     pub token_id: Uuid,
     pub secret: Uuid,
     pub account_id: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: SqlDateTime,
+    pub expires_at: SqlDateTime,
 }
 
 impl Debug for TokenRecord {
