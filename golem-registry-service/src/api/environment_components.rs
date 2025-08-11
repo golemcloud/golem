@@ -14,10 +14,10 @@
 
 use super::ApiResult;
 use super::model::CreateComponentRequest;
+use crate::model::component::Component;
 use golem_common::api::Page;
 use golem_common::model::auth::AuthCtx;
-use crate::model::component::Component;
-use golem_common::model::component::{ComponentName};
+use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;

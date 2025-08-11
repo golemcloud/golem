@@ -45,6 +45,7 @@ pub mod trim_date;
 pub mod worker;
 
 pub use crate::base_model::*;
+use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{IndexedResourceKey, TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
@@ -67,8 +68,6 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
-use crate::model::account::AccountId;
-use self::diff::Hash;
 
 #[cfg(feature = "poem")]
 pub trait PoemTypeRequirements:

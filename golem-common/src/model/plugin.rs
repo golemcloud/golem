@@ -12,17 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::component::ComponentOwner;
 use super::{Empty, PluginId, ProjectId};
-use crate::model::{
-    ComponentId, ComponentVersion, PluginInstallationId, PoemTypeRequirements,
-};
 use crate::model::account::AccountId;
+use crate::model::{ComponentId, ComponentVersion, PluginInstallationId};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
-use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
@@ -291,8 +287,8 @@ mod poem {
 mod protobuf {
     use super::{
         AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
-        OplogProcessorDefinition, PluginDefinition, PluginScope,
-        PluginTypeSpecificDefinition, PluginWasmFileKey,
+        OplogProcessorDefinition, PluginDefinition, PluginScope, PluginTypeSpecificDefinition,
+        PluginWasmFileKey,
     };
 
     impl From<PluginTypeSpecificDefinition>

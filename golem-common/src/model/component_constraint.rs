@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ComponentId;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{FunctionName, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
-use super::ComponentId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentConstraints {

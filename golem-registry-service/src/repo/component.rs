@@ -535,7 +535,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.with_component_files(revision).await?)),
+            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
             None => Ok(None),
         }
     }
@@ -563,7 +563,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.with_component_files(revision).await?)),
+            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
             None => Ok(None),
         }
     }
@@ -595,7 +595,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.with_component_files(revision).await?)),
+            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
             None => Ok(None),
         }
     }
@@ -629,7 +629,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.with_component_files(revision).await?)),
+            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
             None => Ok(None),
         }
     }
@@ -658,7 +658,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.with_component_files(revision).await?)),
+            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
             None => Ok(None),
         }
     }
@@ -688,7 +688,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.with_component_files(revision).await?)),
+            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
             None => Ok(None),
         }
     }
@@ -715,7 +715,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         stream::iter(revisions)
-            .then(|revision| self.with_component_files(revision))
+            .then(|revision| self.enrich_component(revision))
             .try_collect()
             .await
     }
@@ -750,7 +750,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         stream::iter(revisions)
-            .then(|revision| self.with_component_files(revision))
+            .then(|revision| self.enrich_component(revision))
             .try_collect()
             .await
     }
@@ -782,7 +782,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         stream::iter(revisions)
-            .then(|revision| self.with_component_files(revision))
+            .then(|revision| self.enrich_component(revision))
             .try_collect()
             .await
     }
@@ -805,14 +805,26 @@ trait ComponentRepoInternal: ComponentRepo {
         revision_id: i64,
     ) -> RepoResult<Vec<ComponentFileRecord>>;
 
+    async fn get_transformed_component_files(
+        &self,
+        component_id: &Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<ComponentFileRecord>>;
+
     // TODO: create a variant the accepts multiple component records, and which batches
     //       queries (e.g. with "IN")
-    async fn with_component_files(
+    async fn enrich_component(
         &self,
         mut component: ComponentExtRevisionRecord,
     ) -> RepoResult<ComponentExtRevisionRecord> {
-        component.revision.files = self
+        component.revision.original_files = self
             .get_component_files(
+                &component.revision.component_id,
+                component.revision.revision_id,
+            )
+            .await?;
+        component.revision.files = self
+            .get_transformed_component_files(
                 &component.revision.component_id,
                 component.revision.revision_id,
             )
@@ -877,6 +889,26 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                     SELECT component_id, revision_id, file_path, hash,
                            created_at, created_by, file_key, file_permissions
                     FROM component_files
+                    WHERE component_id = $1 AND revision_id = $2
+                    ORDER BY file_path
+                "#})
+                .bind(component_id)
+                .bind(revision_id),
+            )
+            .await
+    }
+
+    async fn get_transformed_component_files(
+        &self,
+        component_id: &Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<ComponentFileRecord>> {
+        self.with_ro("get_transformed_component_files")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT component_id, revision_id, file_path, hash,
+                           created_at, created_by, file_key, file_permissions
+                    FROM transformed_component_files
                     WHERE component_id = $1 AND revision_id = $2
                     ORDER BY file_path
                 "#})

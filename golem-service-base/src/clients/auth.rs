@@ -16,24 +16,24 @@ use super::authorised_request;
 use super::RemoteServiceConfig;
 use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
 use golem_api_grpc::proto::golem::auth::v1::{
-    authorize_account_action_response, authorize_project_action_response, get_account_response,
-    AuthorizeAccountActionRequest, AuthorizeProjectActionRequest, GetAccountRequest,
+    authorize_account_action_response, get_account_response, AuthorizeAccountActionRequest,
+    GetAccountRequest,
 };
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerExecutionError,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::auth::{AccountAction, ProjectAction};
-use golem_common::model::auth::{AuthCtx};
-use golem_common::model::{ProjectId, RetryConfig};
+use golem_common::model::account::AccountId;
+use golem_common::model::auth::AccountAction;
+use golem_common::model::auth::AuthCtx;
+use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use std::fmt::Display;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
-use golem_common::model::account::AccountId;
 
 #[derive(Clone)]
 pub struct AuthService {
@@ -81,7 +81,9 @@ impl AuthService {
                         .into_inner();
                     match response.result {
                         None => Err("Empty response".to_string().into()),
-                        Some(get_account_response::Result::Success(payload)) => Ok(payload.account_id.unwrap().try_into()?),
+                        Some(get_account_response::Result::Success(payload)) => {
+                            Ok(payload.account_id.unwrap().try_into()?)
+                        }
                         Some(get_account_response::Result::Error(error)) => Err(error.into()),
                     }
                 })

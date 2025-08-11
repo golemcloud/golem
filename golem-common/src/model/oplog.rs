@@ -13,11 +13,11 @@
 // limitations under the License.
 
 pub use crate::base_model::OplogIndex;
+use crate::model::account::AccountId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
-    WorkerInvocation,
+    ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId, WorkerInvocation,
 };
 use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;
@@ -34,7 +34,6 @@ use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use uuid::Uuid;
-use crate::model::account::AccountId;
 
 pub struct OplogIndexRange {
     current: u64,

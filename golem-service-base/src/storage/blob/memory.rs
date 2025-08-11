@@ -14,6 +14,7 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use anyhow::Error;
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -24,7 +25,6 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
 };
-use anyhow::Error;
 
 #[derive(Debug)]
 pub struct InMemoryBlobStorage {
@@ -98,7 +98,8 @@ impl BlobStorage for InMemoryBlobStorage {
                 directory.get(&key).map(|entry| {
                     let data = entry.data.clone();
                     let stream = tokio_stream::once(Ok(data));
-                    let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send>> = Box::pin(stream);
+                    let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send>> =
+                        Box::pin(stream);
                     boxed
                 })
             })
@@ -182,9 +183,7 @@ impl BlobStorage for InMemoryBlobStorage {
             .to_string();
 
         let stream = stream.make_stream_erased().await?;
-        let data = stream
-            .try_collect::<Vec<_>>()
-            .await?;
+        let data = stream.try_collect::<Vec<_>>().await?;
         let entry = Entry {
             data: Bytes::from(data.concat()),
             metadata: BlobMetadata {

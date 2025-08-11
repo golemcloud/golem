@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::Error;
 use assert2::check;
 use async_trait::async_trait;
 use aws_config::meta::region::RegionProviderChain;
@@ -43,7 +44,6 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
 use testcontainers_modules::minio::MinIO;
 use uuid::Uuid;
-use anyhow::Error;
 
 #[async_trait]
 trait GetBlobStorage: Debug {

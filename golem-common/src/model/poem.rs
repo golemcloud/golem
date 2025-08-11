@@ -15,7 +15,6 @@
 use crate::model::{
     ComponentFilePath, ComponentFilePathWithPermissionsList, IdempotencyKey, Timestamp,
 };
-use crate::model::account::AccountId;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use serde_json::Value;
@@ -184,12 +183,12 @@ impl poem_openapi::types::ParseFromMultipartField for ComponentFilePathWithPermi
 mod tests {
     use test_r::test;
 
+    use crate::model::diff::Hash;
     use crate::model::{
         ComponentFilePath, ComponentFilePermissions, Empty, IdempotencyKey, InitialComponentFile,
         InitialComponentFileKey, WorkerStatus,
     };
     use poem_openapi::types::ToJSON;
-    use crate::model::diff::Hash;
 
     #[test]
     fn worker_status_serialization_poem_serde_equivalence() {

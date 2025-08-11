@@ -15,6 +15,7 @@
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use anyhow::Error;
 use async_trait::async_trait;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::error::SdkError;
@@ -37,8 +38,6 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use tracing::info;
-use anyhow::Error;
-use std::fmt::format;
 
 #[derive(Debug)]
 pub struct S3BlobStorage {
@@ -388,9 +387,7 @@ impl BlobStorage for S3BlobStorage {
         match result {
             Ok(response) => {
                 let stream = futures::stream::unfold(response.body, |mut body| async {
-                    body.next()
-                        .await
-                        .map(|x| (x.map_err(|e| e.into()), body))
+                    body.next().await.map(|x| (x.map_err(|e| e.into()), body))
                 });
                 Ok(Some(Box::pin(stream)))
             }
@@ -533,10 +530,12 @@ impl BlobStorage for S3BlobStorage {
                                     as u64,
                             ),
                         })),
-                        Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                            HeadObjectError::NotFound(_) => Ok(None),
-                            err => Err(err.into()),
-                        },
+                        Err(SdkError::ServiceError(service_error)) => {
+                            match service_error.into_err() {
+                                HeadObjectError::NotFound(_) => Ok(None),
+                                err => Err(err.into()),
+                            }
+                        }
                         Err(err) => Err(err.into()),
                     }
                 }
@@ -829,11 +828,9 @@ impl BlobStorage for S3BlobStorage {
             .await?
             .iter()
             .flat_map(|obj| {
-                obj.key.as_ref().map(|k| {
-                    ObjectIdentifier::builder()
-                        .key(k)
-                        .build()
-                })
+                obj.key
+                    .as_ref()
+                    .map(|k| ObjectIdentifier::builder().key(k).build())
             })
             .collect::<Result<Vec<_>, _>>()?;
         let has_entries = !to_delete.is_empty();
@@ -930,10 +927,12 @@ impl BlobStorage for S3BlobStorage {
                     .await;
                     match dir_marker_head_result {
                         Ok(_) => Ok(ExistsResult::Directory),
-                        Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                            HeadObjectError::NotFound(_) => Ok(ExistsResult::DoesNotExist),
-                            err => Err(err.into()),
-                        },
+                        Err(SdkError::ServiceError(service_error)) => {
+                            match service_error.into_err() {
+                                HeadObjectError::NotFound(_) => Ok(ExistsResult::DoesNotExist),
+                                err => Err(err.into()),
+                            }
+                        }
                         Err(err) => Err(err.into()),
                     }
                 }
@@ -982,6 +981,7 @@ impl BlobStorage for S3BlobStorage {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum SdkErrorOrCustomError<T> {
     SdkError(aws_sdk_s3::error::SdkError<T>),
     CustomError(anyhow::Error),
@@ -989,11 +989,12 @@ enum SdkErrorOrCustomError<T> {
 
 impl<T> SdkErrorOrCustomError<T> {
     fn erase(self) -> anyhow::Error
-        where T: std::error::Error + Send + Sync + 'static
+    where
+        T: std::error::Error + Send + Sync + 'static,
     {
         match self {
             Self::CustomError(inner) => inner.context("from CustomError"),
-            Self::SdkError(inner) => anyhow::Error::new(inner).context("from SdkError")
+            Self::SdkError(inner) => anyhow::Error::new(inner).context("from SdkError"),
         }
     }
 

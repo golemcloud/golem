@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use crate::replayable_stream::ErasedReplayableStream;
+use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use futures::stream::BoxStream;
+use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentId, Timestamp, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
-use anyhow::{anyhow, Error};
-use golem_common::model::account::AccountId;
 
 pub mod fs;
 pub mod memory;
@@ -334,7 +334,9 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         path: &Path,
     ) -> Result<Option<T>, Error> {
         match self.get_raw(namespace, path).await? {
-            Some(data) => Ok(Some(deserialize(&data).map_err(|e| anyhow!(e).context("Failed deserializing blob storage data"))?)),
+            Some(data) => Ok(Some(deserialize(&data).map_err(|e| {
+                anyhow!(e).context("Failed deserializing blob storage data")
+            })?)),
             None => Ok(None),
         }
     }
@@ -345,7 +347,13 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         path: &Path,
         data: &T,
     ) -> Result<(), Error> {
-        self.put_raw(namespace, path, &serialize(data).map_err(|e| anyhow!(e).context("Failed serializing blob storage data"))?).await
+        self.put_raw(
+            namespace,
+            path,
+            &serialize(data)
+                .map_err(|e| anyhow!(e).context("Failed serializing blob storage data"))?,
+        )
+        .await
     }
 }
 

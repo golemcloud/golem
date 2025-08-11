@@ -308,6 +308,26 @@ CREATE TABLE component_files
         FOREIGN KEY (component_id, revision_id) REFERENCES component_revisions
 );
 
+CREATE TABLE transformed_component_files
+(
+    component_id     UUID      NOT NULL,
+    revision_id      BIGINT    NOT NULL,
+    file_path        TEXT      NOT NULL,
+
+    hash             BYTEA     NOT NULL,
+
+    created_at       TIMESTAMP NOT NULL,
+    created_by       UUID      NOT NULL,
+
+    file_key         TEXT      NOT NULL,
+    file_permissions TEXT      NOT NULL,
+
+    CONSTRAINT component_files_pk
+        PRIMARY KEY (component_id, revision_id, file_path),
+    CONSTRAINT component_files_components_fk
+        FOREIGN KEY (component_id, revision_id) REFERENCES component_revisions
+);
+
 CREATE TABLE deployment_revisions
 (
     environment_id UUID      NOT NULL,

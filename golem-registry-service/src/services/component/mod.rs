@@ -12,71 +12,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod utils;
 pub mod error;
+mod utils;
 
 pub use self::error::ComponentError;
-use async_trait::async_trait;
-use async_zip::tokio::read::seek::ZipFileReader;
-use async_zip::ZipEntry;
-use bytes::Bytes;
-use futures::stream::BoxStream;
-use futures::TryStreamExt;
+use super::component_compilation::ComponentCompilationService;
+use super::component_object_store::ComponentObjectStore;
+use super::component_transformer_plugin_caller::ComponentTransformerPluginCaller;
+use crate::model::component::PluginInstallation;
+use crate::model::component::{Component, InitialComponentFilesArchiveAndPermissions};
+use crate::repo::component::ComponentRepo;
+use crate::repo::model::component::{ComponentRevisionRecord, ComponentRevisionRepoError};
+use anyhow::{Context, anyhow};
+use golem_common::model::InitialComponentFile;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
-use golem_common::model::component::{ComponentName, ComponentOwner};
-use golem_common::model::component::VersionedComponentId;
-use golem_common::model::component_constraint::{ComponentConstraints, FunctionConstraints};
-use golem_common::model::component_constraint::FunctionSignature;
+use golem_common::model::component::ComponentName;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
-use golem_common::model::plugin::{
-    AppPluginDefinition, LibraryPluginDefinition, PluginInstallationUpdateWithId,
-    PluginTypeSpecificDefinition, PluginUninstallation,
-};
-use crate::model::component::PluginInstallation;
-use golem_common::model::plugin::{
-    PluginInstallationAction, PluginInstallationCreation,
-    PluginInstallationUpdate,
-};
-use golem_common::model::InitialComponentFile;
-use golem_common::model::ProjectId;
+use golem_common::model::diff::Hash;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
-use golem_common::model::{ComponentId, ComponentType, ComponentVersion, PluginInstallationId};
-use golem_common::widen_infallible;
+use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::clients::limit::LimitService;
-use golem_service_base::replayable_stream::ReplayableStream;
-use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use golem_wasm_ast::analysis::AnalysedType;
-use rib::FunctionDictionary;
-use std::collections::{BTreeMap, HashMap};
 use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::vec;
-use tap::TapFallible;
-use tracing::{error, info, info_span};
-use tracing_futures::Instrument;
-use crate::repo::component::ComponentRepo;
-use super::component_object_store::ComponentObjectStore;
-use super::component_compilation::ComponentCompilationService;
-use super::component_transformer_plugin_caller::ComponentTransformerPluginCaller;
-use crate::model::component::{Component, ConflictReport, ConflictingFunction, InitialComponentFilesArchiveAndPermissions, ParameterTypeConflict, ReturnTypeConflict};
-use golem_common::model::environment::EnvironmentId;
-use crate::repo::model::component::{ComponentRecord, ComponentRevisionRecord, ComponentRevisionRepoError};
-use anyhow::{anyhow, Context};
-use golem_common::model::diff::Hash;
-use golem_common::model::account::AccountId;
+use tracing::info;
 
 pub struct ComponentService {
     component_repo: Arc<dyn ComponentRepo>,
     object_store: Arc<ComponentObjectStore>,
     component_compilation: Arc<dyn ComponentCompilationService>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
-    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-    transformer_plugin_caller: Arc<dyn ComponentTransformerPluginCaller>,
-    limit_service: Arc<dyn LimitService>,
+    _plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+    _transformer_plugin_caller: Arc<dyn ComponentTransformerPluginCaller>,
+    _limit_service: Arc<dyn LimitService>,
 }
 
 impl ComponentService {
@@ -94,9 +69,9 @@ impl ComponentService {
             object_store,
             component_compilation,
             initial_component_files_service,
-            plugin_wasm_files_service,
-            transformer_plugin_caller,
-            limit_service,
+            _plugin_wasm_files_service: plugin_wasm_files_service,
+            _transformer_plugin_caller: transformer_plugin_caller,
+            _limit_service: limit_service,
         }
     }
 
@@ -112,20 +87,21 @@ impl ComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         agent_types: Vec<AgentType>,
-        actor: &AccountId
+        actor: &AccountId,
     ) -> Result<Component, ComponentError> {
         info!(environment_id = %environment_id, "Create component");
 
         self.component_repo
             .get_staged_by_name(&environment_id.0, &component_name.0)
             .await?
-            .map_or(Ok(()), |rec| Err(ComponentError::AlreadyExists(ComponentId(rec.revision.component_id))))?;
+            .map_or(Ok(()), |rec| {
+                Err(ComponentError::AlreadyExists(ComponentId(
+                    rec.revision.component_id,
+                )))
+            })?;
 
         let uploaded_files = match files {
-            Some(files) => {
-                self.upload_component_files(&environment_id, files)
-                    .await?
-            }
+            Some(files) => self.upload_component_files(environment_id, files).await?,
             None => vec![],
         };
 
@@ -140,7 +116,7 @@ impl ComponentService {
             dynamic_linking,
             env,
             agent_types,
-            actor
+            actor,
         )
         .await
     }
@@ -164,12 +140,16 @@ impl ComponentService {
         self.component_repo
             .get_staged_by_name(&environment_id.0, &component_name.0)
             .await?
-            .map_or(Ok(()), |rec| Err(ComponentError::AlreadyExists(ComponentId(rec.revision.component_id))))?;
+            .map_or(Ok(()), |rec| {
+                Err(ComponentError::AlreadyExists(ComponentId(
+                    rec.revision.component_id,
+                )))
+            })?;
 
         for file in &files {
             let exists = self
                 .initial_component_files_service
-                .exists(&environment_id, &file.key)
+                .exists(environment_id, &file.key)
                 .await
                 .map_err(|e| anyhow!(e).context("Error checking if file exists"))?;
 
@@ -191,7 +171,7 @@ impl ComponentService {
             dynamic_linking,
             env,
             agent_types,
-            actor
+            actor,
         )
         .await
     }
@@ -206,15 +186,12 @@ impl ComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         agent_types: Vec<AgentType>,
-        actor: &AccountId
+        actor: &AccountId,
     ) -> Result<Component, ComponentError> {
         info!(environment_id = %environment_id, "Update component");
 
         let uploaded_files = match files {
-            Some(files) => Some(
-                self.upload_component_files(&environment_id, files)
-                    .await?,
-            ),
+            Some(files) => Some(self.upload_component_files(environment_id, files).await?),
             None => None,
         };
 
@@ -227,7 +204,7 @@ impl ComponentService {
             dynamic_linking,
             env,
             agent_types,
-            actor
+            actor,
         )
         .await
     }
@@ -242,14 +219,14 @@ impl ComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         agent_types: Vec<AgentType>,
-        actor: &AccountId
+        actor: &AccountId,
     ) -> Result<Component, ComponentError> {
         info!(environment_id = %environment_id, "Update component");
 
         for file in files.iter().flatten() {
             let exists = self
                 .initial_component_files_service
-                .exists(&environment_id, &file.key)
+                .exists(environment_id, &file.key)
                 .await
                 .map_err(|e| anyhow!(e).context("Error checking if file exists"))?;
 
@@ -269,7 +246,7 @@ impl ComponentService {
             dynamic_linking,
             env,
             agent_types,
-            actor
+            actor,
         )
         .await
     }
@@ -790,7 +767,7 @@ impl ComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         agent_types: Vec<AgentType>,
-        actor: &AccountId
+        actor: &AccountId,
     ) -> Result<Component, ComponentError> {
         // TODO:
         // FIXME: This needs to be reverted in case creation fails.
@@ -811,20 +788,20 @@ impl ComponentService {
             dynamic_linking,
             env,
             agent_types,
-            wasm_hash
+            wasm_hash,
         )?;
 
         // TODO:
         // let (component, transformed_data) =
         //     self.apply_transformations(component, data.clone()).await?;
 
-        if let Some(known_root_package_name) = &component.metadata.root_package_name {
-            if &component_name.0 != known_root_package_name {
-                Err(ComponentError::InvalidComponentName {
-                    actual: component_name.0.clone(),
-                    expected: known_root_package_name.clone(),
-                })?;
-            }
+        if let Some(known_root_package_name) = &component.metadata.root_package_name
+            && &component_name.0 != known_root_package_name
+        {
+            Err(ComponentError::InvalidComponentName {
+                actual: component_name.0.clone(),
+                expected: known_root_package_name.clone(),
+            })?;
         }
 
         tokio::try_join!(
@@ -840,18 +817,26 @@ impl ComponentService {
             "Uploaded component",
         );
 
-        let record = ComponentRevisionRecord::from_model(component.clone(), &actor);
+        let record = ComponentRevisionRecord::from_model(component.clone(), actor);
 
-        let result = self.component_repo.create(&environment_id.0, &component_name.0, record).await;
+        let result = self
+            .component_repo
+            .create(&environment_id.0, &component_name.0, record)
+            .await;
         let stored_component: Component = match result? {
             Ok(record) => record.into(),
-            Err(ComponentRevisionRepoError::ConcurrentModification) => Err(ComponentError::ConcurrentUpdate { component_id: component_id.clone(), version: 0 })?,
-            Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!()
+            Err(ComponentRevisionRepoError::ConcurrentModification) => {
+                Err(ComponentError::ConcurrentUpdate {
+                    component_id: component_id.clone(),
+                    version: 0,
+                })?
+            }
+            Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),
         };
 
         self.component_compilation
             .enqueue_compilation(
-                &environment_id,
+                environment_id,
                 component_id,
                 stored_component.versioned_component_id.version,
             )
@@ -870,7 +855,7 @@ impl ComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         agent_types: Vec<AgentType>,
-        actor: &AccountId
+        actor: &AccountId,
     ) -> Result<Component, ComponentError> {
         // let component_size: u64 = data.len() as u64;
 
@@ -915,7 +900,7 @@ impl ComponentService {
             .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?
             .into();
 
-        let current_revision = component.versioned_component_id.version.clone();
+        let current_revision = component.versioned_component_id.version;
 
         // make sure we are storing data under new keys so we don't clobber old data.
         component.regenerate_object_store_key();
@@ -940,17 +925,25 @@ impl ComponentService {
 
         let record = ComponentRevisionRecord::from_model(component, actor);
 
-        let result = self.component_repo.update(current_revision as i64, record).await;
+        let result = self
+            .component_repo
+            .update(current_revision as i64, record)
+            .await;
 
         let stored_component: Component = match result? {
             Ok(record) => record.into(),
-            Err(ComponentRevisionRepoError::ConcurrentModification) => Err(ComponentError::ConcurrentUpdate { component_id: component_id.clone(), version: current_revision })?,
-            Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!()
+            Err(ComponentRevisionRepoError::ConcurrentModification) => {
+                Err(ComponentError::ConcurrentUpdate {
+                    component_id: component_id.clone(),
+                    version: current_revision,
+                })?
+            }
+            Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),
         };
 
         self.component_compilation
             .enqueue_compilation(
-                &environment_id,
+                environment_id,
                 component_id,
                 stored_component.versioned_component_id.version,
             )
@@ -976,7 +969,7 @@ impl ComponentService {
             })
     }
 
-    async fn upload_protected_component(
+    async fn _upload_protected_component(
         &self,
         component: &Component,
         data: Vec<u8>,
@@ -1006,23 +999,24 @@ impl ComponentService {
                     .map(|f| (f.path.clone(), f.permissions)),
             );
 
-        let to_upload = self::utils::prepare_component_files_for_upload(&path_permissions, payload)
-            .await?;
+        let to_upload =
+            self::utils::prepare_component_files_for_upload(&path_permissions, payload).await?;
 
         let tasks = to_upload
             .into_iter()
             .map(|(path, permissions, stream)| async move {
                 info!("Uploading file: {}", path.to_string());
 
-                let key = self.initial_component_files_service
+                let key = self
+                    .initial_component_files_service
                     .put_if_not_exists(environment_id, &stream)
                     .await
                     .context("Failed to upload component files")?;
 
                 Ok::<_, ComponentError>(InitialComponentFile {
-                        key,
-                        path,
-                        permissions,
+                    key,
+                    path,
+                    permissions,
                 })
             });
 
@@ -1043,7 +1037,6 @@ impl ComponentService {
 
         Ok(uploaded)
     }
-
 
     // TODO:
     // async fn apply_transformations(

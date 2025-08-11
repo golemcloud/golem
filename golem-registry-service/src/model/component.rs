@@ -12,20 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rib::{FunctionName};
+use chrono::Utc;
+use golem_common::model::agent::AgentType;
+use golem_common::model::component::{ComponentName, VersionedComponentId};
+use golem_common::model::component_metadata::{
+    ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
+};
+use golem_common::model::diff::Hash;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{
+    ComponentFilePathWithPermissions, ComponentId, ComponentType, InitialComponentFile,
+    PluginInstallationId,
+};
 use golem_wasm_ast::analysis::AnalysedType;
+use poem_openapi::Object;
+use rib::FunctionName;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use tempfile::NamedTempFile;
-use golem_common::model::{ComponentFilePathWithPermissions, ComponentId, ComponentType, InitialComponentFile, PluginInstallationId};
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::component::{ComponentName, VersionedComponentId};
-use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance};
-use std::collections::{BTreeMap, HashMap};
-use poem_openapi::Object;
-use golem_common::model::agent::AgentType;
-use chrono::Utc;
 use uuid::Uuid;
-use golem_common::model::diff::Hash;
 
 #[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]
@@ -66,7 +71,7 @@ impl Component {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         agent_types: Vec<AgentType>,
-        wasm_hash: Hash
+        wasm_hash: Hash,
     ) -> Result<Self, ComponentProcessingError> {
         let metadata = ComponentMetadata::analyse_component(data, dynamic_linking, agent_types)?;
 
@@ -90,7 +95,7 @@ impl Component {
             installed_plugins,
             original_env: env.clone(),
             env,
-            wasm_hash
+            wasm_hash,
         })
     }
 

@@ -16,11 +16,11 @@ use std::{path::PathBuf, sync::Arc};
 
 use crate::replayable_stream::{ContentHash, ReplayableStream};
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
+use anyhow::{Context, Error};
 use bytes::Bytes;
+use golem_common::model::account::AccountId;
 use golem_common::model::plugin::PluginWasmFileKey;
 use tracing::debug;
-use anyhow::{Context, Error};
-use golem_common::model::account::AccountId;
 
 const PLUGIN_WASM_FILES_LABEL: &str = "plugin_wasms";
 

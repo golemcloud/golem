@@ -13,5 +13,5 @@
 // limitations under the License.
 
 pub mod account;
-pub mod token;
 pub mod component;
+pub mod token;

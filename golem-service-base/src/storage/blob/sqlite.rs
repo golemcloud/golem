@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use crate::db::sqlite::SqlitePool;
 use crate::db::DBValue;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use golem_common::SafeDisplay;
-use anyhow::{anyhow, Error};
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 #[derive(Debug)]
 pub struct SqliteBlobStorage {
@@ -112,7 +112,8 @@ impl BlobStorage for SqliteBlobStorage {
             .bind(Self::parent_string(path))
             .bind(Self::name_string(path));
 
-        let result = self.pool
+        let result = self
+            .pool
             .with_ro(target_label, op_label)
             .fetch_optional_as::<DBValue, _>(query)
             .await
@@ -153,7 +154,8 @@ impl BlobStorage for SqliteBlobStorage {
             .bind(Self::parent_string(path))
             .bind(Self::name_string(path));
 
-        let result = self.pool
+        let result = self
+            .pool
             .with_ro(target_label, op_label)
             .fetch_optional_as::<DBMetadata, _>(query)
             .await?
@@ -206,7 +208,8 @@ impl BlobStorage for SqliteBlobStorage {
             .try_collect::<Vec<_>>()
             .await?;
         let data = Bytes::from(data.concat());
-        self.put_raw(target_label, op_label, namespace, path, &data).await?;
+        self.put_raw(target_label, op_label, namespace, path, &data)
+            .await?;
         Ok(())
     }
 
@@ -269,7 +272,8 @@ impl BlobStorage for SqliteBlobStorage {
                 .bind(Self::namespace(namespace))
                 .bind(path.to_string_lossy().to_string());
 
-        let result = self.pool
+        let result = self
+            .pool
             .with_ro(target_label, op_label)
             .fetch_all_as::<(String,), _>(query)
             .await
@@ -299,7 +303,8 @@ impl BlobStorage for SqliteBlobStorage {
         .bind(name)
         .bind(parent_prefix);
 
-        let result = self.pool
+        let result = self
+            .pool
             .with_rw(target_label, op_label)
             .execute(query)
             .await
@@ -322,7 +327,8 @@ impl BlobStorage for SqliteBlobStorage {
         .bind(Self::parent_string(path))
         .bind(Self::name_string(path));
 
-        let result = self.pool
+        let result = self
+            .pool
             .with_ro(target_label, op_label)
             .fetch_optional_as(query)
             .await

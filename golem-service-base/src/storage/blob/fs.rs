@@ -14,6 +14,7 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use anyhow::{anyhow, Context, Error};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -23,7 +24,6 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
-use anyhow::{anyhow, Context, Error};
 
 #[derive(Debug)]
 pub struct FileSystemBlobStorage {
@@ -37,8 +37,7 @@ impl FileSystemBlobStorage {
                 .await
                 .map_err(|err| anyhow!("Failed to create local blob storage: {err}"))?
         }
-        let canonical = async_fs::canonicalize(root)
-            .await?;
+        let canonical = async_fs::canonicalize(root).await?;
 
         let compilation_cache = canonical.join("compilation_cache");
 
@@ -218,17 +217,14 @@ impl BlobStorage for FileSystemBlobStorage {
             }
         }
 
-        let file = tokio::fs::File::create(&full_path)
-            .await?;
+        let file = tokio::fs::File::create(&full_path).await?;
 
         let mut writer = tokio::io::BufWriter::new(file);
 
         let mut stream = stream.make_stream_erased().await?;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
-            writer
-                .write_all(&chunk)
-                .await?;
+            writer.write_all(&chunk).await?;
         }
 
         writer.flush().await?;
@@ -278,8 +274,7 @@ impl BlobStorage for FileSystemBlobStorage {
         let mut entries = async_fs::read_dir(&full_path).await?;
 
         let mut result = Vec::new();
-        while let Some(entry) = TryStreamExt::try_next(&mut entries).await?
-        {
+        while let Some(entry) = TryStreamExt::try_next(&mut entries).await? {
             if let Ok(path) = entry.path().strip_prefix(&namespace_root) {
                 result.push(path.to_path_buf());
             }

@@ -18,7 +18,6 @@ mod protobuf;
 #[cfg(test)]
 mod tests;
 
-use super::plugin::PluginDefinition;
 use super::worker::WasiConfigVars;
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::{LeafQuery, Query};

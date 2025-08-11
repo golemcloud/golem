@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod component;
 pub mod component_compilation;
 pub mod component_object_store;
 pub mod component_transformer_plugin_caller;
-pub mod component;

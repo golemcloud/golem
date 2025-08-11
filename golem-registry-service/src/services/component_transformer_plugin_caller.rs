@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::config::ComponentTransformerPluginCallerConfig;
+use crate::model::component::Component;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::model::base64::Base64;
-use crate::model::component::Component;
 use golem_common::model::component::{ComponentName, VersionedComponentId};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{

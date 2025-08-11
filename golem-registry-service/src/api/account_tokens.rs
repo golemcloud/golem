@@ -14,6 +14,7 @@
 
 use crate::api::ApiResult;
 use golem_common::api::CreateTokenRequest;
+use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::login::{Token, TokenWithSecret};
 use golem_common::recorded_http_api_request;
@@ -23,7 +24,6 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::Instrument;
-use golem_common::model::account::AccountId;
 
 pub struct AccountTokensApi {}
 

@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::{
+    ComponentId, IdempotencyKey, PluginInstallationId, PromiseId, TargetWorkerId, WorkerId,
+};
 use golem_api_grpc::proto::golem::common;
 use golem_api_grpc::proto::golem::component;
 use golem_api_grpc::proto::golem::worker;
-use crate::model::{
-    ComponentId, IdempotencyKey, PluginInstallationId, PromiseId, TargetWorkerId,
-    WorkerId,
-};
 
 pub fn proto_component_id_string(component_id: &Option<component::ComponentId>) -> Option<String> {
     (*component_id)

@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::{ComponentFilePath, ComponentId, ComponentVersion, InitialComponentFileKey, PluginInstallationId};
+use crate::model::component::ConflictReport;
+use golem_common::SafeDisplay;
+use golem_common::model::account::AccountId;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::ComponentProcessingError;
-use crate::model::component::ConflictReport;
-use crate::services::component_transformer_plugin_caller::TransformationFailedReason;
-use golem_service_base::clients::auth::AuthServiceError;
-use golem_service_base::clients::limit::LimitError;
-use golem_service_base::clients::project::ProjectError;
-use golem_common::SafeDisplay;
+use golem_common::model::{
+    ComponentFilePath, ComponentId, ComponentVersion, InitialComponentFileKey, PluginInstallationId,
+};
 use golem_service_base::repo::RepoError;
-use anyhow::anyhow;
-use golem_common::model::account::AccountId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -37,15 +34,14 @@ pub enum ComponentError {
     ComponentProcessingError(#[from] ComponentProcessingError),
     #[error("Internal component store error: {message}: {error}")]
     ComponentStoreError { message: String, error: String },
-    #[error("Component Constraint Error. Make sure the component is backward compatible as the functions are already in use:\n{0}"
+    #[error(
+        "Component Constraint Error. Make sure the component is backward compatible as the functions are already in use:\n{0}"
     )]
     ComponentConstraintConflictError(ConflictReport),
     #[error("Component Constraint Create Error: {0}")]
     ComponentConstraintCreateError(String),
     #[error("Malformed component archive: {message}")]
-    MalformedComponentArchive {
-        message: String,
-    },
+    MalformedComponentArchive { message: String },
     #[error("Provided component file not found: {path} (key: {key})")]
     InitialComponentFileNotFound { path: String, key: String },
     #[error("Invalid file path: {0}")]
@@ -84,12 +80,10 @@ pub enum ComponentError {
         installation_id: PluginInstallationId,
     },
     #[error(transparent)]
-    InternalError(#[from] anyhow::Error)
+    InternalError(#[from] anyhow::Error),
 }
 
-
 impl ComponentError {
-
     pub fn component_store_error(message: impl AsRef<str>, error: anyhow::Error) -> ComponentError {
         Self::ComponentStoreError {
             message: message.as_ref().to_string(),
@@ -131,7 +125,7 @@ impl SafeDisplay for ComponentError {
             Self::InvalidPluginScope { .. } => self.to_string(),
             Self::ConcurrentUpdate { .. } => self.to_string(),
             Self::PluginInstallationNotFound { .. } => self.to_string(),
-            Self::InternalError(_) => self.to_string()
+            Self::InternalError(_) => self.to_string(),
         }
     }
 }

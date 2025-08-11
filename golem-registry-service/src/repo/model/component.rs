@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::component::Component;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
 };
 use golem_common::model::diff::Hashable;
-use golem_common::model::{diff, ComponentFilePermissions, InitialComponentFile};
+use golem_common::model::{ComponentFilePermissions, InitialComponentFile, diff};
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::Json;
@@ -27,9 +30,6 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Deref;
 use uuid::Uuid;
-use crate::model::component::Component;
-use golem_common::model::account::AccountId;
-use golem_common::model::component::VersionedComponentId;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum ComponentRevisionRepoError {
@@ -286,7 +286,6 @@ pub struct ComponentRevisionRecord {
 
     #[sqlx(skip)]
     pub files: Vec<ComponentFileRecord>,
-
     // TODO:
     //#[sqlx(skip)]
     //pub installed_plugins: Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>,
@@ -405,23 +404,34 @@ impl ComponentRevisionRecord {
     }
 
     pub fn from_model(value: Component, actor: &AccountId) -> Self {
-
         Self {
-            files: value.files.into_iter().map(|f| ComponentFileRecord::from_model(f, &value.versioned_component_id, &actor)).collect(),
-            original_files: value.original_files.into_iter().map(|f| ComponentFileRecord::from_model(f, &value.versioned_component_id, &actor)).collect(),
+            files: value
+                .files
+                .into_iter()
+                .map(|f| ComponentFileRecord::from_model(f, &value.versioned_component_id, actor))
+                .collect(),
+            original_files: value
+                .original_files
+                .into_iter()
+                .map(|f| ComponentFileRecord::from_model(f, &value.versioned_component_id, actor))
+                .collect(),
             component_id: value.versioned_component_id.component_id.0,
             revision_id: value.versioned_component_id.version as i64,
-            version: value.metadata.root_package_version.clone().unwrap_or_default(),
+            version: value
+                .metadata
+                .root_package_version
+                .clone()
+                .unwrap_or_default(),
             component_type: value.component_type as i32,
             size: value.component_size as i32,
             metadata: value.metadata.into(),
             hash: SqlBlake3Hash::empty(),
             original_env: Json(value.original_env),
             env: Json(value.env),
-            audit: DeletableRevisionAuditFields::new(actor.0.clone()),
+            audit: DeletableRevisionAuditFields::new(actor.0),
             object_store_key: value.object_store_key,
             transformed_object_store_key: value.transformed_object_store_key,
-            binary_hash: value.wasm_hash.into_blake3().into()
+            binary_hash: value.wasm_hash.into_blake3().into(),
         }
     }
 }
@@ -465,16 +475,20 @@ impl ComponentFileRecord {
         }
     }
 
-    fn from_model(file: InitialComponentFile, versioned_component_id: &VersionedComponentId, actor: &AccountId) -> Self {
+    fn from_model(
+        file: InitialComponentFile,
+        versioned_component_id: &VersionedComponentId,
+        actor: &AccountId,
+    ) -> Self {
         Self {
-            component_id: versioned_component_id.component_id.0.clone(),
+            component_id: versioned_component_id.component_id.0,
             revision_id: versioned_component_id.version as i64,
             file_path: file.path.to_string(),
             file_key: file.key.0.clone(),
             file_permissions: file.permissions.into(),
-            audit: RevisionAuditFields::new(actor.0.clone()),
+            audit: RevisionAuditFields::new(actor.0),
             // TODO: The key is the content hash currently, reuse it here
-            hash: SqlBlake3Hash::empty()
+            hash: SqlBlake3Hash::empty(),
         }
     }
 }

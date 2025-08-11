@@ -14,7 +14,6 @@
 
 use super::WorkerWasiConfigVarsFilter;
 use crate::model::oplog::OplogIndex;
-use crate::model::account::AccountId;
 use crate::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentType, FilterComparator, IdempotencyKey,

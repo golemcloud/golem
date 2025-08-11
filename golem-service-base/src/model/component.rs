@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::component::{ComponentName, ComponentOwner, VersionedComponentId};
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::component::{ComponentName, VersionedComponentId};
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentType, InitialComponentFile, PluginId, PluginInstallationId};
 use std::collections::HashMap;
-use std::time::SystemTime;
-use applying::Apply;
 
 #[derive(Debug, Clone)]
 pub struct PluginInstallation {

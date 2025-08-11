@@ -14,11 +14,11 @@
 
 use crate::model::diff::ser::{to_json_with_mode, SerializeMode, ToSerializableWithMode};
 use crate::model::diff::Diffable;
+use serde::de::Visitor;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{self, Display, Formatter};
 use std::sync::OnceLock;
-use serde::de::Visitor;
 
 #[derive(Clone, Copy, std::hash::Hash, PartialEq, Eq, Debug)]
 pub struct Hash(blake3::Hash);
@@ -251,9 +251,12 @@ pub fn hash_from_serialized_value<T: Serialize>(value: &T) -> Hash {
 #[cfg(feature = "poem")]
 mod poem {
     use super::Hash;
-    use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromMultipartField, ParseFromParameter, ParseResult, ToHeader, ToJSON};
-    use poem::web::Field;
     use http::HeaderValue;
+    use poem::web::Field;
+    use poem_openapi::types::{
+        ParseError, ParseFromJSON, ParseFromMultipartField, ParseFromParameter, ParseResult,
+        ToHeader, ToJSON,
+    };
     use serde_json::Value;
 
     impl poem_openapi::types::Type for Hash {
@@ -305,7 +308,7 @@ mod poem {
                 Some(field) => {
                     let value = field.text().await?;
                     Ok(Hash(blake3::Hash::from_hex(value)?))
-                },
+                }
                 None => Err(ParseError::expected_input()),
             }
         }

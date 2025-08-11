@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::component_metadata::ComponentMetadata;
-use super::{ComponentType, InitialComponentFile, PluginInstallationId, ProjectId};
+use super::environment::EnvironmentId;
+use super::PluginInstallationId;
 use crate::base_model::{ComponentId, ComponentVersion};
 use crate::declare_transparent_newtypes;
 use crate::model::account::AccountId;
@@ -22,8 +22,6 @@ use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
-use std::str::FromStr;
-use super::environment::EnvironmentId;
 
 declare_transparent_newtypes! {
     // TODO: Add validations (non-empty, no "/", no " ", ...)
