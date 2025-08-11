@@ -855,7 +855,7 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
             .fetch_optional(
                 sqlx::query(indoc! { r#"
                     SELECT 1
-                    FROM public.http_api_definition_revisions r
+                    FROM http_api_definition_revisions r
                     JOIN deployment_http_api_definition_revisions dr
                         ON dr.http_api_definition_id = r.http_api_definition_id
                                AND dr.http_api_definition_revision_id = r.revision_id
