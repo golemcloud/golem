@@ -1999,25 +1999,21 @@ impl From<ComponentId> for golem_wasm_rpc::ComponentId {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashSet};
-    use std::str::FromStr;
-    use std::time::SystemTime;
-    use std::vec;
-    use test_r::test;
-    use tracing::info;
-
     use crate::model::oplog::OplogIndex;
-
     use crate::model::{
         AccountId, ComponentFilePath, ComponentId, FilterComparator, IdempotencyKey, ProjectId,
         ShardId, StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
-
     use rand::{rng, Rng};
     use serde::{Deserialize, Serialize};
-    use uuid::uuid;
+    use std::collections::{BTreeMap, HashSet};
+    use std::str::FromStr;
+    use std::time::SystemTime;
+    use std::vec;
+    use test_r::test;
+    use tracing::info;
 
     #[test]
     fn timestamp_conversion() {

@@ -181,14 +181,12 @@ impl poem_openapi::types::ParseFromMultipartField for ComponentFilePathWithPermi
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
-
-    use crate::model::diff::Hash;
     use crate::model::{
         ComponentFilePath, ComponentFilePermissions, Empty, IdempotencyKey, InitialComponentFile,
         InitialComponentFileKey, WorkerStatus,
     };
     use poem_openapi::types::ToJSON;
+    use test_r::test;
 
     #[test]
     fn worker_status_serialization_poem_serde_equivalence() {

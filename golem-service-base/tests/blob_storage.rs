@@ -23,7 +23,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{ComponentId, ProjectId};
+use golem_common::model::ComponentId;
 use golem_common::widen_infallible;
 use golem_service_base::config::S3BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
