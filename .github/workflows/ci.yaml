@@ -166,7 +166,7 @@ jobs:
           # - name: integration-tests-group5
           #   description: "Sharding tests"
           - name: integration-tests-group6
-            description: "Sharding tests"
+            description: "Registry service tests"
           # - name: api-tests
           #   description: "API tests"
     steps:
