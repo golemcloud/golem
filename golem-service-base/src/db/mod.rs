@@ -43,9 +43,17 @@ pub enum TxError<E: Display> {
     Business(E),
 }
 
+pub type TxResult<T, E> = Result<T, TxError<E>>;
+
 impl<E: Display> From<RepoError> for TxError<E> {
     fn from(value: RepoError) -> Self {
         TxError::Repo(value)
+    }
+}
+
+impl<E: Display> From<Error> for TxError<E> {
+    fn from(value: Error) -> Self {
+        TxError::Repo(value.into())
     }
 }
 
@@ -59,7 +67,7 @@ pub trait ToBusiness<T, E> {
         F: FnOnce() -> E;
 }
 
-impl<T, E> ToBusiness<T, E> for Result<T, TxError<E>>
+impl<T, E> ToBusiness<T, E> for TxResult<T, E>
 where
     E: Display,
 {
@@ -85,7 +93,7 @@ where
 }
 
 #[async_trait]
-pub trait Pool: Debug + Sync {
+pub trait Pool: Debug + Sync + Clone {
     type LabelledApi: LabelledPoolApi;
     type QueryResult;
     type Db: Database + Sync;
@@ -104,7 +112,7 @@ pub trait Pool: Debug + Sync {
     /// rollback, this is ensured by only sharing a mut ref (given rollback and commit consumes the transaction).
     ///
     /// One reason to prefer using this function compared to direct usage of transactions is that
-    /// this style enforces calling labelled rollback on any error. In direct style, rollback is usually
+    /// this style enforces calling labeled rollback on any error. In direct style, rollback is usually
     /// only called on the sqlx::Transaction drop, unless explicitly handled by the code, which means
     /// that those rollbacks are not visible for metrics.
     ///
@@ -114,13 +122,13 @@ pub trait Pool: Debug + Sync {
         svc_name: &'static str,
         api_name: &'static str,
         f: F,
-    ) -> Result<R, TxError<E>>
+    ) -> TxResult<R, E>
     where
         R: Send,
         E: Display + Send,
         F: for<'f> FnOnce(
                 &'f mut <Self::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, Result<R, TxError<E>>>
+            ) -> BoxFuture<'f, TxResult<R, E>>
             + Send,
     {
         let mut tx = self.with_rw(svc_name, api_name).begin().await?;

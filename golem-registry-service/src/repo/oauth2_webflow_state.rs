@@ -23,7 +23,7 @@ use conditional_trait_gen::trait_gen;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo;
+use golem_service_base::repo::RepoResult;
 use indoc::indoc;
 use sqlx::Database;
 use sqlx::types::Json;
@@ -35,17 +35,17 @@ pub trait OAuth2WebflowStateRepo: Send + Sync {
     async fn create(
         &self,
         metadata: OAuth2WebFlowStateMetadata,
-    ) -> repo::Result<OAuth2WebFlowStateRecord>;
+    ) -> RepoResult<OAuth2WebFlowStateRecord>;
 
     async fn set_token_id(
         &self,
         state_id: &Uuid,
         token_id: &Uuid,
-    ) -> repo::Result<OAuth2WebFlowStateRecord>;
+    ) -> RepoResult<OAuth2WebFlowStateRecord>;
 
-    async fn get_by_id(&self, state_id: &Uuid) -> repo::Result<Option<OAuth2WebFlowStateRecord>>;
+    async fn get_by_id(&self, state_id: &Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>>;
 
-    async fn delete_expired(&self, delete_before: SqlDateTime) -> repo::Result<u64>;
+    async fn delete_expired(&self, delete_before: SqlDateTime) -> RepoResult<u64>;
 }
 
 pub struct LoggedOAuth2WebflowStateRepo<Repo: OAuth2WebflowStateRepo> {
@@ -73,7 +73,7 @@ impl<Repo: OAuth2WebflowStateRepo> OAuth2WebflowStateRepo for LoggedOAuth2Webflo
     async fn create(
         &self,
         metadata: OAuth2WebFlowStateMetadata,
-    ) -> repo::Result<OAuth2WebFlowStateRecord> {
+    ) -> RepoResult<OAuth2WebFlowStateRecord> {
         self.repo.create(metadata).await
     }
 
@@ -81,21 +81,21 @@ impl<Repo: OAuth2WebflowStateRepo> OAuth2WebflowStateRepo for LoggedOAuth2Webflo
         &self,
         state_id: &Uuid,
         token_id: &Uuid,
-    ) -> repo::Result<OAuth2WebFlowStateRecord> {
+    ) -> RepoResult<OAuth2WebFlowStateRecord> {
         self.repo
             .set_token_id(state_id, token_id)
             .instrument(Self::span_id_and_token(state_id, token_id))
             .await
     }
 
-    async fn get_by_id(&self, state_id: &Uuid) -> repo::Result<Option<OAuth2WebFlowStateRecord>> {
+    async fn get_by_id(&self, state_id: &Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>> {
         self.repo
             .get_by_id(state_id)
             .instrument(Self::span_id(state_id))
             .await
     }
 
-    async fn delete_expired(&self, delete_before: SqlDateTime) -> repo::Result<u64> {
+    async fn delete_expired(&self, delete_before: SqlDateTime) -> RepoResult<u64> {
         self.repo.delete_expired(delete_before).await
     }
 }
@@ -133,7 +133,7 @@ impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
     async fn create(
         &self,
         metadata: OAuth2WebFlowStateMetadata,
-    ) -> repo::Result<OAuth2WebFlowStateRecord> {
+    ) -> RepoResult<OAuth2WebFlowStateRecord> {
         self.with_rw("create")
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"
@@ -152,7 +152,7 @@ impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
         &self,
         state_id: &Uuid,
         token_id: &Uuid,
-    ) -> repo::Result<OAuth2WebFlowStateRecord> {
+    ) -> RepoResult<OAuth2WebFlowStateRecord> {
         let state: OAuth2WebFlowStateRecord = self
             .with_rw("set_token_id")
             .fetch_one_as(
@@ -170,7 +170,7 @@ impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
         self.with_token(state).await
     }
 
-    async fn get_by_id(&self, state_id: &Uuid) -> repo::Result<Option<OAuth2WebFlowStateRecord>> {
+    async fn get_by_id(&self, state_id: &Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>> {
         let state: Option<OAuth2WebFlowStateRecord> = self
             .with_ro("get_by_id")
             .fetch_optional_as(
@@ -189,7 +189,7 @@ impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
         }
     }
 
-    async fn delete_expired(&self, delete_before: SqlDateTime) -> repo::Result<u64> {
+    async fn delete_expired(&self, delete_before: SqlDateTime) -> RepoResult<u64> {
         let result = self
             .with_rw("delete_expired")
             .execute(
@@ -209,12 +209,12 @@ trait OAuth2WebflowStateRepoInternal: OAuth2WebflowStateRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
-    async fn get_token_by_id(&self, token_id: &Uuid) -> repo::Result<Option<TokenRecord>>;
+    async fn get_token_by_id(&self, token_id: &Uuid) -> RepoResult<Option<TokenRecord>>;
 
     async fn with_token(
         &self,
         mut state: OAuth2WebFlowStateRecord,
-    ) -> repo::Result<OAuth2WebFlowStateRecord> {
+    ) -> RepoResult<OAuth2WebFlowStateRecord> {
         if let Some(token_id) = &state.token_id {
             state.token = self.get_token_by_id(token_id).await?
             // TODO: fail on None?
@@ -229,7 +229,7 @@ impl OAuth2WebflowStateRepoInternal for DbOAuth2WebflowStateRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
-    async fn get_token_by_id(&self, token_id: &Uuid) -> repo::Result<Option<TokenRecord>> {
+    async fn get_token_by_id(&self, token_id: &Uuid) -> RepoResult<Option<TokenRecord>> {
         self.with_ro("get_token_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"

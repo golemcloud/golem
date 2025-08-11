@@ -18,21 +18,20 @@ use conditional_trait_gen::trait_gen;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo;
-use golem_service_base::repo::ResultExt;
+use golem_service_base::repo::{RepoResult, ResultExt};
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 #[async_trait]
 pub trait TokenRepo: Send + Sync {
-    async fn create(&self, token: TokenRecord) -> repo::Result<Option<TokenRecord>>;
+    async fn create(&self, token: TokenRecord) -> RepoResult<Option<TokenRecord>>;
 
-    async fn get_by_id(&self, token_id: &Uuid) -> repo::Result<Option<TokenRecord>>;
+    async fn get_by_id(&self, token_id: &Uuid) -> RepoResult<Option<TokenRecord>>;
 
-    async fn get_by_account(&self, account_id: &Uuid) -> repo::Result<Vec<TokenRecord>>;
+    async fn get_by_account(&self, account_id: &Uuid) -> RepoResult<Vec<TokenRecord>>;
 
-    async fn delete(&self, token_id: &Uuid) -> repo::Result<()>;
+    async fn delete(&self, token_id: &Uuid) -> RepoResult<()>;
 }
 
 pub struct LoggedTokenRepo<Repo: TokenRepo> {
@@ -57,26 +56,26 @@ impl<Repo: TokenRepo> LoggedTokenRepo<Repo> {
 
 #[async_trait]
 impl<Repo: TokenRepo> TokenRepo for LoggedTokenRepo<Repo> {
-    async fn create(&self, token: TokenRecord) -> repo::Result<Option<TokenRecord>> {
+    async fn create(&self, token: TokenRecord) -> RepoResult<Option<TokenRecord>> {
         let span = Self::span_id(&token.token_id);
         self.repo.create(token).instrument(span).await
     }
 
-    async fn get_by_id(&self, token_id: &Uuid) -> repo::Result<Option<TokenRecord>> {
+    async fn get_by_id(&self, token_id: &Uuid) -> RepoResult<Option<TokenRecord>> {
         self.repo
             .get_by_id(token_id)
             .instrument(Self::span_id(token_id))
             .await
     }
 
-    async fn get_by_account(&self, account_id: &Uuid) -> repo::Result<Vec<TokenRecord>> {
+    async fn get_by_account(&self, account_id: &Uuid) -> RepoResult<Vec<TokenRecord>> {
         self.repo
             .get_by_account(account_id)
             .instrument(Self::span_account(account_id))
             .await
     }
 
-    async fn delete(&self, token_id: &Uuid) -> repo::Result<()> {
+    async fn delete(&self, token_id: &Uuid) -> RepoResult<()> {
         self.repo
             .delete(token_id)
             .instrument(Self::span_id(token_id))
@@ -114,7 +113,7 @@ impl<DBP: Pool> DbTokenRepo<DBP> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl TokenRepo for DbTokenRepo<PostgresPool> {
-    async fn create(&self, token: TokenRecord) -> repo::Result<Option<TokenRecord>> {
+    async fn create(&self, token: TokenRecord) -> RepoResult<Option<TokenRecord>> {
         self.with_rw("create")
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"
@@ -132,7 +131,7 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
             .none_on_unique_violation()
     }
 
-    async fn get_by_id(&self, token_id: &Uuid) -> repo::Result<Option<TokenRecord>> {
+    async fn get_by_id(&self, token_id: &Uuid) -> RepoResult<Option<TokenRecord>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -145,7 +144,7 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
             .await
     }
 
-    async fn get_by_account(&self, account_id: &Uuid) -> repo::Result<Vec<TokenRecord>> {
+    async fn get_by_account(&self, account_id: &Uuid) -> RepoResult<Vec<TokenRecord>> {
         self.with_ro("get_by_account")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -159,10 +158,10 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
             .await
     }
 
-    async fn delete(&self, token_id: &Uuid) -> repo::Result<()> {
+    async fn delete(&self, token_id: &Uuid) -> RepoResult<()> {
         self.with_rw("delete")
             .execute(
-                sqlx::query(indoc! {r#"
+                sqlx::query(indoc! { r#"
                     DELETE FROM tokens WHERE token_id = $1
                 "#})
                 .bind(token_id),

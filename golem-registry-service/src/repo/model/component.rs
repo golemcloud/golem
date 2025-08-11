@@ -28,6 +28,14 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+pub enum ComponentRevisionRepoError {
+    #[error("Concurrent modification")]
+    ConcurrentModification,
+    #[error("Version already exists: {version}")]
+    VersionAlreadyExists { version: String },
+}
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, sqlx::Type)]
 #[sqlx(type_name = "integer")]
@@ -286,9 +294,9 @@ pub struct ComponentRecord {
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ComponentRevisionRecord {
     pub component_id: Uuid,
-    pub revision_id: i64,
+    pub revision_id: i64, // NOTE: set by repo during insert
     pub version: String,
-    pub hash: SqlBlake3Hash,
+    pub hash: SqlBlake3Hash, // NOTE: set by repo during insert
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
     pub component_type: i32,
@@ -297,7 +305,7 @@ pub struct ComponentRevisionRecord {
     pub env: Json<BTreeMap<String, String>>,
     pub status: ComponentStatus,
     pub object_store_key: String,
-    pub binary_hash: SqlBlake3Hash,
+    pub binary_hash: SqlBlake3Hash, // NOTE: expected to be provided by service-layer
     pub transformed_object_store_key: Option<String>,
 
     #[sqlx(skip)]
@@ -432,7 +440,7 @@ pub struct ComponentFileRecord {
     pub component_id: Uuid,
     pub revision_id: i64,
     pub file_path: String,
-    pub hash: SqlBlake3Hash,
+    pub hash: SqlBlake3Hash, // NOTE: expected to be set by service-layer
     #[sqlx(flatten)]
     pub audit: RevisionAuditFields,
     pub file_key: String,

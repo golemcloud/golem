@@ -19,19 +19,18 @@ use conditional_trait_gen::trait_gen;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo;
-use golem_service_base::repo::ResultExt;
+use golem_service_base::repo::{RepoResult, ResultExt};
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 #[async_trait]
 pub trait AccountRepo: Send + Sync {
-    async fn create(&self, account: AccountRecord) -> repo::Result<Option<AccountRecord>>;
+    async fn create(&self, account: AccountRecord) -> RepoResult<Option<AccountRecord>>;
 
-    async fn get_by_id(&self, account_id: &Uuid) -> repo::Result<Option<AccountRecord>>;
+    async fn get_by_id(&self, account_id: &Uuid) -> RepoResult<Option<AccountRecord>>;
 
-    async fn get_by_email(&self, email: &str) -> repo::Result<Option<AccountRecord>>;
+    async fn get_by_email(&self, email: &str) -> RepoResult<Option<AccountRecord>>;
 }
 
 pub struct LoggedAccountRepo<Repo: AccountRepo> {
@@ -56,19 +55,19 @@ impl<Repo: AccountRepo> LoggedAccountRepo<Repo> {
 
 #[async_trait]
 impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
-    async fn create(&self, account: AccountRecord) -> repo::Result<Option<AccountRecord>> {
+    async fn create(&self, account: AccountRecord) -> RepoResult<Option<AccountRecord>> {
         let span = Self::span_account_id(&account.account_id);
         self.repo.create(account).instrument(span).await
     }
 
-    async fn get_by_id(&self, account_id: &Uuid) -> repo::Result<Option<AccountRecord>> {
+    async fn get_by_id(&self, account_id: &Uuid) -> RepoResult<Option<AccountRecord>> {
         self.repo
             .get_by_id(account_id)
             .instrument(Self::span_account_id(account_id))
             .await
     }
 
-    async fn get_by_email(&self, email: &str) -> repo::Result<Option<AccountRecord>> {
+    async fn get_by_email(&self, email: &str) -> RepoResult<Option<AccountRecord>> {
         let span = Self::span_email(email);
         self.repo.get_by_email(email).instrument(span).await
     }
@@ -104,7 +103,7 @@ impl<DBP: Pool> DbAccountRepo<DBP> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl AccountRepo for DbAccountRepo<PostgresPool> {
-    async fn create(&self, account: AccountRecord) -> repo::Result<Option<AccountRecord>> {
+    async fn create(&self, account: AccountRecord) -> RepoResult<Option<AccountRecord>> {
         self
             .with_rw("create")
             .fetch_one_as(
@@ -123,7 +122,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
             .none_on_unique_violation()
     }
 
-    async fn get_by_id(&self, account_id: &Uuid) -> repo::Result<Option<AccountRecord>> {
+    async fn get_by_id(&self, account_id: &Uuid) -> RepoResult<Option<AccountRecord>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
@@ -136,7 +135,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
             .await
     }
 
-    async fn get_by_email(&self, email: &str) -> repo::Result<Option<AccountRecord>> {
+    async fn get_by_email(&self, email: &str) -> RepoResult<Option<AccountRecord>> {
         self.with_ro("get_by_email")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"

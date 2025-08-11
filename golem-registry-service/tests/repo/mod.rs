@@ -104,9 +104,9 @@ impl Deps {
                     environment_id: new_repo_uuid(),
                     revision_id: 0,
                     audit: DeletableRevisionAuditFields::new(app.audit.modified_by),
-                    compatibility_check: false,
-                    version_check: false,
-                    security_overrides: false,
+                    compatibility_check: true,
+                    version_check: true,
+                    security_overrides: true,
                     hash: blake3::hash("test".as_bytes()).into(),
                 },
             )

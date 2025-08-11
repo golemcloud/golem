@@ -19,6 +19,14 @@ use golem_common::model::diff::Hashable;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+pub enum HttpApiDefinitionRevisionRepoError {
+    #[error("Concurrent modification")]
+    ConcurrentModification,
+    #[error("Version already exists: {version}")]
+    VersionAlreadyExists { version: String },
+}
+
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDefinitionRecord {
     pub http_api_definition_id: Uuid,
@@ -34,7 +42,7 @@ pub struct HttpApiDefinitionRevisionRecord {
     pub http_api_definition_id: Uuid,
     pub revision_id: i64,
     pub version: String,
-    pub hash: SqlBlake3Hash,
+    pub hash: SqlBlake3Hash, // NOTE: set by repo during insert
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
     pub definition: Vec<u8>, // TODO: model
@@ -117,4 +125,17 @@ pub struct HttpApiDefinitionRevisionIdentityRecord {
     pub revision_id: i64,
     pub version: String,
     pub hash: SqlBlake3Hash,
+}
+
+impl HttpApiDefinitionRevisionIdentityRecord {
+    // NOTE: on deployment inserts we only expect names to be provided
+    pub fn for_deployment_insert(name: String) -> Self {
+        Self {
+            http_api_definition_id: Uuid::nil(),
+            name,
+            revision_id: 0,
+            version: "".to_string(),
+            hash: SqlBlake3Hash::empty(),
+        }
+    }
 }

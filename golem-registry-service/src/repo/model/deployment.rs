@@ -22,9 +22,9 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
-pub enum DeployError {
-    #[error("Deployment concurrent revision creation")]
-    DeploymentConcurrentRevisionCreation,
+pub enum DeployRepoError {
+    #[error("Concurrent modification")]
+    ConcurrentModification,
     #[error(
         "Deployment hash mismatch: requested hash: {requested_hash:?}, actual hash: {actual_hash:?}."
     )]
@@ -32,10 +32,16 @@ pub enum DeployError {
         requested_hash: SqlBlake3Hash,
         actual_hash: SqlBlake3Hash,
     },
-    #[error("Deployment version check failed, requested version: {version}")]
-    DeploymentVersionCheckFailed { version: String },
+    #[error("Version already exists: {version}")]
+    VersionAlreadyExists { version: String },
     #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]
     ValidationErrors(Vec<DeployValidationError>),
+    #[error("Deployment not found by revision: {revision_id}")]
+    DeploymentNotFoundByRevision { revision_id: i64 },
+    #[error("Deployment not found by version: {version}")]
+    DeploymentNotfoundByVersion { version: String },
+    #[error("Deployment is not unique by version: {version}")]
+    DeploymentIsNotUniqueByVersion { version: String },
 }
 
 fn format_validation_errors(errors: &[DeployValidationError]) -> String {
@@ -61,7 +67,8 @@ pub struct CurrentDeploymentRevisionRecord {
     pub revision_id: i64,
     #[sqlx(flatten)]
     pub audit: RevisionAuditFields,
-    pub current_revision_id: i64,
+    pub deployment_revision_id: i64,
+    pub deployment_version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]

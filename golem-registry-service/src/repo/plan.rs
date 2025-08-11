@@ -18,14 +18,14 @@ use conditional_trait_gen::trait_gen;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo;
+use golem_service_base::repo::RepoResult;
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 #[async_trait]
 pub trait PlanRepository: Send + Sync {
-    async fn create(&self, plan: PlanRecord) -> repo::Result<PlanRecord>;
+    async fn create(&self, plan: PlanRecord) -> RepoResult<PlanRecord>;
 }
 
 pub struct LoggedPlanRepository<Repo: PlanRepository> {
@@ -46,7 +46,7 @@ impl<Repo: PlanRepository> LoggedPlanRepository<Repo> {
 
 #[async_trait]
 impl<Repo: PlanRepository> PlanRepository for LoggedPlanRepository<Repo> {
-    async fn create(&self, plan: PlanRecord) -> repo::Result<PlanRecord> {
+    async fn create(&self, plan: PlanRecord) -> RepoResult<PlanRecord> {
         let span = Self::span(&plan.plan_id);
         self.repo.create(plan).instrument(span).await
     }
@@ -78,7 +78,7 @@ impl<DBP: Pool> DbPlanRepository<DBP> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl PlanRepository for DbPlanRepository<PostgresPool> {
-    async fn create(&self, plan: PlanRecord) -> repo::Result<PlanRecord> {
+    async fn create(&self, plan: PlanRecord) -> RepoResult<PlanRecord> {
         self.with_rw("create")
             .fetch_one_as(
                 sqlx::query_as(indoc! {r#"
