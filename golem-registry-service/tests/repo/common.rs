@@ -1109,7 +1109,10 @@ pub async fn test_account_usage(deps: &Deps) {
     }
 
     {
-        deps.account_usage_repo.rollback(&increased_usage).await.unwrap();
+        deps.account_usage_repo
+            .rollback(&increased_usage)
+            .await
+            .unwrap();
         let usage = deps
             .account_usage_repo
             .get(&user.account_id, &now)

@@ -40,7 +40,7 @@ impl PlanRecord {
 
     pub fn limit(&self, usage_type: UsageType) -> RepoResult<Option<i64>> {
         match self.limits.get(&usage_type) {
-            Some(limit) => Ok(limit.clone()),
+            Some(limit) => Ok(*limit),
             None => Err(RepoError::Internal(format!(
                 "illegal state error: missing limit for {usage_type:?}",
             ))),
