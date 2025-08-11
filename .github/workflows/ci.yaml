@@ -463,59 +463,59 @@ jobs:
           tags: ${{ steps.meta-golem-router.outputs.tags }}
           labels: ${{ steps.meta-golem-router.outputs.labels }}
 
-  publish:
-    needs:
-      - build
-      - unit-tests-and-checks
-      - wasm-rpc-stub
-      - worker-tests
-      - api-and-integration-tests
-    if: "startsWith(github.ref, 'refs/tags/v')"
-    env:
-      CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: v3-rust
-          shared-key: release
-          cache-all-crates: true
-          save-if: true
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - id: get_version
-        uses: battila7/get-version-action@v2
-      - name: Publish all packages
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          VERSION: ${{ steps.get_version.outputs.version-without-v }}
-        run: cargo make --profile ci publish
+  # publish:
+  #   needs:
+  #     - build
+  #     - unit-tests-and-checks
+  #     - wasm-rpc-stub
+  #     - worker-tests
+  #     - api-and-integration-tests
+  #   if: "startsWith(github.ref, 'refs/tags/v')"
+  #   env:
+  #     CARGO_BUILD_JOBS: 10
+  #   runs-on: blacksmith-16vcpu-ubuntu-2204
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 1
+  #         submodules: recursive
+  #     - name: Fetch tag
+  #       run: git fetch origin --deepen=1
+  #     - name: Setup Rust
+  #       run: rustup update stable --no-self-update && rustup default stable
+  #     - uses: useblacksmith/rust-cache@v3
+  #       with:
+  #         prefix-key: v3-rust
+  #         shared-key: release
+  #         cache-all-crates: true
+  #         save-if: true
+  #     - uses: davidB/rust-cargo-make@v1
+  #     - name: Install Protoc
+  #       uses: arduino/setup-protoc@v3
+  #       with:
+  #         repo-token: ${{ secrets.GITHUB_TOKEN }}
+  #     - id: get_version
+  #       uses: battila7/get-version-action@v2
+  #     - name: Publish all packages
+  #       env:
+  #         CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+  #         VERSION: ${{ steps.get_version.outputs.version-without-v }}
+  #       run: cargo make --profile ci publish
 
-  publish-slack-notification:
-    needs:
-      - publish
-      - docker-publish
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: blacksmith
-    steps:
-      - name: Publish Slack Notification
-        uses: rtCamp/action-slack-notify@v2
-        env:
-          SLACK_COLOR: ${{ needs.publish.result }}
-          SLACK_ICON: https://uploads-ssl.webflow.com/64721eeec7cd7ef4f6f1683e/64831138b73a996d0e831773_32.png
-          SLACK_TITLE: "Release Notification"
-          SLACK_MESSAGE: "Publish - cargo result: `${{ needs.publish.result }}`, docker result: `${{ needs.docker-publish.result }}`"
-          SLACK_USERNAME: CI
-          SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}
+  # publish-slack-notification:
+  #   needs:
+  #     - publish
+  #     - docker-publish
+  #   if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+  #   runs-on: blacksmith
+  #   steps:
+  #     - name: Publish Slack Notification
+  #       uses: rtCamp/action-slack-notify@v2
+  #       env:
+  #         SLACK_COLOR: ${{ needs.publish.result }}
+  #         SLACK_ICON: https://uploads-ssl.webflow.com/64721eeec7cd7ef4f6f1683e/64831138b73a996d0e831773_32.png
+  #         SLACK_TITLE: "Release Notification"
+  #         SLACK_MESSAGE: "Publish - cargo result: `${{ needs.publish.result }}`, docker result: `${{ needs.docker-publish.result }}`"
+  #         SLACK_USERNAME: CI
+  #         SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}
