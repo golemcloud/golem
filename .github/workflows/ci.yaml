@@ -52,7 +52,7 @@ jobs:
       - name: Download MinGW # TODO CACHE
         run: |
           Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
-          7z.exe x "mingw-w64.7z" -omingw64 -aoa -r
+          7z.exe x "mingw-w64.7z" -aoa -r
           gcc --version
         
       - name: Setup anew (or from cache) vcpkg (and does not build any package)
@@ -63,7 +63,7 @@ jobs:
           runVcpkgInstall: true
           doNotUpdateVcpkg: true
           doNotCache: true
-          runVcpkgFormatString: '[`install`,`--recurse`,`--clean-after-build`,`--x-install-root`,`${{ env.VCPKG_PKG_INSTALL_DIR }}`,`--triplet`,`$[env.VCPKG_DEFAULT_TRIPLET]`]'
+          runVcpkgFormatString: '[`install`,`--recurse`,`--clean-after-build`,`--x-install-root`,"${{ env.VCPKG_PKG_INSTALL_DIR }}",`--triplet`,`$[env.VCPKG_DEFAULT_TRIPLET]`]'
             
       - name: Setup Rust
         run: |
