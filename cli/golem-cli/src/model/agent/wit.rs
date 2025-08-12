@@ -491,7 +491,7 @@ impl AgentWrapperGeneratorContextState {
     fn find_unused_name(&self, name: String) -> String {
         let mut current = name.clone();
         let mut counter = 1;
-        while self.used_names.contains(&name) {
+        while self.used_names.contains(&current) {
             current = format!("{name}{counter}");
             counter += 1;
         }
