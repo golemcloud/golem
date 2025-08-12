@@ -53,17 +53,14 @@ use self::environment_certificates::EnvironmentCertificatesApi;
 use self::environment_components::EnvironmentComponentsApi;
 use self::environment_security_schemes::EnvironmentSecuritySchemesApi;
 use self::environments::EnvironmentsApi;
+use self::error::ApiError;
 use self::login::LoginApi;
 use self::plugin_registration::PluginRegistrationApi;
 use self::security_schemes::SecuritySchemesApi;
 use self::tokens::TokensApi;
-use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::error::{ErrorBody, ErrorsBody};
-use golem_service_base::api::HealthcheckApi;
-use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, OpenApiService};
 use crate::bootstrap::Services;
-use self::error::ApiError;
+use golem_service_base::api::HealthcheckApi;
+use poem_openapi::OpenApiService;
 
 pub type Apis = (
     HealthcheckApi,

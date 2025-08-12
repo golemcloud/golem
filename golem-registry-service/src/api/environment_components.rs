@@ -15,7 +15,10 @@
 use super::ApiResult;
 use super::model::CreateComponentRequest;
 use crate::model::component::Component;
+use crate::services::component::ComponentService;
 use golem_common::api::Page;
+use golem_common::model::ComponentType;
+use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentId;
@@ -26,15 +29,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
-use tracing::Instrument;
-use crate::services::component::ComponentService;
 use std::sync::Arc;
-use golem_common::model::account::AccountId;
-use golem_common::model::ComponentType;
+use tracing::Instrument;
 use uuid::uuid;
 
 pub struct EnvironmentComponentsApi {
-    component_service: Arc<ComponentService>
+    component_service: Arc<ComponentService>,
 }
 
 #[OpenApi(prefix_path = "/v1/envs", tag = ApiTags::Environment,  tag = ApiTags::Component)]
@@ -84,18 +84,21 @@ impl EnvironmentComponentsApi {
         // TODO
         let account_id: AccountId = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
 
-        let response = self.component_service.create(
-            &environment_id,
-            &payload.component_name,
-            payload.component_type.unwrap_or(ComponentType::Durable),
-            data,
-            files_archive,
-            payload.file_options.unwrap_or_default().0,
-            payload.dynamic_linking.unwrap_or_default().0,
-            payload.env.unwrap_or_default().0,
-            payload.agent_types.unwrap_or_default().0,
-            &account_id
-        ).await?;
+        let response = self
+            .component_service
+            .create(
+                &environment_id,
+                &payload.component_name,
+                payload.component_type.unwrap_or(ComponentType::Durable),
+                data,
+                files_archive,
+                payload.file_options.unwrap_or_default().0,
+                payload.dynamic_linking.unwrap_or_default().0,
+                payload.env.unwrap_or_default().0,
+                payload.agent_types.unwrap_or_default().0,
+                &account_id,
+            )
+            .await?;
 
         Ok(Json(response))
     }

@@ -13,30 +13,28 @@
 // limitations under the License.
 
 use crate::config::RegistryServiceConfig;
+use crate::services::component::ComponentService;
+use anyhow::Error;
 use golem_common::config::DbConfig;
 use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use crate::services::component::ComponentService;
 use std::sync::Arc;
-use anyhow::Error;
 
 #[derive(Clone)]
 pub struct Services {
-    pub component_service: Arc<ComponentService>
+    pub component_service: Arc<ComponentService>,
 }
 
 impl Services {
     pub async fn new(config: &RegistryServiceConfig) -> Result<Self, Error> {
         match config.db.clone() {
             DbConfig::Postgres(db_config) => {
-                let db_pool = PostgresPool::configured(&db_config)
-                    .await?;
+                let db_pool = PostgresPool::configured(&db_config).await?;
                 Self::make_with_db(config, db_pool).await
             }
             DbConfig::Sqlite(db_config) => {
-                let db_pool = SqlitePool::configured(&db_config)
-                    .await?;
+                let db_pool = SqlitePool::configured(&db_config).await?;
                 Self::make_with_db(config, db_pool).await
             }
         }

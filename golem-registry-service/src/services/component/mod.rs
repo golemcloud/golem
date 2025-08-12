@@ -19,31 +19,31 @@ pub use self::error::ComponentError;
 use super::component_compilation::ComponentCompilationService;
 use super::component_object_store::ComponentObjectStore;
 use super::component_transformer_plugin_caller::ComponentTransformerPluginCaller;
-use crate::model::component::{ComponentFileOptions, PluginInstallation};
-use crate::model::component::{Component, InitialComponentFilesArchiveAndPermissions};
+use crate::model::component::Component;
+use crate::model::component::{
+    ComponentFileOptions, FinalizedComponentRevision, NewComponentRevision,
+};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRevisionRecord, ComponentRevisionRepoError};
 use crate::services::account_usage::{AccountUsage, AccountUsageService};
-use anyhow::{Context, anyhow};
-use golem_common::model::{InitialComponentFile, InitialComponentFileKey, Revision};
+use anyhow::Context;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::ComponentName;
-use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::{InitialComponentFile, InitialComponentFileKey, Revision};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::vec;
-use tracing::info;
 use tempfile::NamedTempFile;
+use tracing::info;
 
 pub struct ComponentService {
     component_repo: Arc<dyn ComponentRepo>,
@@ -81,7 +81,7 @@ impl ComponentService {
         environment_id: &EnvironmentId,
         component_name: &ComponentName,
         component_type: ComponentType,
-        data: Vec<u8>,
+        wasm: Vec<u8>,
         files_archive: Option<NamedTempFile>,
         file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
@@ -102,59 +102,37 @@ impl ComponentService {
 
         let mut account_usage = self
             .account_usage_service
-            .add_component(actor, data.len() as i64)
+            .add_component(actor, wasm.len() as i64)
             .await?;
 
-        let initial_component_files: Vec<InitialComponentFile> = self.initial_component_files_for_new_component(&environment_id, files_archive, file_options).await?;
+        let initial_component_files: Vec<InitialComponentFile> = self
+            .initial_component_files_for_new_component(environment_id, files_archive, file_options)
+            .await?;
 
         let component_id = ComponentId::new_v4();
+        let wasm_hash: Hash = blake3::hash(wasm.as_slice()).into();
+        let wasm_object_store_key = self
+            .upload_component_wasm(environment_id, wasm.clone())
+            .await?;
 
-        let wasm_hash: Hash = blake3::hash(data.as_slice()).into();
-
-        let mut component = Component::new(
+        let new_revision = NewComponentRevision::new(
             environment_id.clone(),
             component_id.clone(),
             component_name.clone(),
             component_type,
-            &data,
             initial_component_files,
-            vec![],
-            dynamic_linking,
             env,
-            agent_types,
             wasm_hash,
-        )?;
-
-        // TODO:
-        // let (component, transformed_data) =
-        //     self.apply_transformations(component, data.clone()).await?;
-        let transformed_data = data.clone();
-
-        component.metadata = ComponentMetadata::analyse_component(&transformed_data, dynamic_linking, agent_types)?;
-
-        if let Some(known_root_package_name) = &component.metadata.root_package_name
-            && &component_name.0 != known_root_package_name
-        {
-            Err(ComponentError::InvalidComponentName {
-                actual: component_name.0.clone(),
-                expected: known_root_package_name.clone(),
-            })?;
-        }
-
-        tokio::try_join!(
-            self.upload_user_component(&component, data),
-            // TODO:
-            // self.upload_protected_component(&component, transformed_data)
-        )?;
-
-        info!(
-            environment_id = %environment_id,
-            exports = ?component.metadata.exports,
-            dynamic_linking = ?component.metadata.dynamic_linking,
-            "Uploaded component",
+            wasm_object_store_key,
+            dynamic_linking,
+            agent_types,
         );
 
-        let record = ComponentRevisionRecord::from_model(component.clone(), actor);
+        let finalized_revision = self
+            .finalize_new_component_revision(environment_id, new_revision, wasm)
+            .await?;
+
+        let record = ComponentRevisionRecord::from_model(finalized_revision.clone(), actor);
 
         let result = self
             .component_repo
@@ -198,7 +176,7 @@ impl ComponentService {
         agent_types: Option<Vec<AgentType>>,
         actor: &AccountId,
     ) -> Result<Component, ComponentError> {
-        let mut component: Component = self
+        let component: Component = self
             .component_repo
             .get_staged_by_id(&component_id.0)
             .await?
@@ -207,7 +185,7 @@ impl ComponentService {
 
         let environment_id = component.environment_id.clone();
         let component_id = component.versioned_component_id.component_id.clone();
-        let current_revision = component.versioned_component_id.version.clone();
+        let current_revision = component.versioned_component_id.version;
 
         info!(environment_id = %environment_id, "Update component");
 
@@ -230,13 +208,7 @@ impl ComponentService {
         //     }
         // }
 
-        component.original_files = self.initial_component_files_for_updated_component(&environment_id, component.files, removed_files, new_files_archive, new_file_options).await?;
-        component.files = component.original_files.clone();
-        component.original_env = env.unwrap_or(component.env);
-        component.env = component.original_env.clone();
-        component.component_type = component_type.unwrap_or(component.component_type);
-
-        let data = if let Some(new_data) = data {
+        let (wasm, wasm_object_store_key, wasm_hash) = if let Some(new_data) = data {
             let actual_account_usage = self
                 .account_usage_service
                 .add_component(actor, new_data.len() as i64)
@@ -244,29 +216,44 @@ impl ComponentService {
 
             let _ = account_usage.insert(actual_account_usage);
 
-            // make sure we are storing data under new keys so we don't clobber old data.
-            component.regenerate_object_store_key();
-            self.upload_user_component(&component, new_data.clone()).await?;
-            new_data
+            let object_store_key = self
+                .upload_component_wasm(&environment_id, new_data.clone())
+                .await?;
+            let wasm_hash: Hash = blake3::hash(new_data.as_slice()).into();
+            (new_data, object_store_key, wasm_hash)
         } else {
-            self.object_store.get(&environment_id, &component.full_object_store_key()).await?
+            let old_data = self
+                .object_store
+                .get(&environment_id, &component.object_store_key)
+                .await?;
+            (old_data, component.object_store_key, component.wasm_hash)
         };
 
-        // TODO:
-        // let (component, transformed_data) =
-        //     self.apply_transformations(component, data.clone()).await?;
-        let transformed_data = data.clone();
+        let new_revision = NewComponentRevision::new(
+            environment_id.clone(),
+            component_id.clone(),
+            component.component_name,
+            component_type.unwrap_or(component.component_type),
+            self.initial_component_files_for_updated_component(
+                &environment_id,
+                component.files,
+                removed_files,
+                new_files_archive,
+                new_file_options,
+            )
+            .await?,
+            env.unwrap_or(component.env),
+            wasm_hash,
+            wasm_object_store_key,
+            dynamic_linking.unwrap_or(component.metadata.dynamic_linking),
+            agent_types.unwrap_or(component.metadata.agent_types),
+        );
 
-        {
-            let dynamic_linking = dynamic_linking.unwrap_or(component.metadata.dynamic_linking);
-            let agent_types = agent_types.unwrap_or(component.metadata.agent_types);
-            component.metadata = ComponentMetadata::analyse_component(&transformed_data, dynamic_linking, agent_types)?;
-        }
+        let finalized_revision = self
+            .finalize_new_component_revision(&environment_id, new_revision, wasm)
+            .await?;
 
-        component.regenerate_transformed_object_store_key();
-        self.upload_transformed_component(&component, transformed_data).await?;
-
-        let record = ComponentRevisionRecord::from_model(component, actor);
+        let record = ComponentRevisionRecord::from_model(finalized_revision, actor);
 
         let result = self
             .component_repo
@@ -298,17 +285,21 @@ impl ComponentService {
 
         Ok(stored_component)
     }
+
     pub async fn get_component(
         &self,
         component_id: &ComponentId,
     ) -> Result<Component, ComponentError> {
         info!(component_id = %component_id, "Get component");
 
-        let record = self.component_repo.get_staged_by_id(&component_id.0).await?;
+        let record = self
+            .component_repo
+            .get_staged_by_id(&component_id.0)
+            .await?;
 
         match record {
             Some(record) => Ok(record.into()),
-            None => Err(ComponentError::UnknownComponentId(component_id.clone()))
+            None => Err(ComponentError::UnknownComponentId(component_id.clone())),
         }
     }
 
@@ -319,11 +310,14 @@ impl ComponentService {
     ) -> Result<Component, ComponentError> {
         info!(component_id = %component_id, "Get component revision");
 
-        let record = self.component_repo.get_by_id_and_revision(&component_id.0, revision as i64).await?;
+        let record = self
+            .component_repo
+            .get_by_id_and_revision(&component_id.0, revision as i64)
+            .await?;
 
         match record {
             Some(record) => Ok(record.into()),
-            None => Err(ComponentError::UnknownComponentId(component_id.clone()))
+            None => Err(ComponentError::UnknownComponentId(component_id.clone())),
         }
     }
 
@@ -829,34 +823,13 @@ impl ComponentService {
 
     //     Ok(result)
     // }
-    async fn upload_user_component(
+    async fn upload_component_wasm(
         &self,
-        component: &Component,
+        environment_id: &EnvironmentId,
         data: Vec<u8>,
-    ) -> Result<(), ComponentError> {
-        self.object_store
-            .put(
-                &component.environment_id,
-                &component.full_object_store_key(),
-                data,
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn upload_transformed_component(
-        &self,
-        component: &Component,
-        data: Vec<u8>,
-    ) -> Result<(), ComponentError> {
-        self.object_store
-            .put(
-                &component.environment_id,
-                &component.full_transformed_object_store_key(),
-                data,
-            )
-            .await?;
-        Ok(())
+    ) -> Result<String, ComponentError> {
+        let object_key = self.object_store.put(environment_id, data).await?;
+        Ok(object_key)
     }
 
     async fn initial_component_files_for_new_component(
@@ -877,7 +850,7 @@ impl ComponentService {
             result.push(InitialComponentFile {
                 path,
                 key,
-                permissions: options.permissions
+                permissions: options.permissions,
             });
         }
 
@@ -890,7 +863,7 @@ impl ComponentService {
         previous: Vec<InitialComponentFile>,
         removed_files: Vec<ComponentFilePath>,
         new_files_archive: Option<NamedTempFile>,
-        new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>
+        new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
     ) -> Result<Vec<InitialComponentFile>, ComponentError> {
         let uploaded_files = match new_files_archive {
             Some(files) => self.upload_component_files(environment_id, files).await?,
@@ -907,7 +880,14 @@ impl ComponentService {
         }
 
         for (path, key) in uploaded_files {
-            result.insert(path.clone(), InitialComponentFile { key, path, permissions: ComponentFilePermissions::default() });
+            result.insert(
+                path.clone(),
+                InitialComponentFile {
+                    key,
+                    path,
+                    permissions: ComponentFilePermissions::default(),
+                },
+            );
         }
 
         for (path, options) in new_file_options {
@@ -925,27 +905,60 @@ impl ComponentService {
         environment_id: &EnvironmentId,
         archive: NamedTempFile,
     ) -> Result<HashMap<ComponentFilePath, InitialComponentFileKey>, ComponentError> {
+        let to_upload = self::utils::prepare_component_files_for_upload(archive).await?;
 
-        let to_upload =
-            self::utils::prepare_component_files_for_upload(archive).await?;
+        let tasks = to_upload.into_iter().map(|(path, stream)| async move {
+            info!("Uploading file: {}", path.to_string());
 
-        let tasks = to_upload
-            .into_iter()
-            .map(|(path, stream)| async move {
-                info!("Uploading file: {}", path.to_string());
+            let key = self
+                .initial_component_files_service
+                .put_if_not_exists(environment_id, &stream)
+                .await
+                .context("Failed to upload component files")?;
 
-                let key = self
-                    .initial_component_files_service
-                    .put_if_not_exists(environment_id, &stream)
-                    .await
-                    .context("Failed to upload component files")?;
-
-                Ok::<_, ComponentError>((path, key))
-            });
+            Ok::<_, ComponentError>((path, key))
+        });
 
         let uploaded = futures::future::try_join_all(tasks).await?;
 
         Ok(HashMap::from_iter(uploaded))
+    }
+
+    async fn finalize_new_component_revision(
+        &self,
+        environment_id: &EnvironmentId,
+        new_revision: NewComponentRevision,
+        wasm: Vec<u8>,
+    ) -> Result<FinalizedComponentRevision, ComponentError> {
+        // TODO:
+        // let (component, transformed_data) =
+        //     self.apply_transformations(component, data.clone()).await?;
+
+        let transformed_data = wasm.clone();
+        let transformed_object_store_key = self
+            .upload_component_wasm(environment_id, transformed_data.clone())
+            .await?;
+
+        let finalized_revision = new_revision
+            .with_transformed_component(transformed_object_store_key, &transformed_data)?;
+
+        if let Some(known_root_package_name) = &finalized_revision.metadata.root_package_name
+            && &finalized_revision.component_name.0 != known_root_package_name
+        {
+            Err(ComponentError::InvalidComponentName {
+                actual: finalized_revision.component_name.0.clone(),
+                expected: known_root_package_name.clone(),
+            })?;
+        }
+
+        info!(
+            environment_id = %environment_id,
+            exports = ?finalized_revision.metadata.exports,
+            dynamic_linking = ?finalized_revision.metadata.dynamic_linking,
+            "Finalized component",
+        );
+
+        Ok(finalized_revision)
     }
 
     // TODO:

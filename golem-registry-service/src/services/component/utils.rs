@@ -14,20 +14,17 @@
 
 use super::ComponentError;
 use crate::model::component::{
-    ConflictReport, ConflictingFunction, InitialComponentFilesArchiveAndPermissions,
-    ParameterTypeConflict, ReturnTypeConflict,
+    ConflictReport, ConflictingFunction, ParameterTypeConflict, ReturnTypeConflict,
 };
 use anyhow::anyhow;
 use async_zip::ZipEntry;
 use async_zip::tokio::read::seek::ZipFileReader;
-use bytes::Bytes;
 use futures::TryStreamExt;
+use golem_common::model::ComponentFilePath;
 use golem_common::model::component_constraint::FunctionConstraints;
-use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::FunctionDictionary;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 use tempfile::NamedTempFile;
@@ -40,7 +37,7 @@ use wac_graph::types::Package;
 use wac_graph::{CompositionGraph, EncodeOptions, PlugError};
 
 pub async fn prepare_component_files_for_upload(
-    archive: NamedTempFile
+    archive: NamedTempFile,
 ) -> Result<Vec<(ComponentFilePath, ZipEntryStream)>, ComponentError> {
     let archive = Arc::new(archive);
 
@@ -90,7 +87,7 @@ impl ZipEntryStream {
 }
 
 impl ReplayableStream for ZipEntryStream {
-    type Item = Result<Bytes, anyhow::Error>;
+    type Item = Result<Vec<u8>, anyhow::Error>;
     type Error = anyhow::Error;
 
     async fn make_stream(
@@ -102,7 +99,7 @@ impl ReplayableStream for ZipEntryStream {
         let zip_archive = ZipFileReader::with_tokio(buf_reader).await?;
         let entry_reader = zip_archive.into_entry(self.index).await?;
         let stream = ReaderStream::new(entry_reader.compat());
-        let mapped_stream = stream.map_err(|e| e.into());
+        let mapped_stream = stream.map_ok(|b| b.to_vec()).map_err(|e| e.into());
         Ok(Box::pin(mapped_stream))
     }
 

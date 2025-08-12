@@ -18,20 +18,18 @@
 //! - general server-side only utilities -> golem_service_base::api::*
 //! - types specific to this api that are not reused by the client -> golem_registry_service::api::model::*
 
+use crate::model::component::ComponentFileOptions;
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::login::TokenWithSecret;
 use golem_common::model::plugin::{PluginInstallationAction, PluginScope};
-use golem_common::model::{
-    ComponentFilePath, ComponentFilePermissions, ComponentType, ComponentVersion, Empty,
-};
+use golem_common::model::{ComponentFilePath, ComponentType, ComponentVersion, Empty};
 use golem_service_base::poem::TempFileUpload;
 use poem_openapi::payload::Json;
 use poem_openapi::types::multipart::{JsonField, Upload};
-use poem_openapi::{ApiResponse, Multipart, Object, Union};
+use poem_openapi::{ApiResponse, Multipart};
 use std::collections::{BTreeMap, HashMap};
-use crate::model::component::{ComponentFileOptions};
 
 #[derive(Debug, poem_openapi::Multipart)]
 #[oai(rename_all = "camelCase")]

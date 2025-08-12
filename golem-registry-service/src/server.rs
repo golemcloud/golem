@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::Error;
 use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_registry_service::api::make_open_api_service;
@@ -25,7 +26,6 @@ use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use prometheus::Registry;
 use std::path::Path;
 use tracing::error;
-use anyhow::Error;
 
 fn main() -> Result<(), Error> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
@@ -60,8 +60,7 @@ fn main() -> Result<(), Error> {
 
 async fn dump_openapi_yaml() -> Result<(), Error> {
     let config = RegistryServiceConfig::default();
-    let services = Services::new(&config)
-        .await?;
+    let services = Services::new(&config).await?;
 
     let open_api_service = make_open_api_service(&services);
     println!("{}", open_api_service.spec_yaml());

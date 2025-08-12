@@ -14,35 +14,31 @@
 
 use super::ApiResult;
 use super::model::UpdateComponentRequest;
-use crate::model::component::{Component, InitialComponentFilesArchiveAndPermissions};
+use crate::model::component::Component;
+use crate::services::component::ComponentService;
 use golem_common::api::Page;
+use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::{ComponentId, Revision};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem::Body;
-use poem_openapi::{payload, OpenApi};
+use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::{Binary, Json};
-use tracing::Instrument;
-use crate::services::component::ComponentService;
 use std::sync::Arc;
-use golem_common::model::account::AccountId;
+use tracing::Instrument;
 use uuid::uuid;
 
 pub struct ComponentsApi {
-    component_service: Arc<ComponentService>
+    component_service: Arc<ComponentService>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentsApi {
-    pub fn new(
-        component_service: Arc<ComponentService>
-    ) -> Self {
-        Self {
-            component_service
-        }
+    pub fn new(component_service: Arc<ComponentService>) -> Self {
+        Self { component_service }
     }
 
     /// Get a component by id
@@ -146,7 +142,10 @@ impl ComponentsApi {
         revision: Revision,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        let component = self.component_service.get_component_revision(&component_id, revision).await?;
+        let component = self
+            .component_service
+            .get_component_revision(&component_id, revision)
+            .await?;
         Ok(Json(component))
     }
 
@@ -223,7 +222,7 @@ impl ComponentsApi {
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         let data = if let Some(upload) = payload.component {
-             Some(upload.into_vec().await?)
+            Some(upload.into_vec().await?)
         } else {
             None
         };
@@ -245,7 +244,7 @@ impl ComponentsApi {
                 payload.dynamic_linking.map(|v| v.0),
                 payload.env.map(|v| v.0),
                 payload.agent_types.map(|v| v.0),
-                &account_id
+                &account_id,
             )
             .await?;
 

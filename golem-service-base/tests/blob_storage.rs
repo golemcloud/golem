@@ -257,7 +257,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, Error>, Error = Error>,
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
         self.storage
             .put_stream(target_label, op_label, namespace, path, stream)
@@ -518,7 +518,7 @@ async fn get_put_get_new_dir_streaming(
     for n in 1..(10 * 1024 * 1024) {
         data.put_u8((n % 100) as u8);
     }
-    let data = data.freeze();
+    let data = data.freeze().to_vec();
 
     let stream = (&data)
         .map_item(|i| i.map_err(widen_infallible))

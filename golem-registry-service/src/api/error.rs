@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use poem_openapi::ApiResponse;
-use poem_openapi::payload::Json;
-use golem_common::model::error::{ErrorBody, ErrorsBody};
-use golem_common::metrics::api::TraceErrorKind;
 use crate::services::component::ComponentError;
 use golem_common::SafeDisplay;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
+use poem_openapi::ApiResponse;
+use poem_openapi::payload::Json;
 
 #[derive(ApiResponse, Debug, Clone)]
 pub enum ApiError {
@@ -52,7 +52,7 @@ impl TraceErrorKind for ApiError {
             ApiError::InternalError(_) => "InternalError",
             ApiError::Conflict(_) => "Conflict",
             ApiError::Forbidden(_) => "Forbidden",
-            ApiError::LimitExceeded(_) => "LimitExceeded"
+            ApiError::LimitExceeded(_) => "LimitExceeded",
         }
     }
 
@@ -64,7 +64,7 @@ impl TraceErrorKind for ApiError {
             ApiError::InternalError(_) => false,
             ApiError::Forbidden(_) => true,
             ApiError::Conflict(_) => true,
-            ApiError::LimitExceeded(_) => true
+            ApiError::LimitExceeded(_) => true,
         }
     }
 }
@@ -80,23 +80,17 @@ impl From<std::io::Error> for ApiError {
 impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
         match value {
-            ComponentError::Unauthorized(_) => {
-                Self::Unauthorized(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
+            ComponentError::Unauthorized(_) => Self::Unauthorized(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
 
-            ComponentError::LimitExceeded { .. } => {
-                Self::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_safe_string()],
-                }))
-            }
+            ComponentError::LimitExceeded { .. } => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![value.to_safe_string()],
+            })),
 
-            ComponentError::AlreadyExists(_) => {
-                Self::Conflict(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
+            ComponentError::AlreadyExists(_) => Self::Conflict(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
 
             ComponentError::ComponentProcessingError(_)
             | ComponentError::InitialComponentFileNotFound { .. }
@@ -114,17 +108,13 @@ impl From<ComponentError> for ApiError {
 
             ComponentError::UnknownComponentId(_)
             | ComponentError::UnknownVersionedComponentId(_)
-            | ComponentError::PluginNotFound { .. } => {
-                Self::NotFound(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
+            | ComponentError::PluginNotFound { .. } => Self::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
 
-            ComponentError::InternalError(_) => {
-                Self::InternalError(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
+            ComponentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
         }
     }
 }

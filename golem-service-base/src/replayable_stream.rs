@@ -139,7 +139,23 @@ impl ReplayableStream for Bytes {
 
     async fn make_stream(
         &self,
-    ) -> Result<impl Stream<Item = Result<Bytes, Infallible>> + Send + 'static, Infallible> {
+    ) -> Result<impl Stream<Item = Self::Item> + Send + 'static, Infallible> {
+        let data = self.clone();
+        Ok(Box::pin(futures::stream::once(async move { Ok(data) })))
+    }
+
+    async fn length(&self) -> Result<u64, Self::Error> {
+        Ok(self.len() as u64)
+    }
+}
+
+impl ReplayableStream for Vec<u8> {
+    type Error = Infallible;
+    type Item = Result<Vec<u8>, Infallible>;
+
+    async fn make_stream(
+        &self,
+    ) -> Result<impl Stream<Item = Self::Item> + Send + 'static, Infallible> {
         let data = self.clone();
         Ok(Box::pin(futures::stream::once(async move { Ok(data) })))
     }
@@ -155,16 +171,17 @@ pub trait ContentHash {
     fn content_hash(&self) -> impl Future<Output = Result<String, Self::Error>> + Send;
 }
 
-impl<Error, Stream> ContentHash for Stream
+impl<Error, Data, Stream> ContentHash for Stream
 where
     Error: Debug + Display + Send + 'static,
-    Stream: ReplayableStream<Error = Error, Item = Result<Bytes, Error>>,
+    Data: async_hash::Hash<async_hash::Sha256> + 'static,
+    Stream: ReplayableStream<Error = Error, Item = Result<Data, Error>>,
 {
     type Error = Error;
 
     async fn content_hash(&self) -> Result<String, Self::Error> {
         let stream = self
-            .map_item(|i| i.map(|b| b.to_vec()).map_err(HashingError))
+            .map_item(|i| i.map_err(HashingError))
             .make_stream()
             .await?;
         let hash = async_hash::hash_try_stream::<async_hash::Sha256, _, _, _>(stream)

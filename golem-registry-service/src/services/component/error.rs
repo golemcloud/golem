@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::ConflictReport;
 use crate::services::account_usage::error::AccountUsageError;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
