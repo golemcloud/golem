@@ -50,7 +50,7 @@ jobs:
       - name: Download MinGW # TODO CACHE
         run: |
           Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
-          7z.exe" x "mingw-w64.7z" -omingw64 -aoa -r
+          7z.exe x "mingw-w64.7z" -omingw64 -aoa -r
           gcc --version
         
       - name: Setup Rust
