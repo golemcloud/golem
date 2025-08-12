@@ -22,12 +22,14 @@ use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem::Body;
-use poem_openapi::OpenApi;
+use poem_openapi::{payload, OpenApi};
 use poem_openapi::param::Path;
 use poem_openapi::payload::{Binary, Json};
 use tracing::Instrument;
 use crate::services::component::ComponentService;
 use std::sync::Arc;
+use golem_common::model::account::AccountId;
+use uuid::uuid;
 
 pub struct ComponentsApi {
     component_service: Arc<ComponentService>
@@ -185,77 +187,68 @@ impl ComponentsApi {
         todo!()
     }
 
-    // /// Update a component
-    // ///
-    // /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-    // #[oai(
-    //     path = "/:component_id",
-    //     method = "patch",
-    //     operation_id = "update_component"
-    // )]
-    // async fn update_component(
-    //     &self,
-    //     component_id: Path<ComponentId>,
-    //     payload: UpdateComponentRequest,
-    //     token: GolemSecurityScheme,
-    // ) -> ApiResult<Json<Component>> {
-    //     let record = recorded_http_api_request!(
-    //         "update_component",
-    //         component_id = component_id.0.to_string(),
-    //     );
+    /// Update a component
+    ///
+    /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+    #[oai(
+        path = "/:component_id",
+        method = "patch",
+        operation_id = "update_component"
+    )]
+    async fn update_component(
+        &self,
+        component_id: Path<ComponentId>,
+        payload: UpdateComponentRequest,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Component>> {
+        let record = recorded_http_api_request!(
+            "update_component",
+            component_id = component_id.0.to_string(),
+        );
 
-    //     let auth = AuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
-    //     let response = self
-    //         .update_component_internal(component_id.0, payload, auth)
-    //         .instrument(record.span.clone())
-    //         .await;
+        let response = self
+            .update_component_internal(component_id.0, payload, auth)
+            .instrument(record.span.clone())
+            .await;
 
-    //     record.result(response)
-    // }
+        record.result(response)
+    }
 
-    // async fn update_component_internal(
-    //     &self,
-    //     component_id: ComponentId,
-    //     payload: UpdateComponentRequest,
-    //     _auth: AuthCtx,
-    // ) -> ApiResult<Json<Component>> {
-    //     let data = if let Some(upload) = payload.component {
-    //          Some(upload.into_vec().await?)
-    //     } else {
-    //         None
-    //     };
+    async fn update_component_internal(
+        &self,
+        component_id: ComponentId,
+        payload: UpdateComponentRequest,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Component>> {
+        let data = if let Some(upload) = payload.component {
+             Some(upload.into_vec().await?)
+        } else {
+            None
+        };
 
-    //     let files_archive = payload.files_archive.map(|f| f.into_file());
+        // TODO
+        let account_id: AccountId = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
 
-    //     let files = files_archive
-    //         .zip(payload.files)
-    //         .map(
-    //             |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
-    //                 archive,
-    //                 files: permissions.values,
-    //             },
-    //         );
+        let new_files_archive = payload.new_files.map(|f| f.into_file());
 
+        let response = self
+            .component_service
+            .update(
+                &component_id,
+                data,
+                payload.component_type,
+                payload.removed_files.unwrap_or_default().0,
+                new_files_archive,
+                payload.new_file_options.unwrap_or_default().0,
+                payload.dynamic_linking.map(|v| v.0),
+                payload.env.map(|v| v.0),
+                payload.agent_types.map(|v| v.0),
+                &account_id
+            )
+            .await?;
 
-    //     let files_archive = payload.files_archive.map(|f| f.into_file());
-
-    //     let response = self
-    //         .component_service
-    //         .update(
-    //             &component_id,
-    //             payload.component_type,
-    //             data,
-    //             files,
-    //             payload.dynamic_linking.map(|f| f.0),
-    //             &auth,
-    //             env,
-    //             payload
-    //                 .agent_types
-    //                 .map(|types| types.0.types)
-    //                 .unwrap_or_default(),
-    //         )
-    //         .await?;
-
-    // }
+        Ok(Json(response))
+    }
 }

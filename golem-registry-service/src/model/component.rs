@@ -113,11 +113,6 @@ impl Component {
     pub fn regenerate_transformed_object_store_key(&mut self) {
         self.transformed_object_store_key = Uuid::new_v4().to_string();
     }
-
-    pub fn reset_transformations(&mut self) {
-        self.env = self.original_env.clone();
-        self.files = self.original_files.clone();
-    }
 }
 
 #[derive(Debug, Clone, Object)]
@@ -258,25 +253,6 @@ fn convert_to_pretty_type(analysed_type: &Option<AnalysedType>) -> String {
 }
 
 #[derive(Clone, Debug, Object)]
-pub struct PreviousVersionComponentFileSource {
-    /// path in the filesystem of the previous component version
-    pub path_in_previous_version: String,
-}
-
-#[derive(Clone, Debug, Object)]
-pub struct ArchiveComponentFileSource {
-    /// path in the archive that was uploaded as part of this request
-    pub path_in_archive: String,
-}
-
-#[derive(Clone, Debug, Union)]
-#[oai(one_of = true)]
-pub enum ComponentFileSource {
-    PreviousVersion(PreviousVersionComponentFileSource),
-    Archive(ArchiveComponentFileSource),
-}
-
-#[derive(Clone, Debug, Object)]
 pub struct ComponentFileOptions {
     /// Path of the file in the uploaded archive
     pub permissions: ComponentFilePermissions,
@@ -285,14 +261,7 @@ pub struct ComponentFileOptions {
 impl Default for ComponentFileOptions {
     fn default() -> Self {
         Self {
-            permissions: ComponentFilePermissions::ReadOnly
+            permissions: ComponentFilePermissions::default()
         }
     }
-}
-
-#[derive(Clone, Debug, Object)]
-pub struct ComponentFileOptionsForUpdate {
-    /// Path of the file in the uploaded archive
-    pub source: ComponentFileSource,
-    pub permissions: ComponentFilePermissions,
 }

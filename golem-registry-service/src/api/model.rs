@@ -31,7 +31,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::{ApiResponse, Multipart, Object, Union};
 use std::collections::{BTreeMap, HashMap};
-use crate::model::component::{ComponentFileOptions, ComponentFileOptionsForUpdate};
+use crate::model::component::{ComponentFileOptions};
 
 #[derive(Debug, poem_openapi::Multipart)]
 #[oai(rename_all = "camelCase")]
@@ -96,9 +96,11 @@ pub struct UpdateComponentRequest {
     pub previous_version: ComponentVersion,
     pub component_type: Option<ComponentType>,
     pub component: Option<Upload>,
-    pub files: Option<JsonField<BTreeMap<ComponentFilePath, ComponentFileOptionsForUpdate>>>,
+    pub removed_files: Option<JsonField<Vec<ComponentFilePath>>>,
+    pub new_files: Option<TempFileUpload>,
+    pub new_file_options: Option<JsonField<BTreeMap<ComponentFilePath, ComponentFileOptions>>>,
     pub files_archive: Option<TempFileUpload>,
-    pub dynamic_linking: Option<JsonField<BTreeMap<String, DynamicLinkedInstance>>>,
+    pub dynamic_linking: Option<JsonField<HashMap<String, DynamicLinkedInstance>>>,
     pub env: Option<JsonField<BTreeMap<String, String>>>,
     pub agent_types: Option<JsonField<Vec<AgentType>>>,
     pub plugin_installation_actions: Option<JsonField<Vec<PluginInstallationAction>>>,

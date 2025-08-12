@@ -1857,6 +1857,12 @@ impl ComponentFilePermissions {
     }
 }
 
+impl Default for ComponentFilePermissions {
+    fn default() -> Self {
+        Self::ReadOnly
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
