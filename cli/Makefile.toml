@@ -270,5 +270,5 @@ exec --fail-on-error npm update
 exec --fail-on-error npm install
 exec --fail-on-error npm run generate
 exec --fail-on-error npm run build
-cp dist/wrapper/target/wasm32-wasip1/release/golem_agent.wasm ../golem-templates/templates/ts/ts-agent-app-common/wasm/golem_agent.wasm
+cp dist/wrapper/target/wasm32-wasip1/release/golem_agent.wasm ../golem-templates/templates/ts/ts-app-common/wasm/golem_agent.wasm
 '''
