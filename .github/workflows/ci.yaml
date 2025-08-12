@@ -37,9 +37,9 @@ jobs:
       - name: Update PATH # for security reasons github requires the PATH to be appended via commands
         run: |
           echo "${{ github.workspace }}/mingw64/bin/" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          echo "C:/vcpkg/" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/bin/" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:/Program Files/7-Zip/" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -48,6 +48,21 @@ jobs:
       - name: Fetch tag
         run: git fetch origin --deepen=1
         
+      - name: Setup anew (or from cache) vcpkg (and does not build any package)
+        uses: lukka/run-vcpkg@v11
+        id: runvcpkg
+        with:
+          vcpkgDirectory: "C:/vcpkg"
+          runVcpkgInstall: true
+          doNotUpdateVcpkg: true
+          runVcpkgFormatString:
+            - `install`
+            - `--recurse`
+            - `--clean-after-build`
+            - `--x-install-root`
+            - `${{ github.workspace }}/vcpkg_installed`
+            - `--triplet`, `$[env.VCPKG_DEFAULT_TRIPLET]`
+            
       - name: Download MinGW # TODO CACHE
         run: |
           Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
@@ -67,12 +82,6 @@ jobs:
           cache-all-crates: true
           save-if: true
       - uses: davidB/rust-cargo-make@v1
-      - name: Setup anew (or from cache) vcpkg (and does not build any package)
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgDirectory: "C:/vcpkg"
-          runVcpkgInstall: true
-          doNotUpdateVcpkg: true
       - name: Building all executables
         env:
           QUIET: true
