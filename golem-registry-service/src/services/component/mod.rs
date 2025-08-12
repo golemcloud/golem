@@ -23,6 +23,7 @@ use crate::model::component::PluginInstallation;
 use crate::model::component::{Component, InitialComponentFilesArchiveAndPermissions};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRevisionRecord, ComponentRevisionRepoError};
+use crate::services::account_usage::AccountUsageService;
 use anyhow::{Context, anyhow};
 use golem_common::model::InitialComponentFile;
 use golem_common::model::account::AccountId;
@@ -34,7 +35,6 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::{ComponentId, ComponentType};
-use golem_service_base::clients::limit::LimitService;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::collections::HashSet;
@@ -51,7 +51,7 @@ pub struct ComponentService {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     _plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     _transformer_plugin_caller: Arc<dyn ComponentTransformerPluginCaller>,
-    _limit_service: Arc<dyn LimitService>,
+    account_usage_service: Arc<AccountUsageService>,
 }
 
 impl ComponentService {
@@ -62,7 +62,7 @@ impl ComponentService {
         initial_component_files_service: Arc<InitialComponentFilesService>,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
         transformer_plugin_caller: Arc<dyn ComponentTransformerPluginCaller>,
-        limit_service: Arc<dyn LimitService>,
+        account_usage_service: Arc<AccountUsageService>,
     ) -> Self {
         Self {
             component_repo,
@@ -71,7 +71,7 @@ impl ComponentService {
             initial_component_files_service,
             _plugin_wasm_files_service: plugin_wasm_files_service,
             _transformer_plugin_caller: transformer_plugin_caller,
-            _limit_service: limit_service,
+            account_usage_service,
         }
     }
 
@@ -769,11 +769,10 @@ impl ComponentService {
         agent_types: Vec<AgentType>,
         actor: &AccountId,
     ) -> Result<Component, ComponentError> {
-        // TODO:
-        // FIXME: This needs to be reverted in case creation fails.
-        // self.limit_service
-        //     .update_component_limit(&owner.account_id, component_id, 1, component_size as i64)
-        //     .await?;
+        let mut account_usage = self
+            .account_usage_service
+            .add_component(actor, data.len() as i64)
+            .await?;
 
         let wasm_hash: Hash = blake3::hash(data.as_slice()).into();
 
@@ -834,6 +833,8 @@ impl ComponentService {
             Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),
         };
 
+        account_usage.ack();
+
         self.component_compilation
             .enqueue_compilation(
                 environment_id,
@@ -857,13 +858,10 @@ impl ComponentService {
         agent_types: Vec<AgentType>,
         actor: &AccountId,
     ) -> Result<Component, ComponentError> {
-        // let component_size: u64 = data.len() as u64;
-
-        // TODO:
-        // FIXME: This needs to be reverted in case creation fails.
-        // self.limit_service
-        //     .update_component_limit(&owner.account_id, component_id, 1, component_size as i64)
-        //     .await?;
+        let mut account_usage = self
+            .account_usage_service
+            .add_component(actor, data.len() as i64)
+            .await?;
 
         let metadata = ComponentMetadata::analyse_component(&data, dynamic_linking, agent_types)
             .map_err(ComponentError::ComponentProcessingError)?;
@@ -948,6 +946,8 @@ impl ComponentService {
                 stored_component.versioned_component_id.version,
             )
             .await;
+
+        account_usage.ack();
 
         Ok(stored_component)
     }

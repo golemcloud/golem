@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::component::ConflictReport;
+use crate::services::account_usage::error::AccountUsageError;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::VersionedComponentId;
@@ -52,8 +53,12 @@ pub enum ComponentError {
     InvalidComponentName { expected: String, actual: String },
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
-    #[error("Limit exceeded: {0}")]
-    LimitExceeded(String),
+    #[error("Limit {limit_name} exceeded, limit: {limit_value}, current: {current_value}")]
+    LimitExceeded {
+        limit_name: String,
+        limit_value: i64,
+        current_value: i64,
+    },
     #[error("Plugin does not implement golem:api/oplog-processor")]
     InvalidOplogProcessorPlugin,
     #[error("Plugin not found: {account_id}/{plugin_name}@{plugin_version}")]
@@ -118,14 +123,14 @@ impl SafeDisplay for ComponentError {
             Self::InvalidFilePath(_) => self.to_string(),
             Self::InvalidComponentName { .. } => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
-            Self::LimitExceeded(_) => self.to_string(),
+            Self::LimitExceeded { .. } => self.to_string(),
             Self::InvalidOplogProcessorPlugin => self.to_string(),
             Self::PluginNotFound { .. } => self.to_string(),
             Self::BlobStorageError(_) => self.to_string(),
             Self::InvalidPluginScope { .. } => self.to_string(),
             Self::ConcurrentUpdate { .. } => self.to_string(),
             Self::PluginInstallationNotFound { .. } => self.to_string(),
-            Self::InternalError(_) => self.to_string(),
+            Self::InternalError(_) => "Internal error".to_string(),
         }
     }
 }
@@ -133,5 +138,22 @@ impl SafeDisplay for ComponentError {
 impl From<RepoError> for ComponentError {
     fn from(value: RepoError) -> Self {
         Self::InternalError(anyhow::Error::new(value).context("from RepoError"))
+    }
+}
+
+impl From<AccountUsageError> for ComponentError {
+    fn from(value: AccountUsageError) -> Self {
+        match value {
+            AccountUsageError::LimitExceeded {
+                limit_name,
+                limit_value,
+                current_value,
+            } => Self::LimitExceeded {
+                limit_name,
+                limit_value,
+                current_value,
+            },
+            _ => Self::InternalError(anyhow::Error::new(value).context("from AccountUsageError")),
+        }
     }
 }

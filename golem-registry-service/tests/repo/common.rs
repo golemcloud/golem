@@ -1103,7 +1103,7 @@ pub async fn test_account_usage(deps: &Deps) {
             "{usage_type:?}"
         );
         check!(usage.usage(usage_type) == 0, "{usage_type:?}");
-        assert!(usage.add_checked(usage_type, Some(1)).unwrap());
+        assert!(usage.add_checked(usage_type, 1).unwrap());
         check!(usage.increase(usage_type) == 1, "{usage_type:?}");
     }
 
@@ -1173,7 +1173,7 @@ pub async fn test_account_usage(deps: &Deps) {
             .unwrap();
 
         for usage_type in UsageType::iter() {
-            check!(!usage.add_checked(usage_type, Some(1000000)).unwrap());
+            check!(!usage.add_checked(usage_type, 1000000).unwrap());
         }
     }
 

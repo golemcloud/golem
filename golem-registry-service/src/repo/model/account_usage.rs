@@ -103,21 +103,15 @@ impl AccountUsage {
         self.increase.get(&usage_type).copied().unwrap_or(0)
     }
 
-    pub fn add_checked(
-        &mut self,
-        usage_type: UsageType,
-        increase: Option<i64>,
-    ) -> RepoResult<bool> {
+    pub fn add_checked(&mut self, usage_type: UsageType, increase: i64) -> RepoResult<bool> {
         let Some(limit) = self.plan.limit(usage_type)? else {
             return Ok(true);
         };
 
-        if let Some(increase) = increase {
-            self.increase
-                .entry(usage_type)
-                .and_modify(|e| *e += increase)
-                .or_insert(increase);
-        }
+        self.increase
+            .entry(usage_type)
+            .and_modify(|e| *e += increase)
+            .or_insert(increase);
 
         let increase = self.increase.get(&usage_type).copied().unwrap_or(0);
 
