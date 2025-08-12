@@ -14,7 +14,7 @@
 
 use super::ApiResult;
 use super::model::UpdateComponentRequest;
-use crate::model::component::Component;
+use crate::model::component::{Component, InitialComponentFilesArchiveAndPermissions};
 use golem_common::api::Page;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::{ComponentId, Revision};
@@ -140,11 +140,12 @@ impl ComponentsApi {
 
     async fn get_component_revision_internal(
         &self,
-        _component_id: ComponentId,
-        _revision: Revision,
+        component_id: ComponentId,
+        revision: Revision,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        todo!()
+        let component = self.component_service.get_component_revision(&component_id, revision).await?;
+        Ok(Json(component))
     }
 
     /// Get the component wasm binary of a specific revision
@@ -184,41 +185,77 @@ impl ComponentsApi {
         todo!()
     }
 
-    /// Update a component
-    ///
-    /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-    #[oai(
-        path = "/:component_id",
-        method = "patch",
-        operation_id = "update_component"
-    )]
-    async fn update_component(
-        &self,
-        component_id: Path<ComponentId>,
-        payload: UpdateComponentRequest,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Component>> {
-        let record = recorded_http_api_request!(
-            "update_component",
-            component_id = component_id.0.to_string(),
-        );
+    // /// Update a component
+    // ///
+    // /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+    // #[oai(
+    //     path = "/:component_id",
+    //     method = "patch",
+    //     operation_id = "update_component"
+    // )]
+    // async fn update_component(
+    //     &self,
+    //     component_id: Path<ComponentId>,
+    //     payload: UpdateComponentRequest,
+    //     token: GolemSecurityScheme,
+    // ) -> ApiResult<Json<Component>> {
+    //     let record = recorded_http_api_request!(
+    //         "update_component",
+    //         component_id = component_id.0.to_string(),
+    //     );
 
-        let auth = AuthCtx::new(token.secret());
+    //     let auth = AuthCtx::new(token.secret());
 
-        let response = self
-            .update_component_internal(component_id.0, payload, auth)
-            .instrument(record.span.clone())
-            .await;
+    //     let response = self
+    //         .update_component_internal(component_id.0, payload, auth)
+    //         .instrument(record.span.clone())
+    //         .await;
 
-        record.result(response)
-    }
+    //     record.result(response)
+    // }
 
-    async fn update_component_internal(
-        &self,
-        _component_id: ComponentId,
-        _payload: UpdateComponentRequest,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Component>> {
-        todo!()
-    }
+    // async fn update_component_internal(
+    //     &self,
+    //     component_id: ComponentId,
+    //     payload: UpdateComponentRequest,
+    //     _auth: AuthCtx,
+    // ) -> ApiResult<Json<Component>> {
+    //     let data = if let Some(upload) = payload.component {
+    //          Some(upload.into_vec().await?)
+    //     } else {
+    //         None
+    //     };
+
+    //     let files_archive = payload.files_archive.map(|f| f.into_file());
+
+    //     let files = files_archive
+    //         .zip(payload.files)
+    //         .map(
+    //             |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
+    //                 archive,
+    //                 files: permissions.values,
+    //             },
+    //         );
+
+
+    //     let files_archive = payload.files_archive.map(|f| f.into_file());
+
+    //     let response = self
+    //         .component_service
+    //         .update(
+    //             &component_id,
+    //             payload.component_type,
+    //             data,
+    //             files,
+    //             payload.dynamic_linking.map(|f| f.0),
+    //             &auth,
+    //             env,
+    //             payload
+    //                 .agent_types
+    //                 .map(|types| types.0.types)
+    //                 .unwrap_or_default(),
+    //         )
+    //         .await?;
+
+    // }
 }

@@ -69,6 +69,14 @@ impl TraceErrorKind for ApiError {
     }
 }
 
+impl From<std::io::Error> for ApiError {
+    fn from(value: std::io::Error) -> Self {
+        Self::InternalError(Json(ErrorBody {
+            error: value.to_string(),
+        }))
+    }
+}
+
 impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
         match value {

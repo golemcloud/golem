@@ -1762,7 +1762,7 @@ impl Display for InitialComponentFileKey {
 /// - not contain ".." components
 /// - not contain "." components
 /// - use '/' as a separator
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct ComponentFilePath(Utf8UnixPathBuf);
 
 impl ComponentFilePath {

@@ -30,7 +30,8 @@ use golem_service_base::poem::TempFileUpload;
 use poem_openapi::payload::Json;
 use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::{ApiResponse, Multipart, Object, Union};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use crate::model::component::{ComponentFileOptions, ComponentFileOptionsForUpdate};
 
 #[derive(Debug, poem_openapi::Multipart)]
 #[oai(rename_all = "camelCase")]
@@ -76,49 +77,16 @@ pub enum WebFlowCallbackResponse {
     Success(Json<Empty>),
 }
 
-#[derive(Clone, Debug, Object)]
-pub struct PreviousVersionComponentFileSource {
-    /// path in the filesystem of the previous component version
-    path_in_previous_version: String,
-}
-
-#[derive(Clone, Debug, Object)]
-pub struct ArchiveComponentFileSource {
-    /// path in the archive that was uploaded as part of this request
-    path_in_archive: String,
-}
-
-#[derive(Clone, Debug, Union)]
-#[oai(one_of = true)]
-pub enum ComponentFileSource {
-    PreviousVersion(PreviousVersionComponentFileSource),
-    Archive(ArchiveComponentFileSource),
-}
-
-#[derive(Clone, Debug, Object)]
-pub struct ComponentFileOptions {
-    /// Path of the file in the uploaded archive
-    pub source: ArchiveComponentFileSource,
-    pub permissions: ComponentFilePermissions,
-}
-
-#[derive(Clone, Debug, Object)]
-pub struct ComponentFileOptionsForUpdate {
-    /// Path of the file in the uploaded archive
-    pub source: ComponentFileSource,
-    pub permissions: ComponentFilePermissions,
-}
-
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 pub struct CreateComponentRequest {
     pub component_name: ComponentName,
     pub component: Upload,
     pub component_type: Option<ComponentType>,
-    pub files: Option<JsonField<HashMap<ComponentFilePath, ComponentFileOptions>>>,
+    pub files: Option<JsonField<BTreeMap<ComponentFilePath, ComponentFileOptions>>>,
     pub files_archive: Option<TempFileUpload>,
-    pub dynamic_linking: Option<JsonField<HashMap<String, DynamicLinkedInstance>>>,
-    pub env: Option<JsonField<HashMap<String, String>>>,
+    pub dynamic_linking: Option<JsonField<BTreeMap<String, DynamicLinkedInstance>>>,
+    pub env: Option<JsonField<BTreeMap<String, String>>>,
     pub agent_types: Option<JsonField<Vec<AgentType>>>,
 }
 
@@ -128,10 +96,10 @@ pub struct UpdateComponentRequest {
     pub previous_version: ComponentVersion,
     pub component_type: Option<ComponentType>,
     pub component: Option<Upload>,
-    pub files: Option<JsonField<HashMap<ComponentFilePath, ComponentFileOptionsForUpdate>>>,
+    pub files: Option<JsonField<BTreeMap<ComponentFilePath, ComponentFileOptionsForUpdate>>>,
     pub files_archive: Option<TempFileUpload>,
-    pub dynamic_linking: Option<JsonField<HashMap<String, DynamicLinkedInstance>>>,
-    pub env: Option<JsonField<HashMap<String, String>>>,
+    pub dynamic_linking: Option<JsonField<BTreeMap<String, DynamicLinkedInstance>>>,
+    pub env: Option<JsonField<BTreeMap<String, String>>>,
     pub agent_types: Option<JsonField<Vec<AgentType>>>,
     pub plugin_installation_actions: Option<JsonField<Vec<PluginInstallationAction>>>,
 }

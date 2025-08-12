@@ -40,12 +40,11 @@ use wac_graph::types::Package;
 use wac_graph::{CompositionGraph, EncodeOptions, PlugError};
 
 pub async fn prepare_component_files_for_upload(
-    path_permissions: &HashMap<ComponentFilePath, ComponentFilePermissions>,
-    payload: InitialComponentFilesArchiveAndPermissions,
-) -> Result<Vec<(ComponentFilePath, ComponentFilePermissions, ZipEntryStream)>, ComponentError> {
-    let files_file = Arc::new(payload.archive);
+    archive: NamedTempFile
+) -> Result<Vec<(ComponentFilePath, ZipEntryStream)>, ComponentError> {
+    let archive = Arc::new(archive);
 
-    let tokio_file = tokio::fs::File::from_std(files_file.reopen().map_err(anyhow::Error::from)?);
+    let tokio_file = tokio::fs::File::from_std(archive.reopen().map_err(anyhow::Error::from)?);
 
     let mut buf_reader = BufReader::new(tokio_file);
 
@@ -71,14 +70,9 @@ pub async fn prepare_component_files_for_upload(
 
         let path = initial_component_file_path_from_zip_entry(entry)?;
 
-        let permissions = path_permissions
-            .get(&path)
-            .cloned()
-            .unwrap_or(ComponentFilePermissions::ReadOnly);
+        let stream = ZipEntryStream::from_zip_file_and_index(archive.clone(), i);
 
-        let stream = ZipEntryStream::from_zip_file_and_index(files_file.clone(), i);
-
-        result.push((path, permissions, stream));
+        result.push((path, stream));
     }
 
     Ok(result)

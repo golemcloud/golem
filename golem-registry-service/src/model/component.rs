@@ -21,11 +21,10 @@ use golem_common::model::component_metadata::{
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{
-    ComponentFilePathWithPermissions, ComponentId, ComponentType, InitialComponentFile,
-    PluginInstallationId,
+    ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile, PluginInstallationId
 };
 use golem_wasm_ast::analysis::AnalysedType;
-use poem_openapi::Object;
+use poem_openapi::{Object, Union};
 use rib::FunctionName;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
@@ -256,4 +255,44 @@ fn convert_to_pretty_type(analysed_type: &Option<AnalysedType>) -> String {
             rib::TypeName::try_from(x.clone()).map_or("unknown".to_string(), |x| x.to_string())
         })
         .unwrap_or("unit".to_string())
+}
+
+#[derive(Clone, Debug, Object)]
+pub struct PreviousVersionComponentFileSource {
+    /// path in the filesystem of the previous component version
+    pub path_in_previous_version: String,
+}
+
+#[derive(Clone, Debug, Object)]
+pub struct ArchiveComponentFileSource {
+    /// path in the archive that was uploaded as part of this request
+    pub path_in_archive: String,
+}
+
+#[derive(Clone, Debug, Union)]
+#[oai(one_of = true)]
+pub enum ComponentFileSource {
+    PreviousVersion(PreviousVersionComponentFileSource),
+    Archive(ArchiveComponentFileSource),
+}
+
+#[derive(Clone, Debug, Object)]
+pub struct ComponentFileOptions {
+    /// Path of the file in the uploaded archive
+    pub permissions: ComponentFilePermissions,
+}
+
+impl Default for ComponentFileOptions {
+    fn default() -> Self {
+        Self {
+            permissions: ComponentFilePermissions::ReadOnly
+        }
+    }
+}
+
+#[derive(Clone, Debug, Object)]
+pub struct ComponentFileOptionsForUpdate {
+    /// Path of the file in the uploaded archive
+    pub source: ComponentFileSource,
+    pub permissions: ComponentFilePermissions,
 }
