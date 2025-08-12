@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::component::ConflictReport;
+use crate::services::account_usage::error::AccountUsageError;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::VersionedComponentId;
@@ -133,5 +134,11 @@ impl SafeDisplay for ComponentError {
 impl From<RepoError> for ComponentError {
     fn from(value: RepoError) -> Self {
         Self::InternalError(anyhow::Error::new(value).context("from RepoError"))
+    }
+}
+
+impl From<AccountUsageError> for ComponentError {
+    fn from(value: AccountUsageError) -> Self {
+        todo!()
     }
 }
