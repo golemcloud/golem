@@ -83,9 +83,9 @@ pub struct CreateComponentRequest {
     pub component_name: ComponentName,
     pub component: Upload,
     pub component_type: Option<ComponentType>,
-    pub files: Option<JsonField<BTreeMap<ComponentFilePath, ComponentFileOptions>>>,
-    pub files_archive: Option<TempFileUpload>,
-    pub dynamic_linking: Option<JsonField<BTreeMap<String, DynamicLinkedInstance>>>,
+    pub files: Option<TempFileUpload>,
+    pub file_options: Option<JsonField<BTreeMap<ComponentFilePath, ComponentFileOptions>>>,
+    pub dynamic_linking: Option<JsonField<HashMap<String, DynamicLinkedInstance>>>,
     pub env: Option<JsonField<BTreeMap<String, String>>>,
     pub agent_types: Option<JsonField<Vec<AgentType>>>,
 }

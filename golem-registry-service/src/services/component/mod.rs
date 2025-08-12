@@ -83,8 +83,7 @@ impl ComponentService {
         component_type: ComponentType,
         data: Vec<u8>,
         files_archive: Option<NamedTempFile>,
-        file_options: Option<BTreeMap<ComponentFilePath, ComponentFileOptions>>,
-        installed_plugins: Vec<PluginInstallation>,
+        file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         agent_types: Vec<AgentType>,
@@ -119,7 +118,7 @@ impl ComponentService {
             component_type,
             &data,
             initial_component_files,
-            installed_plugins,
+            vec![],
             dynamic_linking,
             env,
             agent_types,
@@ -158,6 +157,7 @@ impl ComponentService {
             .component_repo
             .create(&environment_id.0, &component_name.0, record)
             .await;
+
         let stored_component: Component = match result? {
             Ok(record) => record.into(),
             Err(ComponentRevisionRepoError::ConcurrentModification) => {
@@ -930,10 +930,8 @@ impl ComponentService {
         &self,
         environment_id: &EnvironmentId,
         files_archive: Option<NamedTempFile>,
-        file_options: Option<BTreeMap<ComponentFilePath, ComponentFileOptions>>,
+        file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
     ) -> Result<Vec<InitialComponentFile>, ComponentError> {
-        let file_options = file_options.unwrap_or_default();
-
         let uploaded_files = match files_archive {
             Some(files) => self.upload_component_files(environment_id, files).await?,
             None => HashMap::new(),
