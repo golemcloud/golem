@@ -55,7 +55,7 @@ jobs:
           vcpkgDirectory: "C:/vcpkg"
           runVcpkgInstall: true
           doNotUpdateVcpkg: true
-          runVcpkgFormatString: [`install`,`--recurse`,`--clean-after-build`,`--x-install-root`,`${{ github.workspace }}/vcpkg_installed`,`--triplet`,`$[env.VCPKG_DEFAULT_TRIPLET]`]
+          runVcpkgFormatString: '[`install`,`--recurse`,`--clean-after-build`,`--x-install-root`,`${{ github.workspace }}/vcpkg_installed`,`--triplet`,`$[env.VCPKG_DEFAULT_TRIPLET]`]'
             
       - name: Download MinGW # TODO CACHE
         run: |
