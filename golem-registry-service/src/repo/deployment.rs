@@ -14,7 +14,7 @@
 
 use super::model::BindFields;
 use crate::repo::environment::{
-    EnvironmentExtRevisionRecord, EnvironmentSharedRepo, EnvironmentSharedRepoImpl,
+    EnvironmentExtRevisionRecord, EnvironmentSharedRepo, EnvironmentSharedRepoDefault,
 };
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
@@ -257,7 +257,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
 pub struct DbDeploymentRepo<DBP: Pool> {
     db_pool: DBP,
-    environment: EnvironmentSharedRepoImpl<DBP>,
+    environment: EnvironmentSharedRepoDefault<DBP>,
 }
 
 static METRICS_SVC_NAME: &str = "deployment";
@@ -266,7 +266,7 @@ impl<DBP: Pool> DbDeploymentRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self {
             db_pool: db_pool.clone(),
-            environment: EnvironmentSharedRepoImpl::new(db_pool),
+            environment: EnvironmentSharedRepoDefault::new(db_pool),
         }
     }
 

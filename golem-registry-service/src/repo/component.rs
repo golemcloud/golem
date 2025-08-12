@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::environment::{EnvironmentSharedRepo, EnvironmentSharedRepoImpl};
+use crate::repo::environment::{EnvironmentSharedRepo, EnvironmentSharedRepoDefault};
 use crate::repo::model::BindFields;
 use crate::repo::model::component::{
     ComponentExtRevisionRecord, ComponentFileRecord, ComponentRecord,
@@ -291,7 +291,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
 
 pub struct DbComponentRepo<DBP: Pool> {
     db_pool: DBP,
-    environment: EnvironmentSharedRepoImpl<DBP>,
+    environment: EnvironmentSharedRepoDefault<DBP>,
 }
 
 static METRICS_SVC_NAME: &str = "component";
@@ -300,7 +300,7 @@ impl<DBP: Pool> DbComponentRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self {
             db_pool: db_pool.clone(),
-            environment: EnvironmentSharedRepoImpl::new(db_pool),
+            environment: EnvironmentSharedRepoDefault::new(db_pool),
         }
     }
 

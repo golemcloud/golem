@@ -464,11 +464,11 @@ pub(super) trait EnvironmentSharedRepo<DBP: Pool>: Send + Sync {
     ) -> RepoResult<EnvironmentExtRevisionRecord>;
 }
 
-pub(super) struct EnvironmentSharedRepoImpl<DBP: Pool> {
+pub(super) struct EnvironmentSharedRepoDefault<DBP: Pool> {
     db_pool: DBP,
 }
 
-impl<DBP: Pool> EnvironmentSharedRepoImpl<DBP> {
+impl<DBP: Pool> EnvironmentSharedRepoDefault<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
     }
@@ -480,7 +480,7 @@ impl<DBP: Pool> EnvironmentSharedRepoImpl<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
-impl EnvironmentSharedRepo<PostgresPool> for EnvironmentSharedRepoImpl<PostgresPool> {
+impl EnvironmentSharedRepo<PostgresPool> for EnvironmentSharedRepoDefault<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
