@@ -19,25 +19,28 @@ use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::preview2::golem_api_1_x;
+use crate::preview2::golem_api_1_x::host;
 use crate::preview2::golem_api_1_x::host::{
-    ForkResult, GetWorkers, Host, HostGetWorkers, WitValue, WorkerAnyFilter,
+    ForkResult, GetWorkers, Host, HostGetWorkers, WorkerAnyFilter,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
 use crate::services::oplog::CommitLevel;
 use crate::services::{HasOplogService, HasPlugins, HasProjectService, HasWorker};
-use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
+use crate::workerctx::{IndexedResourceStore, InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use bincode::de::Decoder;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::Decode;
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, WorkerResourceId};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_wasm_rpc::{print_value_and_type, Value, ValueAndType};
+use rib::{ParsedFunctionSite, SemVer};
 use std::future::Future;
 use std::time::Duration;
 use tracing::debug;
@@ -111,7 +114,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "create_promise",
             DurableFunctionType::WriteLocal,
         )
-        .await?;
+            .await?;
 
         let promise_id = if durability.is_live() {
             let oplog_idx = self.state.current_oplog_index().await.next();
@@ -162,7 +165,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "poll_promise",
             DurableFunctionType::ReadRemote,
         )
-        .await?;
+            .await?;
 
         let result = if durability.is_live() {
             let promise_id: PromiseId = promise_id.into();
@@ -190,7 +193,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "complete_promise",
             DurableFunctionType::WriteLocal,
         )
-        .await?;
+            .await?;
 
         let promise_id: PromiseId = promise_id.into();
         let result = if durability.is_live() {
@@ -217,7 +220,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "delete_promise",
             DurableFunctionType::WriteLocal,
         )
-        .await?;
+            .await?;
 
         let promise_id: PromiseId = promise_id.into();
         if durability.is_live() {
@@ -487,7 +490,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "generate_idempotency_key",
             DurableFunctionType::WriteRemote,
         )
-        .await?;
+            .await?;
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -521,7 +524,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "update-worker",
             DurableFunctionType::WriteRemote,
         )
-        .await?;
+            .await?;
 
         let worker_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.project_id, &worker_id);
@@ -591,7 +594,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "fork_worker",
             DurableFunctionType::WriteRemote,
         )
-        .await?;
+            .await?;
 
         let source_worker_id: WorkerId = source_worker_id.into();
         let target_worker_id: WorkerId = target_worker_id.into();
@@ -629,7 +632,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "revert_worker",
             DurableFunctionType::WriteRemote,
         )
-        .await?;
+            .await?;
 
         if durability.is_live() {
             let worker_id: WorkerId = worker_id.into();
@@ -659,7 +662,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "resolve_component_id",
             DurableFunctionType::WriteRemote,
         )
-        .await?;
+            .await?;
 
         let result = if durability.is_live() {
             let result = self
@@ -703,7 +706,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "resolve_worker_id_strict",
             DurableFunctionType::WriteRemote,
         )
-        .await?;
+            .await?;
 
         let result = if durability.is_live() {
             let worker_id: Result<_, WorkerExecutorError> = async {
@@ -734,7 +737,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 };
                 Ok(worker_id)
             }
-            .await;
+                .await;
 
             durability
                 .persist(self, (component_slug, worker_name), worker_id)
@@ -753,7 +756,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "fork",
             DurableFunctionType::WriteRemote,
         )
-        .await?;
+            .await?;
 
         if durability.is_live() {
             let target_worker_id = WorkerId {
@@ -784,18 +787,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             durability.replay(self).await
         }
-    }
-
-    async fn register_resource(
-        &mut self,
-        parameters: Vec<WitValue>,
-        handle: WitValue,
-    ) -> anyhow::Result<()> {
-        todo!()
-    }
-
-    async fn unregister_resource(&mut self, parameters: Vec<WitValue>) -> anyhow::Result<()> {
-        todo!()
     }
 }
 

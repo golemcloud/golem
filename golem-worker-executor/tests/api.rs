@@ -2740,7 +2740,7 @@ async fn counter_resource_test_1(
                     created_at: ts,
                     resource_owner: "rpc:counters-exports/api".to_string(),
                     resource_name: "counter".to_string(),
-                    resource_params: Some(vec!["\"counter1\"".to_string()]),
+                    resource_params: None
                 }
             ),]
     );

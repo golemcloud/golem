@@ -1351,7 +1351,6 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
         self.state.indexed_resources.get(&key).copied()
     }
 
-    // TODO: expose this as a host function
     async fn store_indexed_resource(
         &mut self,
         resource_owner: &str,
@@ -1386,7 +1385,6 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
         }
     }
 
-    // TODO: expose this as a host function
     fn drop_indexed_resource(
         &mut self,
         resource_owner: &str,

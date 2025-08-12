@@ -19,4 +19,5 @@ world golem {
   import golem:rdbms/mysql@0.0.1;
   import golem:rdbms/postgres@0.0.1;
   import golem:rdbms/types@0.0.1;
+  import golem:agent/host;
 }
