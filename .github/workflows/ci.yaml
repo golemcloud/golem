@@ -25,7 +25,8 @@ env:
 jobs:
   build:
     env:
-      CARGO_BUILD_JOBS: 10
+      CARGO_BUILD_JOBS: 2
+      VCPKG_PKG_INSTALL_DIR: "${{ github.workspace }}/vcpkg_installed/"
       PROTOC: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/tools/protobuf/protoc.exe"
       PROTOC_INCLUDE: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/include"
 #    runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -48,6 +49,12 @@ jobs:
       - name: Fetch tag
         run: git fetch origin --deepen=1
         
+      - name: Download MinGW # TODO CACHE
+        run: |
+          Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
+          7z.exe x "mingw-w64.7z" -omingw64 -aoa -r
+          gcc --version
+        
       - name: Setup anew (or from cache) vcpkg (and does not build any package)
         uses: lukka/run-vcpkg@v11
         id: runvcpkg
@@ -55,14 +62,9 @@ jobs:
           vcpkgDirectory: "C:/vcpkg"
           runVcpkgInstall: true
           doNotUpdateVcpkg: true
-          runVcpkgFormatString: '[`install`,`--recurse`,`--clean-after-build`,`--x-install-root`,`${{ github.workspace }}/vcpkg_installed`,`--triplet`,`$[env.VCPKG_DEFAULT_TRIPLET]`]'
+          doNotCache: true
+          runVcpkgFormatString: '[`install`,`--recurse`,`--clean-after-build`,`--x-install-root`,`${{ env.VCPKG_PKG_INSTALL_DIR }}`,`--triplet`,`$[env.VCPKG_DEFAULT_TRIPLET]`]'
             
-      - name: Download MinGW # TODO CACHE
-        run: |
-          Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
-          7z.exe x "mingw-w64.7z" -omingw64 -aoa -r
-          gcc --version
-        
       - name: Setup Rust
         run: |
           rustup install stable-gnu
