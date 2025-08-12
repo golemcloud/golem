@@ -26,11 +26,23 @@ use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::{Binary, Json};
 use tracing::Instrument;
+use crate::services::component::ComponentService;
+use std::sync::Arc;
 
-pub struct ComponentsApi {}
+pub struct ComponentsApi {
+    component_service: Arc<ComponentService>
+}
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentsApi {
+    pub fn new(
+        component_service: Arc<ComponentService>
+    ) -> Self {
+        Self {
+            component_service
+        }
+    }
+
     /// Get a component by id
     #[oai(
         path = "/:component_id",
@@ -57,10 +69,11 @@ impl ComponentsApi {
 
     async fn get_component_internal(
         &self,
-        _component_id: ComponentId,
+        component_id: ComponentId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        todo!()
+        let component = self.component_service.get_component(&component_id).await?;
+        Ok(Json(component))
     }
 
     /// Get all revisions for a component

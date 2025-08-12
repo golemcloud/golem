@@ -29,6 +29,7 @@ pub mod environment_certificates;
 pub mod environment_components;
 pub mod environment_security_schemes;
 pub mod environments;
+pub mod error;
 pub mod login;
 pub mod model;
 pub mod plugin_registration;
@@ -61,6 +62,8 @@ use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_service_base::api::HealthcheckApi;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, OpenApiService};
+use crate::bootstrap::Services;
+use self::error::ApiError;
 
 pub type Apis = (
     HealthcheckApi,
@@ -91,7 +94,7 @@ pub type Apis = (
     TokensApi,
 );
 
-pub fn make_open_api_service() -> OpenApiService<Apis, ()> {
+pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
     OpenApiService::new(
         (
             HealthcheckApi,
@@ -106,7 +109,7 @@ pub fn make_open_api_service() -> OpenApiService<Apis, ()> {
             ApiDomainsApi {},
             ApplicationsApi {},
             CertificatesApi {},
-            ComponentsApi {},
+            ComponentsApi::new(services.component_service.clone()),
             (
                 EnvironmentApiDefinitionsApi {},
                 EnvironmentApiDeploymentsApi {},
@@ -127,48 +130,3 @@ pub fn make_open_api_service() -> OpenApiService<Apis, ()> {
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
-
-#[derive(ApiResponse, Debug, Clone)]
-pub enum ApiError {
-    /// Invalid request, returning with a list of issues detected in the request
-    #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
-    /// Unauthorized request
-    #[oai(status = 401)]
-    Unauthorized(Json<ErrorBody>),
-    /// Forbidden Request
-    #[oai(status = 403)]
-    Forbidden(Json<ErrorBody>),
-    /// Entity not found
-    #[oai(status = 404)]
-    NotFound(Json<ErrorBody>),
-    #[oai(status = 409)]
-    Conflict(Json<ErrorBody>),
-    /// Internal server error
-    #[oai(status = 500)]
-    InternalError(Json<ErrorBody>),
-}
-
-impl TraceErrorKind for ApiError {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self {
-            ApiError::BadRequest(_) => "BadRequest",
-            ApiError::NotFound(_) => "NotFound",
-            ApiError::Unauthorized(_) => "Unauthorized",
-            ApiError::InternalError(_) => "InternalError",
-            ApiError::Conflict(_) => "Conflict",
-            ApiError::Forbidden(_) => "Forbidden",
-        }
-    }
-
-    fn is_expected(&self) -> bool {
-        match &self {
-            ApiError::BadRequest(_) => true,
-            ApiError::NotFound(_) => true,
-            ApiError::Unauthorized(_) => true,
-            ApiError::InternalError(_) => false,
-            ApiError::Forbidden(_) => true,
-            ApiError::Conflict(_) => true,
-        }
-    }
-}

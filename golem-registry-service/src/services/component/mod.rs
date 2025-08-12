@@ -251,6 +251,20 @@ impl ComponentService {
         .await
     }
 
+    pub async fn get_component(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Component, ComponentError> {
+        info!(component_id = %component_id, "Get component");
+
+        let record = self.component_repo.get_staged_by_id(&component_id.0).await?;
+
+        match record {
+            Some(record) => Ok(record.into()),
+            None => Err(ComponentError::UnknownComponentId(component_id.clone()))
+        }
+    }
+
     // TODO:
     // async fn download(
     //     &self,
@@ -963,10 +977,8 @@ impl ComponentService {
                 &component.full_object_store_key(),
                 data,
             )
-            .await
-            .map_err(|e| {
-                ComponentError::component_store_error("Failed to upload user component", e)
-            })
+            .await?;
+        Ok(())
     }
 
     async fn _upload_protected_component(
@@ -980,10 +992,8 @@ impl ComponentService {
                 &component.full_transformed_object_store_key(),
                 data,
             )
-            .await
-            .map_err(|e| {
-                ComponentError::component_store_error("Failed to upload protected component", e)
-            })
+            .await?;
+        Ok(())
     }
 
     async fn upload_component_files(

@@ -33,14 +33,6 @@ pub enum ComponentError {
     UnknownVersionedComponentId(VersionedComponentId),
     #[error(transparent)]
     ComponentProcessingError(#[from] ComponentProcessingError),
-    #[error("Internal component store error: {message}: {error}")]
-    ComponentStoreError { message: String, error: String },
-    #[error(
-        "Component Constraint Error. Make sure the component is backward compatible as the functions are already in use:\n{0}"
-    )]
-    ComponentConstraintConflictError(ConflictReport),
-    #[error("Component Constraint Create Error: {0}")]
-    ComponentConstraintCreateError(String),
     #[error("Malformed component archive: {message}")]
     MalformedComponentArchive { message: String },
     #[error("Provided component file not found: {path} (key: {key})")]
@@ -67,8 +59,6 @@ pub enum ComponentError {
         plugin_name: String,
         plugin_version: String,
     },
-    #[error("Error accessing blob storage: {0}")]
-    BlobStorageError(String),
     #[error("Invalid plugin scope for {plugin_name}@{plugin_version} {details}")]
     InvalidPluginScope {
         plugin_name: String,
@@ -89,13 +79,6 @@ pub enum ComponentError {
 }
 
 impl ComponentError {
-    pub fn component_store_error(message: impl AsRef<str>, error: anyhow::Error) -> ComponentError {
-        Self::ComponentStoreError {
-            message: message.as_ref().to_string(),
-            error: format!("{error}"),
-        }
-    }
-
     pub fn initial_component_file_not_found(
         path: &ComponentFilePath,
         key: &InitialComponentFileKey,
@@ -114,10 +97,6 @@ impl SafeDisplay for ComponentError {
             Self::UnknownComponentId(_) => self.to_string(),
             Self::UnknownVersionedComponentId(_) => self.to_string(),
             Self::ComponentProcessingError(inner) => inner.to_safe_string(),
-            // Self::InternalRepoError(inner) => inner.to_safe_string(),
-            Self::ComponentStoreError { .. } => self.to_string(),
-            Self::ComponentConstraintConflictError(_) => self.to_string(),
-            Self::ComponentConstraintCreateError(_) => self.to_string(),
             Self::MalformedComponentArchive { .. } => self.to_string(),
             Self::InitialComponentFileNotFound { .. } => self.to_string(),
             Self::InvalidFilePath(_) => self.to_string(),
@@ -126,7 +105,6 @@ impl SafeDisplay for ComponentError {
             Self::LimitExceeded { .. } => self.to_string(),
             Self::InvalidOplogProcessorPlugin => self.to_string(),
             Self::PluginNotFound { .. } => self.to_string(),
-            Self::BlobStorageError(_) => self.to_string(),
             Self::InvalidPluginScope { .. } => self.to_string(),
             Self::ConcurrentUpdate { .. } => self.to_string(),
             Self::PluginInstallationNotFound { .. } => self.to_string(),
