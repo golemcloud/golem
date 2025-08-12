@@ -1,7 +1,7 @@
 {
   "name": "app",
   "dependencies": {
-    "@golemcloud/golem-ts-sdk": "0.0.1-dev.3"
+    "@golemcloud/golem-ts-sdk": "0.0.1-dev.10"
   },
   "scripts": {
     "update": "wit-deps update",
