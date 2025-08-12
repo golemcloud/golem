@@ -38,6 +38,7 @@ jobs:
         run: |
           echo "${{ github.workspace }}/mingw64/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/bin/" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "C:/Program Files/7-Zip/" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -49,7 +50,7 @@ jobs:
       - name: Download MinGW # TODO CACHE
         run: |
           Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
-          "C:\Program Files\7-Zip\7z.exe" x "mingw-w64.7z" "-omingw64" -aoa -r
+          7z.exe" x "mingw-w64.7z" -omingw64 -aoa -r
           gcc --version
         
       - name: Setup Rust
