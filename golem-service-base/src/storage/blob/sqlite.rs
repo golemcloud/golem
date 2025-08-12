@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-
 use crate::db::sqlite::SqlitePool;
 use crate::db::DBValue;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use golem_common::SafeDisplay;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 #[derive(Debug)]
 pub struct SqliteBlobStorage {
@@ -56,25 +56,27 @@ impl SqliteBlobStorage {
 
     fn namespace(namespace: BlobStorageNamespace) -> String {
         match namespace {
-            BlobStorageNamespace::CompilationCache { project_id } => {
-                format!("compilation_cache-{project_id}")
+            BlobStorageNamespace::CompilationCache { environment_id } => {
+                format!("compilation_cache-{environment_id}")
             }
-            BlobStorageNamespace::CustomStorage { project_id } => {
-                format!("custom_data-{project_id}")
+            BlobStorageNamespace::CustomStorage { environment_id } => {
+                format!("custom_data-{environment_id}")
             }
             BlobStorageNamespace::OplogPayload {
-                project_id,
+                environment_id,
                 worker_id,
-            } => format!("oplog_payload-{}-{}", project_id, worker_id.worker_name),
+            } => format!("oplog_payload-{environment_id}-{}", worker_id.worker_name),
             BlobStorageNamespace::CompressedOplog {
-                project_id,
+                environment_id,
                 component_id,
                 level,
-            } => format!("compressed_oplog-{project_id}-{component_id}-{level}"),
-            BlobStorageNamespace::InitialComponentFiles { project_id } => {
-                format!("initial_component_files-{project_id}")
+            } => format!("compressed_oplog-{environment_id}-{component_id}-{level}"),
+            BlobStorageNamespace::InitialComponentFiles { environment_id } => {
+                format!("initial_component_files-{environment_id}")
             }
-            BlobStorageNamespace::Components { project_id } => format!("components-{project_id}"),
+            BlobStorageNamespace::Components { environment_id } => {
+                format!("components-{environment_id}")
+            }
             BlobStorageNamespace::PluginWasmFiles { account_id } => {
                 format!("plugin_wasm_files-{account_id}")
             }
@@ -104,18 +106,20 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, Error> {
         let query = sqlx::query_as("SELECT value FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE;")
             .bind(Self::namespace(namespace))
             .bind(Self::parent_string(path))
             .bind(Self::name_string(path));
 
-        self.pool
+        let result = self
+            .pool
             .with_ro(target_label, op_label)
             .fetch_optional_as::<DBValue, _>(query)
             .await
-            .map(|r| r.map(|op| op.into_bytes()))
-            .map_err(|err| err.to_safe_string())
+            .map(|r| r.map(|op| op.into_bytes()))?;
+
+        Ok(result)
     }
 
     async fn get_stream(
@@ -124,13 +128,13 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         let result = self
             .get_raw(target_label, op_label, namespace, path)
             .await?;
         Ok(result.map(|bytes| {
             let stream = tokio_stream::once(Ok(bytes));
-            let boxed: Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>> =
+            let boxed: Pin<Box<dyn futures::Stream<Item = Result<Bytes, Error>> + Send>> =
                 Box::pin(stream);
             boxed
         }))
@@ -142,7 +146,7 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BlobMetadata>, String> {
+    ) -> Result<Option<BlobMetadata>, Error> {
         let query = sqlx::query_as(
             "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
         )
@@ -150,13 +154,15 @@ impl BlobStorage for SqliteBlobStorage {
             .bind(Self::parent_string(path))
             .bind(Self::name_string(path));
 
-        self.pool
+        let result = self
+            .pool
             .with_ro(target_label, op_label)
             .fetch_optional_as::<DBMetadata, _>(query)
-            .await
-            .map(|r| r.map(|op| op.into_blob_metadata()))
-            .map_err(|err| err.to_safe_string())?
-            .transpose()
+            .await?
+            .map(|r| r.into_blob_metadata().map_err(|e| anyhow!(e)))
+            .transpose()?;
+
+        Ok(result)
     }
 
     async fn put_raw(
@@ -166,7 +172,7 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
         data: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let query = sqlx::query(
                     r#"
                         INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
@@ -183,9 +189,9 @@ impl BlobStorage for SqliteBlobStorage {
         self.pool
             .with_rw(target_label, op_label)
             .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .await?;
+
+        Ok(())
     }
 
     async fn put_stream(
@@ -194,8 +200,8 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
-    ) -> Result<(), String> {
+        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, Error>, Error = Error>,
+    ) -> Result<(), Error> {
         let data = stream
             .make_stream_erased()
             .await?
@@ -203,7 +209,8 @@ impl BlobStorage for SqliteBlobStorage {
             .await?;
         let data = Bytes::from(data.concat());
         self.put_raw(target_label, op_label, namespace, path, &data)
-            .await
+            .await?;
+        Ok(())
     }
 
     async fn delete(
@@ -212,7 +219,7 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let query = sqlx::query(
             "DELETE FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
         )
@@ -222,9 +229,9 @@ impl BlobStorage for SqliteBlobStorage {
         self.pool
             .with_rw(target_label, op_label)
             .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .await?;
+
+        Ok(())
     }
 
     async fn create_dir(
@@ -233,7 +240,7 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let query = sqlx::query(
                     r#"
                         INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
@@ -244,12 +251,13 @@ impl BlobStorage for SqliteBlobStorage {
                 .bind(Self::namespace(namespace))
                 .bind(Self::parent_string(path))
                 .bind(Self::name_string(path));
+
         self.pool
             .with_rw(target_label, op_label)
             .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .await?;
+
+        Ok(())
     }
 
     async fn list_dir(
@@ -258,18 +266,20 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>, Error> {
         let query =
             sqlx::query_as("SELECT name FROM blob_storage WHERE namespace = ? AND parent = ?;")
                 .bind(Self::namespace(namespace))
                 .bind(path.to_string_lossy().to_string());
 
-        self.pool
+        let result = self
+            .pool
             .with_ro(target_label, op_label)
             .fetch_all_as::<(String,), _>(query)
             .await
-            .map(|r| r.into_iter().map(|row| path.join(row.0)).collect())
-            .map_err(|err| err.to_safe_string())
+            .map(|r| r.into_iter().map(|row| path.join(row.0)).collect())?;
+
+        Ok(result)
     }
 
     async fn delete_dir(
@@ -278,7 +288,7 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Error> {
         let parent = Self::parent_string(path);
         let name = Self::name_string(path);
         let parent_prefix = format!("{parent}%");
@@ -292,12 +302,15 @@ impl BlobStorage for SqliteBlobStorage {
         .bind(parent)
         .bind(name)
         .bind(parent_prefix);
-        self.pool
+
+        let result = self
+            .pool
             .with_rw(target_label, op_label)
             .execute(query)
             .await
-            .map(|result| result.rows_affected() > 0)
-            .map_err(|err| err.to_safe_string())
+            .map(|result| result.rows_affected() > 0)?;
+
+        Ok(result)
     }
 
     async fn exists(
@@ -306,7 +319,7 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<ExistsResult, String> {
+    ) -> Result<ExistsResult, Error> {
         let query = sqlx::query_as(
             "SELECT is_directory FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? LIMIT 1;",
         )
@@ -314,7 +327,8 @@ impl BlobStorage for SqliteBlobStorage {
         .bind(Self::parent_string(path))
         .bind(Self::name_string(path));
 
-        self.pool
+        let result = self
+            .pool
             .with_ro(target_label, op_label)
             .fetch_optional_as(query)
             .await
@@ -328,8 +342,9 @@ impl BlobStorage for SqliteBlobStorage {
                 } else {
                     ExistsResult::DoesNotExist
                 }
-            })
-            .map_err(|err| err.to_safe_string())
+            })?;
+
+        Ok(result)
     }
 }
 

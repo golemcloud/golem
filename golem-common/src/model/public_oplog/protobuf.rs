@@ -141,7 +141,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .project_id
                     .ok_or("Missing project_id field")?
                     .try_into()?,
-                created_by: create.created_by.ok_or("Missing created_by field")?.into(),
+                created_by: create
+                    .created_by
+                    .ok_or("Missing created_by field")?
+                    .try_into()?,
                 wasi_config_vars: create
                     .wasi_config_vars
                     .ok_or("Missing wasi_config_vars field")?

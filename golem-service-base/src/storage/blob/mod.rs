@@ -13,11 +13,14 @@
 // limitations under the License.
 
 use crate::replayable_stream::ErasedReplayableStream;
+use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::{AccountId, ComponentId, ProjectId, Timestamp, WorkerId};
+use golem_common::model::account::AccountId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{ComponentId, Timestamp, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -35,7 +38,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String>;
+    ) -> Result<Option<Bytes>, Error>;
 
     async fn get_stream(
         &self,
@@ -43,7 +46,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String>;
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error>;
 
     async fn get_raw_slice(
         &self,
@@ -53,7 +56,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, Error> {
         let data = self
             .get_raw(target_label, op_label, namespace, path)
             .await?;
@@ -66,7 +69,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BlobMetadata>, String>;
+    ) -> Result<Option<BlobMetadata>, Error>;
 
     async fn put_raw(
         &self,
@@ -75,7 +78,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         namespace: BlobStorageNamespace,
         path: &Path,
         data: &[u8],
-    ) -> Result<(), String>;
+    ) -> Result<(), Error>;
 
     async fn put_stream(
         &self,
@@ -83,8 +86,8 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
-    ) -> Result<(), String>;
+        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, Error>, Error = Error>,
+    ) -> Result<(), Error>;
 
     async fn delete(
         &self,
@@ -92,7 +95,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String>;
+    ) -> Result<(), Error>;
 
     async fn delete_many(
         &self,
@@ -100,7 +103,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         for path in paths {
             self.delete(target_label, op_label, namespace.clone(), path)
                 .await?;
@@ -114,7 +117,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String>;
+    ) -> Result<(), Error>;
 
     async fn list_dir(
         &self,
@@ -122,7 +125,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Vec<PathBuf>, String>;
+    ) -> Result<Vec<PathBuf>, Error>;
 
     /// Returns true if the directory was deleted; false if it did not exist
     async fn delete_dir(
@@ -131,7 +134,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, String>;
+    ) -> Result<bool, Error>;
 
     async fn exists(
         &self,
@@ -139,7 +142,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<ExistsResult, String>;
+    ) -> Result<ExistsResult, Error>;
 
     async fn copy(
         &self,
@@ -148,7 +151,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         namespace: BlobStorageNamespace,
         from: &Path,
         to: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         match self
             .get_raw(target_label, op_label, namespace.clone(), from)
             .await?
@@ -157,7 +160,7 @@ pub trait BlobStorage: Debug + Send + Sync {
                 self.put_raw(target_label, op_label, namespace, to, &data)
                     .await
             }
-            None => Err(format!("Entry not found: {from:?}")),
+            None => Err(anyhow!("Blob storage entry not found: {from:?}")),
         }
     }
 
@@ -168,18 +171,18 @@ pub trait BlobStorage: Debug + Send + Sync {
         namespace: BlobStorageNamespace,
         from: &Path,
         to: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.copy(target_label, op_label, namespace.clone(), from, to)
             .await?;
         self.delete(target_label, op_label, namespace, from).await
     }
 }
 
-pub trait BlobStorageLabelledApi<S: BlobStorage + ?Sized + Sync> {
+pub trait BlobStorageLabelledApi<S: BlobStorage + ?Sized> {
     fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledBlobStorage<'_, S>;
 }
 
-impl<S: BlobStorage + ?Sized + Sync> BlobStorageLabelledApi<S> for S {
+impl<S: BlobStorage + ?Sized> BlobStorageLabelledApi<S> for S {
     fn with(
         &self,
         svc_name: &'static str,
@@ -189,7 +192,7 @@ impl<S: BlobStorage + ?Sized + Sync> BlobStorageLabelledApi<S> for S {
     }
 }
 
-pub struct LabelledBlobStorage<'a, S: BlobStorage + ?Sized + Sync> {
+pub struct LabelledBlobStorage<'a, S: BlobStorage + ?Sized> {
     svc_name: &'static str,
     api_name: &'static str,
     storage: &'a S,
@@ -208,7 +211,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, Error> {
         self.storage
             .get_raw(self.svc_name, self.api_name, namespace, path)
             .await
@@ -220,7 +223,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, Error> {
         self.storage
             .get_raw_slice(self.svc_name, self.api_name, namespace, path, start, end)
             .await
@@ -230,7 +233,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BlobMetadata>, String> {
+    ) -> Result<Option<BlobMetadata>, Error> {
         self.storage
             .get_metadata(self.svc_name, self.api_name, namespace, path)
             .await
@@ -241,13 +244,13 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         namespace: BlobStorageNamespace,
         path: &Path,
         data: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .put_raw(self.svc_name, self.api_name, namespace, path, data)
             .await
     }
 
-    pub async fn delete(&self, namespace: BlobStorageNamespace, path: &Path) -> Result<(), String> {
+    pub async fn delete(&self, namespace: BlobStorageNamespace, path: &Path) -> Result<(), Error> {
         self.storage
             .delete(self.svc_name, self.api_name, namespace, path)
             .await
@@ -257,7 +260,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .delete_many(self.svc_name, self.api_name, namespace, paths)
             .await
@@ -267,7 +270,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .create_dir(self.svc_name, self.api_name, namespace, path)
             .await
@@ -277,7 +280,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>, Error> {
         self.storage
             .list_dir(self.svc_name, self.api_name, namespace, path)
             .await
@@ -287,7 +290,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Error> {
         self.storage
             .delete_dir(self.svc_name, self.api_name, namespace, path)
             .await
@@ -297,7 +300,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<ExistsResult, String> {
+    ) -> Result<ExistsResult, Error> {
         self.storage
             .exists(self.svc_name, self.api_name, namespace, path)
             .await
@@ -308,7 +311,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         namespace: BlobStorageNamespace,
         from: &Path,
         to: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .copy(self.svc_name, self.api_name, namespace, from, to)
             .await
@@ -319,7 +322,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         namespace: BlobStorageNamespace,
         from: &Path,
         to: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .r#move(self.svc_name, self.api_name, namespace, from, to)
             .await
@@ -329,9 +332,11 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<T>, String> {
+    ) -> Result<Option<T>, Error> {
         match self.get_raw(namespace, path).await? {
-            Some(data) => Ok(Some(deserialize(&data)?)),
+            Some(data) => Ok(Some(deserialize(&data).map_err(|e| {
+                anyhow!(e).context("Failed deserializing blob storage data")
+            })?)),
             None => Ok(None),
         }
     }
@@ -341,33 +346,39 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         namespace: BlobStorageNamespace,
         path: &Path,
         data: &T,
-    ) -> Result<(), String> {
-        self.put_raw(namespace, path, &serialize(data)?).await
+    ) -> Result<(), Error> {
+        self.put_raw(
+            namespace,
+            path,
+            &serialize(data)
+                .map_err(|e| anyhow!(e).context("Failed serializing blob storage data"))?,
+        )
+        .await
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BlobStorageNamespace {
     CompilationCache {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
     },
     InitialComponentFiles {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
     },
     CustomStorage {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
     },
     OplogPayload {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         worker_id: WorkerId,
     },
     CompressedOplog {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         component_id: ComponentId,
         level: usize,
     },
     Components {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
     },
     PluginWasmFiles {
         account_id: AccountId,

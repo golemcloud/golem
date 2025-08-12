@@ -45,6 +45,7 @@ pub mod trim_date;
 pub mod worker;
 
 pub use crate::base_model::*;
+use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{IndexedResourceKey, TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
@@ -942,48 +943,6 @@ impl<'de, Context> BorrowDecode<'de, Context> for WorkerInvocation {
 pub struct TimestampedWorkerInvocation {
     pub timestamp: Timestamp,
     pub invocation: WorkerInvocation,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialOrd,
-    Ord,
-    derive_more::FromStr,
-    Eq,
-    Hash,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Encode,
-    Decode,
-    IntoValue,
-)]
-#[serde(transparent)]
-pub struct AccountId {
-    pub value: String,
-}
-
-impl AccountId {
-    pub fn generate() -> Self {
-        Self {
-            value: Uuid::new_v4().to_string(),
-        }
-    }
-}
-
-impl From<&str> for AccountId {
-    fn from(value: &str) -> Self {
-        Self {
-            value: value.to_string(),
-        }
-    }
-}
-
-impl Display for AccountId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.value)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
@@ -2040,24 +1999,21 @@ impl From<ComponentId> for golem_wasm_rpc::ComponentId {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashSet};
-    use std::str::FromStr;
-    use std::time::SystemTime;
-    use std::vec;
-    use test_r::test;
-    use tracing::info;
-
     use crate::model::oplog::OplogIndex;
-
     use crate::model::{
         AccountId, ComponentFilePath, ComponentId, FilterComparator, IdempotencyKey, ProjectId,
         ShardId, StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
-
     use rand::{rng, Rng};
     use serde::{Deserialize, Serialize};
+    use std::collections::{BTreeMap, HashSet};
+    use std::str::FromStr;
+    use std::time::SystemTime;
+    use std::vec;
+    use test_r::test;
+    use tracing::info;
 
     #[test]
     fn timestamp_conversion() {
@@ -2073,30 +2029,6 @@ mod tests {
     #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
     struct ExampleWithAccountId {
         account_id: AccountId,
-    }
-
-    #[test]
-    fn account_id_from_json_apigateway_version() {
-        let json = "{ \"account_id\": \"account-1\" }";
-        let example: ExampleWithAccountId = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            example.account_id,
-            AccountId {
-                value: "account-1".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn account_id_json_serialization() {
-        // We want to use this variant for serialization because it is used on the public API gateway API
-        let example: ExampleWithAccountId = ExampleWithAccountId {
-            account_id: AccountId {
-                value: "account-1".to_string(),
-            },
-        };
-        let json = serde_json::to_string(&example).unwrap();
-        assert_eq!(json, "{\"account_id\":\"account-1\"}");
     }
 
     #[test]
@@ -2231,9 +2163,7 @@ mod tests {
                 ("env2".to_string(), "value2".to_string()),
             ],
             project_id: ProjectId::new_v4(),
-            created_by: AccountId {
-                value: "account-1".to_string(),
-            },
+            created_by: AccountId::new_v4(),
             wasi_config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
             created_at: Timestamp::now_utc(),
             parent: None,

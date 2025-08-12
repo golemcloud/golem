@@ -15,7 +15,7 @@
 use super::WorkerWasiConfigVarsFilter;
 use crate::model::oplog::OplogIndex;
 use crate::model::{
-    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
+    ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentType, FilterComparator, IdempotencyKey,
     InitialComponentFile, InitialComponentFileKey, LogLevel, NumberOfShards, Pod, PromiseId,
     RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, TargetWorkerId,
@@ -191,18 +191,6 @@ impl From<WorkerStatus> for golem_api_grpc::proto::golem::worker::WorkerStatus {
             WorkerStatus::Failed => golem_api_grpc::proto::golem::worker::WorkerStatus::Failed,
             WorkerStatus::Exited => golem_api_grpc::proto::golem::worker::WorkerStatus::Exited,
         }
-    }
-}
-
-impl From<golem_api_grpc::proto::golem::common::AccountId> for AccountId {
-    fn from(proto: golem_api_grpc::proto::golem::common::AccountId) -> Self {
-        Self { value: proto.name }
-    }
-}
-
-impl From<AccountId> for golem_api_grpc::proto::golem::common::AccountId {
-    fn from(value: AccountId) -> Self {
-        golem_api_grpc::proto::golem::common::AccountId { name: value.value }
     }
 }
 

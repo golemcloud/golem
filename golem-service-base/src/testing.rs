@@ -12,26 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-
-use golem_wasm_ast::analysis::AnalysedExport;
-use serde::{Deserialize, Serialize};
-
-use crate::model::{Component, ComponentName};
+use crate::model::component::Component;
+use golem_common::model::account::AccountId;
 use golem_common::model::base64::Base64;
-use golem_common::model::component::{ComponentOwner, VersionedComponentId};
+use golem_common::model::component::{ComponentName, VersionedComponentId};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
 };
-use golem_common::model::{
-    AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ProjectId,
-};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{ComponentId, ComponentType, ComponentVersion, InitialComponentFile};
+use golem_wasm_ast::analysis::AnalysedExport;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalFileSystemComponentMetadata {
     pub account_id: AccountId,
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub component_id: ComponentId,
     pub version: ComponentVersion,
     pub size: u64,
@@ -52,10 +50,7 @@ pub struct LocalFileSystemComponentMetadata {
 impl From<LocalFileSystemComponentMetadata> for Component {
     fn from(value: LocalFileSystemComponentMetadata) -> Self {
         Self {
-            owner: ComponentOwner {
-                account_id: value.account_id,
-                project_id: value.project_id,
-            },
+            environment_id: value.environment_id,
             versioned_component_id: VersionedComponentId {
                 component_id: value.component_id,
                 version: value.version,

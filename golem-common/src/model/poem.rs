@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::{
-    AccountId, ComponentFilePath, ComponentFilePathWithPermissionsList, IdempotencyKey, Timestamp,
+    ComponentFilePath, ComponentFilePathWithPermissionsList, IdempotencyKey, Timestamp,
 };
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
@@ -120,55 +120,6 @@ impl ToJSON for IdempotencyKey {
     }
 }
 
-impl poem_openapi::types::Type for AccountId {
-    const IS_REQUIRED: bool = true;
-    type RawValueType = Self;
-    type RawElementValueType = Self;
-
-    fn name() -> Cow<'static, str> {
-        Cow::from("string(account_id)")
-    }
-
-    fn schema_ref() -> MetaSchemaRef {
-        MetaSchemaRef::Inline(Box::new(MetaSchema::new("string")))
-    }
-
-    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
-        Some(self)
-    }
-
-    fn raw_element_iter<'a>(
-        &'a self,
-    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
-        Box::new(self.as_raw_value().into_iter())
-    }
-}
-
-impl ParseFromParameter for AccountId {
-    fn parse_from_parameter(value: &str) -> ParseResult<Self> {
-        Ok(Self {
-            value: value.to_string(),
-        })
-    }
-}
-
-impl ParseFromJSON for AccountId {
-    fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
-        match value {
-            Some(Value::String(s)) => Ok(Self { value: s }),
-            _ => Err(poem_openapi::types::ParseError::<AccountId>::custom(
-                "Unexpected representation of AccountId".to_string(),
-            )),
-        }
-    }
-}
-
-impl ToJSON for AccountId {
-    fn to_json(&self) -> Option<Value> {
-        Some(Value::String(self.value.clone()))
-    }
-}
-
 impl poem_openapi::types::Type for ComponentFilePath {
     const IS_REQUIRED: bool = true;
 
@@ -230,13 +181,12 @@ impl poem_openapi::types::ParseFromMultipartField for ComponentFilePathWithPermi
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
-
     use crate::model::{
         ComponentFilePath, ComponentFilePermissions, Empty, IdempotencyKey, InitialComponentFile,
         InitialComponentFileKey, WorkerStatus,
     };
     use poem_openapi::types::ToJSON;
+    use test_r::test;
 
     #[test]
     fn worker_status_serialization_poem_serde_equivalence() {

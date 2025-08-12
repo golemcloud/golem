@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::Error;
 use assert2::check;
 use async_trait::async_trait;
 use aws_config::meta::region::RegionProviderChain;
@@ -21,7 +22,8 @@ use aws_sdk_s3::Client;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
-use golem_common::model::{ComponentId, ProjectId};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::ComponentId;
 use golem_common::widen_infallible;
 use golem_service_base::config::S3BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -192,7 +194,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, Error> {
         self.storage
             .get_raw(target_label, op_label, namespace, path)
             .await
@@ -204,7 +206,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         self.storage
             .get_stream(target_label, op_label, namespace, path)
             .await
@@ -218,7 +220,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, Error> {
         self.storage
             .get_raw_slice(target_label, op_label, namespace, path, start, end)
             .await
@@ -230,7 +232,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BlobMetadata>, String> {
+    ) -> Result<Option<BlobMetadata>, Error> {
         self.storage
             .get_metadata(target_label, op_label, namespace, path)
             .await
@@ -243,7 +245,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         namespace: BlobStorageNamespace,
         path: &Path,
         data: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .put_raw(target_label, op_label, namespace, path, data)
             .await
@@ -255,8 +257,8 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
-    ) -> Result<(), String> {
+        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, Error>, Error = Error>,
+    ) -> Result<(), Error> {
         self.storage
             .put_stream(target_label, op_label, namespace, path, stream)
             .await
@@ -268,7 +270,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .delete(target_label, op_label, namespace, path)
             .await
@@ -280,7 +282,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .delete_many(target_label, op_label, namespace, paths)
             .await
@@ -292,7 +294,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .create_dir(target_label, op_label, namespace, path)
             .await
@@ -304,7 +306,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>, Error> {
         self.storage
             .list_dir(target_label, op_label, namespace, path)
             .await
@@ -316,7 +318,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Error> {
         self.storage
             .delete_dir(target_label, op_label, namespace, path)
             .await
@@ -328,7 +330,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<ExistsResult, String> {
+    ) -> Result<ExistsResult, Error> {
         self.storage
             .exists(target_label, op_label, namespace, path)
             .await
@@ -341,7 +343,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         namespace: BlobStorageNamespace,
         from: &Path,
         to: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .copy(target_label, op_label, namespace, from, to)
             .await
@@ -354,7 +356,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         namespace: BlobStorageNamespace,
         from: &Path,
         to: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         self.storage
             .r#move(target_label, op_label, namespace, from, to)
             .await
@@ -405,14 +407,18 @@ async fn sqlite() -> Arc<dyn GetBlobStorage + Send + Sync> {
 #[test_dep(tagged_as = "cc")]
 fn compilation_cache() -> BlobStorageNamespace {
     BlobStorageNamespace::CompilationCache {
-        project_id: ProjectId(Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap()),
+        environment_id: EnvironmentId(
+            Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
+        ),
     }
 }
 
 #[test_dep(tagged_as = "co")]
 fn compressed_oplog() -> BlobStorageNamespace {
     BlobStorageNamespace::CompressedOplog {
-        project_id: ProjectId(Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap()),
+        environment_id: EnvironmentId(
+            Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
+        ),
         component_id: ComponentId(Uuid::new_v4()),
         level: 0,
     }

@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::component::ComponentOwner;
 use super::{Empty, PluginId, ProjectId};
-use crate::model::{
-    AccountId, ComponentId, ComponentVersion, PluginInstallationId, PoemTypeRequirements,
-};
+use crate::model::account::AccountId;
+use crate::model::{ComponentId, ComponentVersion, PluginInstallationId};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
-use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
@@ -29,14 +26,6 @@ use std::str::FromStr;
 #[serde(rename_all = "camelCase")]
 pub struct ComponentPluginScope {
     pub component_id: ComponentId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginInstallation {
-    pub id: PluginInstallationId,
-    pub plugin_id: PluginId,
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -88,68 +77,6 @@ pub struct PluginInstallationUpdateWithId {
     pub parameters: HashMap<String, String>,
 }
 
-pub trait PluginInstallationTarget:
-    Debug
-    + Display
-    + Clone
-    + PartialEq
-    + Serialize
-    + for<'de> Deserialize<'de>
-    + PoemTypeRequirements
-    + Send
-    + Sync
-    + 'static
-{
-    #[cfg(feature = "sql")]
-    type Row: crate::repo::RowMeta<sqlx::Sqlite>
-        + crate::repo::RowMeta<sqlx::Postgres>
-        + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-        + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
-        + From<Self>
-        + TryInto<Self, Error = String>
-        + Clone
-        + Display
-        + Send
-        + Sync
-        + Unpin
-        + 'static;
-
-    #[cfg(feature = "sql")]
-    fn table_name() -> &'static str;
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct PluginOwner {
-    pub account_id: AccountId,
-}
-
-impl Display for PluginOwner {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.account_id)
-    }
-}
-
-impl FromStr for PluginOwner {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self {
-            account_id: AccountId::from(s),
-        })
-    }
-}
-
-impl From<ComponentOwner> for PluginOwner {
-    fn from(value: ComponentOwner) -> Self {
-        Self {
-            account_id: value.account_id,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
@@ -163,7 +90,7 @@ pub struct PluginDefinition {
     pub homepage: String,
     pub specs: PluginTypeSpecificDefinition,
     pub scope: PluginScope,
-    pub owner: PluginOwner,
+    pub account_id: AccountId,
     pub deleted: bool,
 }
 
@@ -312,16 +239,6 @@ impl Display for ComponentPluginInstallationTarget {
     }
 }
 
-impl PluginInstallationTarget for ComponentPluginInstallationTarget {
-    #[cfg(feature = "sql")]
-    type Row = crate::repo::ComponentPluginInstallationRow;
-
-    #[cfg(feature = "sql")]
-    fn table_name() -> &'static str {
-        "component_plugin_installation"
-    }
-}
-
 #[cfg(feature = "poem")]
 mod poem {
     use super::{ComponentId, PluginScope, ProjectId};
@@ -370,35 +287,9 @@ mod poem {
 mod protobuf {
     use super::{
         AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
-        OplogProcessorDefinition, PluginDefinition, PluginInstallation, PluginOwner, PluginScope,
-        PluginTypeSpecificDefinition, PluginWasmFileKey,
+        OplogProcessorDefinition, PluginDefinition, PluginScope, PluginTypeSpecificDefinition,
+        PluginWasmFileKey,
     };
-
-    impl From<PluginInstallation> for golem_api_grpc::proto::golem::component::PluginInstallation {
-        fn from(plugin_installation: PluginInstallation) -> Self {
-            golem_api_grpc::proto::golem::component::PluginInstallation {
-                id: Some(plugin_installation.id.into()),
-                plugin_id: Some(plugin_installation.plugin_id.into()),
-                priority: plugin_installation.priority,
-                parameters: plugin_installation.parameters,
-            }
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::component::PluginInstallation> for PluginInstallation {
-        type Error = String;
-
-        fn try_from(
-            proto: golem_api_grpc::proto::golem::component::PluginInstallation,
-        ) -> Result<Self, Self::Error> {
-            Ok(PluginInstallation {
-                id: proto.id.ok_or("Missing id")?.try_into()?,
-                plugin_id: proto.plugin_id.ok_or("Missing plugin id")?.try_into()?,
-                priority: proto.priority,
-                parameters: proto.parameters,
-            })
-        }
-    }
 
     impl From<PluginTypeSpecificDefinition>
         for golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition
@@ -556,9 +447,7 @@ mod protobuf {
                 homepage: value.homepage,
                 specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
                 scope: value.scope.ok_or("Missing plugin scope")?.try_into()?,
-                owner: PluginOwner {
-                    account_id: value.account_id.ok_or("Missing plugin owner")?.into(),
-                },
+                account_id: value.account_id.ok_or("Missing account id")?.try_into()?,
                 deleted: value.deleted,
             })
         }
@@ -571,7 +460,7 @@ mod protobuf {
                 name: value.name,
                 version: value.version,
                 scope: Some(value.scope.into()),
-                account_id: Some(value.owner.account_id.into()),
+                account_id: Some(value.account_id.into()),
                 description: value.description,
                 icon: value.icon,
                 homepage: value.homepage,

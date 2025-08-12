@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{AccountId, ProjectId};
-use bincode::{Decode, Encode};
-use serde::Deserialize;
+use crate::model::account::AccountId;
+use crate::model::ProjectId;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -122,44 +121,6 @@ impl IntoIterator for AuthCtx {
             format!("Bearer {}", self.token_secret.value),
         )]
         .into_iter()
-    }
-}
-
-#[derive(Clone, Debug, Hash, Eq, PartialEq, Encode, Decode, Deserialize)]
-pub struct Namespace {
-    pub project_id: ProjectId,
-    // project owner account
-    pub account_id: AccountId,
-}
-
-impl Namespace {
-    pub fn new(project_id: ProjectId, account_id: AccountId) -> Self {
-        Self {
-            project_id,
-            account_id,
-        }
-    }
-}
-
-impl Display for Namespace {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.account_id, self.project_id)
-    }
-}
-
-impl TryFrom<String> for Namespace {
-    type Error = String;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 2 {
-            return Err(format!("Invalid namespace: {s}"));
-        }
-
-        Ok(Self {
-            project_id: ProjectId::try_from(parts[1])?,
-            account_id: AccountId::from(parts[0]),
-        })
     }
 }
 

@@ -16,9 +16,10 @@ use std::{path::PathBuf, sync::Arc};
 
 use crate::replayable_stream::{ContentHash, ReplayableStream};
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
+use anyhow::{Context, Error};
 use bytes::Bytes;
+use golem_common::model::account::AccountId;
 use golem_common::model::plugin::PluginWasmFileKey;
-use golem_common::model::AccountId;
 use tracing::debug;
 
 const PLUGIN_WASM_FILES_LABEL: &str = "plugin_wasms";
@@ -38,7 +39,7 @@ impl PluginWasmFilesService {
         &self,
         account_id: &AccountId,
         key: &PluginWasmFileKey,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, Error> {
         self.blob_storage
             .get_raw(
                 PLUGIN_WASM_FILES_LABEL,
@@ -54,8 +55,8 @@ impl PluginWasmFilesService {
     pub async fn put_if_not_exists(
         &self,
         account_id: &AccountId,
-        data: impl ReplayableStream<Item = Result<Bytes, String>, Error = String>,
-    ) -> Result<PluginWasmFileKey, String> {
+        data: impl ReplayableStream<Item = Result<Bytes, Error>, Error = Error>,
+    ) -> Result<PluginWasmFileKey, Error> {
         let hash = data.content_hash().await?;
 
         let key = PathBuf::from(hash.clone());
@@ -71,7 +72,7 @@ impl PluginWasmFilesService {
                 &key,
             )
             .await
-            .map_err(|err| format!("Failed to get metadata: {err}"))?;
+            .context("Failed to get metadata")?;
 
         if metadata.is_none() {
             debug!("Storing library plugin file with hash: {}", hash);

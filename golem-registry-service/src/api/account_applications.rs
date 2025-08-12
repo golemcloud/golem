@@ -15,7 +15,7 @@
 use super::ApiResult;
 use golem_common::api::Page;
 use golem_common::api::application::CreateApplicationRequest;
-use golem_common::model::AccountId;
+use golem_common::model::account::AccountId;
 use golem_common::model::application::Application;
 use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;

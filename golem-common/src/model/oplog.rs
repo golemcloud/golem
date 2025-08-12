@@ -13,11 +13,11 @@
 // limitations under the License.
 
 pub use crate::base_model::OplogIndex;
+use crate::model::account::AccountId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
-    WorkerInvocation,
+    ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId, WorkerInvocation,
 };
 use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;

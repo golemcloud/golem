@@ -12,18 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::PlanId;
-use golem_common::model::account::AccountId;
-use poem_openapi_derive::Object;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct Account {
-    pub id: AccountId,
-    pub name: String,
-    pub email: String,
-    pub plan_id: PlanId,
-    // TODO: add created_at
-}
+pub mod component;
+pub mod component_compilation;
+pub mod component_object_store;
+pub mod component_transformer_plugin_caller;

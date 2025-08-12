@@ -12,9 +12,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ComponentId;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{FunctionName, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentConstraints {
+    pub component_id: ComponentId,
+    pub constraints: FunctionConstraints,
+}
+
+impl ComponentConstraints {
+    pub fn function_signatures(&self) -> Vec<FunctionSignature> {
+        let constraints = &self.constraints;
+
+        constraints
+            .constraints
+            .iter()
+            .map(|x| x.function_signature.clone())
+            .collect()
+    }
+}
+
+impl ComponentConstraints {
+    pub fn init(
+        component_id: &ComponentId,
+        worker_functions_in_rib: WorkerFunctionsInRib,
+    ) -> ComponentConstraints {
+        ComponentConstraints {
+            component_id: component_id.clone(),
+            constraints: FunctionConstraints {
+                constraints: worker_functions_in_rib
+                    .function_calls
+                    .iter()
+                    .map(FunctionUsageConstraint::from_worker_function_type)
+                    .collect(),
+            },
+        }
+    }
+}
 
 // This is very similar to WorkerFunctionsInRib data structure in `rib`, however
 // it adds more info that is specific to other golem services,

@@ -23,8 +23,9 @@ use golem_api_grpc::proto::golem::limit::v1::{
     GetResourceLimitsRequest, UpdateComponentLimitRequest, UpdateWorkerLimitRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::account::AccountId;
 use golem_common::model::RetryConfig;
-use golem_common::model::{AccountId, ComponentId, WorkerId};
+use golem_common::model::{ComponentId, WorkerId};
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use std::fmt::Display;

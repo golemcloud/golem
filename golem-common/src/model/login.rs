@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{AccountId, TokenId};
+use super::TokenId;
+use crate::model::account::AccountId;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 

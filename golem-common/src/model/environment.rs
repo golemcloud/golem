@@ -15,7 +15,10 @@
 use super::application::ApplicationId;
 use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
 
-newtype_uuid!(EnvironmentId);
+newtype_uuid!(
+    EnvironmentId,
+    golem_api_grpc::proto::golem::common::EnvironmentId
+);
 
 declare_transparent_newtypes! {
     pub struct EnvironmentName(String);

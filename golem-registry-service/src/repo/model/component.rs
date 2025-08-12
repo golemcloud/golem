@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::component::Component;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
 };
 use golem_common::model::diff::Hashable;
-use golem_common::model::{ComponentFilePermissions, diff};
+use golem_common::model::{ComponentFilePermissions, InitialComponentFile, diff};
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::Json;
@@ -34,36 +37,6 @@ pub enum ComponentRevisionRepoError {
     ConcurrentModification,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
-}
-
-#[repr(i32)]
-#[derive(Debug, Clone, Copy, PartialEq, sqlx::Type)]
-#[sqlx(type_name = "integer")]
-pub enum ComponentStatus {
-    Created = 0,
-    Transformed = 1,
-}
-
-impl ComponentStatus {
-    pub fn from_i32(value: i32) -> Option<Self> {
-        match value {
-            0 => Some(Self::Created),
-            1 => Some(Self::Transformed),
-            _ => None,
-        }
-    }
-
-    pub fn as_i32(&self) -> i32 {
-        *self as i32
-    }
-}
-
-impl TryFrom<i32> for ComponentStatus {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        Self::from_i32(value).ok_or_else(|| format!("Unknown component status value: {value}"))
-    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -302,11 +275,14 @@ pub struct ComponentRevisionRecord {
     pub component_type: i32,
     pub size: i32,
     pub metadata: SqlComponentMetadata,
+    pub original_env: Json<BTreeMap<String, String>>,
     pub env: Json<BTreeMap<String, String>>,
-    pub status: ComponentStatus,
     pub object_store_key: String,
     pub binary_hash: SqlBlake3Hash, // NOTE: expected to be provided by service-layer
-    pub transformed_object_store_key: Option<String>,
+    pub transformed_object_store_key: String,
+
+    #[sqlx(skip)]
+    pub original_files: Vec<ComponentFileRecord>,
 
     #[sqlx(skip)]
     pub files: Vec<ComponentFileRecord>,
@@ -353,11 +329,12 @@ impl ComponentRevisionRecord {
             }
             .into(),
             env: Default::default(),
-            status: ComponentStatus::Created,
+            original_env: Default::default(),
             object_store_key: "".to_string(),
             binary_hash: SqlBlake3Hash::empty(),
-            transformed_object_store_key: None,
+            transformed_object_store_key: "".to_string(),
             files: vec![],
+            original_files: vec![],
         }
     }
 
@@ -425,6 +402,38 @@ impl ComponentRevisionRecord {
         self.update_hash();
         self
     }
+
+    pub fn from_model(value: Component, actor: &AccountId) -> Self {
+        Self {
+            files: value
+                .files
+                .into_iter()
+                .map(|f| ComponentFileRecord::from_model(f, &value.versioned_component_id, actor))
+                .collect(),
+            original_files: value
+                .original_files
+                .into_iter()
+                .map(|f| ComponentFileRecord::from_model(f, &value.versioned_component_id, actor))
+                .collect(),
+            component_id: value.versioned_component_id.component_id.0,
+            revision_id: value.versioned_component_id.version as i64,
+            version: value
+                .metadata
+                .root_package_version
+                .clone()
+                .unwrap_or_default(),
+            component_type: value.component_type as i32,
+            size: value.component_size as i32,
+            metadata: value.metadata.into(),
+            hash: SqlBlake3Hash::empty(),
+            original_env: Json(value.original_env),
+            env: Json(value.env),
+            audit: DeletableRevisionAuditFields::new(actor.0),
+            object_store_key: value.object_store_key,
+            transformed_object_store_key: value.transformed_object_store_key,
+            binary_hash: value.wasm_hash.into_blake3().into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -433,6 +442,12 @@ pub struct ComponentExtRevisionRecord {
     pub environment_id: Uuid,
     #[sqlx(flatten)]
     pub revision: ComponentRevisionRecord,
+}
+
+impl From<ComponentExtRevisionRecord> for Component {
+    fn from(_value: ComponentExtRevisionRecord) -> Self {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -459,6 +474,23 @@ impl ComponentFileRecord {
             ..self
         }
     }
+
+    fn from_model(
+        file: InitialComponentFile,
+        versioned_component_id: &VersionedComponentId,
+        actor: &AccountId,
+    ) -> Self {
+        Self {
+            component_id: versioned_component_id.component_id.0,
+            revision_id: versioned_component_id.version as i64,
+            file_path: file.path.to_string(),
+            file_key: file.key.0.clone(),
+            file_permissions: file.permissions.into(),
+            audit: RevisionAuditFields::new(actor.0),
+            // TODO: The key is the content hash currently, reuse it here
+            hash: SqlBlake3Hash::empty(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -467,6 +499,5 @@ pub struct ComponentRevisionIdentityRecord {
     pub name: String,
     pub revision_id: i64,
     pub version: String,
-    pub status: ComponentStatus,
     pub hash: Option<SqlBlake3Hash>,
 }

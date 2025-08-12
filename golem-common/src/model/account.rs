@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{AccountId, PlanId};
-use crate::declare_structs;
+use super::PlanId;
+use crate::{declare_structs, newtype_uuid};
+
+newtype_uuid!(AccountId, golem_api_grpc::proto::golem::common::AccountId);
 
 declare_structs! {
     pub struct Account {

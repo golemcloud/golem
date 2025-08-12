@@ -14,6 +14,7 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use anyhow::Error;
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -58,7 +59,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, Error> {
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -81,7 +82,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -97,7 +98,7 @@ impl BlobStorage for InMemoryBlobStorage {
                 directory.get(&key).map(|entry| {
                     let data = entry.data.clone();
                     let stream = tokio_stream::once(Ok(data));
-                    let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>> =
+                    let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send>> =
                         Box::pin(stream);
                     boxed
                 })
@@ -112,7 +113,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BlobMetadata>, String> {
+    ) -> Result<Option<BlobMetadata>, Error> {
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -136,7 +137,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
         data: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -168,8 +169,8 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
-    ) -> Result<(), String> {
+        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, Error>, Error = Error>,
+    ) -> Result<(), Error> {
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -182,10 +183,7 @@ impl BlobStorage for InMemoryBlobStorage {
             .to_string();
 
         let stream = stream.make_stream_erased().await?;
-        let data = stream
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|e| e.to_string())?;
+        let data = stream.try_collect::<Vec<_>>().await?;
         let entry = Entry {
             data: Bytes::from(data.concat()),
             metadata: BlobMetadata {
@@ -210,7 +208,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -235,7 +233,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let dir = path.to_string_lossy().to_string();
         self.data
             .entry(namespace)
@@ -251,7 +249,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>, Error> {
         let dir = path.to_string_lossy().to_string();
 
         if let Some(namespace_data) = self.data.get(&namespace) {
@@ -292,7 +290,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Error> {
         let dir = path.to_string_lossy().to_string();
         let result = self
             .data
@@ -307,7 +305,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<ExistsResult, String> {
+    ) -> Result<ExistsResult, Error> {
         if self
             .data
             .get(&namespace)

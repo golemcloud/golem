@@ -274,11 +274,11 @@ CREATE TABLE component_revisions
     component_type               INTEGER   NOT NULL,
     size                         INTEGER   NOT NULL,
     metadata                     BYTEA     NOT NULL,
+    original_env                          JSONB     NOT NULL,
     env                          JSONB     NOT NULL,
-    status                       INTEGER   NOT NULL,
     object_store_key             TEXT      NOT NULL,
     binary_hash                  BYTEA     NOT NULL,
-    transformed_object_store_key TEXT,
+    transformed_object_store_key TEXT NOT NULL,
 
     CONSTRAINT component_revisions_pk
         PRIMARY KEY (component_id, revision_id),
@@ -288,6 +288,26 @@ CREATE TABLE component_revisions
 
 CREATE INDEX component_revisions_latest_revision_by_id_idx
     ON component_revisions (component_id, revision_id DESC);
+
+CREATE TABLE original_component_files
+(
+    component_id     UUID      NOT NULL,
+    revision_id      BIGINT    NOT NULL,
+    file_path        TEXT      NOT NULL,
+
+    hash             BYTEA     NOT NULL,
+
+    created_at       TIMESTAMP NOT NULL,
+    created_by       UUID      NOT NULL,
+
+    file_key         TEXT      NOT NULL,
+    file_permissions TEXT      NOT NULL,
+
+    CONSTRAINT original_component_files_pk
+        PRIMARY KEY (component_id, revision_id, file_path),
+    CONSTRAINT original_component_files_components_fk
+        FOREIGN KEY (component_id, revision_id) REFERENCES component_revisions
+);
 
 CREATE TABLE component_files
 (

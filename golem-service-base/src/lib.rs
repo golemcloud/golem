@@ -17,7 +17,6 @@ pub mod api_tags;
 pub mod clients;
 pub mod config;
 pub mod db;
-pub mod dto;
 pub mod error;
 pub mod grpc;
 pub mod headers;

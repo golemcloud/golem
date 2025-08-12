@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::AccountId;
+use crate::model::account::AccountId;
 use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
 
 newtype_uuid!(ApplicationId);
