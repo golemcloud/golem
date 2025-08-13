@@ -13,12 +13,21 @@
 // limitations under the License.
 
 use crate::config::RegistryServiceConfig;
+use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
+use crate::repo::component::{ComponentRepo, DbComponentRepo};
+use crate::services::account_usage::AccountUsageService;
 use crate::services::component::ComponentService;
-use anyhow::Error;
+use crate::services::component_compilation::ComponentCompilationServiceDisabled;
+use crate::services::component_object_store::ComponentObjectStore;
+use anyhow::anyhow;
 use golem_common::config::DbConfig;
-use golem_service_base::db::Pool;
+use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
+use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -26,27 +35,87 @@ pub struct Services {
     pub component_service: Arc<ComponentService>,
 }
 
+struct Repos {
+    component_repo: Arc<dyn ComponentRepo>,
+    account_usage_repo: Arc<dyn AccountUsageRepo>,
+}
+
 impl Services {
-    pub async fn new(config: &RegistryServiceConfig) -> Result<Self, Error> {
-        match config.db.clone() {
-            DbConfig::Postgres(db_config) => {
-                let db_pool = PostgresPool::configured(&db_config).await?;
-                Self::make_with_db(config, db_pool).await
-            }
-            DbConfig::Sqlite(db_config) => {
-                let db_pool = SqlitePool::configured(&db_config).await?;
-                Self::make_with_db(config, db_pool).await
-            }
+    pub async fn new(config: &RegistryServiceConfig) -> anyhow::Result<Self> {
+        let repos = make_repos(&config.db).await?;
+
+        let blob_storage = make_blob_storage(&config.blob_storage).await?;
+
+        let initial_component_files =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let plugin_wasm_files = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+        let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage));
+
+        let component_compilation = Arc::new(ComponentCompilationServiceDisabled);
+
+        let account_usage = Arc::new(AccountUsageService::new(repos.account_usage_repo));
+
+        let component_service = Arc::new(ComponentService::new(
+            repos.component_repo,
+            component_object_store,
+            component_compilation,
+            initial_component_files,
+            plugin_wasm_files,
+            account_usage,
+        ));
+
+        Ok(Services { component_service })
+    }
+}
+
+async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
+    match db_config {
+        DbConfig::Postgres(postgres_config) => {
+            let db_pool = PostgresPool::configured(postgres_config).await?;
+            let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
+            let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool));
+            Ok(Repos {
+                component_repo,
+                account_usage_repo,
+            })
+        }
+        DbConfig::Sqlite(db_config) => {
+            let db_pool = SqlitePool::configured(db_config).await?;
+            let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
+            let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool));
+            Ok(Repos {
+                component_repo,
+                account_usage_repo,
+            })
         }
     }
+}
 
-    async fn make_with_db<DBP>(
-        _config: &RegistryServiceConfig,
-        _db_pool: DBP,
-    ) -> Result<Self, Error>
-    where
-        DBP: Pool + Clone + Send + Sync + 'static,
-    {
-        todo!()
+async fn make_blob_storage(
+    blob_storage_config: &BlobStorageConfig,
+) -> anyhow::Result<Arc<dyn BlobStorage>> {
+    match blob_storage_config {
+        BlobStorageConfig::S3(config) => {
+            let blob_storage =
+                golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await;
+            Ok(Arc::new(blob_storage))
+        }
+        BlobStorageConfig::LocalFileSystem(config) => {
+            let blob_storage =
+                golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                    .await?;
+            Ok(Arc::new(blob_storage))
+        }
+        BlobStorageConfig::Sqlite(sqlite) => {
+            let pool = SqlitePool::configured(sqlite).await?;
+            let blob_storage = SqliteBlobStorage::new(pool.clone()).await?;
+            Ok(Arc::new(blob_storage))
+        }
+        BlobStorageConfig::InMemory(_) => {
+            let blob_storage =
+                golem_service_base::storage::blob::memory::InMemoryBlobStorage::new();
+            Ok(Arc::new(blob_storage))
+        }
+        _ => Err(anyhow!("Unsupported blob storage configuration")),
     }
 }

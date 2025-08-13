@@ -183,7 +183,7 @@ impl EnvironmentApiDefinitionsApi {
 
     /// Get api-definition in a deployment by name
     #[oai(
-        path = "/:environment_id/deployments/:deployment_id/api-definitions/:api_definition_name",
+        path = "/:environment_id/deployments/:deployment_revision_id/api-definitions/:api_definition_name",
         method = "get",
         operation_id = "get_deployment_api_definition",
         tag = ApiTags::Deployment

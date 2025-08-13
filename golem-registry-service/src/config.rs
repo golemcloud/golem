@@ -17,6 +17,7 @@ use golem_common::config::DbConfig;
 use golem_common::model::auth::Role;
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
+use golem_service_base::config::BlobStorageConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -34,8 +35,9 @@ pub struct RegistryServiceConfig {
     pub login: LoginConfig,
     pub cors_origin_regex: String,
     pub component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig, // TODO:
-                                                                                     // pub plans: PlansConfig,
-                                                                                     // pub accounts: AccountsConfig,
+    // pub plans: PlansConfig,
+    // pub accounts: AccountsConfig,
+    pub blob_storage: BlobStorageConfig,
 }
 
 impl Default for RegistryServiceConfig {
@@ -50,6 +52,7 @@ impl Default for RegistryServiceConfig {
             login: LoginConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
             component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig::default(),
+            blob_storage: BlobStorageConfig::default(),
         }
     }
 }

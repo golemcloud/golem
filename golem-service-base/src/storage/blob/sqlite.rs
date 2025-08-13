@@ -15,6 +15,7 @@
 use crate::db::sqlite::SqlitePool;
 use crate::db::DBValue;
 use crate::replayable_stream::ErasedReplayableStream;
+use crate::repo::RepoError;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
@@ -22,7 +23,6 @@ use bytes::Bytes;
 use chrono::NaiveDateTime;
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
-use golem_common::SafeDisplay;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
@@ -32,13 +32,13 @@ pub struct SqliteBlobStorage {
 }
 
 impl SqliteBlobStorage {
-    pub async fn new(pool: SqlitePool) -> Result<Self, String> {
+    pub async fn new(pool: SqlitePool) -> Result<Self, RepoError> {
         let result = Self { pool };
         result.init().await?;
         Ok(result)
     }
 
-    async fn init(&self) -> Result<(), String> {
+    async fn init(&self) -> Result<(), RepoError> {
         self.pool.with_rw("blob_storage", "init").execute(sqlx::query(r#"
                 CREATE TABLE IF NOT EXISTS blob_storage (
                     namespace TEXT NOT NULL,                              -- 'Bucket' or namespace
@@ -50,7 +50,7 @@ impl SqliteBlobStorage {
                     is_directory BOOLEAN DEFAULT FALSE NOT NULL,          -- Flag indicating if the row represents a directory
                     PRIMARY KEY (namespace, parent, name)  -- Composite primary key
                 );
-                "#)).await.map_err(|err| err.to_safe_string())?;
+                "#)).await?;
         Ok(())
     }
 

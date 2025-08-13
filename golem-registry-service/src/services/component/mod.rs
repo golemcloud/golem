@@ -18,7 +18,6 @@ mod utils;
 pub use self::error::ComponentError;
 use super::component_compilation::ComponentCompilationService;
 use super::component_object_store::ComponentObjectStore;
-use super::component_transformer_plugin_caller::ComponentTransformerPluginCaller;
 use crate::model::component::Component;
 use crate::model::component::{
     ComponentFileOptions, FinalizedComponentRevision, NewComponentRevision,
@@ -53,7 +52,6 @@ pub struct ComponentService {
     component_compilation: Arc<dyn ComponentCompilationService>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
     _plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-    _transformer_plugin_caller: Arc<dyn ComponentTransformerPluginCaller>,
     account_usage_service: Arc<AccountUsageService>,
 }
 
@@ -64,7 +62,6 @@ impl ComponentService {
         component_compilation: Arc<dyn ComponentCompilationService>,
         initial_component_files_service: Arc<InitialComponentFilesService>,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-        transformer_plugin_caller: Arc<dyn ComponentTransformerPluginCaller>,
         account_usage_service: Arc<AccountUsageService>,
     ) -> Self {
         Self {
@@ -73,7 +70,6 @@ impl ComponentService {
             component_compilation,
             initial_component_files_service,
             _plugin_wasm_files_service: plugin_wasm_files_service,
-            _transformer_plugin_caller: transformer_plugin_caller,
             account_usage_service,
         }
     }
