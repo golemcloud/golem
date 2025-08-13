@@ -249,10 +249,7 @@ impl TrapType {
                             Some(WorkerExecutorError::ValueMismatch { details }) => {
                                 TrapType::Error(WorkerError::InvalidRequest(details.clone()))
                             }
-                            _ => {
-                                println!("boom3: {error:?}");
-                                TrapType::Error(WorkerError::Unknown(format!("{error:#}")))
-                            }
+                            _ => TrapType::Error(WorkerError::Unknown(format!("{error:#}"))),
                         },
                     },
                 },
