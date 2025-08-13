@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn renders_interface_ops() {
-        let ops = vec![ParsedOperation { operation_id: "CreateTodo".into(), params_record: None, request_record: Some("TodoCreate".into()), response_record: Some("Todo".into()) }];
+        let ops = vec![ParsedOperation { operation_id: "CreateTodo".into(), group: "todos".into(), params_record: None, request_record: Some("TodoCreate".into()), response_record: Some("Todo".into()) }];
         let iface = render_interface("todo-api", &ops);
         assert!(iface.contains("interface todo-api {"));
         assert!(iface.contains("create-todo: func(request: todo-create) -> result<todo, http-error>;"));
@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn renders_interface_with_params() {
-        let ops = vec![ParsedOperation { operation_id: "UpdateTodo".into(), params_record: Some("todos-id-put-params".into()), request_record: Some("UpdateTodoRequest".into()), response_record: Some("Todo".into()) }];
+        let ops = vec![ParsedOperation { operation_id: "UpdateTodo".into(), group: "todos".into(), params_record: Some("todos-id-put-params".into()), request_record: Some("UpdateTodoRequest".into()), response_record: Some("Todo".into()) }];
         let iface = render_interface("todo-api", &ops);
         assert!(iface.contains("update-todo: func(params: todos-id-put-params, request: update-todo-request) -> result<todo, http-error>;"));
     }

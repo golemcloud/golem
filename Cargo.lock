@@ -11027,6 +11027,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "witgen-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "openapi-to-wit",
+ "protobuf-to-wit",
+]
+
+[[package]]
 name = "witx"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

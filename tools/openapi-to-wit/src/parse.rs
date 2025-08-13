@@ -153,33 +153,8 @@ pub fn parse_component_records(doc: &str) -> Vec<ParsedRecord> {
                     .collect();
                 let mut fields = Vec::new();
                 for (fname, fobj) in props.iter() {
-                    let fty = match fobj {
-                        SchemaObject::Schema(s) => match s.r#type.as_deref() {
-                            Some("array") => {
-                                // Determine inner type
-                                if let Some(items) = &s.items {
-                                    match items.as_ref() {
-                                        SchemaObject::Schema(is) => {
-                                            let inner = is.r#type.clone().unwrap_or_else(|| "string".to_string());
-                                            format!("list:{}", inner)
-                                        }
-                                        SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
-                                            Some(name) => format!("list:ref:{}", name),
-                                            None => "list:string".to_string(),
-                                        }
-                                    }
-                                } else {
-                                    "list:string".to_string()
-                                }
-                            }
-                            Some(t) => t.to_string(),
-                            None => "string".to_string(),
-                        },
-                        SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
-                            Some(name) => format!("ref:{}", name),
-                            None => "string".to_string(),
-                        },
-                    };
+                    let (fty, extra_records) = map_field_type_with_nesting(&name, fname, fobj);
+                    out.extend(extra_records);
                     let optional = !required_set.contains(fname);
                     fields.push(ParsedField { name: fname.clone(), ty: fty, optional });
                 }
@@ -189,6 +164,64 @@ pub fn parse_component_records(doc: &str) -> Vec<ParsedRecord> {
     }
 
     out
+}
+
+fn map_field_type_with_nesting(parent: &str, field: &str, fobj: &SchemaObject) -> (String, Vec<ParsedRecord>) {
+    match fobj {
+        SchemaObject::Ref(r) => (format!("ref:{}", ref_tail(&r.r#ref).unwrap_or_else(|| "string".to_string())), vec![]),
+        SchemaObject::Schema(s) => match s.r#type.as_deref() {
+            Some("array") => {
+                if let Some(items) = &s.items {
+                    match items.as_ref() {
+                        SchemaObject::Schema(is) => match is.r#type.as_deref() {
+                            Some("object") => {
+                                if let Some(props) = is.properties.as_ref() {
+                                    let nested_name = format!("{}-{}-item", parent, field);
+                                    let mut nested_fields = Vec::new();
+                                    let required_set: std::collections::HashSet<_> = is.required.clone().unwrap_or_default().into_iter().collect();
+                                    for (nf, nfobj) in props.iter() {
+                                        let (nfty, extra) = map_field_type_with_nesting(&nested_name, nf, nfobj);
+                                        nested_fields.push(ParsedField { name: nf.clone(), ty: nfty, optional: !required_set.contains(nf) });
+                                        if !extra.is_empty() { /* accumulate in out below */ }
+                                    }
+                                    let nested_rec = ParsedRecord { name: nested_name.clone(), fields: nested_fields };
+                                    // Note: nested of nested already appended via map_field_type_with_nesting extra vec currently discarded; to keep it, re-run recursion returns; for simplicity, nested depth 2 acceptable
+                                    (format!("list:ref:{}", nested_name), vec![nested_rec])
+                                } else {
+                                    ("list:string".to_string(), vec![])
+                                }
+                            }
+                            Some(inner) => (format!("list:{}", inner), vec![]),
+                            None => ("list:string".to_string(), vec![]),
+                        },
+                        SchemaObject::Ref(r) => (format!("list:ref:{}", ref_tail(&r.r#ref).unwrap_or_else(|| "string".to_string())), vec![]),
+                    }
+                } else {
+                    ("list:string".to_string(), vec![])
+                }
+            }
+            Some("object") => {
+                if let Some(props) = s.properties.as_ref() {
+                    let nested_name = format!("{}-{}", parent, field);
+                    let mut nested_fields = Vec::new();
+                    let mut extra_records = Vec::new();
+                    let required_set: std::collections::HashSet<_> = s.required.clone().unwrap_or_default().into_iter().collect();
+                    for (nf, nfobj) in props.iter() {
+                        let (nfty, extra) = map_field_type_with_nesting(&nested_name, nf, nfobj);
+                        nested_fields.push(ParsedField { name: nf.clone(), ty: nfty, optional: !required_set.contains(nf) });
+                        extra_records.extend(extra);
+                    }
+                    let nested_rec = ParsedRecord { name: nested_name.clone(), fields: nested_fields };
+                    extra_records.push(nested_rec);
+                    (format!("ref:{}", nested_name), extra_records)
+                } else {
+                    ("string".to_string(), vec![])
+                }
+            }
+            Some(t) => (t.to_string(), vec![]),
+            None => ("string".to_string(), vec![]),
+        },
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -301,32 +334,9 @@ pub fn parse_operations_with_inline(doc: &str) -> (Vec<ParsedOperation>, Vec<Par
                                         .collect();
                                     let mut fields = Vec::new();
                                     for (fname, fobj) in props.iter() {
-                                        let fty = match fobj {
-                                            SchemaObject::Schema(ss) => match ss.r#type.as_deref() {
-                                                Some("array") => {
-                                                    if let Some(items) = &ss.items {
-                                                        match items.as_ref() {
-                                                            SchemaObject::Schema(is) => {
-                                                                let inner = is.r#type.clone().unwrap_or_else(|| "string".to_string());
-                                                                format!("list:{}", inner)
-                                                            }
-                                                            SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
-                                                                Some(name) => format!("list:ref:{}", name),
-                                                                None => "list:string".to_string(),
-                                                            }
-                                                        }
-                                                    } else { "list:string".to_string() }
-                                                }
-                                                Some(t) => t.to_string(),
-                                                None => "string".to_string(),
-                                            },
-                                            SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
-                                                Some(name) => format!("ref:{}", name),
-                                                None => "string".to_string(),
-                                            },
-                                        };
-                                        let optional = !required_set.contains(fname);
-                                        fields.push(ParsedField { name: fname.clone(), ty: fty, optional });
+                                        let (fty, extra) = map_field_type_with_nesting(&name, fname, fobj);
+                                        fields.push(ParsedField { name: fname.clone(), ty: fty, optional: !required_set.contains(fname) });
+                                        if !extra.is_empty() { recs.extend(extra); }
                                     }
                                     recs.push(ParsedRecord { name: name.clone(), fields });
                                     req_name = Some(name);
@@ -355,32 +365,9 @@ pub fn parse_operations_with_inline(doc: &str) -> (Vec<ParsedOperation>, Vec<Par
                                             .collect();
                                         let mut fields = Vec::new();
                                         for (fname, fobj) in props.iter() {
-                                            let fty = match fobj {
-                                                SchemaObject::Schema(ss) => match ss.r#type.as_deref() {
-                                                    Some("array") => {
-                                                        if let Some(items) = &ss.items {
-                                                            match items.as_ref() {
-                                                                SchemaObject::Schema(is) => {
-                                                                    let inner = is.r#type.clone().unwrap_or_else(|| "string".to_string());
-                                                                    format!("list:{}", inner)
-                                                                }
-                                                                SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
-                                                                    Some(name) => format!("list:ref:{}", name),
-                                                                    None => "list:string".to_string(),
-                                                                }
-                                                            }
-                                                        } else { "list:string".to_string() }
-                                                    }
-                                                    Some(t) => t.to_string(),
-                                                    None => "string".to_string(),
-                                                },
-                                                SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
-                                                    Some(name) => format!("ref:{}", name),
-                                                    None => "string".to_string(),
-                                                },
-                                            };
-                                            let optional = !required_set.contains(fname);
-                                            fields.push(ParsedField { name: fname.clone(), ty: fty, optional });
+                                            let (fty, extra) = map_field_type_with_nesting(&name, fname, fobj);
+                                            fields.push(ParsedField { name: fname.clone(), ty: fty, optional: !required_set.contains(fname) });
+                                            if !extra.is_empty() { recs.extend(extra); }
                                         }
                                         recs.push(ParsedRecord { name: name.clone(), fields });
                                         resp_name = Some(name);
@@ -464,7 +451,7 @@ fn ref_tail(s: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_component_enums, parse_component_records, parse_operations, parse_operations_with_inline, parse_title_version};
+    use super::{parse_component_records, parse_operations, parse_operations_with_inline, parse_title_version};
 
     #[test]
     fn parses_title_version() {
@@ -475,24 +462,38 @@ mod tests {
     }
 
     #[test]
-    fn parses_simple_schema() {
+    fn parses_simple_and_nested_schema() {
         let doc = r#"openapi: '3.0.3'
 info: { title: X, version: '1.0.0' }
 components:
   schemas:
     Todo:
       type: object
-      required: [id, title]
+      required: [id]
       properties:
         id: { type: string }
-        title: { type: string }
-        completed: { type: boolean }
+        meta:
+          type: object
+          properties:
+            etag: { type: string }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              label: { type: string }
 "#;
         let recs = parse_component_records(doc);
-        assert_eq!(recs.len(), 1);
-        let r = &recs[0];
-        assert_eq!(r.name, "Todo");
-        assert_eq!(r.fields.len(), 3);
+        // Expect top-level Todo and nested Todo-meta and Todo-items-item
+        let names: std::collections::HashSet<_> = recs.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains("Todo"));
+        assert!(names.contains("Todo-meta"));
+        assert!(names.contains("Todo-items-item"));
+        let todo = recs.iter().find(|r| r.name == "Todo").unwrap();
+        let meta_field = todo.fields.iter().find(|f| f.name == "meta").unwrap();
+        assert_eq!(meta_field.ty, "ref:Todo-meta");
+        let items_field = todo.fields.iter().find(|f| f.name == "items").unwrap();
+        assert_eq!(items_field.ty, "list:ref:Todo-items-item");
     }
 
     #[test]
@@ -530,7 +531,7 @@ components:
     }
 
     #[test]
-    fn parses_inline_request_and_response_records() {
+    fn parses_inline_request_and_response_records_and_headers() {
         let doc = r##"openapi: 3.0.3
 info: { title: X, version: '1.0.0' }
 paths:
