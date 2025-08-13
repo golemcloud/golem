@@ -19,24 +19,24 @@ pub use self::error::ComponentError;
 use super::component_compilation::ComponentCompilationService;
 use super::component_object_store::ComponentObjectStore;
 use crate::model::component::Component;
-use crate::model::component::{
-    ComponentFileOptions, FinalizedComponentRevision, NewComponentRevision,
-};
+use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRevisionRecord, ComponentRevisionRepoError};
 use crate::services::account_usage::{AccountUsage, AccountUsageService};
 use anyhow::Context;
 use futures::stream::BoxStream;
+use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
+use golem_common::model::component::{
+    ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentType,
+    InitialComponentFile, InitialComponentFileKey,
+};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::deployment::DeploymentRevisionId;
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
-use golem_common::model::{ComponentId, ComponentType};
-use golem_common::model::{InitialComponentFile, InitialComponentFileKey};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::collections::HashSet;
@@ -139,12 +139,7 @@ impl ComponentService {
 
         let stored_component: Component = match result? {
             Ok(record) => record.into(),
-            Err(ComponentRevisionRepoError::ConcurrentModification) => {
-                Err(ComponentError::ConcurrentUpdate {
-                    component_id: component_id.clone(),
-                    version: 0,
-                })?
-            }
+            Err(ComponentRevisionRepoError::ConcurrentModification) => todo!(),
             Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),
         };
 
@@ -164,6 +159,7 @@ impl ComponentService {
     pub async fn update(
         &self,
         component_id: &ComponentId,
+        current_revision: ComponentRevision,
         data: Option<Vec<u8>>,
         component_type: Option<ComponentType>,
         removed_files: Vec<ComponentFilePath>,
@@ -183,7 +179,6 @@ impl ComponentService {
 
         let environment_id = component.environment_id.clone();
         let component_id = component.versioned_component_id.component_id.clone();
-        let current_revision = component.versioned_component_id.version;
 
         info!(environment_id = %environment_id, "Update component");
 
@@ -255,7 +250,7 @@ impl ComponentService {
 
         let result = self
             .component_repo
-            .update(current_revision as i64, record)
+            .update(current_revision.0 as i64, record)
             .await;
 
         let stored_component: Component = match result? {
@@ -263,7 +258,7 @@ impl ComponentService {
             Err(ComponentRevisionRepoError::ConcurrentModification) => {
                 Err(ComponentError::ConcurrentUpdate {
                     component_id: component_id.clone(),
-                    version: current_revision,
+                    current_revision,
                 })?
             }
             Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),

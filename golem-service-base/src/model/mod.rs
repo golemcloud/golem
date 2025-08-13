@@ -17,12 +17,13 @@ pub mod component;
 
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
+use golem_common::model::component::{ComponentFilePermissions, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::plugin::PluginInstallationAction;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
-    ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
-    ComponentVersion, ScanCursor, Timestamp, WorkerFilter, WorkerId,
+    ComponentFileSystemNode, ComponentFileSystemNodeDetails, ScanCursor, Timestamp, WorkerFilter,
+    WorkerId,
 };
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
@@ -36,7 +37,7 @@ use std::time::SystemTime;
 #[oai(rename_all = "camelCase")]
 pub struct WorkerCreationResponse {
     pub worker_id: WorkerId,
-    pub component_version: ComponentVersion,
+    pub component_version: ComponentRevision,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
@@ -222,7 +223,7 @@ impl From<WorkerUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode
 #[oai(rename_all = "camelCase")]
 pub struct UpdateWorkerRequest {
     pub mode: WorkerUpdateMode,
-    pub target_version: ComponentVersion,
+    pub target_version: ComponentRevision,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -249,7 +250,7 @@ pub enum UpdateRecord {
 #[oai(rename_all = "camelCase")]
 pub struct PendingUpdate {
     timestamp: Timestamp,
-    target_version: ComponentVersion,
+    target_version: ComponentRevision,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -257,7 +258,7 @@ pub struct PendingUpdate {
 #[oai(rename_all = "camelCase")]
 pub struct SuccessfulUpdate {
     timestamp: Timestamp,
-    target_version: ComponentVersion,
+    target_version: ComponentRevision,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -265,7 +266,7 @@ pub struct SuccessfulUpdate {
 #[oai(rename_all = "camelCase")]
 pub struct FailedUpdate {
     timestamp: Timestamp,
-    target_version: ComponentVersion,
+    target_version: ComponentRevision,
     details: Option<String>,
 }
 
@@ -279,20 +280,20 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateRecord> for UpdateRecor
             golem_api_grpc::proto::golem::worker::update_record::Update::Failed(failed) => {
                 Ok(Self::FailedUpdate(FailedUpdate {
                     timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                    target_version: value.target_version,
+                    target_version: ComponentRevision(value.target_version),
                     details: { failed.details },
                 }))
             }
             golem_api_grpc::proto::golem::worker::update_record::Update::Pending(_) => {
                 Ok(Self::PendingUpdate(PendingUpdate {
                     timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                    target_version: value.target_version,
+                    target_version: ComponentRevision(value.target_version),
                 }))
             }
             golem_api_grpc::proto::golem::worker::update_record::Update::Successful(_) => {
                 Ok(Self::SuccessfulUpdate(SuccessfulUpdate {
                     timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                    target_version: value.target_version,
+                    target_version: ComponentRevision(value.target_version),
                 }))
             }
         }
@@ -308,7 +309,7 @@ impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
                 details,
             }) => Self {
                 timestamp: Some(timestamp.into()),
-                target_version,
+                target_version: target_version.0,
                 update: Some(
                     golem_api_grpc::proto::golem::worker::update_record::Update::Failed(
                         golem_api_grpc::proto::golem::worker::FailedUpdate { details },
@@ -320,7 +321,7 @@ impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
                 target_version,
             }) => Self {
                 timestamp: Some(timestamp.into()),
-                target_version,
+                target_version: target_version.0,
                 update: Some(
                     golem_api_grpc::proto::golem::worker::update_record::Update::Pending(
                         golem_api_grpc::proto::golem::worker::PendingUpdate {},
@@ -332,7 +333,7 @@ impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
                 target_version,
             }) => Self {
                 timestamp: Some(timestamp.into()),
-                target_version,
+                target_version: target_version.0,
                 update: Some(
                     golem_api_grpc::proto::golem::worker::update_record::Update::Successful(
                         golem_api_grpc::proto::golem::worker::SuccessfulUpdate {},

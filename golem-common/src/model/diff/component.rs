@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::component::{ComponentFilePermissions, ComponentType};
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
 use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
-use crate::model::{ComponentFilePermissions, ComponentType};
 use serde::Serialize;
 use std::collections::BTreeMap;
 

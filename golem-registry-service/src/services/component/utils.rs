@@ -20,7 +20,7 @@ use anyhow::anyhow;
 use async_zip::ZipEntry;
 use async_zip::tokio::read::seek::ZipFileReader;
 use futures::TryStreamExt;
-use golem_common::model::ComponentFilePath;
+use golem_common::model::component::ComponentFilePath;
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_wasm_ast::analysis::AnalysedType;

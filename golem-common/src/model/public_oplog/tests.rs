@@ -47,6 +47,8 @@ fn rounded_ts(ts: Timestamp) -> Timestamp {
 #[test]
 #[cfg(feature = "poem")]
 fn create_serialization_poem_serde_equivalence() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::Create(CreateParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
         worker_id: WorkerId {
@@ -55,7 +57,7 @@ fn create_serialization_poem_serde_equivalence() {
             ),
             worker_name: "test1".to_string(),
         },
-        component_version: 1,
+        component_version: ComponentRevision(1),
         args: vec!["a".to_string(), "b".to_string()],
         env: vec![("x".to_string(), "y".to_string())]
             .into_iter()
@@ -339,9 +341,11 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
 #[test]
 #[cfg(feature = "poem")]
 fn pending_update_serialization_poem_serde_equivalence_1() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
-        target_version: 1,
+        target_version: ComponentRevision(1),
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
         }),
@@ -354,9 +358,11 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
 #[test]
 #[cfg(feature = "poem")]
 fn pending_update_serialization_poem_serde_equivalence_2() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
-        target_version: 1,
+        target_version: ComponentRevision(1),
         description: PublicUpdateDescription::Automatic(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -367,9 +373,11 @@ fn pending_update_serialization_poem_serde_equivalence_2() {
 #[test]
 #[cfg(feature = "poem")]
 fn successful_update_serialization_poem_serde_equivalence() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
-        target_version: 1,
+        target_version: ComponentRevision(1),
         new_component_size: 100_000_000,
         new_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
             installation_id: PluginInstallationId(
@@ -389,9 +397,11 @@ fn successful_update_serialization_poem_serde_equivalence() {
 #[test]
 #[cfg(feature = "poem")]
 fn failed_update_serialization_poem_serde_equivalence_1() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
-        target_version: 1,
+        target_version: ComponentRevision(1),
         details: Some("test".to_string()),
     });
     let serialized = entry.to_json_string();
@@ -402,9 +412,11 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
 #[test]
 #[cfg(feature = "poem")]
 fn failed_update_serialization_poem_serde_equivalence_2() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
-        target_version: 1,
+        target_version: ComponentRevision(1),
         details: None,
     });
     let serialized = entry.to_json_string();

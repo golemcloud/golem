@@ -14,7 +14,7 @@
 
 use crate::model::agent::AgentType;
 use crate::model::base64::Base64;
-use crate::model::ComponentType;
+use crate::model::component::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;

@@ -18,42 +18,17 @@
 //! - general server-side only utilities -> golem_service_base::api::*
 //! - types specific to this api that are not reused by the client -> golem_registry_service::api::model::*
 
-use crate::model::component::ComponentFileOptions;
-use golem_common::model::agent::AgentType;
-use golem_common::model::component::ComponentName;
-use golem_common::model::component_metadata::DynamicLinkedInstance;
+use golem_common::api::component::{
+    CreateAppPluginRequestMetadata, CreateComponentRequestMetadata,
+    CreateLibraryPluginRequestMetadata, UpdateComponentRequestComponentMetadata,
+};
+use golem_common::model::Empty;
 use golem_common::model::login::TokenWithSecret;
-use golem_common::model::plugin::{PluginInstallationAction, PluginScope};
-use golem_common::model::{ComponentFilePath, ComponentType, ComponentVersion, Empty};
 use golem_service_base::poem::TempFileUpload;
 use poem_openapi::payload::Json;
+use poem_openapi::types::Binary;
 use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::{ApiResponse, Multipart};
-use std::collections::{BTreeMap, HashMap};
-
-#[derive(Debug, poem_openapi::Multipart)]
-#[oai(rename_all = "camelCase")]
-pub struct CreateLibraryPluginRequest {
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub icon: poem_openapi::types::Binary<Vec<u8>>,
-    pub homepage: String,
-    pub scope: PluginScope,
-    pub wasm: TempFileUpload,
-}
-
-#[derive(Debug, poem_openapi::Multipart)]
-#[oai(rename_all = "camelCase")]
-pub struct CreateAppPluginRequest {
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub icon: poem_openapi::types::Binary<Vec<u8>>,
-    pub homepage: String,
-    pub scope: PluginScope,
-    pub wasm: TempFileUpload,
-}
 
 #[derive(Debug, Clone, ApiResponse)]
 pub enum WebFlowPollResponse {
@@ -75,31 +50,34 @@ pub enum WebFlowCallbackResponse {
     Success(Json<Empty>),
 }
 
+#[derive(Debug, poem_openapi::Multipart)]
+#[oai(rename_all = "camelCase")]
+pub struct CreateLibraryPluginRequest {
+    pub metadata: JsonField<CreateLibraryPluginRequestMetadata>,
+    pub icon: Binary<Vec<u8>>,
+    pub plugin_wasm: TempFileUpload,
+}
+
+#[derive(Debug, poem_openapi::Multipart)]
+#[oai(rename_all = "camelCase")]
+pub struct CreateAppPluginRequest {
+    pub metadata: JsonField<CreateAppPluginRequestMetadata>,
+    pub icon: Binary<Vec<u8>>,
+    pub plugin_wasm: TempFileUpload,
+}
+
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 pub struct CreateComponentRequest {
-    pub component_name: ComponentName,
-    pub component: Upload,
-    pub component_type: Option<ComponentType>,
+    pub metadata: JsonField<CreateComponentRequestMetadata>,
+    pub component_wasm: Upload,
     pub files: Option<TempFileUpload>,
-    pub file_options: Option<JsonField<BTreeMap<ComponentFilePath, ComponentFileOptions>>>,
-    pub dynamic_linking: Option<JsonField<HashMap<String, DynamicLinkedInstance>>>,
-    pub env: Option<JsonField<BTreeMap<String, String>>>,
-    pub agent_types: Option<JsonField<Vec<AgentType>>>,
 }
 
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 pub struct UpdateComponentRequest {
-    pub previous_version: ComponentVersion,
-    pub component_type: Option<ComponentType>,
-    pub component: Option<Upload>,
-    pub removed_files: Option<JsonField<Vec<ComponentFilePath>>>,
+    pub metadata: JsonField<UpdateComponentRequestComponentMetadata>,
+    pub new_component_wasm: Option<Upload>,
     pub new_files: Option<TempFileUpload>,
-    pub new_file_options: Option<JsonField<BTreeMap<ComponentFilePath, ComponentFileOptions>>>,
-    pub files_archive: Option<TempFileUpload>,
-    pub dynamic_linking: Option<JsonField<HashMap<String, DynamicLinkedInstance>>>,
-    pub env: Option<JsonField<BTreeMap<String, String>>>,
-    pub agent_types: Option<JsonField<Vec<AgentType>>>,
-    pub plugin_installation_actions: Option<JsonField<Vec<PluginInstallationAction>>>,
 }

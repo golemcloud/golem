@@ -2544,47 +2544,16 @@ paths:
             schema:
               type: object
               required:
-              - previousVersion
+              - metadata
               properties:
-                previousVersion:
-                  type: integer
-                  format: uint64
-                componentType:
-                  $ref: '#/components/schemas/ComponentType'
-                component:
+                metadata:
+                  $ref: '#/components/schemas/UpdateComponentRequestComponentMetadata'
+                newComponentWasm:
                   type: string
                   format: binary
-                removedFiles:
-                  type: array
-                  items:
-                    type: string
-                    description: Path inside a component filesystem. Must be absolute.
                 newFiles:
                   type: string
                   format: binary
-                newFileOptions:
-                  type: object
-                  additionalProperties:
-                    $ref: '#/components/schemas/ComponentFileOptions'
-                filesArchive:
-                  type: string
-                  format: binary
-                dynamicLinking:
-                  type: object
-                  additionalProperties:
-                    $ref: '#/components/schemas/DynamicLinkedInstance'
-                env:
-                  type: object
-                  additionalProperties:
-                    type: string
-                agentTypes:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/AgentType'
-                pluginInstallationActions:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/PluginInstallationAction'
         required: true
       responses:
         '200':
@@ -4070,35 +4039,17 @@ paths:
             schema:
               type: object
               required:
-              - componentName
-              - component
+              - metadata
+              - componentWasm
               properties:
-                componentName:
-                  type: string
-                component:
+                metadata:
+                  $ref: '#/components/schemas/CreateComponentRequestMetadata'
+                componentWasm:
                   type: string
                   format: binary
-                componentType:
-                  $ref: '#/components/schemas/ComponentType'
                 files:
                   type: string
                   format: binary
-                fileOptions:
-                  type: object
-                  additionalProperties:
-                    $ref: '#/components/schemas/ComponentFileOptions'
-                dynamicLinking:
-                  type: object
-                  additionalProperties:
-                    $ref: '#/components/schemas/DynamicLinkedInstance'
-                env:
-                  type: object
-                  additionalProperties:
-                    type: string
-                agentTypes:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/AgentType'
         required: true
       responses:
         '200':
@@ -5921,28 +5872,16 @@ paths:
             schema:
               type: object
               required:
-              - name
-              - version
-              - description
+              - metadata
               - icon
-              - homepage
-              - scope
-              - wasm
+              - pluginWasm
               properties:
-                name:
-                  type: string
-                version:
-                  type: string
-                description:
-                  type: string
+                metadata:
+                  $ref: '#/components/schemas/CreateLibraryPluginRequestMetadata'
                 icon:
                   type: string
                   format: binary
-                homepage:
-                  type: string
-                scope:
-                  $ref: '#/components/schemas/PluginScope'
-                wasm:
+                pluginWasm:
                   type: string
                   format: binary
         required: true
@@ -6010,28 +5949,16 @@ paths:
             schema:
               type: object
               required:
-              - name
-              - version
-              - description
+              - metadata
               - icon
-              - homepage
-              - scope
-              - wasm
+              - pluginWasm
               properties:
-                name:
-                  type: string
-                version:
-                  type: string
-                description:
-                  type: string
+                metadata:
+                  $ref: '#/components/schemas/CreateAppPluginRequestMetadata'
                 icon:
                   type: string
                   format: binary
-                homepage:
-                  type: string
-                scope:
-                  $ref: '#/components/schemas/PluginScope'
-                wasm:
+                pluginWasm:
                   type: string
                   format: binary
         required: true
@@ -7176,6 +7103,26 @@ components:
       properties:
         domainName:
           type: string
+    CreateAppPluginRequestMetadata:
+      type: object
+      title: CreateAppPluginRequestMetadata
+      required:
+      - name
+      - version
+      - description
+      - homepage
+      - scope
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        homepage:
+          type: string
+        scope:
+          $ref: '#/components/schemas/PluginScope'
     CreateApplicationRequest:
       type: object
       title: CreateApplicationRequest
@@ -7201,6 +7148,32 @@ components:
           type: string
         certificatePrivateKey:
           type: string
+    CreateComponentRequestMetadata:
+      type: object
+      title: CreateComponentRequestMetadata
+      required:
+      - componentName
+      properties:
+        componentName:
+          type: string
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+        fileOptions:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ComponentFileOptions'
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        agentTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
     CreateEnvironmentRequest:
       type: object
       title: CreateEnvironmentRequest
@@ -7219,6 +7192,26 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RouteRequestView'
+    CreateLibraryPluginRequestMetadata:
+      type: object
+      title: CreateLibraryPluginRequestMetadata
+      required:
+      - name
+      - version
+      - description
+      - homepage
+      - scope
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        homepage:
+          type: string
+        scope:
+          $ref: '#/components/schemas/PluginScope'
     CreatePluginRequest:
       type: object
       title: CreatePluginRequest
@@ -8445,6 +8438,42 @@ components:
           type: string
         certificatePrivateKey:
           type: string
+    UpdateComponentRequestComponentMetadata:
+      type: object
+      title: UpdateComponentRequestComponentMetadata
+      required:
+      - previousVersion
+      properties:
+        previousVersion:
+          type: integer
+          format: uint64
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+        removedFiles:
+          type: array
+          items:
+            type: string
+            description: Path inside a component filesystem. Must be absolute.
+        newFileOptions:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ComponentFileOptions'
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        agentTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
+        pluginInstallationActions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationAction'
     UpdateEnvironmentRequest:
       type: object
       title: UpdateEnvironmentRequest

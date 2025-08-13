@@ -186,6 +186,7 @@ where
 
 #[cfg(test)]
 mod test {
+    use crate::model::component::ComponentType;
     use crate::model::diff::component::{Component, ComponentFile};
     use crate::model::diff::deployment::Deployment;
     use crate::model::diff::hash::Hashable;
@@ -198,7 +199,7 @@ mod test {
         ToSerializableWithModeExt,
     };
     use crate::model::diff::{ComponentMetadata, Diffable};
-    use crate::model::{ComponentFilePermissions, ComponentType};
+    use crate::model::ComponentFilePermissions;
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
 

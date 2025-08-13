@@ -50,9 +50,6 @@ pub mod newtype;
 #[cfg(feature = "redis")]
 pub mod redis;
 
-#[cfg(feature = "sql")]
-pub mod repo;
-
 #[cfg(feature = "tokio")]
 pub mod retriable_error;
 

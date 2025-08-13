@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{
-    ComponentFilePath, ComponentFilePathWithPermissionsList, IdempotencyKey, Timestamp,
-};
+use crate::model::component::ComponentFilePath;
+use crate::model::{IdempotencyKey, Timestamp};
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use serde_json::Value;
@@ -170,21 +169,12 @@ impl poem_openapi::types::ParseFromJSON for ComponentFilePath {
     }
 }
 
-impl poem_openapi::types::ParseFromMultipartField for ComponentFilePathWithPermissionsList {
-    async fn parse_from_multipart(field: Option<poem::web::Field>) -> ParseResult<Self> {
-        String::parse_from_multipart(field)
-            .await
-            .map_err(|err| err.propagate::<ComponentFilePathWithPermissionsList>())
-            .and_then(|s| serde_json::from_str(&s).map_err(poem_openapi::types::ParseError::custom))
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::model::{
-        ComponentFilePath, ComponentFilePermissions, Empty, IdempotencyKey, InitialComponentFile,
-        InitialComponentFileKey, WorkerStatus,
+    use crate::model::component::{
+        ComponentFilePath, InitialComponentFile, InitialComponentFileKey,
     };
+    use crate::model::{ComponentFilePermissions, Empty, IdempotencyKey, WorkerStatus};
     use poem_openapi::types::ToJSON;
     use test_r::test;
 

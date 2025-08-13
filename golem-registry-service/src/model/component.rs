@@ -14,21 +14,18 @@
 
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::{ComponentName, VersionedComponentId};
+use golem_common::model::component::{ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{
-    ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentId, ComponentType,
-    InitialComponentFile, PluginInstallationId,
-};
+use golem_common::model::{ComponentId, PluginInstallationId};
 use golem_wasm_ast::analysis::AnalysedType;
 use poem_openapi::Object;
 use rib::FunctionName;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
-use tempfile::NamedTempFile;
 
 #[derive(Debug, Clone)]
 pub struct NewComponentRevision {
@@ -189,12 +186,6 @@ pub struct PluginInstallation {
 }
 
 #[derive(Debug)]
-pub struct InitialComponentFilesArchiveAndPermissions {
-    pub archive: NamedTempFile,
-    pub files: Vec<ComponentFilePathWithPermissions>,
-}
-
-#[derive(Debug)]
 pub struct ConflictReport {
     pub missing_functions: Vec<FunctionName>,
     pub conflicting_functions: Vec<ConflictingFunction>,
@@ -311,10 +302,4 @@ fn convert_to_pretty_type(analysed_type: &Option<AnalysedType>) -> String {
             rib::TypeName::try_from(x.clone()).map_or("unknown".to_string(), |x| x.to_string())
         })
         .unwrap_or("unit".to_string())
-}
-
-#[derive(Clone, Debug, Object, Default)]
-pub struct ComponentFileOptions {
-    /// Path of the file in the uploaded archive
-    pub permissions: ComponentFilePermissions,
 }

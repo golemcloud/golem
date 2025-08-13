@@ -2936,7 +2936,7 @@ dependencies = [
 [[package]]
 name = "golem-openapi-client-generator"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-openapi-client-generator.git?branch=atomic-deployment-fixes#5cf336b0b47d29b99e8cbe0b6fa3f7b77ca543fc"
+source = "git+https://github.com/golemcloud/golem-openapi-client-generator.git?branch=atomic-deployment-fixes#225e41632ca743843d371534f82b9a87ba32a5dd"
 dependencies = [
  "clap",
  "convert_case 0.6.0",

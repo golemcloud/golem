@@ -16,6 +16,7 @@ pub mod api_definition;
 pub mod api_domain;
 pub mod application;
 pub mod certificate;
+pub mod component;
 pub mod environment;
 
 use crate::model::api_definition::ApiDefinitionId;

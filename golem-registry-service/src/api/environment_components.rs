@@ -17,10 +17,10 @@ use super::model::CreateComponentRequest;
 use crate::model::component::Component;
 use crate::services::component::ComponentService;
 use golem_common::api::Page;
-use golem_common::model::ComponentType;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::ComponentName;
+use golem_common::model::component::ComponentType;
 use golem_common::model::deployment::DeploymentRevisionId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
@@ -78,24 +78,26 @@ impl EnvironmentComponentsApi {
         payload: CreateComponentRequest,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        let data = payload.component.into_vec().await?;
+        let data = payload.component_wasm.into_vec().await?;
         let files_archive = payload.files.map(|f| f.into_file());
 
         // TODO
         let account_id: AccountId = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
 
+        let metadata = payload.metadata.0;
+
         let response = self
             .component_service
             .create(
                 &environment_id,
-                &payload.component_name,
-                payload.component_type.unwrap_or(ComponentType::Durable),
+                &metadata.component_name,
+                metadata.component_type.unwrap_or(ComponentType::Durable),
                 data,
                 files_archive,
-                payload.file_options.unwrap_or_default().0,
-                payload.dynamic_linking.unwrap_or_default().0,
-                payload.env.unwrap_or_default().0,
-                payload.agent_types.unwrap_or_default().0,
+                metadata.file_options.unwrap_or_default(),
+                metadata.dynamic_linking.unwrap_or_default(),
+                metadata.env.unwrap_or_default(),
+                metadata.agent_types.unwrap_or_default(),
                 &account_id,
             )
             .await?;
