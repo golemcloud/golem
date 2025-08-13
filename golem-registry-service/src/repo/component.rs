@@ -152,6 +152,14 @@ impl<Repo: ComponentRepo> LoggedComponentRepo<Repo> {
     ) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id, deployment_revision_id)
     }
+
+    fn span_env_and_deployment_revision_and_name(
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        name: &str,
+    ) -> Span {
+        info_span!(SPAN_NAME, environment_id = %environment_id, deployment_revision_id, name)
+    }
 }
 
 #[async_trait]
@@ -303,9 +311,10 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         self.repo
             .get_by_deployment_and_name(environment_id, deployment_revision_id, name)
-            .instrument(Self::span_env_and_deployment_revision(
+            .instrument(Self::span_env_and_deployment_revision_and_name(
                 environment_id,
                 deployment_revision_id,
+                name,
             ))
             .await
     }
