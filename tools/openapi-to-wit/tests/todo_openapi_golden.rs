@@ -41,6 +41,6 @@ fn generates_wit_package_and_version_and_interface() {
     assert!(wit.contains("record todo-create {"));
     assert!(wit.contains("record todo {"));
     assert!(wit.contains("variant http-error"));
-    assert!(wit.contains("interface todo-rest-api {"));
+    assert!(wit.contains("interface todos {"));
     assert!(wit.contains("create-todo: func(request: todo-create) -> result<todo, http-error>;"));
 } 

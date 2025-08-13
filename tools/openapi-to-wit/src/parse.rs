@@ -153,7 +153,7 @@ pub fn parse_component_records(doc: &str) -> Vec<ParsedRecord> {
                     .collect();
                 let mut fields = Vec::new();
                 for (fname, fobj) in props.iter() {
-                    let (fty) = match fobj {
+                    let fty = match fobj {
                         SchemaObject::Schema(s) => match s.r#type.as_deref() {
                             Some("array") => {
                                 // Determine inner type
@@ -220,6 +220,7 @@ pub fn parse_component_enums(doc: &str) -> Vec<ParsedEnum> {
 #[derive(Debug, Clone)]
 pub struct ParsedOperation {
     pub operation_id: String,
+    pub group: String,
     pub params_record: Option<String>,
     pub request_record: Option<String>,
     pub response_record: Option<String>,
@@ -233,15 +234,14 @@ pub fn parse_operations(doc: &str) -> Vec<ParsedOperation> {
     let mut out = Vec::new();
     let paths = match parsed.paths { Some(p) => p, None => return out };
 
-    for (_path, item) in paths.into_iter() {
+    for (path, item) in paths.into_iter() {
         for op in [item.get, item.post, item.put, item.delete].into_iter().flatten() {
             let operation_id = op.operationId.clone().unwrap_or_default();
             if operation_id.is_empty() { continue; }
-
+            let group = synth_group_name(&path);
             let req_rec = op.requestBody.as_ref().and_then(|rb| first_json_ref_name(rb.content.as_ref()));
             let resp_rec = find_200_json_ref_name(op.responses.as_ref());
-
-            out.push(ParsedOperation { operation_id, params_record: None, request_record: req_rec, response_record: resp_rec });
+            out.push(ParsedOperation { operation_id, group, params_record: None, request_record: req_rec, response_record: resp_rec });
         }
     }
 
@@ -259,6 +259,7 @@ pub fn parse_operations_with_inline(doc: &str) -> (Vec<ParsedOperation>, Vec<Par
             if let Some(op) = op_opt {
                 let operation_id = op.operationId.clone().unwrap_or_default();
                 if operation_id.is_empty() { continue; }
+                let group = synth_group_name(&path);
 
                 // params (path+query)
                 let mut params_rec_name: Option<String> = None;
@@ -390,7 +391,7 @@ pub fn parse_operations_with_inline(doc: &str) -> (Vec<ParsedOperation>, Vec<Par
                     }
                 }
 
-                ops.push(ParsedOperation { operation_id, params_record: params_rec_name, request_record: req_name, response_record: resp_name });
+                ops.push(ParsedOperation { operation_id, group, params_record: params_rec_name, request_record: req_name, response_record: resp_name });
             }
         }
     }
@@ -409,6 +410,12 @@ fn merge_parameters(path_params: Option<&Vec<ParameterObject>>, op_params: Optio
     if let Some(v) = path_params { for po in v { insert(po); } }
     if let Some(v) = op_params { for po in v { insert(po); } }
     map.into_values().collect()
+}
+
+fn synth_group_name(path: &str) -> String {
+    let seg = path.split('/').filter(|s| !s.is_empty() && !s.starts_with('{')).next().unwrap_or("");
+    let s = seg.replace(|c: char| !c.is_ascii_alphanumeric(), "-");
+    s.trim_matches('-').to_lowercase()
 }
 
 fn synth_inline_name(path: &str, method: &str, is_request: bool) -> String {
@@ -505,6 +512,7 @@ components:
         assert_eq!(ops.len(), 1);
         let op = &ops[0];
         assert_eq!(op.operation_id, "CreateTodo");
+        assert_eq!(op.group, "todos");
         assert_eq!(op.params_record, None);
         assert_eq!(op.request_record.as_deref(), Some("TodoCreate"));
         assert_eq!(op.response_record.as_deref(), Some("Todo"));
@@ -561,6 +569,7 @@ paths:
         assert_eq!(ops.len(), 1);
         let op = &ops[0];
         assert_eq!(op.operation_id, "UpdateTodo");
+        assert_eq!(op.group, "todos");
         assert_eq!(op.params_record.as_deref(), Some("todos-id-put-params"));
         assert_eq!(op.request_record.as_deref(), Some("todos-id-put-request-body"));
         assert_eq!(op.response_record.as_deref(), Some("todos-id-put-response-body"));

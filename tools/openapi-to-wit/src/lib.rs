@@ -2,6 +2,8 @@ mod naming;
 mod render;
 mod parse;
 
+use std::collections::BTreeMap;
+
 pub mod model {
     #[derive(Debug, Clone)]
     pub struct WitOutput {
@@ -41,12 +43,16 @@ pub fn convert_openapi_to_wit(openapi_text: &str) -> Result<model::WitOutput, Ge
     let enums = parse::parse_component_enums(openapi_text);
     for enm in &enums { body.push_str(&render::render_enum(enm)); }
 
-    // Operations (with inline lifting) -> single interface named from title
+    // Operations (with inline lifting) -> group by first path segment
     let (ops, lifted) = parse::parse_operations_with_inline(openapi_text);
     for rec in &lifted { body.push_str(&render::render_record(rec)); }
     if !ops.is_empty() {
         body.push_str(&render::render_error_variant());
-        body.push_str(&render::render_interface(&pkg_name, &ops));
+        let mut groups: BTreeMap<String, Vec<parse::ParsedOperation>> = BTreeMap::new();
+        for op in ops { groups.entry(op.group.clone()).or_default().push(op); }
+        for (group, gops) in groups {
+            body.push_str(&render::render_interface(&group, &gops));
+        }
     }
 
     Ok(model::WitOutput {
