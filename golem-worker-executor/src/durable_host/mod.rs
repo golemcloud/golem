@@ -2646,14 +2646,15 @@ impl PrivateDurableWorkerState {
                     )
                     .await;
 
-                // if end entry is not found and the commit was executed,
-                // we need to check if the remote transaction was committed
-                if end_entry.is_none() && pre_entry.is_pre_commit_remote_transaction(begin_index) {
-                    // if the remote transaction was not committed, we need to restart
-                    should_restart = !handler.is_committed(&tx_id).await?;
+                if end_entry.is_none() {
+                    if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                        // if we can not confirm the transaction was committed, we need to restart
+                        should_restart = !handler.is_committed(&tx_id).await?;
+                    } else if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                        // if we can not confirm the transaction was rolled back, we need to restart
+                        should_restart = !handler.is_rolled_back(&tx_id).await?;
+                    }
                 }
-                // NOTE: rollback is not checked, because by default transaction is rolled back
-                // it is not optimal to restart transaction which will end with rollback
             } else {
                 // if pre entry is not found, we need to restart
                 should_restart = true;

@@ -1307,6 +1307,8 @@ where
 
     async fn is_rolled_back(&self, transaction_id: &TransactionId) -> Result<bool, RdbmsError> {
         let transaction_status = self.get_transaction_status(transaction_id).await?;
-        Ok(transaction_status == RdbmsTransactionStatus::RolledBack)
+        // if transaction is not found, it is considered as rolled back
+        Ok(transaction_status == RdbmsTransactionStatus::RolledBack
+            || transaction_status == RdbmsTransactionStatus::NotFound)
     }
 }
