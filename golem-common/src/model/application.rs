@@ -19,6 +19,8 @@ newtype_uuid!(ApplicationId);
 
 declare_transparent_newtypes! {
     pub struct ApplicationName(pub String);
+
+    pub struct ApplicationRevision(pub u64);
 }
 
 declare_structs! {

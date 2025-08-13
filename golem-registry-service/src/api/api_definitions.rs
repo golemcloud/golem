@@ -17,8 +17,8 @@ use golem_common::api::Page;
 use golem_common::api::api_definition::{
     HttpApiDefinitionResponseView, UpdateHttpApiDefinitionRequest,
 };
-use golem_common::model::Revision;
 use golem_common::model::api_definition::ApiDefinitionId;
+use golem_common::model::api_definition::ApiDefinitionRevision;
 use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -109,13 +109,13 @@ impl ApiDefinitionsApi {
     async fn get_api_definition_revision(
         &self,
         api_definition_id: Path<ApiDefinitionId>,
-        revision: Path<Revision>,
+        revision: Path<ApiDefinitionRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<HttpApiDefinitionResponseView>> {
         let record = recorded_http_api_request!(
             "get_api_definition_revisions",
             api_definition_id = api_definition_id.0.to_string(),
-            revision = revision.0.to_string()
+            revision = revision.0.0
         );
 
         let auth = AuthCtx::new(token.secret());
@@ -131,7 +131,7 @@ impl ApiDefinitionsApi {
     async fn get_api_definition_revision_internal(
         &self,
         _api_definition_id: ApiDefinitionId,
-        _revision: Revision,
+        _revision: ApiDefinitionRevision,
         _auth: AuthCtx,
     ) -> ApiResult<Json<HttpApiDefinitionResponseView>> {
         todo!()

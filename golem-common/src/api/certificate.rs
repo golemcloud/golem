@@ -14,8 +14,8 @@
 
 use crate::declare_structs;
 use crate::model::certificate::CertificateName;
+use crate::model::certificate::CertificateRevision;
 use crate::model::environment::EnvironmentId;
-use crate::model::Revision;
 
 declare_structs! {
     pub struct CreateCertificateRequest {
@@ -33,7 +33,7 @@ declare_structs! {
     pub struct CertificateResponseView {
         pub environment_id: EnvironmentId,
         pub name: CertificateName,
-        pub revision: Revision,
+        pub revision: CertificateRevision,
         pub domain_name: String,
         pub created_at: chrono::DateTime<chrono::Utc>,
     }

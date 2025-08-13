@@ -16,10 +16,12 @@ use super::ApiResult;
 use super::model::UpdateComponentRequest;
 use crate::model::component::Component;
 use crate::services::component::ComponentService;
+use futures::TryStreamExt;
 use golem_common::api::Page;
+use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
-use golem_common::model::{ComponentId, Revision};
+use golem_common::model::component::ComponentRevision;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -30,7 +32,6 @@ use poem_openapi::payload::{Binary, Json};
 use std::sync::Arc;
 use tracing::Instrument;
 use uuid::uuid;
-use futures::TryStreamExt;
 
 pub struct ComponentsApi {
     component_service: Arc<ComponentService>,
@@ -118,13 +119,13 @@ impl ComponentsApi {
     async fn get_component_revision(
         &self,
         component_id: Path<ComponentId>,
-        revision: Path<Revision>,
+        revision: Path<ComponentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Component>> {
         let record = recorded_http_api_request!(
             "get_component_revision",
             component_id = component_id.0.to_string(),
-            revision = revision.0.to_string()
+            revision = revision.0.0
         );
 
         let auth = AuthCtx::new(token.secret());
@@ -140,7 +141,7 @@ impl ComponentsApi {
     async fn get_component_revision_internal(
         &self,
         component_id: ComponentId,
-        revision: Revision,
+        revision: ComponentRevision,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         let component = self
@@ -159,13 +160,13 @@ impl ComponentsApi {
     async fn get_component_wasm(
         &self,
         component_id: Path<ComponentId>,
-        revision: Path<Revision>,
+        revision: Path<ComponentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Binary<Body>> {
         let record = recorded_http_api_request!(
             "get_component_wasm",
             component_id = component_id.0.to_string(),
-            revision = revision.0.to_string()
+            revision = revision.0.0
         );
 
         let auth = AuthCtx::new(token.secret());
@@ -181,11 +182,15 @@ impl ComponentsApi {
     async fn get_component_wasm_internal(
         &self,
         component_id: ComponentId,
-        revision: Revision,
+        revision: ComponentRevision,
         _auth: AuthCtx,
     ) -> ApiResult<Binary<Body>> {
-        let result = self.component_service.download_component_wasm(&component_id, revision).await?;
-        let body = Body::from_bytes_stream(result.map_err(|e| std::io::Error::other(e.to_string())));
+        let result = self
+            .component_service
+            .download_component_wasm(&component_id, revision)
+            .await?;
+        let body =
+            Body::from_bytes_stream(result.map_err(|e| std::io::Error::other(e.to_string())));
         Ok(Binary(body))
     }
 

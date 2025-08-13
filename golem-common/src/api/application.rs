@@ -14,7 +14,7 @@
 
 use crate::declare_structs;
 use crate::model::application::ApplicationName;
-use crate::model::Revision;
+use crate::model::application::ApplicationRevision;
 
 declare_structs! {
     pub struct CreateApplicationRequest {
@@ -22,6 +22,6 @@ declare_structs! {
     }
 
     pub struct UpdateApplicationRequest {
-        pub previous_revision: Revision,
+        pub previous_revision: ApplicationRevision,
     }
 }

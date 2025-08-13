@@ -17,11 +17,11 @@ use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentName, VersionedComponentId};
 use golem_common::model::component_metadata::ComponentProcessingError;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{
     ComponentFilePath, ComponentId, ComponentVersion, InitialComponentFileKey, PluginInstallationId,
 };
 use golem_service_base::repo::RepoError;
-use golem_common::model::environment::EnvironmentId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -32,7 +32,7 @@ pub enum ComponentError {
     #[error("Component {component_name} not found in environment {environment_id}")]
     UnknownEnvironmentComponentName {
         environment_id: EnvironmentId,
-        component_name: ComponentName
+        component_name: ComponentName,
     },
     #[error("Unknown versioned component id: {0}")]
     UnknownVersionedComponentId(VersionedComponentId),

@@ -109,9 +109,11 @@ impl From<ComponentError> for ApiError {
             ComponentError::UnknownComponentId(_)
             | ComponentError::UnknownVersionedComponentId(_)
             | ComponentError::PluginNotFound { .. }
-            | ComponentError::UnknownEnvironmentComponentName { .. } => Self::NotFound(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
+            | ComponentError::UnknownEnvironmentComponentName { .. } => {
+                Self::NotFound(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
 
             ComponentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error: value.to_safe_string(),

@@ -48,7 +48,7 @@ macro_rules! declare_enums {
 #[macro_export]
 macro_rules! declare_transparent_newtypes {
     ($($i:item)*) => { $(
-    #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+    #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize, derive_more::Display)]
     #[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
     #[repr(transparent)]
         $i

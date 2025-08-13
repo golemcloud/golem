@@ -13,19 +13,20 @@
 // limitations under the License.
 
 use super::environment::EnvironmentId;
-use crate::model::Revision;
 use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
 
 newtype_uuid!(ApiDomainId);
 
 declare_transparent_newtypes! {
     pub struct ApiDomainName(pub String);
+
+    pub struct ApiDomainRevision(u64);
 }
 
 declare_structs! {
     pub struct ApiDomain {
         pub id: ApiDomainId,
-        pub revision: Revision,
+        pub revision: ApiDomainRevision,
         pub environment_id: EnvironmentId,
         pub domain_name: ApiDomainName,
         pub name_servers: Vec<String>,
