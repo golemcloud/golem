@@ -8,7 +8,7 @@
   ],
   "dependencies": {
     "@golemcloud/golem-ts": "1.5.0",
-    "@golemcloud/golem-ts-sdk": "0.0.1-dev.3",
+    "@golemcloud/golem-ts-sdk": "0.0.1-dev.12",
     "rttist": "^1.0.0-rc.4"
   },
   "devDependencies": {
