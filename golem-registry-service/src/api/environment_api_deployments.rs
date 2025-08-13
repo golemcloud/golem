@@ -16,7 +16,7 @@ use super::ApiResult;
 use golem_common::api::{CreateApiDeploymentRequest, Page};
 use golem_common::model::api_deployment::{ApiDeployment, ApiSiteString};
 use golem_common::model::auth::AuthCtx;
-use golem_common::model::deployment::DeploymentId;
+use golem_common::model::deployment::DeploymentRevisionId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -139,7 +139,7 @@ impl EnvironmentApiDeploymentsApi {
 
     /// Get all api-deployments in a specific deployment
     #[oai(
-        path = "/:environment_id/deployments/:deployment_id/api-deployments",
+        path = "/:environment_id/deployments/:deployment_revision_id/api-deployments",
         method = "get",
         operation_id = "get_deployment_api_deployments",
         tag = ApiTags::Deployment
@@ -147,19 +147,23 @@ impl EnvironmentApiDeploymentsApi {
     async fn get_deployment_api_deployments(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_id: Path<DeploymentId>,
+        deployment_revision_id: Path<DeploymentRevisionId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<ApiDeployment>>> {
         let record = recorded_http_api_request!(
             "get_deployment_api_deployments",
             environment_id = environment_id.0.to_string(),
-            deployment_id = deployment_id.0.0.to_string(),
+            deployment_revision_id = deployment_revision_id.0.0,
         );
 
         let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .get_deployment_api_deployments_internal(environment_id.0, deployment_id.0, auth)
+            .get_deployment_api_deployments_internal(
+                environment_id.0,
+                deployment_revision_id.0,
+                auth,
+            )
             .instrument(record.span.clone())
             .await;
 
@@ -169,7 +173,7 @@ impl EnvironmentApiDeploymentsApi {
     async fn get_deployment_api_deployments_internal(
         &self,
         _environment_id: EnvironmentId,
-        _deployment_id: DeploymentId,
+        _deployment_revision_id: DeploymentRevisionId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<ApiDeployment>>> {
         todo!()
@@ -177,7 +181,7 @@ impl EnvironmentApiDeploymentsApi {
 
     /// Get api-deployment in a deployment by site
     #[oai(
-        path = "/:environment_id/deployments/:deployment_id/api-deployments/:site",
+        path = "/:environment_id/deployments/:deployment_revision_id/api-deployments/:site",
         method = "get",
         operation_id = "get_deployment_api_deployment",
         tag = ApiTags::Deployment
@@ -185,21 +189,26 @@ impl EnvironmentApiDeploymentsApi {
     async fn get_deployment_api_deployment(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_id: Path<DeploymentId>,
+        deployment_revision_id: Path<DeploymentRevisionId>,
         site: Path<ApiSiteString>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<ApiDeployment>> {
         let record = recorded_http_api_request!(
             "get_deployment_api_deployment",
             environment_id = environment_id.0.to_string(),
-            deployment_id = deployment_id.0.0.to_string(),
+            deployment_revision_id = deployment_revision_id.0.0,
             site = site.0.0
         );
 
         let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .get_deployment_api_deployment_internal(environment_id.0, deployment_id.0, site.0, auth)
+            .get_deployment_api_deployment_internal(
+                environment_id.0,
+                deployment_revision_id.0,
+                site.0,
+                auth,
+            )
             .instrument(record.span.clone())
             .await;
 
@@ -209,7 +218,7 @@ impl EnvironmentApiDeploymentsApi {
     async fn get_deployment_api_deployment_internal(
         &self,
         _environment_id: EnvironmentId,
-        _deployment_id: DeploymentId,
+        _deployment_revision_id: DeploymentRevisionId,
         _site: ApiSiteString,
         _auth: AuthCtx,
     ) -> ApiResult<Json<ApiDeployment>> {

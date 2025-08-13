@@ -18,4 +18,6 @@ newtype_uuid!(CertificateId);
 
 declare_transparent_newtypes! {
     pub struct CertificateName(pub String);
+
+    pub struct CertificateRevision(pub u64);
 }

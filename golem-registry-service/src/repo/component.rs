@@ -106,6 +106,13 @@ pub trait ComponentRepo: Send + Sync {
         environment_id: &Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<ComponentExtRevisionRecord>>;
+
+    async fn get_by_deployment_and_name(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        name: &str,
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 }
 
 pub struct LoggedComponentRepo<Repo: ComponentRepo> {
@@ -144,6 +151,14 @@ impl<Repo: ComponentRepo> LoggedComponentRepo<Repo> {
         deployment_revision_id: i64,
     ) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id, deployment_revision_id)
+    }
+
+    fn span_env_and_deployment_revision_and_name(
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        name: &str,
+    ) -> Span {
+        info_span!(SPAN_NAME, environment_id = %environment_id, deployment_revision_id, name)
     }
 }
 
@@ -284,6 +299,22 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
             .instrument(Self::span_env_and_deployment_revision(
                 environment_id,
                 deployment_revision_id,
+            ))
+            .await
+    }
+
+    async fn get_by_deployment_and_name(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        name: &str,
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
+        self.repo
+            .get_by_deployment_and_name(environment_id, deployment_revision_id, name)
+            .instrument(Self::span_env_and_deployment_revision_and_name(
+                environment_id,
+                deployment_revision_id,
+                name,
             ))
             .await
     }
@@ -785,6 +816,37 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .then(|revision| self.enrich_component(revision))
             .try_collect()
             .await
+    }
+
+    async fn get_by_deployment_and_name(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        name: &str,
+    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
+        let revision = self.with_ro("get_deployed_by_name")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT c.environment_id, c.name,
+                           cr.component_id, cr.revision_id, cr.version, cr.hash,
+                           cr.created_at, cr.created_by, cr.deleted,
+                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
+                    FROM components c
+                    JOIN component_revisions cr ON c.component_id = cr.component_id
+                    JOIN deployment_component_revisions dcr ON dcr.component_id = c.component_id AND dcr.component_revision_id = cr.revision_id
+                    WHERE c.environment_id = $1 AND dcr.deployment_revision_id = $2 AND c.name = $3
+                "#})
+                    .bind(environment_id)
+                    .bind(deployment_revision_id)
+                    .bind(name),
+            )
+            .await?;
+
+        match revision {
+            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
+            None => Ok(None),
+        }
     }
 }
 

@@ -19,8 +19,9 @@ pub mod certificate;
 pub mod environment;
 
 use crate::model::api_definition::ApiDefinitionId;
+use crate::model::component::ComponentRevision;
 use crate::model::plugin::{ComponentTransformerDefinition, OplogProcessorDefinition, PluginScope};
-use crate::model::{ComponentId, Revision};
+use crate::model::ComponentId;
 use crate::{declare_structs, declare_unions};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -63,7 +64,7 @@ declare_structs! {
 
     pub struct ComponentReference {
         name: String,
-        revision: Revision,
+        revision: ComponentRevision,
         id: ComponentId
     }
 }

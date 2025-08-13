@@ -16,12 +16,12 @@ use super::environment::EnvironmentId;
 use crate::{declare_structs, declare_transparent_newtypes};
 
 declare_transparent_newtypes! {
-    pub struct DeploymentId(pub u64);
+    pub struct DeploymentRevisionId(pub u64);
 }
 
 declare_structs! {
     pub struct Deployment {
-        pub id: DeploymentId,
-        pub environment_id: EnvironmentId
+        pub environment_id: EnvironmentId,
+        pub deployment_revision_id: DeploymentRevisionId
     }
 }

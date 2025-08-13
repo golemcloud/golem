@@ -26,12 +26,8 @@ use std::fmt::{Debug, Display, Formatter};
 declare_transparent_newtypes! {
     // TODO: Add validations (non-empty, no "/", no " ", ...)
     pub struct ComponentName(pub String);
-}
 
-impl Display for ComponentName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
+    pub struct ComponentRevision(pub u64);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

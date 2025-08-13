@@ -18,7 +18,7 @@ use golem_common::api::api_definition::{
     CreateHttpApiDefinitionRequest, HttpApiDefinitionResponseView,
 };
 use golem_common::model::auth::AuthCtx;
-use golem_common::model::deployment::DeploymentId;
+use golem_common::model::deployment::DeploymentRevisionId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -141,7 +141,7 @@ impl EnvironmentApiDefinitionsApi {
 
     /// Get all api-definitions in a specific deployment
     #[oai(
-        path = "/:environment_id/deployments/:deployment_id/api-definitions",
+        path = "/:environment_id/deployments/:deployment_revision_id/api-definitions",
         method = "get",
         operation_id = "get_deployment_api_definitions",
         tag = ApiTags::Deployment
@@ -149,19 +149,23 @@ impl EnvironmentApiDefinitionsApi {
     async fn get_deployment_api_definitions(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_id: Path<DeploymentId>,
+        deployment_revision_id: Path<DeploymentRevisionId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<HttpApiDefinitionResponseView>>> {
         let record = recorded_http_api_request!(
             "get_deployment_api_definitions",
             environment_id = environment_id.0.to_string(),
-            deployment_id = deployment_id.0.0.to_string(),
+            deployment_revision_id = deployment_revision_id.0.0.to_string(),
         );
 
         let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .get_deployment_api_definitions_internal(environment_id.0, deployment_id.0, auth)
+            .get_deployment_api_definitions_internal(
+                environment_id.0,
+                deployment_revision_id.0,
+                auth,
+            )
             .instrument(record.span.clone())
             .await;
 
@@ -171,7 +175,7 @@ impl EnvironmentApiDefinitionsApi {
     async fn get_deployment_api_definitions_internal(
         &self,
         _environment_id: EnvironmentId,
-        _deployment_id: DeploymentId,
+        _deployment_revision_id: DeploymentRevisionId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<HttpApiDefinitionResponseView>>> {
         todo!()
@@ -187,14 +191,14 @@ impl EnvironmentApiDefinitionsApi {
     async fn get_deployment_api_definition(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_id: Path<DeploymentId>,
+        deployment_revision_id: Path<DeploymentRevisionId>,
         api_definition_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<HttpApiDefinitionResponseView>> {
         let record = recorded_http_api_request!(
             "get_deployment_api_definition",
             environment_id = environment_id.0.to_string(),
-            deployment_id = deployment_id.0.0.to_string(),
+            deployment_revision_id = deployment_revision_id.0.0,
             api_definition_name = api_definition_name.0
         );
 
@@ -203,7 +207,7 @@ impl EnvironmentApiDefinitionsApi {
         let response = self
             .get_deployment_api_definition_internal(
                 environment_id.0,
-                deployment_id.0,
+                deployment_revision_id.0,
                 api_definition_name.0,
                 auth,
             )
@@ -216,7 +220,7 @@ impl EnvironmentApiDefinitionsApi {
     async fn get_deployment_api_definition_internal(
         &self,
         _environment_id: EnvironmentId,
-        _deployment_id: DeploymentId,
+        _deployment_revision_id: DeploymentRevisionId,
         _api_definition_name: String,
         _auth: AuthCtx,
     ) -> ApiResult<Json<HttpApiDefinitionResponseView>> {

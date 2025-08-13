@@ -22,6 +22,8 @@ newtype_uuid!(
 
 declare_transparent_newtypes! {
     pub struct EnvironmentName(String);
+
+    pub struct EnvironmentRevision(pub u64);
 }
 
 declare_structs! {

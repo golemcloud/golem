@@ -21,7 +21,7 @@ use golem_common::model::ComponentType;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::ComponentName;
-use golem_common::model::deployment::DeploymentId;
+use golem_common::model::deployment::DeploymentRevisionId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -131,10 +131,15 @@ impl EnvironmentComponentsApi {
 
     async fn get_environment_components_internal(
         &self,
-        _environment_id: EnvironmentId,
+        environment_id: EnvironmentId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<Component>>> {
-        todo!()
+        let components = self
+            .component_service
+            .list_staged_components(&environment_id)
+            .await?;
+
+        Ok(Json(Page { values: components }))
     }
 
     /// Get a component in the environment by name
@@ -167,16 +172,21 @@ impl EnvironmentComponentsApi {
 
     async fn get_environment_component_internal(
         &self,
-        _environment_id: EnvironmentId,
-        _component_name: ComponentName,
+        environment_id: EnvironmentId,
+        component_name: ComponentName,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        todo!()
+        let component = self
+            .component_service
+            .get_staged_component(environment_id, component_name)
+            .await?;
+
+        Ok(Json(component))
     }
 
     /// Get all components in a specific deployment
     #[oai(
-        path = "/:environment_id/deployments/:deployment_id/components",
+        path = "/:environment_id/deployments/:deployment_revision_id/components",
         method = "get",
         operation_id = "get_deployment_components",
         tag = ApiTags::Deployment
@@ -184,19 +194,19 @@ impl EnvironmentComponentsApi {
     async fn get_deployment_components(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_id: Path<DeploymentId>,
+        deployment_revision_id: Path<DeploymentRevisionId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<Component>>> {
         let record = recorded_http_api_request!(
             "get_deployment_components",
             environment_id = environment_id.0.to_string(),
-            deployment_id = deployment_id.0.0.to_string(),
+            deployment_revision_id = deployment_revision_id.0.0,
         );
 
         let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .get_deployment_components_internal(environment_id.0, deployment_id.0, auth)
+            .get_deployment_components_internal(environment_id.0, deployment_revision_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -205,16 +215,21 @@ impl EnvironmentComponentsApi {
 
     async fn get_deployment_components_internal(
         &self,
-        _environment_id: EnvironmentId,
-        _deployment_id: DeploymentId,
+        environment_id: EnvironmentId,
+        deployment_revision_id: DeploymentRevisionId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<Component>>> {
-        todo!()
+        let components = self
+            .component_service
+            .list_deployed_components(&environment_id, deployment_revision_id)
+            .await?;
+
+        Ok(Json(Page { values: components }))
     }
 
     /// Get component in a deployment by name
     #[oai(
-        path = "/:environment_id/deployments/:deployment_id/components/:component_name",
+        path = "/:environment_id/deployments/:deployment_revision_id/components/:component_name",
         method = "get",
         operation_id = "get_deployment_component",
         tag = ApiTags::Deployment
@@ -222,13 +237,14 @@ impl EnvironmentComponentsApi {
     async fn get_deployment_component(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_id: Path<DeploymentId>,
+        deployment_revision_id: Path<DeploymentRevisionId>,
         component_name: Path<ComponentName>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Component>> {
         let record = recorded_http_api_request!(
             "get_deployment_component",
-            deployment_id = deployment_id.0.0.to_string(),
+            environment_id = environment_id.0.to_string(),
+            deployment_revision_id = deployment_revision_id.0.0,
             component_name = component_name.0.to_string()
         );
 
@@ -237,7 +253,7 @@ impl EnvironmentComponentsApi {
         let response = self
             .get_deployment_component_internal(
                 environment_id.0,
-                deployment_id.0,
+                deployment_revision_id.0,
                 component_name.0,
                 auth,
             )
@@ -249,11 +265,15 @@ impl EnvironmentComponentsApi {
 
     async fn get_deployment_component_internal(
         &self,
-        _environment_id: EnvironmentId,
-        _deployment_id: DeploymentId,
-        _component_name: ComponentName,
+        environment_id: EnvironmentId,
+        deployment_revision_id: DeploymentRevisionId,
+        component_name: ComponentName,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        todo!()
+        let component = self
+            .component_service
+            .get_deployed_component(environment_id, deployment_revision_id, component_name)
+            .await?;
+        Ok(Json(component))
     }
 }

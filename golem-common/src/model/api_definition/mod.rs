@@ -17,11 +17,16 @@ pub mod oas;
 pub mod security_scheme;
 
 use self::cors::CorsConfiguration;
-use super::{ComponentId, Revision};
+use super::component::ComponentRevision;
+use super::ComponentId;
 use crate::api::api_definition::GatewayBindingType;
-use crate::{declare_enums, declare_structs, newtype_uuid};
+use crate::{declare_enums, declare_structs, declare_transparent_newtypes, newtype_uuid};
 
 newtype_uuid!(ApiDefinitionId);
+
+declare_transparent_newtypes! {
+    pub struct ApiDefinitionRevision(pub u64);
+}
 
 declare_enums! {
     pub enum RouteMethod {
@@ -49,7 +54,7 @@ declare_structs! {
     pub struct ResolvedGatewayBindingComponent {
         name: String,
         id: ComponentId,
-        revision: Revision,
+        revision: ComponentRevision,
     }
 
     pub struct GatewayBindingData {

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::declare_structs;
-use crate::model::Revision;
+use crate::model::environment::EnvironmentRevision;
 
 declare_structs! {
     pub struct CreateEnvironmentRequest {
@@ -21,7 +21,7 @@ declare_structs! {
     }
 
     pub struct UpdateEnvironmentRequest {
-        pub previous_revision: Revision,
+        pub previous_revision: EnvironmentRevision,
     }
 
     pub struct DeployEnvironmentRequest {
