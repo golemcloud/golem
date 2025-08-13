@@ -65,7 +65,7 @@ jobs:
           
       - name: Vcpkg build and install packages
         run: |
-          "${{ env.VCPKG_ROOT }}/vcpkg.exe" --recurse --clean-after-build --x-install-root "${{ env.VCPKG_PKG_INSTALL_DIR }}" --triplet "$[env.VCPKG_DEFAULT_TRIPLET]"
+          ${{ env.VCPKG_ROOT }}/vcpkg.exe install --recurse --clean-after-build --x-install-root "${{ env.VCPKG_PKG_INSTALL_DIR }}" --triplet "${{ env.VCPKG_DEFAULT_TRIPLET }}"
             
       - name: Setup Rust
         run: |
