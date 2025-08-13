@@ -5534,6 +5534,8 @@ components:
       required:
       - timestamp
       - id
+      - name
+      - owner
       properties:
         timestamp:
           type: string
@@ -5542,6 +5544,8 @@ components:
           type: integer
           format: uint64
         name:
+          type: string
+        owner:
           type: string
     ResumeResponse:
       type: object

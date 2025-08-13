@@ -11131,9 +11131,13 @@ components:
           format: uint64
         name:
           type: string
+        owner:
+          type: string
       required:
       - timestamp
       - id
+      - name
+      - owner
     ResumeResponse:
       title: ResumeResponse
       type: object

@@ -50,7 +50,9 @@ impl TryFrom<&Type> for AnalysedType {
                     .as_ref()
                     .ok_or_else(|| "List element type is None".to_string())?;
                 let analysed_type = AnalysedType::try_from(elem_type.as_ref())?;
-                Ok(list(analysed_type).with_optional_name(inner.name.clone()))
+                Ok(list(analysed_type)
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Tuple(inner)) => {
                 let elems = inner
@@ -58,7 +60,9 @@ impl TryFrom<&Type> for AnalysedType {
                     .iter()
                     .map(AnalysedType::try_from)
                     .collect::<Result<Vec<_>, String>>()?;
-                Ok(tuple(elems).with_optional_name(inner.name.clone()))
+                Ok(tuple(elems)
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Record(inner)) => {
                 let fields = inner
@@ -72,7 +76,9 @@ impl TryFrom<&Type> for AnalysedType {
                         Ok(field(&proto_field.name, analysed_type))
                     })
                     .collect::<Result<Vec<_>, String>>()?;
-                Ok(record(fields).with_optional_name(inner.name.clone()))
+                Ok(record(fields)
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Flags(inner)) => Ok(flags(
                 &inner
@@ -81,7 +87,8 @@ impl TryFrom<&Type> for AnalysedType {
                     .map(|s| s.as_str())
                     .collect::<Vec<&str>>(),
             )
-            .with_optional_name(inner.name.clone())),
+            .with_optional_name(inner.name.clone())
+            .with_optional_owner(inner.owner.clone())),
             Some(r#type::Type::Enum(inner)) => Ok(r#enum(
                 &inner
                     .names
@@ -89,14 +96,17 @@ impl TryFrom<&Type> for AnalysedType {
                     .map(|s| s.as_str())
                     .collect::<Vec<&str>>(),
             )
-            .with_optional_name(inner.name.clone())),
+            .with_optional_name(inner.name.clone())
+            .with_optional_owner(inner.owner.clone())),
             Some(r#type::Type::Option(inner)) => {
                 let elem_type = inner
                     .elem
                     .as_ref()
                     .ok_or_else(|| "Option element type is None".to_string())?;
                 let analysed_type = AnalysedType::try_from(elem_type.as_ref())?;
-                Ok(option(analysed_type).with_optional_name(inner.name.clone()))
+                Ok(option(analysed_type)
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Result(inner)) => {
                 let ok_type = inner
@@ -115,7 +125,8 @@ impl TryFrom<&Type> for AnalysedType {
                     name: inner.name.clone(),
                     owner: inner.owner.clone(),
                 })
-                .with_optional_name(inner.name.clone()))
+                .with_optional_name(inner.name.clone())
+                .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Variant(inner)) => {
                 let cases = inner
@@ -130,7 +141,9 @@ impl TryFrom<&Type> for AnalysedType {
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?;
-                Ok(variant(cases).with_optional_name(inner.name.clone()))
+                Ok(variant(cases)
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Handle(inner)) => {
                 let resource_mode = match inner.mode {
@@ -139,7 +152,8 @@ impl TryFrom<&Type> for AnalysedType {
                     _ => Err("Invalid resource mode".to_string()),
                 }?;
                 Ok(handle(AnalysedResourceId(inner.resource_id), resource_mode)
-                    .with_optional_name(inner.name.clone()))
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             None => Err("Type is None".to_string()),
         }
