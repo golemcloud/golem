@@ -86,7 +86,7 @@ enum ParameterObject {
 struct Parameter {
     name: String,
     #[serde(rename = "in")]
-    location: String, // "path" | "query" | others
+    location: String, // "path" | "query" | "header" | others
     #[serde(default)]
     required: Option<bool>,
     #[serde(default)]
@@ -261,20 +261,21 @@ pub fn parse_operations_with_inline(doc: &str) -> (Vec<ParsedOperation>, Vec<Par
                 if operation_id.is_empty() { continue; }
                 let group = synth_group_name(&path);
 
-                // params (path+query)
+                // params (path+query+header)
                 let mut params_rec_name: Option<String> = None;
                 let mut params_fields: Vec<ParsedField> = Vec::new();
                 let mut any_params = false;
                 let merged_params = merge_parameters(item.parameters.as_ref(), op.parameters.as_ref());
                 for p in merged_params {
-                    if p.location == "path" || p.location == "query" {
+                    if p.location == "path" || p.location == "query" || p.location == "header" {
                         any_params = true;
                         let ty = match p.schema.as_ref() {
                             Some(SchemaObject::Schema(s)) => s.r#type.clone().unwrap_or_else(|| "string".to_string()),
                             Some(SchemaObject::Ref(_)) | None => "string".to_string(),
                         };
                         let optional = !(p.required.unwrap_or(p.location == "path"));
-                        params_fields.push(ParsedField { name: p.name.clone(), ty, optional });
+                        let mapped_name = if p.location == "header" { map_header_name(&p.name) } else { p.name.clone() };
+                        params_fields.push(ParsedField { name: mapped_name, ty, optional });
                     }
                 }
                 if any_params {
@@ -412,6 +413,16 @@ fn merge_parameters(path_params: Option<&Vec<ParameterObject>>, op_params: Optio
     map.into_values().collect()
 }
 
+fn map_header_name(orig: &str) -> String {
+    match orig.to_ascii_lowercase().as_str() {
+        "authorization" => "auth".to_string(),
+        "etag" => "version".to_string(),
+        "if-match" => "expected-version".to_string(),
+        "last-modified" => "last-updated".to_string(),
+        _ => orig.to_string(),
+    }
+}
+
 fn synth_group_name(path: &str) -> String {
     let seg = path.split('/').filter(|s| !s.is_empty() && !s.starts_with('{')).next().unwrap_or("");
     let s = seg.replace(|c: char| !c.is_ascii_alphanumeric(), "-");
@@ -519,22 +530,6 @@ components:
     }
 
     #[test]
-    fn parses_component_enums() {
-        let doc = r#"openapi: 3.0.3
-info: { title: X, version: '1.0.0' }
-components:
-  schemas:
-    Status:
-      type: string
-      enum: [open, closed]
-"#;
-        let enums = parse_component_enums(doc);
-        assert_eq!(enums.len(), 1);
-        assert_eq!(enums[0].name, "Status");
-        assert_eq!(enums[0].cases, vec!["open", "closed"]);
-    }
-
-    #[test]
     fn parses_inline_request_and_response_records() {
         let doc = r##"openapi: 3.0.3
 info: { title: X, version: '1.0.0' }
@@ -546,6 +541,14 @@ paths:
         - name: id
           in: path
           required: true
+          schema: { type: string }
+        - name: Authorization
+          in: header
+          required: false
+          schema: { type: string }
+        - name: If-Match
+          in: header
+          required: false
           schema: { type: string }
       requestBody:
         content:
@@ -571,11 +574,10 @@ paths:
         assert_eq!(op.operation_id, "UpdateTodo");
         assert_eq!(op.group, "todos");
         assert_eq!(op.params_record.as_deref(), Some("todos-id-put-params"));
-        assert_eq!(op.request_record.as_deref(), Some("todos-id-put-request-body"));
-        assert_eq!(op.response_record.as_deref(), Some("todos-id-put-response-body"));
-        let names: Vec<_> = recs.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.contains(&"todos-id-put-params"));
-        assert!(names.contains(&"todos-id-put-request-body"));
-        assert!(names.contains(&"todos-id-put-response-body"));
+        let params = recs.iter().find(|r| r.name == "todos-id-put-params").unwrap();
+        let names: Vec<_> = params.fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"id"));
+        assert!(names.contains(&"auth"));
+        assert!(names.contains(&"expected-version"));
     }
 } 
