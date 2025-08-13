@@ -18,6 +18,7 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
     component_compilation_service_client::ComponentCompilationServiceClient,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentId, RetryConfig};
 use http::Uri;
@@ -32,7 +33,7 @@ pub trait ComponentCompilationService: Debug + Send + Sync {
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
     );
 }
 
@@ -81,7 +82,7 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
     ) {
         let component_id_clone = component_id.clone();
         let environment_id_clone = environment_id.clone();
@@ -95,7 +96,7 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
                 Box::pin(async move {
                     let request = ComponentCompilationRequest {
                         component_id: Some(component_id_clone.into()),
-                        component_version,
+                        component_version: component_version.0,
                         component_service_port: Some(component_service_port.into()),
                         environment_id: Some(environment_id_clone.into()),
                     };
@@ -130,5 +131,5 @@ impl Debug for ComponentCompilationServiceDisabled {
 
 #[async_trait]
 impl ComponentCompilationService for ComponentCompilationServiceDisabled {
-    async fn enqueue_compilation(&self, _: &EnvironmentId, _: &ComponentId, _: u64) {}
+    async fn enqueue_compilation(&self, _: &EnvironmentId, _: &ComponentId, _: ComponentRevision) {}
 }

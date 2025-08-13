@@ -26,7 +26,7 @@ use crate::model::oplog::{
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
+    AccountId, ComponentRevision, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
 };
 use crate::model::{ProjectId, RetryConfig};
 use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str};
@@ -185,7 +185,7 @@ impl IntoValue for ExportedFunctionParameters {
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
 pub struct ManualUpdateParameters {
-    pub target_version: ComponentVersion,
+    pub target_version: ComponentRevision,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
@@ -216,7 +216,7 @@ pub struct PluginInstallationDescription {
 pub struct CreateParameters {
     pub timestamp: Timestamp,
     pub worker_id: WorkerId,
-    pub component_version: ComponentVersion,
+    pub component_version: ComponentRevision,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub project_id: ProjectId,
@@ -416,7 +416,7 @@ pub struct PendingWorkerInvocationParameters {
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct PendingUpdateParameters {
     pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
+    pub target_version: ComponentRevision,
     pub description: PublicUpdateDescription,
 }
 
@@ -424,7 +424,7 @@ pub struct PendingUpdateParameters {
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct SuccessfulUpdateParameters {
     pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
+    pub target_version: ComponentRevision,
     pub new_component_size: u64,
     pub new_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
@@ -435,7 +435,7 @@ pub struct SuccessfulUpdateParameters {
 #[serde(rename_all = "camelCase")]
 pub struct FailedUpdateParameters {
     pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
+    pub target_version: ComponentRevision,
     pub details: Option<String>,
 }
 

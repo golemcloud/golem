@@ -14,7 +14,7 @@
 
 use super::{Empty, PluginId, ProjectId};
 use crate::model::account::AccountId;
-use crate::model::{ComponentId, ComponentVersion, PluginInstallationId};
+use crate::model::{ComponentId, ComponentRevision, PluginInstallationId};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -145,7 +145,7 @@ pub struct ComponentTransformerDefinition {
 #[serde(rename_all = "camelCase")]
 pub struct OplogProcessorDefinition {
     pub component_id: ComponentId,
-    pub component_version: ComponentVersion,
+    pub component_version: ComponentRevision,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -230,7 +230,7 @@ impl Display for PluginScope {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentPluginInstallationTarget {
     pub component_id: ComponentId,
-    pub component_version: ComponentVersion,
+    pub component_version: ComponentRevision,
 }
 
 impl Display for ComponentPluginInstallationTarget {
@@ -290,6 +290,7 @@ mod protobuf {
         OplogProcessorDefinition, PluginDefinition, PluginScope, PluginTypeSpecificDefinition,
         PluginWasmFileKey,
     };
+    use crate::model::component::ComponentRevision;
 
     impl From<PluginTypeSpecificDefinition>
         for golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition
@@ -365,7 +366,7 @@ mod protobuf {
         fn from(value: OplogProcessorDefinition) -> Self {
             golem_api_grpc::proto::golem::component::OplogProcessorDefinition {
                 component_id: Some(value.component_id.into()),
-                component_version: value.component_version,
+                component_version: value.component_version.0,
             }
         }
     }
@@ -383,7 +384,7 @@ mod protobuf {
                     .component_id
                     .ok_or("Missing component_id")?
                     .try_into()?,
-                component_version: value.component_version,
+                component_version: ComponentRevision(value.component_version),
             })
         }
     }

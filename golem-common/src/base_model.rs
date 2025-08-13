@@ -102,8 +102,6 @@ impl golem_wasm_rpc::IntoValue for ShardId {
     }
 }
 
-pub type ComponentVersion = u64;
-
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
 #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]

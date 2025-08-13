@@ -155,8 +155,8 @@ impl PluginRegistrationApi {
     ) -> ApiResult<Json<Empty>> {
         let record = recorded_http_api_request!(
             "create_library_plugin",
-            plugin_name = plugin.name,
-            plugin_version = plugin.version
+            plugin_name = plugin.metadata.0.name,
+            plugin_version = plugin.metadata.0.version
         );
 
         let response = self
@@ -188,8 +188,8 @@ impl PluginRegistrationApi {
     ) -> ApiResult<Json<Empty>> {
         let record = recorded_http_api_request!(
             "create_app_plugin",
-            plugin_name = plugin.name,
-            plugin_version = plugin.version
+            plugin_name = plugin.metadata.0.name,
+            plugin_version = plugin.metadata.0.version
         );
 
         let response = self

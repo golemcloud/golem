@@ -229,7 +229,7 @@ impl ComponentsApi {
         payload: UpdateComponentRequest,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        let data = if let Some(upload) = payload.component {
+        let data = if let Some(upload) = payload.new_component_wasm {
             Some(upload.into_vec().await?)
         } else {
             None
@@ -240,18 +240,21 @@ impl ComponentsApi {
 
         let new_files_archive = payload.new_files.map(|f| f.into_file());
 
+        let metadata = payload.metadata.0;
+
         let response = self
             .component_service
             .update(
                 &component_id,
+                metadata.previous_version,
                 data,
-                payload.component_type,
-                payload.removed_files.unwrap_or_default().0,
+                metadata.component_type,
+                metadata.removed_files.unwrap_or_default(),
                 new_files_archive,
-                payload.new_file_options.unwrap_or_default().0,
-                payload.dynamic_linking.map(|v| v.0),
-                payload.env.map(|v| v.0),
-                payload.agent_types.map(|v| v.0),
+                metadata.new_file_options.unwrap_or_default(),
+                metadata.dynamic_linking,
+                metadata.env,
+                metadata.agent_types,
                 &account_id,
             )
             .await?;

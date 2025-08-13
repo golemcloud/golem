@@ -12,7 +12,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use self::model::{
+    CreateAppPluginRequestMetadata, CreateComponentRequestMetadata,
+    CreateLibraryPluginRequestMetadata, UpdateComponentRequestComponentMetadata,
+};
+use crate::model::MultipartField;
+
 include!(concat!(env!("OUT_DIR"), "/src/lib.rs"));
 
 #[cfg(test)]
 test_r::enable!();
+
+impl MultipartField for CreateComponentRequestMetadata {
+    fn to_multipart_field(&self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
+
+    fn mime_type(&self) -> &'static str {
+        "application/json"
+    }
+}
+
+impl MultipartField for UpdateComponentRequestComponentMetadata {
+    fn to_multipart_field(&self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
+
+    fn mime_type(&self) -> &'static str {
+        "application/json"
+    }
+}
+
+impl MultipartField for CreateAppPluginRequestMetadata {
+    fn to_multipart_field(&self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
+
+    fn mime_type(&self) -> &'static str {
+        "application/json"
+    }
+}
+
+impl MultipartField for CreateLibraryPluginRequestMetadata {
+    fn to_multipart_field(&self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
+
+    fn mime_type(&self) -> &'static str {
+        "application/json"
+    }
+}

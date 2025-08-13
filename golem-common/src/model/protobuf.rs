@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::component::ComponentRevision;
 use super::WorkerWasiConfigVarsFilter;
+use crate::model::component::{
+    ComponentFilePath, ComponentType, InitialComponentFile, InitialComponentFileKey,
+};
 use crate::model::oplog::OplogIndex;
 use crate::model::{
-    ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentType, FilterComparator, IdempotencyKey,
-    InitialComponentFile, InitialComponentFileKey, LogLevel, NumberOfShards, Pod, PromiseId,
-    RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, TargetWorkerId,
-    Timestamp, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId,
-    WorkerNameFilter, WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
+    ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
+    FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable,
+    RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, TargetWorkerId, Timestamp,
+    WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId, WorkerNameFilter,
+    WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
 };
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
@@ -205,9 +208,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilte
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Name(filter) => Ok(
                     WorkerFilter::new_name(filter.comparator.try_into()?, filter.value),
                 ),
-                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(filter) => Ok(
-                    WorkerFilter::new_version(filter.comparator.try_into()?, filter.value),
-                ),
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(filter) => {
+                    Ok(WorkerFilter::new_version(
+                        filter.comparator.try_into()?,
+                        ComponentRevision(filter.value),
+                    ))
+                }
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Status(filter) => {
                     Ok(WorkerFilter::new_status(
                         filter.comparator.try_into()?,
@@ -281,7 +287,7 @@ impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(
                     golem_api_grpc::proto::golem::worker::WorkerVersionFilter {
                         comparator: comparator.into(),
-                        value,
+                        value: value.0,
                     },
                 )
             }

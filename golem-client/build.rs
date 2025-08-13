@@ -36,74 +36,95 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         false,
         true,
         &[
-            ("AgentType", "golem_common::model::agent::AgentType"),
-            ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
-            ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
+            (
+                "ComponentFileOptions",
+                "golem_common::model::component::ComponentFileOptions",
+            ),
+            (
+                "CreateComponentRequestMetadata",
+                "golem_common::api::component::CreateComponentRequestMetadata",
+            ),
+            (
+                "UpdateComponentRequestComponentMetadata",
+                "golem_common::api::component::UpdateComponentRequestComponentMetadata",
+            ),
+            (
+                "CreateAppPluginRequestMetadata",
+                "golem_common::api::component::CreateAppPluginRequestMetadata",
+            ),
+            (
+                "CreateLibraryPluginRequestMetadata",
+                "golem_common::api::component::CreateLibraryPluginRequestMetadata",
+            ),
             ("PluginScope", "golem_common::model::plugin::PluginScope"),
-            (
-                "ComponentMetadata",
-                "golem_common::model::component_metadata::ComponentMetadata",
-            ),
-            (
-                "ComponentFilePathWithPermissionsList",
-                "golem_common::model::ComponentFilePathWithPermissionsList",
-            ),
-            ("ComponentType", "golem_common::model::ComponentType"),
-            ("Empty", "golem_common::model::Empty"),
-            (
-                "InitialComponentFile",
-                "golem_common::model::InitialComponentFile",
-            ),
-            ("ErrorBody", "golem_common::model::error::ErrorBody"),
-            ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
-            ("GolemError", "golem_common::model::error::GolemError"),
-            (
-                "PluginInstallationAction",
-                "golem_common::model::plugin::PluginInstallationAction",
-            ),
-            (
-                "OplogCursor",
-                "golem_common::model::public_oplog::OplogCursor",
-            ),
-            ("OplogRegion", "golem_common::model::regions::OplogRegion"),
-            (
-                "ProjectActions",
-                "golem_common::model::auth::ProjectActions",
-            ),
-            (
-                "ProjectPermission",
-                "golem_common::model::auth::ProjectPermission",
-            ),
-            ("PromiseId", "golem_common::model::PromiseId"),
-            (
-                "PublicOplogEntry",
-                "golem_common::model::public_oplog::PublicOplogEntry",
-            ),
-            ("ShardId", "golem_common::model::ShardId"),
-            ("ValueAndType", "golem_wasm_rpc::ValueAndType"),
-            (
-                "ValueAndOptionalType",
-                "golem_wasm_rpc::json::OptionallyValueAndTypeJson",
-            ),
-            (
-                "WasiConfigVarsEntry",
-                "golem_common::model::worker::WasiConfigVarsEntry",
-            ),
-            (
-                "WasmRpcTarget",
-                "golem_common::model::component_metadata::WasmRpcTarget",
-            ),
-            (
-                "WorkerCreationRequest",
-                "golem_common::model::worker::WorkerCreationRequest",
-            ),
-            ("WorkerFilter", "golem_common::model::WorkerFilter"),
-            ("WorkerId", "golem_common::model::WorkerId"),
-            (
-                "WorkerBindingType",
-                "golem_common::model::WorkerBindingType",
-            ),
-            ("WorkerStatus", "golem_common::model::WorkerStatus"),
+            // ("AgentType", "golem_common::model::agent::AgentType"),
+            // ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
+            // ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
+            // ("PluginScope", "golem_common::model::plugin::PluginScope"),
+            // (
+            //     "ComponentMetadata",
+            //     "golem_common::model::component_metadata::ComponentMetadata",
+            // ),
+            // (
+            //     "ComponentFilePathWithPermissionsList",
+            //     "golem_common::model::ComponentFilePathWithPermissionsList",
+            // ),
+            // ("ComponentType", "golem_common::model::ComponentType"),
+            // ("Empty", "golem_common::model::Empty"),
+            // (
+            //     "InitialComponentFile",
+            //     "golem_common::model::InitialComponentFile",
+            // ),
+            // ("ErrorBody", "golem_common::model::error::ErrorBody"),
+            // ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
+            // ("GolemError", "golem_common::model::error::GolemError"),
+            // (
+            //     "PluginInstallationAction",
+            //     "golem_common::model::plugin::PluginInstallationAction",
+            // ),
+            // (
+            //     "OplogCursor",
+            //     "golem_common::model::public_oplog::OplogCursor",
+            // ),
+            // ("OplogRegion", "golem_common::model::regions::OplogRegion"),
+            // (
+            //     "ProjectActions",
+            //     "golem_common::model::auth::ProjectActions",
+            // ),
+            // (
+            //     "ProjectPermission",
+            //     "golem_common::model::auth::ProjectPermission",
+            // ),
+            // ("PromiseId", "golem_common::model::PromiseId"),
+            // (
+            //     "PublicOplogEntry",
+            //     "golem_common::model::public_oplog::PublicOplogEntry",
+            // ),
+            // ("ShardId", "golem_common::model::ShardId"),
+            // ("ValueAndType", "golem_wasm_rpc::ValueAndType"),
+            // (
+            //     "ValueAndOptionalType",
+            //     "golem_wasm_rpc::json::OptionallyValueAndTypeJson",
+            // ),
+            // (
+            //     "WasiConfigVarsEntry",
+            //     "golem_common::model::worker::WasiConfigVarsEntry",
+            // ),
+            // (
+            //     "WasmRpcTarget",
+            //     "golem_common::model::component_metadata::WasmRpcTarget",
+            // ),
+            // (
+            //     "WorkerCreationRequest",
+            //     "golem_common::model::worker::WorkerCreationRequest",
+            // ),
+            // ("WorkerFilter", "golem_common::model::WorkerFilter"),
+            // ("WorkerId", "golem_common::model::WorkerId"),
+            // (
+            //     "WorkerBindingType",
+            //     "golem_common::model::WorkerBindingType",
+            // ),
+            // ("WorkerStatus", "golem_common::model::WorkerStatus"),
         ],
         &["/v1/components/{component_id}/workers/{worker_name}/connect"],
     )

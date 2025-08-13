@@ -17,11 +17,11 @@ use crate::model::component::Component;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::model::base64::Base64;
-use golem_common::model::component::{ComponentName, VersionedComponentId};
-use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::{
+use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentType, InitialComponentFile,
 };
+use golem_common::model::component::{ComponentName, VersionedComponentId};
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::retries::with_retries;
 use http::StatusCode;
 use reqwest::multipart::{Form, Part};

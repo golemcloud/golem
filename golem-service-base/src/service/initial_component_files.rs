@@ -17,8 +17,8 @@ use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use anyhow::{Context, Error};
 use bytes::Bytes;
 use futures::stream::BoxStream;
+use golem_common::model::component::InitialComponentFileKey;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::InitialComponentFileKey;
 use std::{path::PathBuf, sync::Arc};
 use tracing::debug;
 

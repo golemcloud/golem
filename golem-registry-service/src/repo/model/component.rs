@@ -16,11 +16,11 @@ use crate::model::component::{Component, FinalizedComponentRevision};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentFilePermissions, InitialComponentFile};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
 };
-use golem_common::model::diff::Hashable;
-use golem_common::model::{ComponentFilePermissions, InitialComponentFile, diff};
+use golem_common::model::diff::{self, Hashable};
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::Json;

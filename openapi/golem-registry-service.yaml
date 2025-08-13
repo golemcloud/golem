@@ -2,12 +2,48 @@ openapi: 3.0.0
 info:
   title: Golem API
   version: '1.0'
+servers: []
+tags:
+- name: Account
+  description: The account API allows users to query and manipulate their own account data.
+- name: AccountSummary
+- name: ApiCertificate
+- name: ApiDefinition
+- name: ApiDeployment
+- name: ApiDomain
+- name: ApiSecurity
+- name: Application
+- name: Component
+- name: Debugging
+- name: Deployment
+- name: Environment
+- name: Grant
+- name: HealthCheck
+- name: Limits
+  description: The limits API allows users to query their current resource limits.
+- name: Login
+  description: The login endpoints are implementing an OAuth2 flow.
+- name: Plugin
+- name: Project
+  description: |-
+    Projects are groups of components and their workers, providing both a separate namespace for these entities and allows sharing between accounts.
+
+    Every account has a default project which is assumed when no specific project ID is passed in some component and worker related APIs.
+- name: ProjectGrant
+  description: |-
+    Projects can have grants providing access to other accounts than the project's owner.
+
+    The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
+- name: ProjectPolicy
+  description: Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
+- name: Token
+  description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+- name: Worker
 paths:
   /healthcheck:
     get:
       tags:
       - HealthCheck
-      operationId: healthcheck
       responses:
         '200':
           description: ''
@@ -15,11 +51,11 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/HealthcheckResponse'
+      operationId: healthcheck
   /version:
     get:
       tags:
       - HealthCheck
-      operationId: version
       responses:
         '200':
           description: ''
@@ -27,23 +63,22 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/VersionInfo'
+      operationId: version
   /v1/accounts/{account_id}/apps:
     get:
       tags:
       - Account
       - Application
       summary: Get all applications in the account
-      operationId: get_applications_in_account
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -96,22 +131,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_applications_in_account
     post:
       tags:
       - Account
       - Application
       summary: Create an application in the account
-      operationId: create_application
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -170,31 +204,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: create_application
   /v1/accounts/{account_id}/apps/{application_name}:
     get:
       tags:
       - Account
       - Application
       summary: Get application in the account by name
-      operationId: get_account_application
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: application_name
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: application_name
         schema:
           type: string
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -247,22 +279,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_account_application
   /v1/accounts/{account_id}/grants:
     get:
       tags:
       - Account
       - Grant
-      operationId: get_account_grants
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -317,30 +348,28 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_account_grants
   /v1/accounts/{account_id}/grants/{role}:
     get:
       tags:
       - Account
       - Grant
-      operationId: get_account_grant
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: role
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: role
         schema:
           $ref: '#/components/schemas/Role'
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -393,29 +422,27 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_account_grant
     put:
       tags:
       - Account
       - Grant
-      operationId: create_account_grant
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: role
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: role
         schema:
           $ref: '#/components/schemas/Role'
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -468,29 +495,27 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: create_account_grant
     delete:
       tags:
       - Account
       - Grant
-      operationId: delete_account_grant
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: role
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: role
         schema:
           $ref: '#/components/schemas/Role'
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -543,6 +568,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: delete_account_grant
   /v1/accounts/{account_id}/tokens:
     get:
       tags:
@@ -552,17 +578,15 @@ paths:
       description: |-
         Gets all created tokens of an account.
         The format of each element is the same as the data object in the oauth2 endpoint's response.
-      operationId: get_account_tokens
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -617,6 +641,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_account_tokens
     post:
       tags:
       - Account
@@ -625,17 +650,15 @@ paths:
       description: |
         Creates a new token with a given expiration date.
         The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
-      operationId: create_token
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -694,21 +717,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: create_token
   /v1/accounts:
     get:
       tags:
       - Account
       summary: Find accounts
       description: Find matching accounts. Only your own account or accounts you have at least one grant from will be returned
-      operationId: find_accounts
       parameters:
-      - in: query
-        name: email
-        deprecated: false
+      - name: email
         schema:
           type: string
+        in: query
+        required: false
+        deprecated: false
         explode: true
-        style: form
       responses:
         '200':
           description: ''
@@ -761,12 +784,12 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: find_accounts
     post:
       tags:
       - Account
       summary: Create account
       description: Create a new account. The response is the created account data.
-      operationId: create_account
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -825,23 +848,22 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: create_account
   /v1/accounts/{account_id}:
     get:
       tags:
       - Account
       summary: Get account
       description: Retrieve an account for a given Account ID
-      operationId: get_account
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -894,6 +916,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_account
     put:
       tags:
       - Account
@@ -903,17 +926,15 @@ paths:
 
         Changing the planId is not allowed and the request will be rejected.
         The response is the updated account data.
-      operationId: update_account
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -972,22 +993,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: update_account
     delete:
       tags:
       - Account
       summary: Delete account
       description: Delete an account.
-      operationId: delete_account
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -1040,22 +1060,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: delete_account
   /v1/accounts/{account_id}/plan:
     get:
       tags:
       - Account
       summary: Get account's plan
-      operationId: get_account_plan
       parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
+      - name: account_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -1108,22 +1127,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_account_plan
   /v1/api-definitions/{api_definition_id}:
     get:
       tags:
       - ApiDefinition
       summary: Get api-definition by id
-      operationId: get_api_definition
       parameters:
-      - in: path
-        name: api_definition_id
-        required: true
-        deprecated: false
+      - name: api_definition_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -1176,21 +1194,20 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_api_definition
     patch:
       tags:
       - ApiDefinition
       summary: update api-definition
-      operationId: update_api_definition
       parameters:
-      - in: path
-        name: api_definition_id
-        required: true
-        deprecated: false
+      - name: api_definition_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -1249,22 +1266,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: update_api_definition
   /v1/api-definitions/{api_definition_id}/revisions:
     get:
       tags:
       - ApiDefinition
       summary: Get revisions of the api definition
-      operationId: get_api_definition_revisions
       parameters:
-      - in: path
-        name: api_definition_id
-        required: true
-        deprecated: false
+      - name: api_definition_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -1317,31 +1333,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_api_definition_revisions
   /v1/api-definitions/{api_definition_id}/revisions/{revision}:
     get:
       tags:
       - ApiDefinition
       summary: Get specific revision of an api definition
-      operationId: get_api_definition_revision
       parameters:
-      - in: path
-        name: api_definition_id
-        required: true
-        deprecated: false
+      - name: api_definition_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: revision
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: revision
         schema:
           type: integer
           format: uint64
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -1394,22 +1408,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_api_definition_revision
   /v1/api-deployments/{api_deployment_id}:
     get:
       tags:
       - ApiDeployment
       summary: Get an api-deployment by id
-      operationId: get_api_deployment
       parameters:
-      - in: path
-        name: api_deployment_id
-        required: true
-        deprecated: false
+      - name: api_deployment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -1462,21 +1475,20 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_api_deployment
     patch:
       tags:
       - ApiDeployment
       summary: Update an api-deployment
-      operationId: update_api_deployment
       parameters:
-      - in: path
-        name: api_deployment_id
-        required: true
-        deprecated: false
+      - name: api_deployment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -1535,22 +1547,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: update_api_deployment
   /v1/api-deployments/{api_deployment_id}/revisions:
     get:
       tags:
       - ApiDeployment
       summary: Get all revisions for an api-deployment
-      operationId: get_api_deployment_revisions
       parameters:
-      - in: path
-        name: api_deployment_id
-        required: true
-        deprecated: false
+      - name: api_deployment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -1603,31 +1614,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_api_deployment_revisions
   /v1/api-deployments/{api_deployment_id}/revisions/{revision}:
     get:
       tags:
       - ApiDeployment
       summary: Get specific revision an api-deployment
-      operationId: get_api_deployment_revision
       parameters:
-      - in: path
-        name: api_deployment_id
-        required: true
-        deprecated: false
+      - name: api_deployment_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: revision
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: revision
         schema:
           type: integer
           format: uint64
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -1680,22 +1689,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_api_deployment_revision
   /v1/domains/{domain_id}:
     get:
       tags:
       - ApiDomain
       summary: Get api domain by id
-      operationId: get_domain
       parameters:
-      - in: path
-        name: domain_id
-        required: true
-        deprecated: false
+      - name: domain_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -1748,21 +1756,20 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_domain
     patch:
       tags:
       - ApiDomain
       summary: Update an api-domain
-      operationId: update_domain
       parameters:
-      - in: path
-        name: domain_id
-        required: true
-        deprecated: false
+      - name: domain_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -1821,22 +1828,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: update_domain
   /v1/domains/{domain_id}/revisions:
     get:
       tags:
       - ApiDomain
       summary: Get all revisions of an api-domain
-      operationId: get_domain_revisions
       parameters:
-      - in: path
-        name: domain_id
-        required: true
-        deprecated: false
+      - name: domain_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -1889,22 +1895,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_domain_revisions
   /v1/apps/{application_id}:
     get:
       tags:
       - Application
       summary: Get application by id.
-      operationId: get_application
       parameters:
-      - in: path
-        name: application_id
-        required: true
-        deprecated: false
+      - name: application_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -1957,21 +1962,20 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_application
     patch:
       tags:
       - Application
       summary: Update application by id.
-      operationId: update_application
       parameters:
-      - in: path
-        name: application_id
-        required: true
-        deprecated: false
+      - name: application_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -2030,23 +2034,22 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: update_application
   /v1/apps/{application_id}/envs:
     get:
       tags:
       - Application
       - Environment
       summary: List all application environments
-      operationId: list_application_environments
       parameters:
-      - in: path
-        name: application_id
-        required: true
-        deprecated: false
+      - name: application_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -2099,22 +2102,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: list_application_environments
     post:
       tags:
       - Application
       - Environment
       summary: Create an application environment
-      operationId: create_application_environment
       parameters:
-      - in: path
-        name: application_id
-        required: true
-        deprecated: false
+      - name: application_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -2173,31 +2175,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: create_application_environment
   /v1/apps/{application_id}/envs/{environment_name}:
     get:
       tags:
       - Application
       - Environment
       summary: Get application environment by name
-      operationId: get_application_environment
       parameters:
-      - in: path
-        name: application_id
-        required: true
-        deprecated: false
+      - name: application_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: environment_name
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: environment_name
         schema:
           type: string
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -2250,22 +2250,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_application_environment
   /v1/certificates/{certificate_id}:
     get:
       tags:
       - ApiCertificate
       summary: Get a certificate by id
-      operationId: get_certificate
       parameters:
-      - in: path
-        name: certificate_id
-        required: true
-        deprecated: false
+      - name: certificate_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -2318,21 +2317,20 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_certificate
     patch:
       tags:
       - ApiCertificate
       summary: Update a certificate
-      operationId: update_certificate
       parameters:
-      - in: path
-        name: certificate_id
-        required: true
-        deprecated: false
+      - name: certificate_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -2391,22 +2389,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: update_certificate
   /v1/certificates/{certificate_id}/revisions:
     get:
       tags:
       - ApiCertificate
       summary: Get all revisions of a certificate
-      operationId: get_certificate_revisions
       parameters:
-      - in: path
-        name: certificate_id
-        required: true
-        deprecated: false
+      - name: certificate_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -2459,22 +2456,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_certificate_revisions
   /v1/components/{component_id}:
     get:
       tags:
       - Component
       summary: Get a component by id
-      operationId: get_component
       parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
+      - name: component_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -2527,27 +2523,28 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_component
     patch:
       tags:
       - Component
       summary: Update a component
       description: The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-      operationId: update_component
       parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
+      - name: component_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           multipart/form-data:
             schema:
               type: object
+              required:
+              - metadata
               properties:
                 metadata:
                   $ref: '#/components/schemas/UpdateComponentRequestComponentMetadata'
@@ -2557,8 +2554,6 @@ paths:
                 newFiles:
                   type: string
                   format: binary
-              required:
-              - metadata
         required: true
       responses:
         '200':
@@ -2612,22 +2607,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: update_component
   /v1/components/{component_id}/revisions:
     get:
       tags:
       - Component
       summary: Get all revisions for a component
-      operationId: get_component_revisions
       parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
+      - name: component_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -2680,31 +2674,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_component_revisions
   /v1/components/{component_id}/revisions/{revision}:
     get:
       tags:
       - Component
       summary: Get specific revision of a component
-      operationId: get_component_revision
       parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
+      - name: component_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: revision
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: revision
         schema:
           type: integer
           format: uint64
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -2757,31 +2749,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_component_revision
   /v1/components/{component_id}/revisions/{revision}/wasm:
     get:
       tags:
       - Component
       summary: Get the component wasm binary of a specific revision
-      operationId: get_component_wasm
       parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
+      - name: component_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: revision
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: revision
         schema:
           type: integer
           format: uint64
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -2835,91 +2825,22 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_component_wasm
   /v1/envs/{environment_id}/api-definitions:
-    get:
-      tags:
-      - Environment
-      - ApiDefinition
-      summary: Get all api-definitions in the environment
-      operationId: get_environment_api_definitions
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_HttpApiDefinitionResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
     post:
       tags:
       - Environment
       - ApiDefinition
       summary: Create a new api-definition in the environment
-      operationId: create_api_definition
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -2978,110 +2899,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/api-definitions/{api_definition_name}:
+      operationId: create_api_definition
     get:
       tags:
       - Environment
       - ApiDefinition
-      summary: Get api-definition by name
-      operationId: get_environment_api_definition
+      summary: Get all api-definitions in the environment
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: api_definition_name
+        in: path
         required: true
         deprecated: false
-        schema:
-          type: string
         explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/HttpApiDefinitionResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-definitions:
-    get:
-      tags:
-      - Environment
-      - ApiDefinition
-      - Deployment
-      summary: Get all api-definitions in a specific deployment
-      operationId: get_deployment_api_definitions
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: deployment_revision_id
-        required: true
-        deprecated: false
-        schema:
-          type: integer
-          format: uint64
-        explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -3134,41 +2966,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-definitions/{api_definition_name}:
+      operationId: get_environment_api_definitions
+  /v1/envs/{environment_id}/api-definitions/{api_definition_name}:
     get:
       tags:
       - Environment
       - ApiDefinition
-      - Deployment
-      summary: Get api-definition in a deployment by name
-      operationId: get_deployment_api_definition
+      summary: Get api-definition by name
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: deployment_revision_id
+        in: path
         required: true
         deprecated: false
-        schema:
-          type: integer
-          format: uint64
         explode: true
-        style: simple
-      - in: path
-        name: api_definition_name
-        required: true
-        deprecated: false
+      - name: api_definition_name
         schema:
           type: string
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -3221,30 +3041,38 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/api-deployments:
+      operationId: get_environment_api_definition
+  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-definitions:
     get:
       tags:
       - Environment
-      - ApiDeployment
-      summary: Get all api-deployments in the environment
-      operationId: get_environment_api_deployments
+      - ApiDefinition
+      - Deployment
+      summary: Get all api-definitions in a specific deployment
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
+      - name: deployment_revision_id
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
       responses:
         '200':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_ApiDeployment'
+                $ref: '#/components/schemas/Page_HttpApiDefinitionResponseView'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -3290,22 +3118,106 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_deployment_api_definitions
+  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-definitions/{api_definition_name}:
+    get:
+      tags:
+      - Environment
+      - ApiDefinition
+      - Deployment
+      summary: Get api-definition in a deployment by name
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: deployment_revision_id
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: api_definition_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinitionResponseView'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_deployment_api_definition
+  /v1/envs/{environment_id}/api-deployments:
     post:
       tags:
       - Environment
       - ApiDeployment
       summary: Create a new api deployment
-      operationId: create_api_deployment
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -3364,110 +3276,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/api-deployments/{site}:
+      operationId: create_api_deployment
     get:
       tags:
       - Environment
       - ApiDeployment
-      summary: Get api-deployment by site
-      operationId: get_environment_api_deployment
+      summary: Get all api-deployments in the environment
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: site
+        in: path
         required: true
         deprecated: false
-        schema:
-          type: string
         explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ApiDeployment'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-deployments:
-    get:
-      tags:
-      - Environment
-      - ApiDeployment
-      - Deployment
-      summary: Get all api-deployments in a specific deployment
-      operationId: get_deployment_api_deployments
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: deployment_revision_id
-        required: true
-        deprecated: false
-        schema:
-          type: integer
-          format: uint64
-        explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -3520,41 +3343,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-deployments/{site}:
+      operationId: get_environment_api_deployments
+  /v1/envs/{environment_id}/api-deployments/{site}:
     get:
       tags:
       - Environment
       - ApiDeployment
-      - Deployment
-      summary: Get api-deployment in a deployment by site
-      operationId: get_deployment_api_deployment
+      summary: Get api-deployment by site
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: deployment_revision_id
+        in: path
         required: true
         deprecated: false
-        schema:
-          type: integer
-          format: uint64
         explode: true
-        style: simple
-      - in: path
-        name: site
-        required: true
-        deprecated: false
+      - name: site
         schema:
           type: string
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -3607,23 +3418,183 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_environment_api_deployment
+  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-deployments:
+    get:
+      tags:
+      - Environment
+      - ApiDeployment
+      - Deployment
+      summary: Get all api-deployments in a specific deployment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: deployment_revision_id
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_ApiDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_deployment_api_deployments
+  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-deployments/{site}:
+    get:
+      tags:
+      - Environment
+      - ApiDeployment
+      - Deployment
+      summary: Get api-deployment in a deployment by site
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: deployment_revision_id
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: site
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ApiDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_deployment_api_deployment
   /v1/envs/{environment_id}/domains:
     get:
       tags:
       - Environment
       - ApiDomain
       summary: Get all API domains
-      operationId: get_domains
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -3676,22 +3647,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_domains
     post:
       tags:
       - Environment
       - ApiDomain
       summary: Create a new api-domain in the environment
-      operationId: create_domain
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -3750,31 +3720,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: create_domain
   /v1/envs/{environment_id}/domains/{domain}:
     get:
       tags:
       - Environment
       - ApiDomain
       summary: Get an api-domain in the environment
-      operationId: get_environment_domain
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: domain
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: domain
         schema:
           type: string
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -3827,23 +3795,22 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_environment_domain
   /v1/envs/{environment_id}/certificates:
     get:
       tags:
       - Environment
       - ApiCertificate
       summary: Get all certificates in this environment
-      operationId: get_environment_certificates
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -3896,6 +3863,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_environment_certificates
     post:
       tags:
       - Environment
@@ -3906,17 +3874,15 @@ paths:
         a key pair.
 
         The created certificate will be associated with a certificate ID returned by this endpoint.
-      operationId: create_environment_certificate
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -3975,31 +3941,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: create_environment_certificate
   /v1/envs/{environment_id}/certificates/{certificate_name}:
     get:
       tags:
       - Environment
       - ApiCertificate
       summary: Get a certificate in this environment
-      operationId: get_environment_certificate
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: certificate_name
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: certificate_name
         schema:
           type: string
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -4052,97 +4016,31 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_environment_certificate
   /v1/envs/{environment_id}/components:
-    get:
-      tags:
-      - Environment
-      - Component
-      summary: Get all components in the environment
-      operationId: get_environment_components
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_Component'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
     post:
       tags:
       - Environment
       - Component
       summary: Create a new component in the environment
       description: The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-      operationId: post_component
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           multipart/form-data:
             schema:
               type: object
+              required:
+              - metadata
+              - componentWasm
               properties:
                 metadata:
                   $ref: '#/components/schemas/CreateComponentRequestMetadata'
@@ -4152,9 +4050,6 @@ paths:
                 files:
                   type: string
                   format: binary
-              required:
-              - metadata
-              - componentWasm
         required: true
       responses:
         '200':
@@ -4208,110 +4103,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/components/{component_name}:
+      operationId: post_component
     get:
       tags:
       - Environment
       - Component
-      summary: Get a component in the environment by name
-      operationId: get_environment_component
+      summary: Get all components in the environment
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: component_name
+        in: path
         required: true
         deprecated: false
-        schema:
-          type: string
         explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Component'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/components:
-    get:
-      tags:
-      - Environment
-      - Component
-      - Deployment
-      summary: Get all components in a specific deployment
-      operationId: get_deployment_components
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: deployment_revision_id
-        required: true
-        deprecated: false
-        schema:
-          type: integer
-          format: uint64
-        explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -4364,41 +4170,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/components/{component_name}:
+      operationId: get_environment_components
+  /v1/envs/{environment_id}/components/{component_name}:
     get:
       tags:
       - Environment
       - Component
-      - Deployment
-      summary: Get component in a deployment by name
-      operationId: get_deployment_component
+      summary: Get a component in the environment by name
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: deployment_revision_id
+        in: path
         required: true
         deprecated: false
-        schema:
-          type: integer
-          format: uint64
         explode: true
-        style: simple
-      - in: path
-        name: component_name
-        required: true
-        deprecated: false
+      - name: component_name
         schema:
           type: string
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -4451,22 +4245,182 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_environment_component
+  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/components:
+    get:
+      tags:
+      - Environment
+      - Component
+      - Deployment
+      summary: Get all components in a specific deployment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: deployment_revision_id
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_Component'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_deployment_components
+  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/components/{component_name}:
+    get:
+      tags:
+      - Environment
+      - Component
+      - Deployment
+      summary: Get component in a deployment by name
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: deployment_revision_id
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: component_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Component'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_deployment_component
   /v1/envs/{environment_id}:
     get:
       tags:
       - Environment
       summary: Get environment by id.
-      operationId: get_environment
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -4519,21 +4473,20 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_environment
     patch:
       tags:
       - Environment
       summary: Update environment by id.
-      operationId: update_environment
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -4592,22 +4545,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: update_environment
   /v1/envs/{environment_id}/current-deployment/hash:
     get:
       tags:
       - Environment
       summary: Get hash of the currently deployed environment
-      operationId: get_deployed_environment_hash
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -4660,22 +4612,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_deployed_environment_hash
   /v1/envs/{environment_id}/current-deployment/summary:
     get:
       tags:
       - Environment
       summary: Get summary of the currently deployed environment
-      operationId: get_deployed_environment_summary
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -4728,22 +4679,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_deployed_environment_summary
   /v1/envs/{environment_id}/plan:
     get:
       tags:
       - Environment
       summary: Get the current deployment plan. This is equivalent to a summary of the current staging area.
-      operationId: get_environment_deployment_plan
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -4796,23 +4746,22 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_environment_deployment_plan
   /v1/envs/{environment_id}/deployments:
     get:
       tags:
       - Environment
       - Deployment
       summary: Get all deployments in this environment
-      operationId: get_deployments
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -4865,22 +4814,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_deployments
     post:
       tags:
       - Environment
       - Deployment
       summary: Deploy the current staging area of this environment
-      operationId: deploy_environment
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -4939,23 +4887,22 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: deploy_environment
   /v1/envs/{environment_id}/security-schemes:
     get:
       tags:
       - Environment
       - ApiSecurity
       summary: Get all security schemes in the environment
-      operationId: get_environment_security_schemes
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -5008,22 +4955,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_environment_security_schemes
     post:
       tags:
       - Environment
       - ApiSecurity
       summary: Create a new security scheme in the environment
-      operationId: create_environment_security_scheme
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -5082,6 +5028,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: create_environment_security_scheme
   /v1/envs/{environment_id}/security-schemes/{security_scheme_name}:
     get:
       tags:
@@ -5089,25 +5036,22 @@ paths:
       - ApiSecurity
       summary: Get a security scheme
       description: Get a security scheme by name
-      operationId: get_environment_security_scheme
       parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
+      - name: environment_id
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: security_scheme_name
+        in: path
         required: true
         deprecated: false
+        explode: true
+      - name: security_scheme_name
         schema:
           type: string
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -5160,6 +5104,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_environment_security_scheme
   /v1/login/token:
     get:
       tags:
@@ -5168,7 +5113,6 @@ paths:
       description: |-
         Gets information about a token that is selected by the secret key passed in the Authorization header.
         The JSON is the same as the data object in the oauth2 endpoint's response.
-      operationId: current_login_token
       responses:
         '200':
           description: ''
@@ -5221,6 +5165,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: current_login_token
   /v1/login/oauth2:
     post:
       tags:
@@ -5233,26 +5178,23 @@ paths:
         - `id` is the identifier of the token itself
         - `accountId` is the account's identifier, can be used on the account API
         - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
-      operationId: login_oauth2
       parameters:
-      - in: query
-        name: provider
+      - name: provider
+        schema:
+          type: string
+        in: query
         description: Currently only `github` is supported.
         required: true
         deprecated: false
+        explode: true
+      - name: access-token
         schema:
           type: string
-        explode: true
-        style: form
-      - in: query
-        name: access-token
+        in: query
         description: OAuth2 access token
         required: true
         deprecated: false
-        schema:
-          type: string
         explode: true
-        style: form
       responses:
         '200':
           description: ''
@@ -5302,6 +5244,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+      operationId: login_oauth2
   /v1/login/oauth2/device/start:
     post:
       tags:
@@ -5311,7 +5254,6 @@ paths:
         Starts an interactive authorization flow.
         The user must open the returned url and enter the userCode in a form before the expires deadline.
         Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
-      operationId: start_login_oauth2
       responses:
         '200':
           description: ''
@@ -5361,6 +5303,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+      operationId: start_login_oauth2
   /v1/login/oauth2/device/complete:
     post:
       tags:
@@ -5369,7 +5312,6 @@ paths:
       description: |-
         Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
         Returns a JSON string containing the encodedSession from the start endpoint's response.
-      operationId: complete_login_oauth2
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -5425,31 +5367,30 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+      operationId: complete_login_oauth2
   /v1/login/oauth2/web/authorize:
     get:
       tags:
       - Login
       summary: Initiate OAuth2 Web Flow
       description: Starts the OAuth2 web flow authorization process by returning the authorization URL for the given provider.
-      operationId: oauth2_web_flow_start
       parameters:
-      - in: query
-        name: provider
+      - name: provider
+        schema:
+          type: string
+        in: query
         description: Currently only `github` is supported.
         required: true
         deprecated: false
+        explode: true
+      - name: redirect
         schema:
           type: string
-        explode: true
-        style: form
-      - in: query
-        name: redirect
+        in: query
         description: The redirect URL to redirect to after the user has authorized the application
+        required: false
         deprecated: false
-        schema:
-          type: string
         explode: true
-        style: form
       responses:
         '200':
           description: ''
@@ -5499,6 +5440,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+      operationId: oauth2_web_flow_start
   /v1/login/oauth2/web/callback/github:
     get:
       tags:
@@ -5507,40 +5449,36 @@ paths:
       description: |-
         This endpoint handles the callback from GitHub after the user has authorized the application.
         It exchanges the code for an access token and then uses that to log the user in.
-      operationId: oauth2_web_flow_callback_github
       parameters:
-      - in: query
-        name: code
+      - name: code
+        schema:
+          type: string
+        in: query
         description: The authorization code returned by GitHub
         required: true
         deprecated: false
+        explode: true
+      - name: state
         schema:
           type: string
-        explode: true
-        style: form
-      - in: query
-        name: state
+        in: query
         description: The state parameter for CSRF protection
         required: true
         deprecated: false
-        schema:
-          type: string
         explode: true
-        style: form
       responses:
         '302':
           description: Redirect to the given URL specified in the web flow start
-          headers:
-            LOCATION:
-              style: simple
-              required: true
-              deprecated: false
-              schema:
-                type: string
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/Empty'
+          headers:
+            LOCATION:
+              required: true
+              deprecated: false
+              schema:
+                type: string
         '200':
           description: OAuth flow has completed
           content:
@@ -5589,23 +5527,22 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+      operationId: oauth2_web_flow_callback_github
   /v1/login/oauth2/web/poll:
     get:
       tags:
       - Login
       summary: Poll for OAuth2 Web Flow token
       description: This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
-      operationId: oauth2_web_flow_poll
       parameters:
-      - in: query
-        name: state
+      - name: state
+        schema:
+          type: string
+        in: query
         description: The state parameter for identifying the session
         required: true
         deprecated: false
-        schema:
-          type: string
         explode: true
-        style: form
       responses:
         '200':
           description: OAuth flow has completed
@@ -5661,21 +5598,20 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+      operationId: oauth2_web_flow_poll
   /v1/plugins:
     get:
       tags:
       - Plugin
       summary: Lists all the registered plugins (including all versions of each).
-      operationId: list_plugins
       parameters:
-      - in: query
-        name: scope
-        required: true
-        deprecated: false
+      - name: scope
         schema:
           $ref: '#/components/schemas/PluginScope'
+        in: query
+        required: true
+        deprecated: false
         explode: true
-        style: form
       responses:
         '200':
           description: ''
@@ -5728,11 +5664,11 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: list_plugins
     post:
       tags:
       - Plugin
       summary: Registers a new plugin
-      operationId: create_plugin
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -5791,22 +5727,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: create_plugin
   /v1/plugins/{plugin_id}:
     get:
       tags:
       - Plugin
       summary: Gets a registered plugin by its id
-      operationId: get_plugin
       parameters:
-      - in: path
-        name: plugin_id
-        required: true
-        deprecated: false
+      - name: plugin_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -5859,21 +5794,20 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_plugin
     delete:
       tags:
       - Plugin
       summary: Deletes a registered plugin by its id
-      operationId: delete_plugin
       parameters:
-      - in: path
-        name: plugin_id
-        required: true
-        deprecated: false
+      - name: plugin_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -5926,17 +5860,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: delete_plugin
   /v1/library-plugins:
     post:
       tags:
       - Plugin
       summary: Registers a new library plugin
-      operationId: create_library_plugin
       requestBody:
         content:
           multipart/form-data:
             schema:
               type: object
+              required:
+              - metadata
+              - icon
+              - pluginWasm
               properties:
                 metadata:
                   $ref: '#/components/schemas/CreateLibraryPluginRequestMetadata'
@@ -5946,10 +5884,6 @@ paths:
                 pluginWasm:
                   type: string
                   format: binary
-              required:
-              - metadata
-              - icon
-              - pluginWasm
         required: true
       responses:
         '200':
@@ -6003,17 +5937,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: create_library_plugin
   /v1/app-plugins:
     post:
       tags:
       - Plugin
       summary: Registers a new app plugin
-      operationId: create_app_plugin
       requestBody:
         content:
           multipart/form-data:
             schema:
               type: object
+              required:
+              - metadata
+              - icon
+              - pluginWasm
               properties:
                 metadata:
                   $ref: '#/components/schemas/CreateAppPluginRequestMetadata'
@@ -6023,10 +5961,6 @@ paths:
                 pluginWasm:
                   type: string
                   format: binary
-              required:
-              - metadata
-              - icon
-              - pluginWasm
         required: true
       responses:
         '200':
@@ -6080,22 +6014,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: create_app_plugin
   /v1/security-schemes/{security_scheme_id}:
     get:
       tags:
       - ApiSecurity
       summary: Get api security scheme by id
-      operationId: get_security_scheme
       parameters:
-      - in: path
-        name: security_scheme_id
-        required: true
-        deprecated: false
+      - name: security_scheme_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -6148,22 +6081,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_security_scheme
   /v1/security-schemes/{security_scheme_id}/revisions:
     get:
       tags:
       - ApiSecurity
       summary: Get all revisions of the security scheme
-      operationId: get_security_scheme_revisions
       parameters:
-      - in: path
-        name: security_scheme_id
-        required: true
-        deprecated: false
+      - name: security_scheme_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -6216,22 +6148,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_security_scheme_revisions
   /v1/tokens/{token_id}:
     get:
       tags:
       - Token
       summary: Get token by id
-      operationId: get_token
       parameters:
-      - in: path
-        name: token_id
-        required: true
-        deprecated: false
+      - name: token_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -6286,22 +6217,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: get_token
     delete:
       tags:
       - Token
       summary: Delete a token
       description: Deletes a previously created token given by its identifier.
-      operationId: delete_token
       parameters:
-      - in: path
-        name: token_id
-        required: true
-        deprecated: false
+      - name: token_id
         schema:
           type: string
           format: uuid
+        in: path
+        required: true
+        deprecated: false
         explode: true
-        style: simple
       responses:
         '200':
           description: ''
@@ -6354,11 +6284,17 @@ paths:
       security:
       - Cookie: []
       - Token: []
+      operationId: delete_token
 components:
   schemas:
     Account:
-      title: Account
       type: object
+      title: Account
+      required:
+      - id
+      - name
+      - email
+      - planId
       properties:
         id:
           type: string
@@ -6370,25 +6306,23 @@ components:
         planId:
           type: string
           format: uuid
+    AccountData:
+      type: object
+      title: AccountData
       required:
-      - id
       - name
       - email
-      - planId
-    AccountData:
-      title: AccountData
-      type: object
       properties:
         name:
           type: string
         email:
           type: string
-      required:
-      - name
-      - email
     AgentConstructor:
-      title: AgentConstructor
       type: object
+      title: AgentConstructor
+      required:
+      - description
+      - inputSchema
       properties:
         name:
           type: string
@@ -6398,12 +6332,13 @@ components:
           type: string
         inputSchema:
           $ref: '#/components/schemas/DataSchema'
-      required:
-      - description
-      - inputSchema
     AgentDependency:
-      title: AgentDependency
       type: object
+      title: AgentDependency
+      required:
+      - typeName
+      - constructor
+      - methods
       properties:
         typeName:
           type: string
@@ -6415,13 +6350,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentMethod'
-      required:
-      - typeName
-      - constructor
-      - methods
     AgentMethod:
-      title: AgentMethod
       type: object
+      title: AgentMethod
+      required:
+      - name
+      - description
+      - inputSchema
+      - outputSchema
       properties:
         name:
           type: string
@@ -6433,14 +6369,15 @@ components:
           $ref: '#/components/schemas/DataSchema'
         outputSchema:
           $ref: '#/components/schemas/DataSchema'
-      required:
-      - name
-      - description
-      - inputSchema
-      - outputSchema
     AgentType:
-      title: AgentType
       type: object
+      title: AgentType
+      required:
+      - typeName
+      - description
+      - constructor
+      - methods
+      - dependencies
       properties:
         typeName:
           type: string
@@ -6456,49 +6393,46 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentDependency'
-      required:
-      - typeName
-      - description
-      - constructor
-      - methods
-      - dependencies
     AnalysedExport:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/AnalysedExport_AnalysedFunction'
+      - $ref: '#/components/schemas/AnalysedExport_AnalysedInstance'
       discriminator:
         propertyName: type
         mapping:
           Function: '#/components/schemas/AnalysedExport_AnalysedFunction'
           Instance: '#/components/schemas/AnalysedExport_AnalysedInstance'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/AnalysedExport_AnalysedFunction'
-      - $ref: '#/components/schemas/AnalysedExport_AnalysedInstance'
     AnalysedExport_AnalysedFunction:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Function
             type: string
             enum:
             - Function
-        required:
-        - type
+            example: Function
       - $ref: '#/components/schemas/AnalysedFunction'
     AnalysedExport_AnalysedInstance:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Instance
             type: string
             enum:
             - Instance
-        required:
-        - type
+            example: Instance
       - $ref: '#/components/schemas/AnalysedInstance'
     AnalysedFunction:
-      title: AnalysedFunction
       type: object
+      title: AnalysedFunction
+      required:
+      - name
+      - parameters
       properties:
         name:
           type: string
@@ -6508,31 +6442,31 @@ components:
             $ref: '#/components/schemas/AnalysedFunctionParameter'
         result:
           $ref: '#/components/schemas/AnalysedFunctionResult'
+    AnalysedFunctionParameter:
+      type: object
+      title: AnalysedFunctionParameter
       required:
       - name
-      - parameters
-    AnalysedFunctionParameter:
-      title: AnalysedFunctionParameter
-      type: object
+      - typ
       properties:
         name:
           type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
-      required:
-      - name
-      - typ
     AnalysedFunctionResult:
-      title: AnalysedFunctionResult
       type: object
+      title: AnalysedFunctionResult
+      required:
+      - typ
       properties:
         typ:
           $ref: '#/components/schemas/AnalysedType'
-      required:
-      - typ
     AnalysedInstance:
-      title: AnalysedInstance
       type: object
+      title: AnalysedInstance
+      required:
+      - name
+      - functions
       properties:
         name:
           type: string
@@ -6540,15 +6474,36 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AnalysedFunction'
-      required:
-      - name
-      - functions
     AnalysedResourceMode:
       type: string
       enum:
       - Owned
       - Borrowed
     AnalysedType:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/AnalysedType_TypeVariant'
+      - $ref: '#/components/schemas/AnalysedType_TypeResult'
+      - $ref: '#/components/schemas/AnalysedType_TypeOption'
+      - $ref: '#/components/schemas/AnalysedType_TypeEnum'
+      - $ref: '#/components/schemas/AnalysedType_TypeFlags'
+      - $ref: '#/components/schemas/AnalysedType_TypeRecord'
+      - $ref: '#/components/schemas/AnalysedType_TypeTuple'
+      - $ref: '#/components/schemas/AnalysedType_TypeList'
+      - $ref: '#/components/schemas/AnalysedType_TypeStr'
+      - $ref: '#/components/schemas/AnalysedType_TypeChr'
+      - $ref: '#/components/schemas/AnalysedType_TypeF64'
+      - $ref: '#/components/schemas/AnalysedType_TypeF32'
+      - $ref: '#/components/schemas/AnalysedType_TypeU64'
+      - $ref: '#/components/schemas/AnalysedType_TypeS64'
+      - $ref: '#/components/schemas/AnalysedType_TypeU32'
+      - $ref: '#/components/schemas/AnalysedType_TypeS32'
+      - $ref: '#/components/schemas/AnalysedType_TypeU16'
+      - $ref: '#/components/schemas/AnalysedType_TypeS16'
+      - $ref: '#/components/schemas/AnalysedType_TypeU8'
+      - $ref: '#/components/schemas/AnalysedType_TypeS8'
+      - $ref: '#/components/schemas/AnalysedType_TypeBool'
+      - $ref: '#/components/schemas/AnalysedType_TypeHandle'
       discriminator:
         propertyName: type
         mapping:
@@ -6574,297 +6529,280 @@ components:
           S8: '#/components/schemas/AnalysedType_TypeS8'
           Bool: '#/components/schemas/AnalysedType_TypeBool'
           Handle: '#/components/schemas/AnalysedType_TypeHandle'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/AnalysedType_TypeVariant'
-      - $ref: '#/components/schemas/AnalysedType_TypeResult'
-      - $ref: '#/components/schemas/AnalysedType_TypeOption'
-      - $ref: '#/components/schemas/AnalysedType_TypeEnum'
-      - $ref: '#/components/schemas/AnalysedType_TypeFlags'
-      - $ref: '#/components/schemas/AnalysedType_TypeRecord'
-      - $ref: '#/components/schemas/AnalysedType_TypeTuple'
-      - $ref: '#/components/schemas/AnalysedType_TypeList'
-      - $ref: '#/components/schemas/AnalysedType_TypeStr'
-      - $ref: '#/components/schemas/AnalysedType_TypeChr'
-      - $ref: '#/components/schemas/AnalysedType_TypeF64'
-      - $ref: '#/components/schemas/AnalysedType_TypeF32'
-      - $ref: '#/components/schemas/AnalysedType_TypeU64'
-      - $ref: '#/components/schemas/AnalysedType_TypeS64'
-      - $ref: '#/components/schemas/AnalysedType_TypeU32'
-      - $ref: '#/components/schemas/AnalysedType_TypeS32'
-      - $ref: '#/components/schemas/AnalysedType_TypeU16'
-      - $ref: '#/components/schemas/AnalysedType_TypeS16'
-      - $ref: '#/components/schemas/AnalysedType_TypeU8'
-      - $ref: '#/components/schemas/AnalysedType_TypeS8'
-      - $ref: '#/components/schemas/AnalysedType_TypeBool'
-      - $ref: '#/components/schemas/AnalysedType_TypeHandle'
     AnalysedType_TypeBool:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Bool
             type: string
             enum:
             - Bool
-        required:
-        - type
+            example: Bool
       - $ref: '#/components/schemas/TypeBool'
     AnalysedType_TypeChr:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Chr
             type: string
             enum:
             - Chr
-        required:
-        - type
+            example: Chr
       - $ref: '#/components/schemas/TypeChr'
     AnalysedType_TypeEnum:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Enum
             type: string
             enum:
             - Enum
-        required:
-        - type
+            example: Enum
       - $ref: '#/components/schemas/TypeEnum'
     AnalysedType_TypeF32:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: F32
             type: string
             enum:
             - F32
-        required:
-        - type
+            example: F32
       - $ref: '#/components/schemas/TypeF32'
     AnalysedType_TypeF64:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: F64
             type: string
             enum:
             - F64
-        required:
-        - type
+            example: F64
       - $ref: '#/components/schemas/TypeF64'
     AnalysedType_TypeFlags:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Flags
             type: string
             enum:
             - Flags
-        required:
-        - type
+            example: Flags
       - $ref: '#/components/schemas/TypeFlags'
     AnalysedType_TypeHandle:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Handle
             type: string
             enum:
             - Handle
-        required:
-        - type
+            example: Handle
       - $ref: '#/components/schemas/TypeHandle'
     AnalysedType_TypeList:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: List
             type: string
             enum:
             - List
-        required:
-        - type
+            example: List
       - $ref: '#/components/schemas/TypeList'
     AnalysedType_TypeOption:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Option
             type: string
             enum:
             - Option
-        required:
-        - type
+            example: Option
       - $ref: '#/components/schemas/TypeOption'
     AnalysedType_TypeRecord:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Record
             type: string
             enum:
             - Record
-        required:
-        - type
+            example: Record
       - $ref: '#/components/schemas/TypeRecord'
     AnalysedType_TypeResult:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Result
             type: string
             enum:
             - Result
-        required:
-        - type
+            example: Result
       - $ref: '#/components/schemas/TypeResult'
     AnalysedType_TypeS16:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: S16
             type: string
             enum:
             - S16
-        required:
-        - type
+            example: S16
       - $ref: '#/components/schemas/TypeS16'
     AnalysedType_TypeS32:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: S32
             type: string
             enum:
             - S32
-        required:
-        - type
+            example: S32
       - $ref: '#/components/schemas/TypeS32'
     AnalysedType_TypeS64:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: S64
             type: string
             enum:
             - S64
-        required:
-        - type
+            example: S64
       - $ref: '#/components/schemas/TypeS64'
     AnalysedType_TypeS8:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: S8
             type: string
             enum:
             - S8
-        required:
-        - type
+            example: S8
       - $ref: '#/components/schemas/TypeS8'
     AnalysedType_TypeStr:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Str
             type: string
             enum:
             - Str
-        required:
-        - type
+            example: Str
       - $ref: '#/components/schemas/TypeStr'
     AnalysedType_TypeTuple:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Tuple
             type: string
             enum:
             - Tuple
-        required:
-        - type
+            example: Tuple
       - $ref: '#/components/schemas/TypeTuple'
     AnalysedType_TypeU16:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: U16
             type: string
             enum:
             - U16
-        required:
-        - type
+            example: U16
       - $ref: '#/components/schemas/TypeU16'
     AnalysedType_TypeU32:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: U32
             type: string
             enum:
             - U32
-        required:
-        - type
+            example: U32
       - $ref: '#/components/schemas/TypeU32'
     AnalysedType_TypeU64:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: U64
             type: string
             enum:
             - U64
-        required:
-        - type
+            example: U64
       - $ref: '#/components/schemas/TypeU64'
     AnalysedType_TypeU8:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: U8
             type: string
             enum:
             - U8
-        required:
-        - type
+            example: U8
       - $ref: '#/components/schemas/TypeU8'
     AnalysedType_TypeVariant:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Variant
             type: string
             enum:
             - Variant
-        required:
-        - type
+            example: Variant
       - $ref: '#/components/schemas/TypeVariant'
     ApiDeployment:
-      title: ApiDeployment
       type: object
+      title: ApiDeployment
+      required:
+      - id
+      - revision
+      - apiDefinitions
+      - environmentId
+      - site
+      - createdAt
       properties:
         id:
           type: string
@@ -6885,16 +6823,16 @@ components:
         createdAt:
           type: string
           format: date-time
+    ApiDomain:
+      type: object
+      title: ApiDomain
       required:
       - id
       - revision
-      - apiDefinitions
       - environmentId
-      - site
+      - domainName
+      - nameServers
       - createdAt
-    ApiDomain:
-      title: ApiDomain
-      type: object
       properties:
         id:
           type: string
@@ -6914,24 +6852,21 @@ components:
         createdAt:
           type: string
           format: date-time
-      required:
-      - id
-      - revision
-      - environmentId
-      - domainName
-      - nameServers
-      - createdAt
     AppPluginDefinition:
-      title: AppPluginDefinition
       type: object
+      title: AppPluginDefinition
+      required:
+      - blobStorageKey
       properties:
         blobStorageKey:
           type: string
-      required:
-      - blobStorageKey
     Application:
-      title: Application
       type: object
+      title: Application
+      required:
+      - id
+      - accountId
+      - name
       properties:
         id:
           type: string
@@ -6941,29 +6876,31 @@ components:
           format: uuid
         name:
           type: string
-      required:
-      - id
-      - accountId
-      - name
     BinaryDescriptor:
-      title: BinaryDescriptor
       type: object
+      title: BinaryDescriptor
       properties:
         restrictions:
           type: array
           items:
             $ref: '#/components/schemas/BinaryType'
     BinaryType:
-      title: BinaryType
       type: object
+      title: BinaryType
+      required:
+      - mimeType
       properties:
         mimeType:
           type: string
-      required:
-      - mimeType
     CertificateResponseView:
-      title: CertificateResponseView
       type: object
+      title: CertificateResponseView
+      required:
+      - environmentId
+      - name
+      - revision
+      - domainName
+      - createdAt
       properties:
         environmentId:
           type: string
@@ -6978,15 +6915,21 @@ components:
         createdAt:
           type: string
           format: date-time
+    Component:
+      type: object
+      title: Component
       required:
       - environmentId
-      - name
-      - revision
-      - domainName
+      - versionedComponentId
+      - componentName
+      - componentSize
+      - metadata
       - createdAt
-    Component:
-      title: Component
-      type: object
+      - componentType
+      - files
+      - installedPlugins
+      - env
+      - wasmHash
       properties:
         environmentId:
           type: string
@@ -7018,40 +6961,35 @@ components:
           additionalProperties:
             type: string
         wasmHash:
-          description: Hash of the wasm before any transformations
           type: string
           format: hash
-      required:
-      - environmentId
-      - versionedComponentId
-      - componentName
-      - componentSize
-      - metadata
-      - createdAt
-      - componentType
-      - files
-      - installedPlugins
-      - env
-      - wasmHash
+          description: Hash of the wasm before any transformations
     ComponentFileOptions:
-      title: ComponentFileOptions
       type: object
+      title: ComponentFileOptions
+      required:
+      - permissions
       properties:
         permissions:
           description: Path of the file in the uploaded archive
           allOf:
           - $ref: '#/components/schemas/ComponentFilePermissions'
           - description: Path of the file in the uploaded archive
-      required:
-      - permissions
     ComponentFilePermissions:
       type: string
       enum:
       - read-only
       - read-write
     ComponentMetadata:
-      title: ComponentMetadata
       type: object
+      title: ComponentMetadata
+      required:
+      - exports
+      - producers
+      - memories
+      - binaryWit
+      - dynamicLinking
+      - agentTypes
       properties:
         exports:
           type: array
@@ -7080,25 +7018,22 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentType'
-      required:
-      - exports
-      - producers
-      - memories
-      - binaryWit
-      - dynamicLinking
-      - agentTypes
     ComponentPluginScope:
-      title: ComponentPluginScope
       type: object
+      title: ComponentPluginScope
+      required:
+      - componentId
       properties:
         componentId:
           type: string
           format: uuid
-      required:
-      - componentId
     ComponentReference:
-      title: ComponentReference
       type: object
+      title: ComponentReference
+      required:
+      - name
+      - revision
+      - id
       properties:
         name:
           type: string
@@ -7108,13 +7043,12 @@ components:
         id:
           type: string
           format: uuid
-      required:
-      - name
-      - revision
-      - id
     ComponentTransformerDefinition:
-      title: ComponentTransformerDefinition
       type: object
+      title: ComponentTransformerDefinition
+      required:
+      - validateUrl
+      - transformUrl
       properties:
         providedWitPackage:
           type: string
@@ -7124,17 +7058,18 @@ components:
           type: string
         transformUrl:
           type: string
-      required:
-      - validateUrl
-      - transformUrl
     ComponentType:
       type: string
       enum:
       - Durable
       - Ephemeral
     CorsConfiguration:
-      title: CorsConfiguration
       type: object
+      title: CorsConfiguration
+      required:
+      - allowOrigin
+      - allowMethods
+      - allowHeaders
       properties:
         allowOrigin:
           type: string
@@ -7149,32 +7084,34 @@ components:
         maxAge:
           type: integer
           format: uint64
-      required:
-      - allowOrigin
-      - allowMethods
-      - allowHeaders
     CreateApiDeploymentRequest:
-      title: CreateApiDeploymentRequest
       type: object
+      title: CreateApiDeploymentRequest
+      required:
+      - apiDefinitions
       properties:
         apiDefinitions:
           type: array
           items:
             type: string
             format: uuid
-      required:
-      - apiDefinitions
     CreateApiDomainRequest:
-      title: CreateApiDomainRequest
       type: object
+      title: CreateApiDomainRequest
+      required:
+      - domainName
       properties:
         domainName:
           type: string
-      required:
-      - domainName
     CreateAppPluginRequestMetadata:
-      title: CreateAppPluginRequestMetadata
       type: object
+      title: CreateAppPluginRequestMetadata
+      required:
+      - name
+      - version
+      - description
+      - homepage
+      - scope
       properties:
         name:
           type: string
@@ -7186,23 +7123,22 @@ components:
           type: string
         scope:
           $ref: '#/components/schemas/PluginScope'
+    CreateApplicationRequest:
+      type: object
+      title: CreateApplicationRequest
       required:
       - name
-      - version
-      - description
-      - homepage
-      - scope
-    CreateApplicationRequest:
-      title: CreateApplicationRequest
-      type: object
       properties:
         name:
           type: string
+    CreateCertificateRequest:
+      type: object
+      title: CreateCertificateRequest
       required:
       - name
-    CreateCertificateRequest:
-      title: CreateCertificateRequest
-      type: object
+      - domainName
+      - certificateBody
+      - certificatePrivateKey
       properties:
         name:
           type: string
@@ -7212,14 +7148,11 @@ components:
           type: string
         certificatePrivateKey:
           type: string
-      required:
-      - name
-      - domainName
-      - certificateBody
-      - certificatePrivateKey
     CreateComponentRequestMetadata:
-      title: CreateComponentRequestMetadata
       type: object
+      title: CreateComponentRequestMetadata
+      required:
+      - componentName
       properties:
         componentName:
           type: string
@@ -7241,29 +7174,33 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentType'
-      required:
-      - componentName
     CreateEnvironmentRequest:
-      title: CreateEnvironmentRequest
       type: object
+      title: CreateEnvironmentRequest
+      required:
+      - name
       properties:
         name:
           type: string
-      required:
-      - name
     CreateHttpApiDefinitionRequest:
-      title: CreateHttpApiDefinitionRequest
       type: object
+      title: CreateHttpApiDefinitionRequest
+      required:
+      - routes
       properties:
         routes:
           type: array
           items:
             $ref: '#/components/schemas/RouteRequestView'
-      required:
-      - routes
     CreateLibraryPluginRequestMetadata:
-      title: CreateLibraryPluginRequestMetadata
       type: object
+      title: CreateLibraryPluginRequestMetadata
+      required:
+      - name
+      - version
+      - description
+      - homepage
+      - scope
       properties:
         name:
           type: string
@@ -7275,15 +7212,17 @@ components:
           type: string
         scope:
           $ref: '#/components/schemas/PluginScope'
+    CreatePluginRequest:
+      type: object
+      title: CreatePluginRequest
       required:
       - name
       - version
       - description
+      - icon
       - homepage
+      - specs
       - scope
-    CreatePluginRequest:
-      title: CreatePluginRequest
-      type: object
       properties:
         name:
           type: string
@@ -7302,17 +7241,16 @@ components:
           $ref: '#/components/schemas/PluginTypeSpecificCreation'
         scope:
           $ref: '#/components/schemas/PluginScope'
-      required:
-      - name
-      - version
-      - description
-      - icon
-      - homepage
-      - specs
-      - scope
     CreateSecuritySchemeRequest:
-      title: CreateSecuritySchemeRequest
       type: object
+      title: CreateSecuritySchemeRequest
+      required:
+      - providerType
+      - schemeIdentifier
+      - clientId
+      - clientSecret
+      - redirectUrl
+      - scopes
       properties:
         providerType:
           $ref: '#/components/schemas/Provider'
@@ -7328,50 +7266,46 @@ components:
           type: array
           items:
             type: string
-      required:
-      - providerType
-      - schemeIdentifier
-      - clientId
-      - clientSecret
-      - redirectUrl
-      - scopes
     CreateTokenRequest:
-      title: CreateTokenRequest
       type: object
+      title: CreateTokenRequest
+      required:
+      - expiresAt
       properties:
         expiresAt:
           type: string
           format: date-time
-      required:
-      - expiresAt
     DataSchema:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
+      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
       discriminator:
         propertyName: type
         mapping:
           Tuple: '#/components/schemas/DataSchema_NamedElementSchemas'
           Multimodal: '#/components/schemas/DataSchema_NamedElementSchemas'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
-      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
     DataSchema_NamedElementSchemas:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Multimodal
             type: string
             enum:
             - Multimodal
-        required:
-        - type
+            example: Multimodal
       - $ref: '#/components/schemas/NamedElementSchemas'
     DeployEnvironmentRequest:
+      type: object
       title: DeployEnvironmentRequest
-      type: object
     Deployment:
-      title: Deployment
       type: object
+      title: Deployment
+      required:
+      - environmentId
+      - deploymentRevisionId
       properties:
         environmentId:
           type: string
@@ -7379,94 +7313,95 @@ components:
         deploymentRevisionId:
           type: integer
           format: uint64
-      required:
-      - environmentId
-      - deploymentRevisionId
     DynamicLinkedInstance:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
       discriminator:
         propertyName: type
         mapping:
           WasmRpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
     DynamicLinkedInstance_DynamicLinkedWasmRpc:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: WasmRpc
             type: string
             enum:
             - WasmRpc
-        required:
-        - type
+            example: WasmRpc
       - $ref: '#/components/schemas/DynamicLinkedWasmRpc'
     DynamicLinkedWasmRpc:
-      title: DynamicLinkedWasmRpc
       type: object
-      properties:
-        targets:
-          description: Maps resource names within the dynamic linked interface to target information
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/WasmRpcTarget'
+      title: DynamicLinkedWasmRpc
       required:
       - targets
+      properties:
+        targets:
+          type: object
+          description: Maps resource names within the dynamic linked interface to target information
+          additionalProperties:
+            $ref: '#/components/schemas/WasmRpcTarget'
     ElementSchema:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ElementSchema_AnalysedType'
+      - $ref: '#/components/schemas/ElementSchema_TextDescriptor'
+      - $ref: '#/components/schemas/ElementSchema_BinaryDescriptor'
       discriminator:
         propertyName: type
         mapping:
           ComponentModel: '#/components/schemas/ElementSchema_AnalysedType'
           UnstructuredText: '#/components/schemas/ElementSchema_TextDescriptor'
           UnstructuredBinary: '#/components/schemas/ElementSchema_BinaryDescriptor'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/ElementSchema_AnalysedType'
-      - $ref: '#/components/schemas/ElementSchema_TextDescriptor'
-      - $ref: '#/components/schemas/ElementSchema_BinaryDescriptor'
     ElementSchema_AnalysedType:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: ComponentModel
             type: string
             enum:
             - ComponentModel
-        required:
-        - type
+            example: ComponentModel
       - $ref: '#/components/schemas/AnalysedType'
     ElementSchema_BinaryDescriptor:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: UnstructuredBinary
             type: string
             enum:
             - UnstructuredBinary
-        required:
-        - type
+            example: UnstructuredBinary
       - $ref: '#/components/schemas/BinaryDescriptor'
     ElementSchema_TextDescriptor:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: UnstructuredText
             type: string
             enum:
             - UnstructuredText
-        required:
-        - type
+            example: UnstructuredText
       - $ref: '#/components/schemas/TextDescriptor'
     Empty:
+      type: object
       title: Empty
-      type: object
     Environment:
-      title: Environment
       type: object
+      title: Environment
+      required:
+      - id
+      - applicationId
+      - name
       properties:
         id:
           type: string
@@ -7476,37 +7411,33 @@ components:
           format: uuid
         name:
           type: string
-      required:
-      - id
-      - applicationId
-      - name
     EnvironmentHash:
+      type: object
       title: EnvironmentHash
-      type: object
     EnvironmentSummary:
+      type: object
       title: EnvironmentSummary
-      type: object
     ErrorBody:
-      title: ErrorBody
       type: object
+      title: ErrorBody
+      required:
+      - error
       properties:
         error:
           type: string
-      required:
-      - error
     ErrorsBody:
-      title: ErrorsBody
       type: object
+      title: ErrorsBody
+      required:
+      - errors
       properties:
         errors:
           type: array
           items:
             type: string
-      required:
-      - errors
     GatewayBindingRequestView:
-      title: GatewayBindingRequestView
       type: object
+      title: GatewayBindingRequestView
       properties:
         bindingType:
           $ref: '#/components/schemas/GatewayBindingType'
@@ -7519,8 +7450,8 @@ components:
         invocationContext:
           type: string
     GatewayBindingResponseView:
-      title: GatewayBindingResponseView
       type: object
+      title: GatewayBindingResponseView
       properties:
         component:
           $ref: '#/components/schemas/ComponentReference'
@@ -7555,11 +7486,15 @@ components:
       - cors-preflight
       - swagger-ui
     HealthcheckResponse:
+      type: object
       title: HealthcheckResponse
-      type: object
     HttpApiDefinitionResponseView:
-      title: HttpApiDefinitionResponseView
       type: object
+      title: HttpApiDefinitionResponseView
+      required:
+      - id
+      - routes
+      - createdAt
       properties:
         id:
           type: string
@@ -7571,95 +7506,96 @@ components:
         createdAt:
           type: string
           format: date-time
-      required:
-      - id
-      - routes
-      - createdAt
     InitialComponentFile:
-      title: InitialComponentFile
       type: object
-      properties:
-        key:
-          title: |-
-            Key that can be used to identify a component file.
-            All files with the same content will have the same key.
-          type: string
-        path:
-          description: Path inside a component filesystem. Must be absolute.
-          type: string
-        permissions:
-          $ref: '#/components/schemas/ComponentFilePermissions'
+      title: InitialComponentFile
       required:
       - key
       - path
       - permissions
+      properties:
+        key:
+          type: string
+          title: |-
+            Key that can be used to identify a component file.
+            All files with the same content will have the same key.
+        path:
+          type: string
+          description: Path inside a component filesystem. Must be absolute.
+        permissions:
+          $ref: '#/components/schemas/ComponentFilePermissions'
     LibraryPluginDefinition:
-      title: LibraryPluginDefinition
       type: object
+      title: LibraryPluginDefinition
+      required:
+      - blobStorageKey
       properties:
         blobStorageKey:
           type: string
-      required:
-      - blobStorageKey
     LinearMemory:
-      title: LinearMemory
       type: object
-      properties:
-        initial:
-          description: Initial size of the linear memory in bytes
-          type: integer
-          format: uint64
-        maximum:
-          description: Optional maximal size of the linear memory in bytes
-          type: integer
-          format: uint64
+      title: LinearMemory
       required:
       - initial
-    NameOptionTypePair:
-      title: NameOptionTypePair
-      type: object
       properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
+        initial:
+          type: integer
+          format: uint64
+          description: Initial size of the linear memory in bytes
+        maximum:
+          type: integer
+          format: uint64
+          description: Optional maximal size of the linear memory in bytes
+    NameOptionTypePair:
+      type: object
+      title: NameOptionTypePair
       required:
       - name
-    NameTypePair:
-      title: NameTypePair
-      type: object
       properties:
         name:
           type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
+    NameTypePair:
+      type: object
+      title: NameTypePair
       required:
       - name
       - typ
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
     NamedElementSchema:
-      title: NamedElementSchema
       type: object
+      title: NamedElementSchema
+      required:
+      - name
+      - schema
       properties:
         name:
           type: string
         schema:
           $ref: '#/components/schemas/ElementSchema'
-      required:
-      - name
-      - schema
     NamedElementSchemas:
-      title: NamedElementSchemas
       type: object
+      title: NamedElementSchemas
+      required:
+      - elements
       properties:
         elements:
           type: array
           items:
             $ref: '#/components/schemas/NamedElementSchema'
-      required:
-      - elements
     OAuth2Data:
-      title: OAuth2Data
       type: object
+      title: OAuth2Data
+      required:
+      - url
+      - userCode
+      - expires
+      - encodedSession
       properties:
         url:
           type: string
@@ -7670,14 +7606,12 @@ components:
           format: date-time
         encodedSession:
           type: string
-      required:
-      - url
-      - userCode
-      - expires
-      - encodedSession
     OplogProcessorDefinition:
-      title: OplogProcessorDefinition
       type: object
+      title: OplogProcessorDefinition
+      required:
+      - componentId
+      - componentVersion
       properties:
         componentId:
           type: string
@@ -7685,134 +7619,138 @@ components:
         componentVersion:
           type: integer
           format: uint64
-      required:
-      - componentId
-      - componentVersion
     Page_Account:
-      title: Page_Account
       type: object
+      title: Page_Account
+      required:
+      - values
       properties:
         values:
           type: array
           items:
             $ref: '#/components/schemas/Account'
+    Page_ApiDeployment:
+      type: object
+      title: Page_ApiDeployment
       required:
       - values
-    Page_ApiDeployment:
-      title: Page_ApiDeployment
-      type: object
       properties:
         values:
           type: array
           items:
             $ref: '#/components/schemas/ApiDeployment'
+    Page_ApiDomain:
+      type: object
+      title: Page_ApiDomain
       required:
       - values
-    Page_ApiDomain:
-      title: Page_ApiDomain
-      type: object
       properties:
         values:
           type: array
           items:
             $ref: '#/components/schemas/ApiDomain'
+    Page_Application:
+      type: object
+      title: Page_Application
       required:
       - values
-    Page_Application:
-      title: Page_Application
-      type: object
       properties:
         values:
           type: array
           items:
             $ref: '#/components/schemas/Application'
+    Page_CertificateResponseView:
+      type: object
+      title: Page_CertificateResponseView
       required:
       - values
-    Page_CertificateResponseView:
-      title: Page_CertificateResponseView
-      type: object
       properties:
         values:
           type: array
           items:
             $ref: '#/components/schemas/CertificateResponseView'
+    Page_Component:
+      type: object
+      title: Page_Component
       required:
       - values
-    Page_Component:
-      title: Page_Component
-      type: object
       properties:
         values:
           type: array
           items:
             $ref: '#/components/schemas/Component'
+    Page_Deployment:
+      type: object
+      title: Page_Deployment
       required:
       - values
-    Page_Deployment:
-      title: Page_Deployment
-      type: object
       properties:
         values:
           type: array
           items:
             $ref: '#/components/schemas/Deployment'
+    Page_Environment:
+      type: object
+      title: Page_Environment
       required:
       - values
-    Page_Environment:
-      title: Page_Environment
-      type: object
       properties:
         values:
           type: array
           items:
             $ref: '#/components/schemas/Environment'
+    Page_HttpApiDefinitionResponseView:
+      type: object
+      title: Page_HttpApiDefinitionResponseView
       required:
       - values
-    Page_HttpApiDefinitionResponseView:
-      title: Page_HttpApiDefinitionResponseView
-      type: object
       properties:
         values:
           type: array
           items:
             $ref: '#/components/schemas/HttpApiDefinitionResponseView'
+    Page_PluginDefinition:
+      type: object
+      title: Page_PluginDefinition
       required:
       - values
-    Page_PluginDefinition:
-      title: Page_PluginDefinition
-      type: object
       properties:
         values:
           type: array
           items:
             $ref: '#/components/schemas/PluginDefinition'
+    Page_SecuritySchemeResponseView:
+      type: object
+      title: Page_SecuritySchemeResponseView
       required:
       - values
-    Page_SecuritySchemeResponseView:
-      title: Page_SecuritySchemeResponseView
-      type: object
       properties:
         values:
           type: array
           items:
             $ref: '#/components/schemas/SecuritySchemeResponseView'
-      required:
-      - values
     Plan:
-      title: Plan
       type: object
+      title: Plan
+      required:
+      - planId
+      - planData
       properties:
         planId:
           type: string
           format: uuid
         planData:
           $ref: '#/components/schemas/PlanData'
-      required:
-      - planId
-      - planData
     PlanData:
-      title: PlanData
       type: object
+      title: PlanData
+      required:
+      - projectLimit
+      - componentLimit
+      - workerLimit
+      - storageLimit
+      - monthlyGasLimit
+      - monthlyUploadLimit
       properties:
         projectLimit:
           type: integer
@@ -7832,16 +7770,20 @@ components:
         monthlyUploadLimit:
           type: integer
           format: int32
-      required:
-      - projectLimit
-      - componentLimit
-      - workerLimit
-      - storageLimit
-      - monthlyGasLimit
-      - monthlyUploadLimit
     PluginDefinition:
-      title: PluginDefinition
       type: object
+      title: PluginDefinition
+      required:
+      - id
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - specs
+      - scope
+      - accountId
+      - deleted
       properties:
         id:
           type: string
@@ -7868,20 +7810,16 @@ components:
           format: uuid
         deleted:
           type: boolean
+    PluginInstallation:
+      type: object
+      title: PluginInstallation
       required:
       - id
-      - name
-      - version
-      - description
-      - icon
-      - homepage
-      - specs
-      - scope
-      - accountId
-      - deleted
-    PluginInstallation:
-      title: PluginInstallation
-      type: object
+      - pluginName
+      - pluginVersion
+      - pluginRegistered
+      - priority
+      - parameters
       properties:
         id:
           type: string
@@ -7891,8 +7829,8 @@ components:
         pluginVersion:
           type: string
         pluginRegistered:
-          description: Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
           type: boolean
+          description: Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
         priority:
           type: integer
           format: int32
@@ -7900,85 +7838,82 @@ components:
           type: object
           additionalProperties:
             type: string
-      required:
-      - id
-      - pluginName
-      - pluginVersion
-      - pluginRegistered
-      - priority
-      - parameters
     PluginInstallationAction:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
       discriminator:
         propertyName: type
         mapping:
           Install: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
           Update: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
           Uninstall: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
-      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
-      - $ref: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
     PluginInstallationAction_PluginInstallationCreation:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Install
             type: string
             enum:
             - Install
-        required:
-        - type
+            example: Install
       - $ref: '#/components/schemas/PluginInstallationCreation'
     PluginInstallationAction_PluginInstallationUpdateWithId:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Update
             type: string
             enum:
             - Update
-        required:
-        - type
+            example: Update
       - $ref: '#/components/schemas/PluginInstallationUpdateWithId'
     PluginInstallationAction_PluginUninstallation:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Uninstall
             type: string
             enum:
             - Uninstall
-        required:
-        - type
+            example: Uninstall
       - $ref: '#/components/schemas/PluginUninstallation'
     PluginInstallationCreation:
-      title: PluginInstallationCreation
       type: object
+      title: PluginInstallationCreation
+      required:
+      - name
+      - version
+      - priority
+      - parameters
       properties:
         name:
           type: string
         version:
           type: string
         priority:
-          description: Plugins will be applied in order of increasing priority
           type: integer
           format: int32
+          description: Plugins will be applied in order of increasing priority
         parameters:
           type: object
           additionalProperties:
             type: string
+    PluginInstallationUpdateWithId:
+      type: object
+      title: PluginInstallationUpdateWithId
       required:
-      - name
-      - version
+      - installationId
       - priority
       - parameters
-    PluginInstallationUpdateWithId:
-      title: PluginInstallationUpdateWithId
-      type: object
       properties:
         installationId:
           type: string
@@ -7990,93 +7925,95 @@ components:
           type: object
           additionalProperties:
             type: string
-      required:
-      - installationId
-      - priority
-      - parameters
     PluginScope:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginScope_Empty'
+      - $ref: '#/components/schemas/PluginScope_ComponentPluginScope'
+      - $ref: '#/components/schemas/PluginScope_ProjectPluginScope'
       discriminator:
         propertyName: type
         mapping:
           Global: '#/components/schemas/PluginScope_Empty'
           Component: '#/components/schemas/PluginScope_ComponentPluginScope'
           Project: '#/components/schemas/PluginScope_ProjectPluginScope'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PluginScope_Empty'
-      - $ref: '#/components/schemas/PluginScope_ComponentPluginScope'
-      - $ref: '#/components/schemas/PluginScope_ProjectPluginScope'
     PluginScope_ComponentPluginScope:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Component
             type: string
             enum:
             - Component
-        required:
-        - type
+            example: Component
       - $ref: '#/components/schemas/ComponentPluginScope'
     PluginScope_Empty:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Global
             type: string
             enum:
             - Global
-        required:
-        - type
+            example: Global
       - $ref: '#/components/schemas/Empty'
     PluginScope_ProjectPluginScope:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Project
             type: string
             enum:
             - Project
-        required:
-        - type
+            example: Project
       - $ref: '#/components/schemas/ProjectPluginScope'
     PluginTypeSpecificCreation:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginTypeSpecificCreation_ComponentTransformerDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificCreation_OplogProcessorDefinition'
       discriminator:
         propertyName: type
         mapping:
           ComponentTransformer: '#/components/schemas/PluginTypeSpecificCreation_ComponentTransformerDefinition'
           OplogProcessor: '#/components/schemas/PluginTypeSpecificCreation_OplogProcessorDefinition'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PluginTypeSpecificCreation_ComponentTransformerDefinition'
-      - $ref: '#/components/schemas/PluginTypeSpecificCreation_OplogProcessorDefinition'
     PluginTypeSpecificCreation_ComponentTransformerDefinition:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: ComponentTransformer
             type: string
             enum:
             - ComponentTransformer
-        required:
-        - type
+            example: ComponentTransformer
       - $ref: '#/components/schemas/ComponentTransformerDefinition'
     PluginTypeSpecificCreation_OplogProcessorDefinition:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: OplogProcessor
             type: string
             enum:
             - OplogProcessor
-        required:
-        - type
+            example: OplogProcessor
       - $ref: '#/components/schemas/OplogProcessorDefinition'
     PluginTypeSpecificDefinition:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_ComponentTransformerDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_OplogProcessorDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_LibraryPluginDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_AppPluginDefinition'
       discriminator:
         propertyName: type
         mapping:
@@ -8084,72 +8021,69 @@ components:
           OplogProcessor: '#/components/schemas/PluginTypeSpecificDefinition_OplogProcessorDefinition'
           Library: '#/components/schemas/PluginTypeSpecificDefinition_LibraryPluginDefinition'
           App: '#/components/schemas/PluginTypeSpecificDefinition_AppPluginDefinition'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_ComponentTransformerDefinition'
-      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_OplogProcessorDefinition'
-      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_LibraryPluginDefinition'
-      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_AppPluginDefinition'
     PluginTypeSpecificDefinition_AppPluginDefinition:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: App
             type: string
             enum:
             - App
-        required:
-        - type
+            example: App
       - $ref: '#/components/schemas/AppPluginDefinition'
     PluginTypeSpecificDefinition_ComponentTransformerDefinition:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: ComponentTransformer
             type: string
             enum:
             - ComponentTransformer
-        required:
-        - type
+            example: ComponentTransformer
       - $ref: '#/components/schemas/ComponentTransformerDefinition'
     PluginTypeSpecificDefinition_LibraryPluginDefinition:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: Library
             type: string
             enum:
             - Library
-        required:
-        - type
+            example: Library
       - $ref: '#/components/schemas/LibraryPluginDefinition'
     PluginTypeSpecificDefinition_OplogProcessorDefinition:
       allOf:
       - type: object
+        required:
+        - type
         properties:
           type:
-            example: OplogProcessor
             type: string
             enum:
             - OplogProcessor
-        required:
-        - type
+            example: OplogProcessor
       - $ref: '#/components/schemas/OplogProcessorDefinition'
     PluginUninstallation:
-      title: PluginUninstallation
       type: object
+      title: PluginUninstallation
+      required:
+      - installationId
       properties:
         installationId:
           type: string
           format: uuid
-      required:
-      - installationId
     ProducerField:
-      title: ProducerField
       type: object
+      title: ProducerField
+      required:
+      - name
+      - values
       properties:
         name:
           type: string
@@ -8157,28 +8091,25 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/VersionedName'
-      required:
-      - name
-      - values
     Producers:
-      title: Producers
       type: object
+      title: Producers
+      required:
+      - fields
       properties:
         fields:
           type: array
           items:
             $ref: '#/components/schemas/ProducerField'
-      required:
-      - fields
     ProjectPluginScope:
-      title: ProjectPluginScope
       type: object
+      title: ProjectPluginScope
+      required:
+      - projectId
       properties:
         projectId:
           type: string
           format: uuid
-      required:
-      - projectId
     Provider:
       type: string
       enum:
@@ -8187,23 +8118,23 @@ components:
       - Microsoft
       - Gitlab
     RibInputTypeInfo:
-      title: RibInputTypeInfo
       type: object
+      title: RibInputTypeInfo
+      required:
+      - types
       properties:
         types:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AnalysedType'
-      required:
-      - types
     RibOutputTypeInfo:
-      title: RibOutputTypeInfo
       type: object
+      title: RibOutputTypeInfo
+      required:
+      - analysedType
       properties:
         analysedType:
           $ref: '#/components/schemas/AnalysedType'
-      required:
-      - analysedType
     Role:
       type: string
       enum:
@@ -8222,8 +8153,12 @@ components:
       - trace
       - head
     RouteRequestView:
-      title: RouteRequestView
       type: object
+      title: RouteRequestView
+      required:
+      - method
+      - path
+      - binding
       properties:
         method:
           $ref: '#/components/schemas/RouteMethod'
@@ -8233,13 +8168,13 @@ components:
           $ref: '#/components/schemas/GatewayBindingRequestView'
         security:
           type: string
+    RouteResponseView:
+      type: object
+      title: RouteResponseView
       required:
       - method
       - path
       - binding
-    RouteResponseView:
-      title: RouteResponseView
-      type: object
       properties:
         method:
           $ref: '#/components/schemas/RouteMethod'
@@ -8249,13 +8184,17 @@ components:
           $ref: '#/components/schemas/GatewayBindingResponseView'
         security:
           type: string
-      required:
-      - method
-      - path
-      - binding
     SecuritySchemeResponseView:
-      title: SecuritySchemeResponseView
       type: object
+      title: SecuritySchemeResponseView
+      required:
+      - providerType
+      - schemeIdentifier
+      - clientId
+      - clientSecret
+      - redirectUrl
+      - scopes
+      - createdAt
       properties:
         providerType:
           $ref: '#/components/schemas/Provider'
@@ -8274,33 +8213,30 @@ components:
         createdAt:
           type: string
           format: date-time
-      required:
-      - providerType
-      - schemeIdentifier
-      - clientId
-      - clientSecret
-      - redirectUrl
-      - scopes
-      - createdAt
     TextDescriptor:
-      title: TextDescriptor
       type: object
+      title: TextDescriptor
       properties:
         restrictions:
           type: array
           items:
             $ref: '#/components/schemas/TextType'
     TextType:
-      title: TextType
       type: object
+      title: TextType
+      required:
+      - languageCode
       properties:
         languageCode:
           type: string
-      required:
-      - languageCode
     Token:
-      title: Token
       type: object
+      title: Token
+      required:
+      - id
+      - accountId
+      - createdAt
+      - expiresAt
       properties:
         id:
           type: string
@@ -8314,31 +8250,28 @@ components:
         expiresAt:
           type: string
           format: date-time
-      required:
-      - id
-      - accountId
-      - createdAt
-      - expiresAt
     TokenWithSecret:
-      title: TokenWithSecret
       type: object
+      title: TokenWithSecret
+      required:
+      - data
+      - secret
       properties:
         data:
           $ref: '#/components/schemas/Token'
         secret:
           type: string
-      required:
-      - data
-      - secret
     TypeBool:
+      type: object
       title: TypeBool
-      type: object
     TypeChr:
+      type: object
       title: TypeChr
-      type: object
     TypeEnum:
-      title: TypeEnum
       type: object
+      title: TypeEnum
+      required:
+      - cases
       properties:
         name:
           type: string
@@ -8346,17 +8279,17 @@ components:
           type: array
           items:
             type: string
-      required:
-      - cases
     TypeF32:
+      type: object
       title: TypeF32
-      type: object
     TypeF64:
+      type: object
       title: TypeF64
-      type: object
     TypeFlags:
-      title: TypeFlags
       type: object
+      title: TypeFlags
+      required:
+      - names
       properties:
         name:
           type: string
@@ -8364,11 +8297,12 @@ components:
           type: array
           items:
             type: string
-      required:
-      - names
     TypeHandle:
-      title: TypeHandle
       type: object
+      title: TypeHandle
+      required:
+      - resource_id
+      - mode
       properties:
         name:
           type: string
@@ -8377,32 +8311,31 @@ components:
           format: uint64
         mode:
           $ref: '#/components/schemas/AnalysedResourceMode'
-      required:
-      - resource_id
-      - mode
     TypeList:
+      type: object
       title: TypeList
-      type: object
+      required:
+      - inner
       properties:
         name:
           type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
-      required:
-      - inner
     TypeOption:
-      title: TypeOption
       type: object
+      title: TypeOption
+      required:
+      - inner
       properties:
         name:
           type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
-      required:
-      - inner
     TypeRecord:
-      title: TypeRecord
       type: object
+      title: TypeRecord
+      required:
+      - fields
       properties:
         name:
           type: string
@@ -8410,11 +8343,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/NameTypePair'
-      required:
-      - fields
     TypeResult:
-      title: TypeResult
       type: object
+      title: TypeResult
       properties:
         name:
           type: string
@@ -8423,23 +8354,25 @@ components:
         err:
           $ref: '#/components/schemas/AnalysedType'
     TypeS16:
+      type: object
       title: TypeS16
-      type: object
     TypeS32:
+      type: object
       title: TypeS32
-      type: object
     TypeS64:
+      type: object
       title: TypeS64
-      type: object
     TypeS8:
+      type: object
       title: TypeS8
-      type: object
     TypeStr:
+      type: object
       title: TypeStr
-      type: object
     TypeTuple:
-      title: TypeTuple
       type: object
+      title: TypeTuple
+      required:
+      - items
       properties:
         name:
           type: string
@@ -8447,23 +8380,23 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AnalysedType'
-      required:
-      - items
     TypeU16:
+      type: object
       title: TypeU16
-      type: object
     TypeU32:
+      type: object
       title: TypeU32
-      type: object
     TypeU64:
+      type: object
       title: TypeU64
-      type: object
     TypeU8:
+      type: object
       title: TypeU8
-      type: object
     TypeVariant:
-      title: TypeVariant
       type: object
+      title: TypeVariant
+      required:
+      - cases
       properties:
         name:
           type: string
@@ -8471,45 +8404,45 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/NameOptionTypePair'
-      required:
-      - cases
     UpdateApiDeploymentRequest:
-      title: UpdateApiDeploymentRequest
       type: object
+      title: UpdateApiDeploymentRequest
+      required:
+      - apiDefinitions
       properties:
         apiDefinitions:
           type: array
           items:
             type: string
             format: uuid
-      required:
-      - apiDefinitions
     UpdateApiDomainRequest:
+      type: object
       title: UpdateApiDomainRequest
-      type: object
     UpdateApplicationRequest:
-      title: UpdateApplicationRequest
       type: object
+      title: UpdateApplicationRequest
+      required:
+      - previousRevision
       properties:
         previousRevision:
           type: integer
           format: uint64
-      required:
-      - previousRevision
     UpdateCertificateRequest:
-      title: UpdateCertificateRequest
       type: object
+      title: UpdateCertificateRequest
+      required:
+      - certificateBody
+      - certificatePrivateKey
       properties:
         certificateBody:
           type: string
         certificatePrivateKey:
           type: string
-      required:
-      - certificateBody
-      - certificatePrivateKey
     UpdateComponentRequestComponentMetadata:
-      title: UpdateComponentRequestComponentMetadata
       type: object
+      title: UpdateComponentRequestComponentMetadata
+      required:
+      - previousVersion
       properties:
         previousVersion:
           type: integer
@@ -8519,8 +8452,8 @@ components:
         removedFiles:
           type: array
           items:
-            description: Path inside a component filesystem. Must be absolute.
             type: string
+            description: Path inside a component filesystem. Must be absolute.
         newFileOptions:
           type: object
           additionalProperties:
@@ -8541,38 +8474,39 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationAction'
-      required:
-      - previousVersion
     UpdateEnvironmentRequest:
-      title: UpdateEnvironmentRequest
       type: object
+      title: UpdateEnvironmentRequest
+      required:
+      - previousRevision
       properties:
         previousRevision:
           type: integer
           format: uint64
-      required:
-      - previousRevision
     UpdateHttpApiDefinitionRequest:
-      title: UpdateHttpApiDefinitionRequest
       type: object
+      title: UpdateHttpApiDefinitionRequest
+      required:
+      - routes
       properties:
         routes:
           type: array
           items:
             $ref: '#/components/schemas/RouteRequestView'
-      required:
-      - routes
     VersionInfo:
-      title: VersionInfo
       type: object
+      title: VersionInfo
+      required:
+      - version
       properties:
         version:
           type: string
-      required:
-      - version
     VersionedComponentId:
-      title: VersionedComponentId
       type: object
+      title: VersionedComponentId
+      required:
+      - componentId
+      - version
       properties:
         componentId:
           type: string
@@ -8580,23 +8514,24 @@ components:
         version:
           type: integer
           format: uint64
-      required:
-      - componentId
-      - version
     VersionedName:
-      title: VersionedName
       type: object
+      title: VersionedName
+      required:
+      - name
+      - version
       properties:
         name:
           type: string
         version:
           type: string
-      required:
-      - name
-      - version
     WasmRpcTarget:
-      title: WasmRpcTarget
       type: object
+      title: WasmRpcTarget
+      required:
+      - interfaceName
+      - componentName
+      - componentType
       properties:
         interfaceName:
           type: string
@@ -8604,62 +8539,23 @@ components:
           type: string
         componentType:
           $ref: '#/components/schemas/ComponentType'
-      required:
-      - interfaceName
-      - componentName
-      - componentType
     WebFlowAuthorizeUrlResponse:
-      title: WebFlowAuthorizeUrlResponse
       type: object
+      title: WebFlowAuthorizeUrlResponse
+      required:
+      - url
+      - state
       properties:
         url:
           type: string
         state:
           type: string
-      required:
-      - url
-      - state
   securitySchemes:
     Cookie:
       type: apiKey
-      in: cookie
       name: GOLEM_SESSION
+      in: cookie
     Token:
       type: http
       scheme: bearer
-tags:
-- name: Account
-  description: The account API allows users to query and manipulate their own account data.
-- name: AccountSummary
-- name: ApiCertificate
-- name: ApiDefinition
-- name: ApiDeployment
-- name: ApiDomain
-- name: ApiSecurity
-- name: Application
-- name: Component
-- name: Debugging
-- name: Deployment
-- name: Environment
-- name: Grant
-- name: HealthCheck
-- name: Limits
-  description: The limits API allows users to query their current resource limits.
-- name: Login
-  description: The login endpoints are implementing an OAuth2 flow.
-- name: Plugin
-- name: Project
-  description: |-
-    Projects are groups of components and their workers, providing both a separate namespace for these entities and allows sharing between accounts.
 
-    Every account has a default project which is assumed when no specific project ID is passed in some component and worker related APIs.
-- name: ProjectGrant
-  description: |-
-    Projects can have grants providing access to other accounts than the project's owner.
-
-    The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
-- name: ProjectPolicy
-  description: Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
-- name: Token
-  description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
-- name: Worker

@@ -17,7 +17,7 @@ use crate::model::account::AccountId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId, WorkerInvocation,
+    ComponentRevision, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId, WorkerInvocation,
 };
 use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;
@@ -349,7 +349,7 @@ pub enum OplogEntry {
     /// An update failed to be applied
     FailedUpdate {
         timestamp: Timestamp,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         details: Option<String>,
     },
     /// Increased total linear memory size
@@ -391,7 +391,7 @@ pub enum OplogEntry {
     Create {
         timestamp: Timestamp,
         worker_id: WorkerId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         args: Vec<String>,
         env: Vec<(String, String)>,
         project_id: ProjectId,
@@ -415,7 +415,7 @@ pub enum OplogEntry {
     /// An update was successfully applied
     SuccessfulUpdate {
         timestamp: Timestamp,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     },
@@ -469,7 +469,7 @@ pub enum OplogEntry {
 impl OplogEntry {
     pub fn create(
         worker_id: WorkerId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         args: Vec<String>,
         env: Vec<(String, String)>,
         wasi_config_vars: BTreeMap<String, String>,
@@ -582,7 +582,7 @@ impl OplogEntry {
     }
 
     pub fn successful_update(
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) -> OplogEntry {
@@ -594,7 +594,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn failed_update(target_version: ComponentVersion, details: Option<String>) -> OplogEntry {
+    pub fn failed_update(target_version: ComponentRevision, details: Option<String>) -> OplogEntry {
         OplogEntry::FailedUpdate {
             timestamp: Timestamp::now_utc(),
             target_version,
@@ -810,7 +810,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn specifies_component_version(&self) -> Option<ComponentVersion> {
+    pub fn specifies_component_version(&self) -> Option<ComponentRevision> {
         match self {
             OplogEntry::Create {
                 component_version, ..
@@ -858,17 +858,17 @@ impl OplogEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum UpdateDescription {
     /// Automatic update by replaying the oplog on the new version
-    Automatic { target_version: ComponentVersion },
+    Automatic { target_version: ComponentRevision },
 
     /// Custom update by loading a given snapshot on the new version
     SnapshotBased {
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         payload: OplogPayload,
     },
 }
 
 impl UpdateDescription {
-    pub fn target_version(&self) -> &ComponentVersion {
+    pub fn target_version(&self) -> &ComponentRevision {
         match self {
             UpdateDescription::Automatic { target_version } => target_version,
             UpdateDescription::SnapshotBased { target_version, .. } => target_version,

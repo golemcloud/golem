@@ -15,12 +15,13 @@
 use crate::model::component::Component;
 use golem_common::model::account::AccountId;
 use golem_common::model::base64::Base64;
-use golem_common::model::component::{ComponentName, VersionedComponentId};
+use golem_common::model::component::{ComponentName, ComponentRevision, VersionedComponentId};
+use golem_common::model::component::{ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{ComponentId, ComponentType, ComponentVersion, InitialComponentFile};
+use golem_common::model::ComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -31,7 +32,7 @@ pub struct LocalFileSystemComponentMetadata {
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
     pub component_id: ComponentId,
-    pub version: ComponentVersion,
+    pub version: ComponentRevision,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
     pub exports: Vec<AnalysedExport>,

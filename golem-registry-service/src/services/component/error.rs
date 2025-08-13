@@ -15,12 +15,13 @@
 use crate::services::account_usage::error::AccountUsageError;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentName, VersionedComponentId};
+use golem_common::model::component::{
+    ComponentFilePath, ComponentName, ComponentRevision, InitialComponentFileKey,
+    VersionedComponentId,
+};
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{
-    ComponentFilePath, ComponentId, ComponentVersion, InitialComponentFileKey, PluginInstallationId,
-};
+use golem_common::model::{ComponentId, PluginInstallationId};
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
@@ -70,10 +71,10 @@ pub enum ComponentError {
         plugin_version: String,
         details: String,
     },
-    #[error("Concurrent update of component {component_id} to version {version}")]
+    #[error("Concurrent update of component {component_id} from version {current_revision}")]
     ConcurrentUpdate {
         component_id: ComponentId,
-        version: ComponentVersion,
+        current_revision: ComponentRevision,
     },
     #[error("Plugin installation not found: {installation_id}")]
     PluginInstallationNotFound {

@@ -20,8 +20,8 @@ use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
-use poem::web::Path;
 use poem_openapi::OpenApi;
+use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use tracing::Instrument;
 

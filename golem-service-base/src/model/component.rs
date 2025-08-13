@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use golem_common::model::component::{ComponentName, VersionedComponentId};
+use golem_common::model::component::{ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{ComponentType, InitialComponentFile, PluginId, PluginInstallationId};
+use golem_common::model::{PluginId, PluginInstallationId};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

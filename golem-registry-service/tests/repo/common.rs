@@ -16,7 +16,7 @@ use crate::repo::Deps;
 use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
-use golem_common::model::ComponentFilePermissions;
+use golem_common::model::component::ComponentFilePermissions;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_registry_service::repo::account::AccountRecord;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
