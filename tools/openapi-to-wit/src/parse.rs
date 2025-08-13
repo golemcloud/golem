@@ -19,20 +19,20 @@ struct Components {
     schemas: Option<HashMap<String, SchemaObject>>, // components.schemas.*
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum SchemaObject {
     Schema(Schema),
     Ref(RefObj),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct RefObj {
     #[serde(rename = "$ref")]
     r#ref: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Schema {
     #[serde(default)]
@@ -59,6 +59,8 @@ struct PathItem {
     put: Option<Operation>,
     #[serde(default)]
     delete: Option<Operation>,
+    #[serde(default)]
+    parameters: Option<Vec<ParameterObject>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +71,26 @@ struct Operation {
     requestBody: Option<RequestBody>,
     #[serde(default)]
     responses: Option<HashMap<String, Response>>, // e.g., "200": { ... }
+    #[serde(default)]
+    parameters: Option<Vec<ParameterObject>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ParameterObject {
+    Param(Parameter),
+    Ref(RefObj),
+}
+
+#[derive(Debug, Deserialize)]
+struct Parameter {
+    name: String,
+    #[serde(rename = "in")]
+    location: String, // "path" | "query" | others
+    #[serde(default)]
+    required: Option<bool>,
+    #[serde(default)]
+    schema: Option<SchemaObject>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -198,6 +220,7 @@ pub fn parse_component_enums(doc: &str) -> Vec<ParsedEnum> {
 #[derive(Debug, Clone)]
 pub struct ParsedOperation {
     pub operation_id: String,
+    pub params_record: Option<String>,
     pub request_record: Option<String>,
     pub response_record: Option<String>,
 }
@@ -218,7 +241,7 @@ pub fn parse_operations(doc: &str) -> Vec<ParsedOperation> {
             let req_rec = op.requestBody.as_ref().and_then(|rb| first_json_ref_name(rb.content.as_ref()));
             let resp_rec = find_200_json_ref_name(op.responses.as_ref());
 
-            out.push(ParsedOperation { operation_id, request_record: req_rec, response_record: resp_rec });
+            out.push(ParsedOperation { operation_id, params_record: None, request_record: req_rec, response_record: resp_rec });
         }
     }
 
@@ -237,6 +260,29 @@ pub fn parse_operations_with_inline(doc: &str) -> (Vec<ParsedOperation>, Vec<Par
                 let operation_id = op.operationId.clone().unwrap_or_default();
                 if operation_id.is_empty() { continue; }
 
+                // params (path+query)
+                let mut params_rec_name: Option<String> = None;
+                let mut params_fields: Vec<ParsedField> = Vec::new();
+                let mut any_params = false;
+                let merged_params = merge_parameters(item.parameters.as_ref(), op.parameters.as_ref());
+                for p in merged_params {
+                    if p.location == "path" || p.location == "query" {
+                        any_params = true;
+                        let ty = match p.schema.as_ref() {
+                            Some(SchemaObject::Schema(s)) => s.r#type.clone().unwrap_or_else(|| "string".to_string()),
+                            Some(SchemaObject::Ref(_)) | None => "string".to_string(),
+                        };
+                        let optional = !(p.required.unwrap_or(p.location == "path"));
+                        params_fields.push(ParsedField { name: p.name.clone(), ty, optional });
+                    }
+                }
+                if any_params {
+                    let name = synth_params_name(&path, method);
+                    params_rec_name = Some(name.clone());
+                    recs.push(ParsedRecord { name, fields: params_fields });
+                }
+
+                // request body
                 let mut req_name: Option<String> = None;
                 if let Some(rb) = op.requestBody.as_ref() {
                     if let Some(mt) = rb.content.as_ref().and_then(|m| m.get("application/json")) {
@@ -289,6 +335,7 @@ pub fn parse_operations_with_inline(doc: &str) -> (Vec<ParsedOperation>, Vec<Par
                     }
                 }
 
+                // response body
                 let mut resp_name: Option<String> = None;
                 if let Some(responses) = op.responses.as_ref() {
                     if let Some(ok) = responses.get("200") {
@@ -343,7 +390,7 @@ pub fn parse_operations_with_inline(doc: &str) -> (Vec<ParsedOperation>, Vec<Par
                     }
                 }
 
-                ops.push(ParsedOperation { operation_id, request_record: req_name, response_record: resp_name });
+                ops.push(ParsedOperation { operation_id, params_record: params_rec_name, request_record: req_name, response_record: resp_name });
             }
         }
     }
@@ -351,11 +398,30 @@ pub fn parse_operations_with_inline(doc: &str) -> (Vec<ParsedOperation>, Vec<Par
     (ops, recs)
 }
 
+fn merge_parameters(path_params: Option<&Vec<ParameterObject>>, op_params: Option<&Vec<ParameterObject>>) -> Vec<Parameter> {
+    let mut map: HashMap<(String, String), Parameter> = HashMap::new();
+    let mut insert = |po: &ParameterObject| {
+        if let ParameterObject::Param(p) = po {
+            let key = (p.name.clone(), p.location.clone());
+            map.insert(key, Parameter { name: p.name.clone(), location: p.location.clone(), required: p.required, schema: p.schema.clone() });
+        }
+    };
+    if let Some(v) = path_params { for po in v { insert(po); } }
+    if let Some(v) = op_params { for po in v { insert(po); } }
+    map.into_values().collect()
+}
+
 fn synth_inline_name(path: &str, method: &str, is_request: bool) -> String {
     let s = path.replace(|c: char| !c.is_ascii_alphanumeric(), "-");
     let s = s.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-");
     let kind = if is_request { "request-body" } else { "response-body" };
     format!("{}-{}-{}", s, method.to_lowercase(), kind)
+}
+
+fn synth_params_name(path: &str, method: &str) -> String {
+    let s = path.replace(|c: char| !c.is_ascii_alphanumeric(), "-");
+    let s = s.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-");
+    format!("{}-{}-params", s, method.to_lowercase())
 }
 
 fn first_json_ref_name(content: Option<&HashMap<String, MediaType>>) -> Option<String> {
@@ -439,6 +505,7 @@ components:
         assert_eq!(ops.len(), 1);
         let op = &ops[0];
         assert_eq!(op.operation_id, "CreateTodo");
+        assert_eq!(op.params_record, None);
         assert_eq!(op.request_record.as_deref(), Some("TodoCreate"));
         assert_eq!(op.response_record.as_deref(), Some("Todo"));
     }
@@ -467,6 +534,11 @@ paths:
   /todos/{id}:
     put:
       operationId: UpdateTodo
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
       requestBody:
         content:
           application/json:
@@ -489,9 +561,11 @@ paths:
         assert_eq!(ops.len(), 1);
         let op = &ops[0];
         assert_eq!(op.operation_id, "UpdateTodo");
+        assert_eq!(op.params_record.as_deref(), Some("todos-id-put-params"));
         assert_eq!(op.request_record.as_deref(), Some("todos-id-put-request-body"));
         assert_eq!(op.response_record.as_deref(), Some("todos-id-put-response-body"));
         let names: Vec<_> = recs.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"todos-id-put-params"));
         assert!(names.contains(&"todos-id-put-request-body"));
         assert!(names.contains(&"todos-id-put-response-body"));
     }

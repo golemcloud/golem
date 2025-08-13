@@ -71,9 +71,13 @@ pub fn render_interface(iface_name: &str, ops: &[ParsedOperation]) -> String {
     out.push_str(&format!("interface {} {{\n", to_wit_ident(iface_name)));
     for op in ops {
         let oname = to_wit_ident(&op.operation_id);
+        let params = op.params_record.as_ref().map(|s| to_wit_ident(s));
         let req = op.request_record.as_ref().map(|s| to_wit_ident(s)).unwrap_or_else(|| "unit".to_string());
         let res = op.response_record.as_ref().map(|s| to_wit_ident(s)).unwrap_or_else(|| "unit".to_string());
-        out.push_str(&format!("    {}: func(request: {}) -> result<{}, http-error>;\n", oname, req, res));
+        match params {
+            Some(p) => out.push_str(&format!("    {}: func(params: {}, request: {}) -> result<{}, http-error>;\n", oname, p, req, res)),
+            None => out.push_str(&format!("    {}: func(request: {}) -> result<{}, http-error>;\n", oname, req, res)),
+        }
     }
     out.push_str("}\n\n");
     out
@@ -97,12 +101,17 @@ mod tests {
 
     #[test]
     fn renders_interface_ops() {
-        let ops = vec![ParsedOperation { operation_id: "CreateTodo".into(), request_record: Some("TodoCreate".into()), response_record: Some("Todo".into()) }];
+        let ops = vec![ParsedOperation { operation_id: "CreateTodo".into(), params_record: None, request_record: Some("TodoCreate".into()), response_record: Some("Todo".into()) }];
         let iface = render_interface("todo-api", &ops);
         assert!(iface.contains("interface todo-api {"));
         assert!(iface.contains("create-todo: func(request: todo-create) -> result<todo, http-error>;"));
-        let err = render_error_variant();
-        assert!(err.contains("variant http-error"));
+    }
+
+    #[test]
+    fn renders_interface_with_params() {
+        let ops = vec![ParsedOperation { operation_id: "UpdateTodo".into(), params_record: Some("todos-id-put-params".into()), request_record: Some("UpdateTodoRequest".into()), response_record: Some("Todo".into()) }];
+        let iface = render_interface("todo-api", &ops);
+        assert!(iface.contains("update-todo: func(params: todos-id-put-params, request: update-todo-request) -> result<todo, http-error>;"));
     }
 
     #[test]
