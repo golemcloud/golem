@@ -1,0 +1,64 @@
+mod naming;
+mod render;
+mod parse;
+
+use std::collections::BTreeMap;
+
+pub mod model {
+    #[derive(Debug, Clone)]
+    pub struct WitOutput {
+        pub package: String,
+        pub version: String,
+        pub source_digest: String,
+        pub wit_text: String,
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum GeneratorError {
+    #[error("unsupported feature: {0}")]
+    Unsupported(String),
+    #[error("invalid schema: {0}")]
+    Invalid(String),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// Converts an OpenAPI 3.0.x document (YAML/JSON text) into WIT text and metadata.
+pub fn convert_openapi_to_wit(openapi_text: &str) -> Result<model::WitOutput, GeneratorError> {
+    // Parse header info
+    let (title, version) = parse::parse_title_version(openapi_text)
+        .ok_or_else(|| GeneratorError::Invalid("missing or invalid info section".into()))?;
+    let pkg_name = naming::to_wit_ident(&title);
+
+    // Header
+    let header = render::WitPackage { name: format!("api:{}", pkg_name), version: version.clone() }.render_header();
+
+    // Records from components.schemas
+    let mut body = String::new();
+    let records = parse::parse_component_records(openapi_text);
+    for rec in &records { body.push_str(&render::render_record(rec)); }
+
+    // Enums from components
+    let enums = parse::parse_component_enums(openapi_text);
+    for enm in &enums { body.push_str(&render::render_enum(enm)); }
+
+    // Operations (with inline lifting) -> group by first path segment
+    let (ops, lifted) = parse::parse_operations_with_inline(openapi_text);
+    for rec in &lifted { body.push_str(&render::render_record(rec)); }
+    if !ops.is_empty() {
+        body.push_str(&render::render_error_variant());
+        let mut groups: BTreeMap<String, Vec<parse::ParsedOperation>> = BTreeMap::new();
+        for op in ops { groups.entry(op.group.clone()).or_default().push(op); }
+        for (group, gops) in groups {
+            body.push_str(&render::render_interface(&group, &gops));
+        }
+    }
+
+    Ok(model::WitOutput {
+        package: format!("api:{}", pkg_name),
+        version,
+        source_digest: format!("sha256:{}", blake3::hash(openapi_text.as_bytes())),
+        wit_text: format!("{}{}", header, body),
+    })
+}
