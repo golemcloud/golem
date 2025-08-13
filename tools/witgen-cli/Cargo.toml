@@ -7,4 +7,5 @@ edition = "2021"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 openapi-to-wit = { path = "../openapi-to-wit" }
-protobuf-to-wit = { path = "../protobuf-to-wit" } 
+protobuf-to-wit = { path = "../protobuf-to-wit" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] } 
