@@ -16,7 +16,10 @@ use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
 use crate::model::base64::Base64;
 use crate::model::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
-use bincode::{Decode, Encode};
+use bincode::de::BorrowDecoder;
+use bincode::enc::Encoder;
+use bincode::error::{DecodeError, EncodeError};
+use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedInstance};
 use golem_wasm_ast::core::Mem;
@@ -27,16 +30,274 @@ use golem_wasm_ast::{
     IgnoreAllButMetadata,
 };
 use heck::ToKebabCase;
+use poem_openapi::registry::MetaSchemaRef;
+use poem_openapi::types::ParseResult;
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Default)]
 pub struct ComponentMetadata {
+    data: Arc<ComponentMetadataInnerData>,
+    cache: Arc<Mutex<ComponentMetadataInnerCache>>,
+}
+
+impl ComponentMetadata {
+    pub fn analyse_component(
+        data: &[u8],
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        agent_types: Vec<AgentType>,
+    ) -> Result<Self, ComponentProcessingError> {
+        let raw = RawComponentMetadata::analyse_component(data)?;
+        Ok(Self {
+            data: Arc::new(raw.into_metadata(dynamic_linking, agent_types)),
+            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+        })
+    }
+
+    pub fn from_parts(
+        exports: Vec<AnalysedExport>,
+        memories: Vec<LinearMemory>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        root_package_name: Option<String>,
+        root_package_version: Option<String>,
+    ) -> Self {
+        Self {
+            data: Arc::new(ComponentMetadataInnerData {
+                exports,
+                producers: vec![],
+                memories,
+                binary_wit: Base64(vec![]),
+                root_package_name,
+                root_package_version,
+                dynamic_linking,
+                agent_types: vec![],
+            }),
+            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+        }
+    }
+
+    pub fn exports(&self) -> &[AnalysedExport] {
+        &self.data.exports
+    }
+    pub fn producers(&self) -> &[Producers] {
+        &self.data.producers
+    }
+    pub fn memories(&self) -> &[LinearMemory] {
+        &self.data.memories
+    }
+    pub fn binary_wit(&self) -> &Base64 {
+        &self.data.binary_wit
+    }
+    pub fn root_package_name(&self) -> &Option<String> {
+        &self.data.root_package_name
+    }
+    pub fn root_package_version(&self) -> &Option<String> {
+        &self.data.root_package_version
+    }
+    pub fn dynamic_linking(&self) -> &HashMap<String, DynamicLinkedInstance> {
+        &self.data.dynamic_linking
+    }
+    pub fn agent_types(&self) -> &[AgentType] {
+        &self.data.agent_types
+    }
+
+    pub async fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().await.load_snapshot(&self.data)
+    }
+
+    pub async fn save_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().await.save_snapshot(&self.data)
+    }
+
+    pub async fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().await.find_function(&self.data, name)
+    }
+
+    pub async fn find_parsed_function(
+        &self,
+        parsed: &ParsedFunctionName,
+    ) -> Result<Option<InvokableFunction>, String> {
+        self.cache
+            .lock()
+            .await
+            .find_parsed_function(&self.data, parsed)
+    }
+}
+
+impl Debug for ComponentMetadata {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ComponentMetadata")
+            .field("exports", &self.data.exports)
+            .field("producers", &self.data.producers)
+            .field("memories", &self.data.memories)
+            .field("binary_wit_len", &self.data.binary_wit.len())
+            .field("root_package_name", &self.data.root_package_name)
+            .field("root_package_version", &self.data.root_package_version)
+            .field("dynamic_linking", &self.data.dynamic_linking)
+            .field("agent_types", &self.data.agent_types)
+            .finish()
+    }
+}
+
+impl PartialEq for ComponentMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data
+    }
+}
+
+impl Eq for ComponentMetadata {}
+
+impl Serialize for ComponentMetadata {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.data.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ComponentMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let data = ComponentMetadataInnerData::deserialize(deserializer)?;
+        Ok(Self {
+            data: Arc::new(data),
+            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+        })
+    }
+}
+
+impl Encode for ComponentMetadata {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        self.data.encode(encoder)
+    }
+}
+
+impl<Context> Decode<Context> for ComponentMetadata {
+    fn decode<D: bincode::de::Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let data = ComponentMetadataInnerData::decode(decoder)?;
+        Ok(Self {
+            data: Arc::new(data),
+            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+        })
+    }
+}
+
+impl<'de, Context> BorrowDecode<'de, Context> for ComponentMetadata {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
+        let data = ComponentMetadataInnerData::borrow_decode(decoder)?;
+        Ok(Self {
+            data: Arc::new(data),
+            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+        })
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::Type for ComponentMetadata {
+    const IS_REQUIRED: bool =
+        <ComponentMetadataInnerData as poem_openapi::types::Type>::IS_REQUIRED;
+    type RawValueType = <ComponentMetadataInnerData as poem_openapi::types::Type>::RawValueType;
+    type RawElementValueType =
+        <ComponentMetadataInnerData as poem_openapi::types::Type>::RawElementValueType;
+
+    fn name() -> Cow<'static, str> {
+        <ComponentMetadataInnerData as poem_openapi::types::Type>::name()
+    }
+
+    fn schema_ref() -> MetaSchemaRef {
+        <ComponentMetadataInnerData as poem_openapi::types::Type>::schema_ref()
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        <ComponentMetadataInnerData as poem_openapi::types::Type>::as_raw_value(&self.data)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        <ComponentMetadataInnerData as poem_openapi::types::Type>::raw_element_iter(&self.data)
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::IsObjectType for ComponentMetadata {}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromJSON for ComponentMetadata {
+    fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
+        let data =
+            ComponentMetadataInnerData::parse_from_json(value).map_err(|err| err.propagate())?;
+        Ok(Self {
+            data: Arc::new(data),
+            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+        })
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ToJSON for ComponentMetadata {
+    fn to_json(&self) -> Option<Value> {
+        self.data.to_json()
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromXML for ComponentMetadata {
+    fn parse_from_xml(value: Option<Value>) -> ParseResult<Self> {
+        let data =
+            ComponentMetadataInnerData::parse_from_xml(value).map_err(|err| err.propagate())?;
+        Ok(Self {
+            data: Arc::new(data),
+            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+        })
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ToXML for ComponentMetadata {
+    fn to_xml(&self) -> Option<Value> {
+        self.data.to_xml()
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
+    fn parse_from_yaml(value: Option<Value>) -> ParseResult<Self> {
+        let data =
+            ComponentMetadataInnerData::parse_from_yaml(value).map_err(|err| err.propagate())?;
+        Ok(Self {
+            data: Arc::new(data),
+            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+        })
+    }
+}
+
+#[cfg(feature = "poem")]
+impl poem_openapi::types::ToYAML for ComponentMetadata {
+    fn to_yaml(&self) -> Option<Value> {
+        self.data.to_yaml()
+    }
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(
+    feature = "poem",
+    oai(rename = "ComponentMetadata", rename_all = "camelCase")
+)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentMetadataInnerData {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
@@ -52,16 +313,7 @@ pub struct ComponentMetadata {
     pub agent_types: Vec<AgentType>,
 }
 
-impl ComponentMetadata {
-    pub fn analyse_component(
-        data: &[u8],
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        agent_types: Vec<AgentType>,
-    ) -> Result<ComponentMetadata, ComponentProcessingError> {
-        let raw = RawComponentMetadata::analyse_component(data)?;
-        Ok(raw.into_metadata(dynamic_linking, agent_types))
-    }
-
+impl ComponentMetadataInnerData {
     pub fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
         self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
             ParsedFunctionSite::PackagedInterface {
@@ -262,18 +514,69 @@ impl ComponentMetadata {
     }
 }
 
-impl Debug for ComponentMetadata {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ComponentMetadata")
-            .field("exports", &self.exports)
-            .field("producers", &self.producers)
-            .field("memories", &self.memories)
-            .field("binary_wit_len", &self.binary_wit.len())
-            .field("root_package_name", &self.root_package_name)
-            .field("root_package_version", &self.root_package_version)
-            .field("dynamic_linking", &self.dynamic_linking)
-            .field("agent_types", &self.agent_types)
-            .finish()
+#[derive(Default)]
+struct ComponentMetadataInnerCache {
+    load_snapshot: Option<Result<Option<InvokableFunction>, String>>,
+    save_snapshot: Option<Result<Option<InvokableFunction>, String>>,
+    functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
+    functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
+}
+
+impl ComponentMetadataInnerCache {
+    pub fn load_snapshot(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(snapshot) = &self.load_snapshot {
+            snapshot.clone()
+        } else {
+            let result = data.load_snapshot();
+            self.load_snapshot = Some(result.clone());
+            result
+        }
+    }
+
+    pub fn save_snapshot(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(snapshot) = &self.save_snapshot {
+            snapshot.clone()
+        } else {
+            let result = data.save_snapshot();
+            self.save_snapshot = Some(result.clone());
+            result
+        }
+    }
+
+    pub fn find_function(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+        name: &str,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(cached) = self.functions_unparsed.get(name) {
+            cached.clone()
+        } else {
+            let parsed = ParsedFunctionName::parse(name)?;
+            let result = data.find_parsed_function(&parsed);
+            self.functions_unparsed
+                .insert(name.to_string(), result.clone());
+            result
+        }
+    }
+
+    pub fn find_parsed_function(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+        parsed: &ParsedFunctionName,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(cached) = self.functions_parsed.get(parsed) {
+            cached.clone()
+        } else {
+            let result = data.find_parsed_function(parsed);
+            self.functions_parsed.insert(parsed.clone(), result.clone());
+            result
+        }
     }
 }
 
@@ -470,7 +773,7 @@ impl RawComponentMetadata {
         self,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         agent_types: Vec<AgentType>,
-    ) -> ComponentMetadata {
+    ) -> ComponentMetadataInnerData {
         let producers = self
             .producers
             .into_iter()
@@ -481,7 +784,7 @@ impl RawComponentMetadata {
 
         let memories = self.memories.into_iter().map(LinearMemory::from).collect();
 
-        ComponentMetadata {
+        ComponentMetadataInnerData {
             exports,
             producers,
             memories,
@@ -637,10 +940,13 @@ fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
 mod protobuf {
     use crate::model::base64::Base64;
     use crate::model::component_metadata::{
-        ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc, LinearMemory,
-        ProducerField, Producers, VersionedName, WasmRpcTarget,
+        ComponentMetadata, ComponentMetadataInnerCache, ComponentMetadataInnerData,
+        DynamicLinkedInstance, DynamicLinkedWasmRpc, LinearMemory, ProducerField, Producers,
+        VersionedName, WasmRpcTarget,
     };
     use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     impl From<golem_api_grpc::proto::golem::component::VersionedName> for VersionedName {
         fn from(value: golem_api_grpc::proto::golem::component::VersionedName) -> Self {
@@ -718,6 +1024,22 @@ mod protobuf {
         fn try_from(
             value: golem_api_grpc::proto::golem::component::ComponentMetadata,
         ) -> Result<Self, Self::Error> {
+            let inner_data = ComponentMetadataInnerData::try_from(value)?;
+            Ok(Self {
+                data: Arc::new(inner_data),
+                cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            })
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata>
+        for ComponentMetadataInnerData
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::ComponentMetadata,
+        ) -> Result<Self, Self::Error> {
             Ok(Self {
                 exports: value
                     .exports
@@ -753,6 +1075,14 @@ mod protobuf {
 
     impl From<ComponentMetadata> for golem_api_grpc::proto::golem::component::ComponentMetadata {
         fn from(value: ComponentMetadata) -> Self {
+            value.data.as_ref().clone().into()
+        }
+    }
+
+    impl From<ComponentMetadataInnerData>
+        for golem_api_grpc::proto::golem::component::ComponentMetadata
+    {
+        fn from(value: ComponentMetadataInnerData) -> Self {
             Self {
                 exports: value
                     .exports

@@ -302,7 +302,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 )
                 .await?
                 .metadata;
-            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name)
+            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name).await
                 .map_err(|e| anyhow!("Failed to get target constructor metadata: {e}"))?
                 .ok_or_else(|| anyhow!("Target constructor {target_constructor_name} not found in component metadata"))?;
 
@@ -416,7 +416,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 )
                 .await?
                 .metadata;
-            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name)
+            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name).await
                 .map_err(|e| anyhow!("Failed to get target constructor metadata: {e}"))?
                 .ok_or_else(|| anyhow!("Target constructor {target_constructor_name} not found in component metadata"))?;
 
@@ -527,6 +527,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
+                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(
@@ -581,6 +582,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
+                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(
@@ -632,6 +634,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
+                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(
@@ -694,6 +697,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
+                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(

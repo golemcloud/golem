@@ -121,7 +121,7 @@ impl PluginService {
 
         let implements_oplog_processor_interface = component
             .metadata
-            .exports
+            .exports()
             .iter()
             .any(is_valid_oplog_processor_implementation);
 

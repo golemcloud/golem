@@ -1164,7 +1164,7 @@ async fn try_get_typed_parameters(
         .get_metadata(project_id, component_id, None)
         .await
     {
-        if let Ok(Some(function)) = component.metadata.find_function(function_name) {
+        if let Ok(Some(function)) = component.metadata.find_function(function_name).await {
             if function.analysed_export.parameters.len() == params.len() {
                 return params
                     .iter()

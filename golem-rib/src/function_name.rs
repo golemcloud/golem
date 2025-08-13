@@ -344,7 +344,7 @@ impl DynamicParsedFunctionReference {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Encode, Decode)]
 pub enum ParsedFunctionReference {
     Function {
         function: String,
@@ -628,7 +628,7 @@ impl Display for DynamicParsedFunctionName {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Encode, Decode)]
 pub struct ParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: ParsedFunctionReference,

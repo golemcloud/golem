@@ -79,11 +79,12 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
         component_id: component_id.0,
-        root_package_name: metadata.root_package_name,
-        root_package_version: metadata.root_package_version,
+        root_package_name: metadata.root_package_name().clone(),
+        root_package_version: metadata.root_package_version().clone(),
     };
 
-    let component_dependency = ComponentDependency::new(component_dependency_key, metadata.exports);
+    let component_dependency =
+        ComponentDependency::new(component_dependency_key, metadata.exports().to_vec());
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 
@@ -166,11 +167,12 @@ async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
         component_id: component_id.0,
-        root_package_name: metadata.root_package_name,
-        root_package_version: metadata.root_package_version,
+        root_package_name: metadata.root_package_name().clone(),
+        root_package_version: metadata.root_package_version().clone(),
     };
 
-    let component_dependency = ComponentDependency::new(component_dependency_key, metadata.exports);
+    let component_dependency =
+        ComponentDependency::new(component_dependency_key, metadata.exports().to_vec());
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 
@@ -272,11 +274,12 @@ async fn test_rib_with_resource_methods(
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
         component_id: component_id.0,
-        root_package_name: metadata.root_package_name,
-        root_package_version: metadata.root_package_version,
+        root_package_name: metadata.root_package_name().clone(),
+        root_package_version: metadata.root_package_version().clone(),
     };
 
-    let component_dependency = ComponentDependency::new(component_dependency_key, metadata.exports);
+    let component_dependency =
+        ComponentDependency::new(component_dependency_key, metadata.exports().to_vec());
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 

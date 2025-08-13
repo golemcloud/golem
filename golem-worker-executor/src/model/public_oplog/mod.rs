@@ -354,7 +354,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let function = metadata.metadata.find_function(&function_name)?.ok_or(
+                let function = metadata.metadata.find_function(&function_name).await?.ok_or(
                     format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                 )?;
 
@@ -476,7 +476,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                             .await
                             .map_err(|err| err.to_string())?;
 
-                        let function = metadata.metadata.find_function(&full_function_name)?;
+                        let function = metadata.metadata.find_function(&full_function_name).await?;
 
                         // It is not guaranteed that we can resolve the enqueued invocation's parameter types because
                         // we only know the current component version. If the client enqueued an update earlier and assumes
@@ -638,7 +638,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let resource_name = resource_type_id.name.clone();
                 let resource_owner = resource_type_id.owner.clone();
                 let resource_constructor_name = ParsedFunctionName::new(
-                    find_resource_site(&metadata.metadata.exports, &resource_name).ok_or(
+                    find_resource_site(metadata.metadata.exports(), &resource_name).ok_or(
                         format!(
                             "Resource site for resource {} not found in component {} version {}",
                             resource_name,
@@ -650,7 +650,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         resource: resource_name.clone(),
                     },
                 );
-                let constructor_def = metadata.metadata.find_function(&resource_constructor_name.to_string())?.ok_or(
+                let constructor_def = metadata.metadata.find_function(&resource_constructor_name.to_string()).await?.ok_or(
                         format!("Resource constructor {resource_constructor_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                     )?;
 

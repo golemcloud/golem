@@ -241,6 +241,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     let metadata = component_metadata
         .find_parsed_function(&parsed)
+        .await
         .map_err(WorkerExecutorError::runtime)?
         .ok_or_else(|| {
             WorkerExecutorError::invalid_request(format!(
@@ -453,6 +454,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
 
             let constructor_metadata = component_metadata
                 .find_parsed_function(&resource_constructor_name)
+                .await
                 .map_err(WorkerExecutorError::runtime)?
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(format!(

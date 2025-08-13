@@ -1320,7 +1320,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         component_size: component.component_size,
                         total_linear_memory_size: component
                             .metadata
-                            .memories
+                            .memories()
                             .iter()
                             .map(|m| m.initial)
                             .sum(),

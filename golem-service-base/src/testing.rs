@@ -18,7 +18,6 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{Component, ComponentName};
-use golem_common::model::base64::Base64;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
@@ -62,16 +61,13 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             },
             component_name: ComponentName(value.component_name),
             component_size: value.size,
-            metadata: ComponentMetadata {
-                exports: value.exports,
-                producers: vec![],
-                memories: value.memories,
-                binary_wit: Base64(vec![]),
-                root_package_name: None,
-                root_package_version: None,
-                dynamic_linking: value.dynamic_linking,
-                agent_types: vec![],
-            },
+            metadata: ComponentMetadata::from_parts(
+                value.exports,
+                value.memories,
+                value.dynamic_linking,
+                None,
+                None,
+            ),
             created_at: Default::default(),
             component_type: value.component_type,
             files: value.files,
