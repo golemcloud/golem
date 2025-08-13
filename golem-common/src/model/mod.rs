@@ -2036,7 +2036,7 @@ mod tests {
             WorkerFilter::new_version(FilterComparator::GreaterEqual, ComponentRevision(1))
                 .and(WorkerFilter::new_version(
                     FilterComparator::Less,
-                    ComponentRevision(1)
+                    ComponentRevision(2)
                 ))
                 .or(WorkerFilter::new_name(
                     StringFilterComparator::Equal,
