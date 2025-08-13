@@ -8,16 +8,16 @@ class CounterResource implements World.api.Counter {
         this.value = BigInt(0)
     }
 
-    async incBy(value: bigint): Promise<void> {
+    incBy(value: bigint) {
         this.value += value
     }
-    async getValue(): Promise<bigint> {
+    getValue(): bigint {
         return this.value
     }
-    async getArgs(): Promise<string[]> {
+    getArgs(): string[] {
         return getArguments()
     }
-    async getEnv(): Promise<[string, string][]> {
+    getEnv(): [string, string][] {
         return getEnvironment()
     }
 
@@ -28,10 +28,10 @@ let globalValue: bigint = BigInt(0)
 
 const api: typeof World.api = {
     Counter: CounterResource,
-    async incGlobalBy(value: bigint) {
+    incGlobalBy(value: bigint) {
         globalValue += value
     },
-    async getGlobalValue() {
+    getGlobalValue() {
         return globalValue
     },
 }

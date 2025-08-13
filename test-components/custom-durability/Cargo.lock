@@ -355,7 +355,7 @@ dependencies = [
 [[package]]
 name = "golem-wasm-rpc"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem?branch=type-names#6682aca89656b91f3e538729332b399f87249d26"
+source = "git+https://github.com/golemcloud/golem?branch=resource-improvements#b65adf9d20167fd33c71503e015a0b478a1234cb"
 dependencies = [
  "cargo_metadata",
  "chrono",

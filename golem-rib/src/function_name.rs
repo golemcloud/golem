@@ -744,6 +744,13 @@ impl ParsedFunctionName {
             _ => None,
         }
     }
+
+    pub fn with_site(&self, site: ParsedFunctionSite) -> Self {
+        Self {
+            site,
+            function: self.function.clone(),
+        }
+    }
 }
 
 #[cfg(feature = "protobuf")]

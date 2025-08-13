@@ -120,7 +120,7 @@ impl ComponentMetadata {
     /// Finds a function ignoring the function site's version. Returns None if it was not found.
     fn find_parsed_function_ignoring_version(
         &self,
-        parsed: &ParsedFunctionName,
+        name: &ParsedFunctionName,
     ) -> Result<Option<InvokableFunction>, String> {
         Ok(self
             .exports
@@ -128,8 +128,9 @@ impl ComponentMetadata {
             .find_map(|export| {
                 if let AnalysedExport::Instance(instance) = export {
                     if let Ok(site) = ParsedFunctionSite::parse(&instance.name) {
-                        if &site.unversioned() == parsed.site() {
-                            Self::find_function_in_instance(parsed, instance)
+                        if &site.unversioned() == name.site() {
+                            Self::find_function_in_instance(name, instance)
+                                .map(|func| (func, name.with_site(site)))
                         } else {
                             None
                         }
@@ -140,16 +141,16 @@ impl ComponentMetadata {
                     None
                 }
             })
-            .map(|analysed_export| {
-                self.find_agent_method_or_constructor(parsed)
+            .map(|(analysed_export, name)| {
+                self.find_agent_method_or_constructor(&name)
                     .map(|agent_method_or_constructor| {
-                        (analysed_export, agent_method_or_constructor)
+                        (analysed_export, name, agent_method_or_constructor)
                     })
             })
             .transpose()?
             .map(
-                |(analysed_export, agent_method_or_constructor)| InvokableFunction {
-                    name: parsed.clone(),
+                |(analysed_export, name, agent_method_or_constructor)| InvokableFunction {
+                    name,
                     analysed_export,
                     agent_method_or_constructor,
                 },

@@ -16,13 +16,18 @@ use crate::durable_host::wasm_rpc::{create_rpc_connection_span, WasmRpcEntryPayl
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
-use golem_common::model::component_metadata::DynamicLinkedWasmRpc;
+use golem_common::model::component_metadata::{DynamicLinkedWasmRpc, InvokableFunction};
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, TargetWorkerId, WorkerId};
-use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
+use golem_wasm_ast::analysis::analysed_type::str;
+use golem_wasm_ast::analysis::{
+    AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
+};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, ResourceStore, ResourceTypeId};
-use golem_wasm_rpc::{CancellationTokenEntry, HostWasmRpc, Uri, Value, WasmRpcEntry, WitValue};
+use golem_wasm_rpc::{
+    CancellationTokenEntry, HostWasmRpc, IntoValue, Uri, Value, WasmRpcEntry, WitValue,
+};
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use std::collections::HashMap;
@@ -313,6 +318,19 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             )?;
             let temp_handle = handle.rep();
 
+            let mut analysed_param_types = constructor
+                .analysed_export
+                .parameters
+                .iter()
+                .map(|p| &p.typ)
+                .collect::<Vec<_>>();
+            match component_type {
+                ComponentType::Durable => {
+                    analysed_param_types.insert(0, &str());
+                }
+                ComponentType::Ephemeral => {}
+            }
+
             let constructor_result = remote_invoke_and_await(
                 target_constructor_name,
                 params,
@@ -414,16 +432,29 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             )?;
             let temp_handle = handle.rep();
 
+            let mut analysed_param_types = constructor
+                .analysed_export
+                .parameters
+                .iter()
+                .map(|p| &p.typ)
+                .collect::<Vec<_>>();
+
+            let worker_id_type = WorkerId::get_type();
+            let component_id_type = ComponentId::get_type();
+            match component_type {
+                ComponentType::Durable => {
+                    analysed_param_types.insert(0, &worker_id_type);
+                }
+                ComponentType::Ephemeral => {
+                    analysed_param_types.insert(0, &component_id_type);
+                }
+            }
+
             let constructor_result = remote_invoke_and_await(
                 target_constructor_name,
                 params,
                 param_types,
-                &constructor
-                    .analysed_export
-                    .parameters
-                    .iter()
-                    .map(|p| &p.typ)
-                    .collect::<Vec<_>>(),
+                &analysed_param_types,
                 &mut store,
                 handle,
             )
@@ -503,16 +534,14 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                     )
                 })?;
 
+            let analysed_param_types =
+                get_analysed_param_types_on_rpc_resource(&target_function_metadata);
+
             let result = remote_invoke_and_await(
                 target_function_name,
                 params,
                 param_types,
-                &target_function_metadata
-                    .analysed_export
-                    .parameters
-                    .iter()
-                    .map(|p| &p.typ)
-                    .collect::<Vec<_>>(),
+                &analysed_param_types,
                 &mut store,
                 handle,
             )
@@ -559,16 +588,14 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                     )
                 })?;
 
+            let analysed_param_types =
+                get_analysed_param_types_on_rpc_resource(&target_function_metadata);
+
             remote_invoke(
                 target_function_name,
                 params,
                 param_types,
-                &target_function_metadata
-                    .analysed_export
-                    .parameters
-                    .iter()
-                    .map(|p| &p.typ)
-                    .collect::<Vec<_>>(),
+                &analysed_param_types,
                 &mut store,
                 handle,
             )
@@ -611,19 +638,8 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                         "Target function {target_function_name} not found in component metadata"
                     )
                 })?;
-            let mut analysed_param_types = target_function_metadata
-                .analysed_export
-                .parameters
-                .iter()
-                .map(|p| &p.typ)
-                .collect::<Vec<_>>();
-
-            analysed_param_types.insert(0, &AnalysedType::Handle(TypeHandle {
-                name: None,
-                owner: None,
-                resource_id: AnalysedResourceId(u64::MAX), // TODO
-                mode: AnalysedResourceMode::Borrowed
-            }));
+            let analysed_param_types =
+                get_analysed_param_types_on_rpc_resource(&target_function_metadata);
 
             // function should have at least one parameter for the scheduled_for datetime.
             if !(!params.is_empty() && !param_types.is_empty()) {
@@ -685,16 +701,14 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                     )
                 })?;
 
+            let analysed_param_types =
+                get_analysed_param_types_on_rpc_resource(&target_function_metadata);
+
             let result = remote_async_invoke_and_await(
                 target_function_name,
                 params,
                 param_types,
-                &target_function_metadata
-                    .analysed_export
-                    .parameters
-                    .iter()
-                    .map(|p| &p.typ)
-                    .collect::<Vec<_>>(),
+                &analysed_param_types,
                 &mut store,
                 handle,
             )
@@ -766,6 +780,29 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
     }
 
     Ok(())
+}
+
+fn get_analysed_param_types_on_rpc_resource(
+    target_function_metadata: &InvokableFunction,
+) -> Vec<&AnalysedType> {
+    let mut analysed_param_types = target_function_metadata
+        .analysed_export
+        .parameters
+        .iter()
+        .map(|p| &p.typ)
+        .collect::<Vec<_>>();
+
+    analysed_param_types.insert(
+        0,
+        &AnalysedType::Handle(TypeHandle {
+            name: None,
+            owner: None,
+            resource_id: AnalysedResourceId(u64::MAX), // NOTE: this is a fake value but currently it does not cause any issues
+            mode: AnalysedResourceMode::Borrowed,
+        }),
+    );
+
+    analysed_param_types
 }
 
 fn unwrap_constructor_result(constructor_result: Value) -> anyhow::Result<(Uri, u64)> {

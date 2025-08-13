@@ -451,10 +451,10 @@ impl AnalysedType {
             AnalysedType::Variant(typ) => typ
                 .cases
                 .iter()
-                .any(|case| case.typ.as_ref().map_or(false, |t| t.contains_handle())),
+                .any(|case| case.typ.as_ref().is_some_and(|t| t.contains_handle())),
             AnalysedType::Result(typ) => {
-                typ.ok.as_ref().map_or(false, |t| t.contains_handle())
-                    || typ.err.as_ref().map_or(false, |t| t.contains_handle())
+                typ.ok.as_ref().is_some_and(|t| t.contains_handle())
+                    || typ.err.as_ref().is_some_and(|t| t.contains_handle())
             }
             AnalysedType::Option(typ) => typ.inner.contains_handle(),
             AnalysedType::Record(typ) => typ.fields.iter().any(|f| f.typ.contains_handle()),

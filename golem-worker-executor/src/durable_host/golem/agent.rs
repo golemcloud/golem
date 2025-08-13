@@ -58,7 +58,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         // TODO: log
 
         // For now, we index agents by their ID and not their constructor parameters
-        self.drop_indexed_resource("golem:agent/guest", "agent", &vec![id]);
+        self.drop_indexed_resource("golem:agent/guest", "agent", &[id]);
 
         // TODO: need to drop from ResourceStore with `add`
 

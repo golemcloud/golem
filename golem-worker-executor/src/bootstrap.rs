@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{golem, DurableWorkerCtx};
+use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::{golem_agent, golem_api_1_x, golem_durability};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;

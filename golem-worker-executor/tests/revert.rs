@@ -198,7 +198,7 @@ async fn revert_auto_update(
     let _ = executor.log_output(&worker_id).await;
 
     let target_version = executor
-        .update_component(&component_id, "update-test-v2")
+        .update_component(&component_id, "update-test-v2-11")
         .await;
     info!("Updated component to version {target_version}");
 
@@ -255,14 +255,18 @@ async fn revert_manual_update(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component_id = executor.component("update-test-v2").unique().store().await;
+    let component_id = executor
+        .component("update-test-v2-11")
+        .unique()
+        .store()
+        .await;
     let worker_id = executor
         .start_worker_with(&component_id, "revert_manual_update", vec![], env, vec![])
         .await;
     let _ = executor.log_output(&worker_id).await;
 
     let target_version = executor
-        .update_component(&component_id, "update-test-v3")
+        .update_component(&component_id, "update-test-v3-11")
         .await;
     info!("Updated component to version {target_version}");
 

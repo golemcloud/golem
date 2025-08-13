@@ -49,7 +49,6 @@ use golem_worker_executor::workerctx::{
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
     StatusManagement, UpdateManagement, WorkerCtx,
 };
-use rib::ParsedFunctionSite;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use tracing::debug;
