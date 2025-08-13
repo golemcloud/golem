@@ -20,7 +20,7 @@ members = [
     "integration-tests",
     "wasm-ast",
     "wasm-rpc",
-    "wasm-rpc-derive",
+    "wasm-rpc-derive", "tools/protobuf-to-wit",
 ]
 
 exclude = [
