@@ -34,9 +34,13 @@ pub fn convert_openapi_to_wit(openapi_text: &str) -> Result<model::WitOutput, Ge
 
     // Records from components.schemas
     let records = parse::parse_component_records(openapi_text);
+    let enums = parse::parse_component_enums(openapi_text);
     let mut body = String::new();
     for rec in &records {
         body.push_str(&render::render_record(rec));
+    }
+    for enm in &enums {
+        body.push_str(&render::render_enum(enm));
     }
 
     // Operations -> single interface named from title

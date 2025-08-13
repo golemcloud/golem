@@ -43,6 +43,10 @@ struct Schema {
     properties: Option<HashMap<String, SchemaObject>>, // nested
     #[serde(default)]
     required: Option<Vec<String>>,
+    #[serde(default, rename = "enum")]
+    r#enum: Option<Vec<String>>, // enum cases for string enums
+    #[serde(default)]
+    items: Option<Box<SchemaObject>>, // for arrays
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,7 +107,7 @@ pub struct ParsedRecord {
 #[derive(Debug, Clone)]
 pub struct ParsedField {
     pub name: String,
-    pub ty: String,     // logical type like "string", "boolean", "integer"
+    pub ty: String,     // logical: string|boolean|integer|number|ref:Name|list:<inner>
     pub optional: bool, // true if not in required
 }
 
@@ -127,10 +131,32 @@ pub fn parse_component_records(doc: &str) -> Vec<ParsedRecord> {
                     .collect();
                 let mut fields = Vec::new();
                 for (fname, fobj) in props.iter() {
-                    // Only handle direct schema types for now; refs and nested objects can be extended later
-                    let (fty, _fmt) = match fobj {
-                        SchemaObject::Schema(s) => (s.r#type.clone().unwrap_or_else(|| "string".to_string()), s.format.clone()),
-                        SchemaObject::Ref(_) => ("string".to_string(), None),
+                    let (fty) = match fobj {
+                        SchemaObject::Schema(s) => match s.r#type.as_deref() {
+                            Some("array") => {
+                                // Determine inner type
+                                if let Some(items) = &s.items {
+                                    match items.as_ref() {
+                                        SchemaObject::Schema(is) => {
+                                            let inner = is.r#type.clone().unwrap_or_else(|| "string".to_string());
+                                            format!("list:{}", inner)
+                                        }
+                                        SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
+                                            Some(name) => format!("list:ref:{}", name),
+                                            None => "list:string".to_string(),
+                                        }
+                                    }
+                                } else {
+                                    "list:string".to_string()
+                                }
+                            }
+                            Some(t) => t.to_string(),
+                            None => "string".to_string(),
+                        },
+                        SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
+                            Some(name) => format!("ref:{}", name),
+                            None => "string".to_string(),
+                        },
                     };
                     let optional = !required_set.contains(fname);
                     fields.push(ParsedField { name: fname.clone(), ty: fty, optional });
@@ -140,6 +166,32 @@ pub fn parse_component_records(doc: &str) -> Vec<ParsedRecord> {
         }
     }
 
+    out
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedEnum {
+    pub name: String,
+    pub cases: Vec<String>,
+}
+
+pub fn parse_component_enums(doc: &str) -> Vec<ParsedEnum> {
+    let parsed: OpenApiDoc = match serde_yaml::from_str(doc) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    let mut out = Vec::new();
+    let components = match parsed.components { Some(c) => c, None => return out };
+    let schemas = match components.schemas { Some(s) => s, None => return out };
+    for (name, obj) in schemas.into_iter() {
+        if let SchemaObject::Schema(schema) = obj {
+            if schema.properties.is_none() {
+                if let Some(cases) = schema.r#enum.clone() {
+                    out.push(ParsedEnum { name, cases });
+                }
+            }
+        }
+    }
     out
 }
 
@@ -195,7 +247,7 @@ fn ref_tail(s: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_component_records, parse_operations, parse_title_version};
+    use super::{parse_component_enums, parse_component_records, parse_operations, parse_title_version};
 
     #[test]
     fn parses_title_version() {
@@ -256,5 +308,21 @@ components:
         assert_eq!(op.operation_id, "CreateTodo");
         assert_eq!(op.request_record.as_deref(), Some("TodoCreate"));
         assert_eq!(op.response_record.as_deref(), Some("Todo"));
+    }
+
+    #[test]
+    fn parses_component_enums() {
+        let doc = r#"openapi: 3.0.3
+info: { title: X, version: '1.0.0' }
+components:
+  schemas:
+    Status:
+      type: string
+      enum: [open, closed]
+"#;
+        let enums = parse_component_enums(doc);
+        assert_eq!(enums.len(), 1);
+        assert_eq!(enums[0].name, "Status");
+        assert_eq!(enums[0].cases, vec!["open", "closed"]);
     }
 } 

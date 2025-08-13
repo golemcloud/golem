@@ -1,5 +1,5 @@
 use crate::naming::to_wit_ident;
-use crate::parse::{ParsedField, ParsedOperation, ParsedRecord};
+use crate::parse::{ParsedEnum, ParsedField, ParsedOperation, ParsedRecord};
 
 pub struct WitPackage {
     pub name: String,   // e.g., "api:todos"
@@ -38,8 +38,20 @@ fn render_field_name(f: &ParsedField) -> String {
 }
 
 fn render_field_type(f: &ParsedField) -> String {
-    let base = map_openapi_type(&f.ty);
-    if f.optional { format!("option<{}>", base) } else { base.to_string() }
+    let base = match f.ty.as_str() {
+        s if s.starts_with("list:") => {
+            let inner = &s[5..];
+            let inner_ty = if inner.starts_with("ref:") {
+                to_wit_ident(&inner[4..])
+            } else {
+                map_openapi_type(inner).to_string()
+            };
+            format!("list<{}>", inner_ty)
+        }
+        s if s.starts_with("ref:") => to_wit_ident(&s[4..]),
+        other => map_openapi_type(other).to_string(),
+    };
+    if f.optional { format!("option<{}>", base) } else { base }
 }
 
 pub fn render_error_variant() -> String {
@@ -67,9 +79,20 @@ pub fn render_interface(iface_name: &str, ops: &[ParsedOperation]) -> String {
     out
 }
 
+pub fn render_enum(enm: &ParsedEnum) -> String {
+    let name = to_wit_ident(&enm.name);
+    let mut out = String::new();
+    out.push_str(&format!("variant {} {{\n", name));
+    for c in &enm.cases {
+        out.push_str(&format!("    {},\n", to_wit_ident(c)));
+    }
+    out.push_str("}\n\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{render_error_variant, render_interface};
+    use super::*;
     use crate::parse::ParsedOperation;
 
     #[test]
@@ -80,5 +103,30 @@ mod tests {
         assert!(iface.contains("create-todo: func(request: todo-create) -> result<todo, http-error>;"));
         let err = render_error_variant();
         assert!(err.contains("variant http-error"));
+    }
+
+    #[test]
+    fn renders_field_list_and_ref() {
+        let rec = ParsedRecord {
+            name: "Wrapper".into(),
+            fields: vec![
+                ParsedField { name: "items".into(), ty: "list:integer".into(), optional: false },
+                ParsedField { name: "child".into(), ty: "ref:Todo".into(), optional: true },
+                ParsedField { name: "manyChildren".into(), ty: "list:ref:Todo".into(), optional: false },
+            ],
+        };
+        let out = render_record(&rec);
+        assert!(out.contains("items: list<s32>,"));
+        assert!(out.contains("child: option<todo>,"));
+        assert!(out.contains("many-children: list<todo>,"));
+    }
+
+    #[test]
+    fn renders_enum() {
+        let enm = ParsedEnum { name: "Status".into(), cases: vec!["open".into(), "closed".into()] };
+        let out = render_enum(&enm);
+        assert!(out.contains("variant status {"));
+        assert!(out.contains("open,"));
+        assert!(out.contains("closed,"));
     }
 } 
