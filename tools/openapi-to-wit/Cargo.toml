@@ -7,6 +7,7 @@ edition = "2021"
 thiserror = "1.0"
 once_cell = "1.19"
 regex = "1.10"
+blake3 = "1.5"
 
 [dev-dependencies]
 pretty_assertions = "1.4"
