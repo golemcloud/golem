@@ -317,8 +317,8 @@ async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tra
                 WorkerResourceId(0),
                 WorkerResourceDescription {
                     created_at: ts,
-                    resource_owner: "owner".to_string(), // TODO
-                    resource_name: "name".to_string(),   // TODO
+                    resource_owner: "rpc:counters-exports/api".to_string(),
+                    resource_name: "counter".to_string(),
                     resource_params: None
                 }
             ),]
@@ -476,8 +476,8 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
                 WorkerResourceId(0),
                 WorkerResourceDescription {
                     created_at: ts,
-                    resource_owner: "owner".to_string(), // TODO
-                    resource_name: "name".to_string(),   // TODO
+                    resource_owner: "rpc:counters-exports/api".to_string(),
+                    resource_name: "counter".to_string(),
                     resource_params: None
                 }
             ),]

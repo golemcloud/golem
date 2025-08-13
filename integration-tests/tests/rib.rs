@@ -151,6 +151,7 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
                     field("quantity", u32()),
                 ])
                 .named("product-item")
+                .owned("golem:it/api")
             ),
         ))
     );
@@ -253,6 +254,7 @@ async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<
                     field("quantity", u32()),
                 ])
                 .named("product-item")
+                .owned("golem:it/api")
             ),
         ))
     );
@@ -358,6 +360,7 @@ async fn test_rib_with_resource_methods(
                     field("quantity", u32()),
                 ])
                 .named("product-item")
+                .owned("golem:it/api")
             ),
         ))
     );

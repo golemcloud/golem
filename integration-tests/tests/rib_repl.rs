@@ -130,6 +130,7 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
                     field("quantity", u32()),
                 ])
                 .named("product-item")
+                .owned("golem:it/api")
             ),
         )))
     );
@@ -165,6 +166,7 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
                     field("quantity", u32()),
                 ])
                 .named("product-item")
+                .owned("golem:it/api")
             ),
         )))
     );
@@ -249,6 +251,7 @@ async fn test_repl_invoking_resource_methods(
                     field("quantity", u32()),
                 ])
                 .named("product-item")
+                .owned("golem:it/api")
             ),
         )))
     );
@@ -284,6 +287,7 @@ async fn test_repl_invoking_resource_methods(
                     field("quantity", u32()),
                 ])
                 .named("product-item")
+                .owned("golem:it/api")
             ),
         )))
     )
