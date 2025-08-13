@@ -299,3 +299,9 @@ redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", 
 wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
