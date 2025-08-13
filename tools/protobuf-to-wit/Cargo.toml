@@ -1,6 +1,11 @@
 [package]
 name = "protobuf-to-wit"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+prost-types = "0.13"
+thiserror = "1.0"
+
+[dev-dependencies]
+pretty_assertions = "1.4"
