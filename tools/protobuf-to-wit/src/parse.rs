@@ -13,9 +13,22 @@ pub struct MessageField {
 }
 
 #[derive(Debug, Clone)]
+pub struct OneofField {
+    pub name: String,
+    pub ty: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OneofDef {
+    pub name: String,
+    pub options: Vec<OneofField>,
+}
+
+#[derive(Debug, Clone)]
 pub struct MessageDef {
     pub name: String,
     pub fields: Vec<MessageField>,
+    pub oneofs: Vec<OneofDef>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,8 +46,9 @@ pub struct ServiceDef {
 
 pub fn parse_messages(src: &str) -> Vec<MessageDef> {
     // Extremely naive regex-based parser for demo/golden tests
-    let msg_re = Regex::new(r"(?s)message\s+([A-Za-z0-9_]+)\s*\{(.*?)\}").unwrap();
+    let msg_re = Regex::new(r"(?s)message\s+([A-Za-z0-9_]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}").unwrap();
     let field_re = Regex::new(r"(?m)^\s*([A-Za-z0-9_\.]+)\s+([A-Za-z0-9_]+)\s*=\s*[0-9]+\s*;\s*$").unwrap();
+    let oneof_re = Regex::new(r"(?s)oneof\s+([A-Za-z0-9_]+)\s*\{(.*?)\}").unwrap();
     let mut out = Vec::new();
     for caps in msg_re.captures_iter(src) {
         let name = caps.get(1).unwrap().as_str().to_string();
@@ -45,7 +59,19 @@ pub fn parse_messages(src: &str) -> Vec<MessageDef> {
             let fname = f.get(2).unwrap().as_str().to_string();
             fields.push(MessageField { name: fname, ty });
         }
-        out.push(MessageDef { name, fields });
+        let mut oneofs = Vec::new();
+        for oc in oneof_re.captures_iter(body) {
+            let oname = oc.get(1).unwrap().as_str().to_string();
+            let obody = oc.get(2).unwrap().as_str();
+            let mut options = Vec::new();
+            for f in field_re.captures_iter(obody) {
+                let ty = f.get(1).unwrap().as_str().to_string();
+                let fname = f.get(2).unwrap().as_str().to_string();
+                options.push(OneofField { name: fname, ty });
+            }
+            oneofs.push(OneofDef { name: oname, options });
+        }
+        out.push(MessageDef { name, fields, oneofs });
     }
     out
 }
@@ -94,5 +120,23 @@ service TodoService { rpc TodoAdd(TodoAddRequest) returns (TodoAddResponse); }
         let svc = parse_service(src).unwrap();
         assert_eq!(svc.name, "TodoService");
         assert_eq!(svc.rpcs.len(), 1);
+    }
+
+    #[test]
+    fn parses_oneof() {
+        let src = r#"syntax = "proto3";
+package core.todo.v1;
+message User {
+  oneof id {
+    string ssn = 1;
+    int32 employee_id = 2;
+  }
+}
+"#;
+        let msgs = parse_messages(src);
+        let user = msgs.into_iter().find(|m| m.name == "User").unwrap();
+        assert_eq!(user.oneofs.len(), 1);
+        assert_eq!(user.oneofs[0].name, "id");
+        assert_eq!(user.oneofs[0].options.len(), 2);
     }
 } 

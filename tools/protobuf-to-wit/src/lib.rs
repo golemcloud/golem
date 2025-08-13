@@ -31,6 +31,11 @@ pub fn convert_protobuf_to_wit(proto_src: &str) -> Result<model::WitOutput, Gene
 	for m in &messages {
 		body.push_str(&render::render_message_record(m));
 	}
+	for m in &messages {
+		for oneof in &m.oneofs {
+			body.push_str(&render::render_oneof_variant(&m.name, oneof));
+		}
+	}
 	if let Some(svc) = service {
 		body.push_str(&render::render_error_variant());
 		body.push_str(&render::render_service_interface(&svc));

@@ -33,18 +33,17 @@ pub fn convert_openapi_to_wit(openapi_text: &str) -> Result<model::WitOutput, Ge
     let header = render::WitPackage { name: format!("api:{}", pkg_name), version: version.clone() }.render_header();
 
     // Records from components.schemas
-    let records = parse::parse_component_records(openapi_text);
-    let enums = parse::parse_component_enums(openapi_text);
     let mut body = String::new();
-    for rec in &records {
-        body.push_str(&render::render_record(rec));
-    }
-    for enm in &enums {
-        body.push_str(&render::render_enum(enm));
-    }
+    let records = parse::parse_component_records(openapi_text);
+    for rec in &records { body.push_str(&render::render_record(rec)); }
 
-    // Operations -> single interface named from title
-    let ops = parse::parse_operations(openapi_text);
+    // Enums from components
+    let enums = parse::parse_component_enums(openapi_text);
+    for enm in &enums { body.push_str(&render::render_enum(enm)); }
+
+    // Operations (with inline lifting) -> single interface named from title
+    let (ops, lifted) = parse::parse_operations_with_inline(openapi_text);
+    for rec in &lifted { body.push_str(&render::render_record(rec)); }
     if !ops.is_empty() {
         body.push_str(&render::render_error_variant());
         body.push_str(&render::render_interface(&pkg_name, &ops));

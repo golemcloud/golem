@@ -225,6 +225,139 @@ pub fn parse_operations(doc: &str) -> Vec<ParsedOperation> {
     out
 }
 
+pub fn parse_operations_with_inline(doc: &str) -> (Vec<ParsedOperation>, Vec<ParsedRecord>) {
+    let parsed: OpenApiDoc = match serde_yaml::from_str(doc) { Ok(v) => v, Err(_) => return (vec![], vec![]) };
+    let mut ops = Vec::new();
+    let mut recs = Vec::new();
+    let paths = match parsed.paths { Some(p) => p, None => return (ops, recs) };
+
+    for (path, item) in paths.into_iter() {
+        for (method, op_opt) in [("get", item.get), ("post", item.post), ("put", item.put), ("delete", item.delete)] {
+            if let Some(op) = op_opt {
+                let operation_id = op.operationId.clone().unwrap_or_default();
+                if operation_id.is_empty() { continue; }
+
+                let mut req_name: Option<String> = None;
+                if let Some(rb) = op.requestBody.as_ref() {
+                    if let Some(mt) = rb.content.as_ref().and_then(|m| m.get("application/json")) {
+                        match mt.schema.as_ref() {
+                            Some(SchemaObject::Ref(r)) => req_name = ref_tail(&r.r#ref),
+                            Some(SchemaObject::Schema(s)) => {
+                                if let Some(props) = s.properties.as_ref() {
+                                    let name = synth_inline_name(&path, method, true);
+                                    let required_set: std::collections::HashSet<_> = s
+                                        .required
+                                        .clone()
+                                        .unwrap_or_default()
+                                        .into_iter()
+                                        .collect();
+                                    let mut fields = Vec::new();
+                                    for (fname, fobj) in props.iter() {
+                                        let fty = match fobj {
+                                            SchemaObject::Schema(ss) => match ss.r#type.as_deref() {
+                                                Some("array") => {
+                                                    if let Some(items) = &ss.items {
+                                                        match items.as_ref() {
+                                                            SchemaObject::Schema(is) => {
+                                                                let inner = is.r#type.clone().unwrap_or_else(|| "string".to_string());
+                                                                format!("list:{}", inner)
+                                                            }
+                                                            SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
+                                                                Some(name) => format!("list:ref:{}", name),
+                                                                None => "list:string".to_string(),
+                                                            }
+                                                        }
+                                                    } else { "list:string".to_string() }
+                                                }
+                                                Some(t) => t.to_string(),
+                                                None => "string".to_string(),
+                                            },
+                                            SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
+                                                Some(name) => format!("ref:{}", name),
+                                                None => "string".to_string(),
+                                            },
+                                        };
+                                        let optional = !required_set.contains(fname);
+                                        fields.push(ParsedField { name: fname.clone(), ty: fty, optional });
+                                    }
+                                    recs.push(ParsedRecord { name: name.clone(), fields });
+                                    req_name = Some(name);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                let mut resp_name: Option<String> = None;
+                if let Some(responses) = op.responses.as_ref() {
+                    if let Some(ok) = responses.get("200") {
+                        if let Some(mt) = ok.content.as_ref().and_then(|m| m.get("application/json")) {
+                            match mt.schema.as_ref() {
+                                Some(SchemaObject::Ref(r)) => resp_name = ref_tail(&r.r#ref),
+                                Some(SchemaObject::Schema(s)) => {
+                                    if let Some(props) = s.properties.as_ref() {
+                                        let name = synth_inline_name(&path, method, false);
+                                        let required_set: std::collections::HashSet<_> = s
+                                            .required
+                                            .clone()
+                                            .unwrap_or_default()
+                                            .into_iter()
+                                            .collect();
+                                        let mut fields = Vec::new();
+                                        for (fname, fobj) in props.iter() {
+                                            let fty = match fobj {
+                                                SchemaObject::Schema(ss) => match ss.r#type.as_deref() {
+                                                    Some("array") => {
+                                                        if let Some(items) = &ss.items {
+                                                            match items.as_ref() {
+                                                                SchemaObject::Schema(is) => {
+                                                                    let inner = is.r#type.clone().unwrap_or_else(|| "string".to_string());
+                                                                    format!("list:{}", inner)
+                                                                }
+                                                                SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
+                                                                    Some(name) => format!("list:ref:{}", name),
+                                                                    None => "list:string".to_string(),
+                                                                }
+                                                            }
+                                                        } else { "list:string".to_string() }
+                                                    }
+                                                    Some(t) => t.to_string(),
+                                                    None => "string".to_string(),
+                                                },
+                                                SchemaObject::Ref(r) => match ref_tail(&r.r#ref) {
+                                                    Some(name) => format!("ref:{}", name),
+                                                    None => "string".to_string(),
+                                                },
+                                            };
+                                            let optional = !required_set.contains(fname);
+                                            fields.push(ParsedField { name: fname.clone(), ty: fty, optional });
+                                        }
+                                        recs.push(ParsedRecord { name: name.clone(), fields });
+                                        resp_name = Some(name);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+
+                ops.push(ParsedOperation { operation_id, request_record: req_name, response_record: resp_name });
+            }
+        }
+    }
+
+    (ops, recs)
+}
+
+fn synth_inline_name(path: &str, method: &str, is_request: bool) -> String {
+    let s = path.replace(|c: char| !c.is_ascii_alphanumeric(), "-");
+    let s = s.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-");
+    let kind = if is_request { "request-body" } else { "response-body" };
+    format!("{}-{}-{}", s, method.to_lowercase(), kind)
+}
+
 fn first_json_ref_name(content: Option<&HashMap<String, MediaType>>) -> Option<String> {
     let media = content?;
     let mt = media.get("application/json")?;
@@ -247,7 +380,7 @@ fn ref_tail(s: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_component_enums, parse_component_records, parse_operations, parse_title_version};
+    use super::{parse_component_enums, parse_component_records, parse_operations, parse_operations_with_inline, parse_title_version};
 
     #[test]
     fn parses_title_version() {
@@ -324,5 +457,42 @@ components:
         assert_eq!(enums.len(), 1);
         assert_eq!(enums[0].name, "Status");
         assert_eq!(enums[0].cases, vec!["open", "closed"]);
+    }
+
+    #[test]
+    fn parses_inline_request_and_response_records() {
+        let doc = r##"openapi: 3.0.3
+info: { title: X, version: '1.0.0' }
+paths:
+  /todos/{id}:
+    put:
+      operationId: UpdateTodo
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                tags: { type: array, items: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+"##;
+        let (ops, recs) = parse_operations_with_inline(doc);
+        assert_eq!(ops.len(), 1);
+        let op = &ops[0];
+        assert_eq!(op.operation_id, "UpdateTodo");
+        assert_eq!(op.request_record.as_deref(), Some("todos-id-put-request-body"));
+        assert_eq!(op.response_record.as_deref(), Some("todos-id-put-response-body"));
+        let names: Vec<_> = recs.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"todos-id-put-request-body"));
+        assert!(names.contains(&"todos-id-put-response-body"));
     }
 } 

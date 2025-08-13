@@ -1,5 +1,5 @@
 use crate::naming::to_wit_ident;
-use crate::parse::{MessageDef, RpcDef, ServiceDef};
+use crate::parse::{MessageDef, OneofDef, RpcDef, ServiceDef};
 
 pub struct WitPackage {
     pub name: String,
@@ -42,6 +42,26 @@ pub fn render_message_record(msg: &MessageDef) -> String {
         let fty = map_proto_scalar(&f.ty);
         out.push_str(&format!("    {}: {},\n", fname, fty));
     }
+    for oneof in &msg.oneofs {
+        let fname = to_wit_ident(&oneof.name);
+        let vty = oneof_variant_name(&msg.name, oneof);
+        out.push_str(&format!("    {}: {},\n", fname, vty));
+    }
+    out.push_str("}\n\n");
+    out
+}
+
+fn oneof_variant_name(msg_name: &str, oneof: &OneofDef) -> String {
+    to_wit_ident(&format!("{}-{}", msg_name, oneof.name))
+}
+
+pub fn render_oneof_variant(msg_name: &str, oneof: &OneofDef) -> String {
+    let vname = oneof_variant_name(msg_name, oneof);
+    let mut out = String::new();
+    out.push_str(&format!("variant {} {{\n", vname));
+    for opt in &oneof.options {
+        out.push_str(&format!("    {}({},),\n", to_wit_ident(&opt.name), map_proto_scalar(&opt.ty)));
+    }
     out.push_str("}\n\n");
     out
 }
@@ -78,11 +98,11 @@ fn render_rpc(rpc: &RpcDef) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::MessageField;
+    use crate::parse::{MessageField, OneofDef, OneofField};
 
     #[test]
     fn renders_message_and_service() {
-        let msg = MessageDef { name: "TodoAddRequest".into(), fields: vec![MessageField { name: "user_id".into(), ty: "string".into() }] };
+        let msg = MessageDef { name: "TodoAddRequest".into(), fields: vec![MessageField { name: "user_id".into(), ty: "string".into() }], oneofs: vec![] };
         let rec = render_message_record(&msg);
         assert!(rec.contains("record todo-add-request {"));
         assert!(rec.contains("user-id: string,"));
@@ -91,5 +111,19 @@ mod tests {
         let iface = render_service_interface(&svc);
         assert!(iface.contains("interface todo-service {"));
         assert!(iface.contains("todo-add: func(request: todo-add-request) -> result<todo-add-response, todo-error>;"));
+    }
+
+    #[test]
+    fn renders_oneof_variant_and_field() {
+        let oneof = OneofDef { name: "id".into(), options: vec![
+            OneofField { name: "ssn".into(), ty: "string".into() },
+            OneofField { name: "employee_id".into(), ty: "int32".into() },
+        ]};
+        let rec = render_message_record(&MessageDef { name: "User".into(), fields: vec![], oneofs: vec![oneof.clone()] });
+        assert!(rec.contains("id: user-id"));
+        let v = render_oneof_variant("User", &oneof);
+        assert!(v.contains("variant user-id {"));
+        assert!(v.contains("ssn(string,)"));
+        assert!(v.contains("employee-id(s32,)"));
     }
 } 
