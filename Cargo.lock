@@ -5871,6 +5871,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "openapi-to-wit"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "once_cell",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_yaml",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "openapiv3"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6902,6 +6915,17 @@ version = "3.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e36c2f31e0a47f9280fb347ef5e461ffcd2c52dd520d8e216b52f93b0b0d7d6"
 dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "protobuf-to-wit"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "pretty_assertions",
+ "prost-types",
+ "regex",
  "thiserror 1.0.69",
 ]
 

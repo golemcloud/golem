@@ -1,5 +1,6 @@
 mod naming;
 mod render;
+mod parse;
 
 pub mod model {
     #[derive(Debug, Clone)]
@@ -23,16 +24,32 @@ pub enum GeneratorError {
 
 /// Converts an OpenAPI 3.0.x document (YAML/JSON text) into WIT text and metadata.
 pub fn convert_openapi_to_wit(openapi_text: &str) -> Result<model::WitOutput, GeneratorError> {
-    // TODO: parse openapi_text (YAML/JSON) and derive package/version
-    let package = "api:todos".to_string();
-    let version = "1.0.0".to_string();
+    // Parse header info
+    let (title, version) = parse::parse_title_version(openapi_text)
+        .ok_or_else(|| GeneratorError::Invalid("missing or invalid info section".into()))?;
+    let pkg_name = naming::to_wit_ident(&title);
 
-    let header = render::WitPackage { name: package.clone(), version: version.clone() }.render_header();
+    // Header
+    let header = render::WitPackage { name: format!("api:{}", pkg_name), version: version.clone() }.render_header();
+
+    // Records from components.schemas
+    let records = parse::parse_component_records(openapi_text);
+    let mut body = String::new();
+    for rec in &records {
+        body.push_str(&render::render_record(rec));
+    }
+
+    // Operations -> single interface named from title
+    let ops = parse::parse_operations(openapi_text);
+    if !ops.is_empty() {
+        body.push_str(&render::render_error_variant());
+        body.push_str(&render::render_interface(&pkg_name, &ops));
+    }
 
     Ok(model::WitOutput {
-        package,
+        package: format!("api:{}", pkg_name),
         version,
         source_digest: format!("sha256:{}", blake3::hash(openapi_text.as_bytes())),
-        wit_text: header,
+        wit_text: format!("{}{}", header, body),
     })
 }
