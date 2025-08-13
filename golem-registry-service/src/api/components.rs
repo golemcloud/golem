@@ -30,6 +30,7 @@ use poem_openapi::payload::{Binary, Json};
 use std::sync::Arc;
 use tracing::Instrument;
 use uuid::uuid;
+use futures::TryStreamExt;
 
 pub struct ComponentsApi {
     component_service: Arc<ComponentService>,
@@ -179,11 +180,13 @@ impl ComponentsApi {
 
     async fn get_component_wasm_internal(
         &self,
-        _component_id: ComponentId,
-        _revision: Revision,
+        component_id: ComponentId,
+        revision: Revision,
         _auth: AuthCtx,
     ) -> ApiResult<Binary<Body>> {
-        todo!()
+        let result = self.component_service.download_component_wasm(&component_id, revision).await?;
+        let body = Body::from_bytes_stream(result.map_err(|e| std::io::Error::other(e.to_string())));
+        Ok(Binary(body))
     }
 
     /// Update a component

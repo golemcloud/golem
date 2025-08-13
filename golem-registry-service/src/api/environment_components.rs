@@ -131,10 +131,12 @@ impl EnvironmentComponentsApi {
 
     async fn get_environment_components_internal(
         &self,
-        _environment_id: EnvironmentId,
+        environment_id: EnvironmentId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<Component>>> {
-        todo!()
+        let components = self.component_service.list_staged_components(&environment_id).await?;
+
+        Ok(Json(Page { values: components }))
     }
 
     /// Get a component in the environment by name

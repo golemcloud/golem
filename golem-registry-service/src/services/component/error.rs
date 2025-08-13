@@ -15,12 +15,13 @@
 use crate::services::account_usage::error::AccountUsageError;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::VersionedComponentId;
+use golem_common::model::component::{ComponentName, VersionedComponentId};
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::{
     ComponentFilePath, ComponentId, ComponentVersion, InitialComponentFileKey, PluginInstallationId,
 };
 use golem_service_base::repo::RepoError;
+use golem_common::model::environment::EnvironmentId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -28,6 +29,11 @@ pub enum ComponentError {
     AlreadyExists(ComponentId),
     #[error("Unknown component id: {0}")]
     UnknownComponentId(ComponentId),
+    #[error("Component {component_name} not found in environment {environment_id}")]
+    UnknownEnvironmentComponentName {
+        environment_id: EnvironmentId,
+        component_name: ComponentName
+    },
     #[error("Unknown versioned component id: {0}")]
     UnknownVersionedComponentId(VersionedComponentId),
     #[error(transparent)]
@@ -94,6 +100,7 @@ impl SafeDisplay for ComponentError {
         match self {
             Self::AlreadyExists(_) => self.to_string(),
             Self::UnknownComponentId(_) => self.to_string(),
+            Self::UnknownEnvironmentComponentName { .. } => self.to_string(),
             Self::UnknownVersionedComponentId(_) => self.to_string(),
             Self::ComponentProcessingError(inner) => inner.to_safe_string(),
             Self::MalformedComponentArchive { .. } => self.to_string(),

@@ -44,6 +44,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tracing::info;
+use futures::stream::BoxStream;
+use std::result;
 
 pub struct ComponentService {
     component_repo: Arc<dyn ComponentRepo>,
@@ -319,6 +321,105 @@ impl ComponentService {
             Some(record) => Ok(record.into()),
             None => Err(ComponentError::UnknownComponentId(component_id.clone())),
         }
+    }
+
+    pub async fn list_staged_components(
+        &self,
+        environment_id: &EnvironmentId
+    ) -> Result<Vec<Component>, ComponentError> {
+        info!(environment_id = %environment_id, "Get staged components");
+
+        let result = self
+            .component_repo
+            .list_staged(&environment_id.0)
+            .await?
+            .into_iter()
+            .map(Component::from)
+            .collect();
+
+        Ok(result)
+    }
+
+    pub async fn get_staged_component(
+        &self,
+        environment_id: EnvironmentId,
+        component_name: ComponentName,
+    ) -> Result<Component, ComponentError> {
+        info!(
+            environment_id = %environment_id,
+            component_name = %component_name,
+            "Get staged component"
+        );
+
+        let record = self
+            .component_repo
+            .get_staged_by_name(&environment_id.0, &component_name.0)
+            .await?;
+
+        match record {
+            Some(record) => Ok(record.into()),
+            None => Err(ComponentError::UnknownEnvironmentComponentName { environment_id, component_name })?,
+        }
+    }
+
+    pub async fn list_deployed_components(
+        &self,
+        environment_id: &EnvironmentId,
+        deployment_revision: &Revision
+    ) -> Result<Vec<Component>, ComponentError> {
+        info!(
+            environment_id = %environment_id,
+            deployment_revision = %deployment_revision,
+            "Get deployed components"
+        );
+
+        let result = self
+            .component_repo
+            .list_by_deployment(&environment_id.0, *deployment_revision as i64)
+            .await?
+            .into_iter()
+            .map(Component::from)
+            .collect();
+
+        Ok(result)
+    }
+
+    pub async fn get_deployed_component(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: &Revision,
+        component_name: ComponentName,
+    ) -> Result<Component, ComponentError> {
+        info!(
+            environment_id = %environment_id,
+            deployment_revision = %deployment_revision,
+            component_name = %component_name,
+            "Get deplyed component"
+        );
+
+        let record = self
+            .component_repo
+            .get_deployed_by_name(&environment_id.0, &component_name.0)
+            .await?;
+
+        match record {
+            Some(record) => Ok(record.into()),
+            None => Err(ComponentError::UnknownEnvironmentComponentName { environment_id, component_name })?,
+        }
+    }
+
+    pub async fn download_component_wasm(
+        &self,
+        component_id: &ComponentId,
+        revision: Revision,
+    ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
+        let component = self.get_component_revision(component_id, revision).await?;
+
+        let stream =             self.object_store
+            .get_stream(&component.environment_id, &component.transformed_object_store_key)
+            .await?;
+
+        Ok(stream)
     }
 
     // TODO:
