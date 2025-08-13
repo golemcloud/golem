@@ -1,0 +1,10 @@
+[package]
+name = "witgen-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+openapi-to-wit = { path = "../openapi-to-wit" }
+protobuf-to-wit = { path = "../protobuf-to-wit" } 
