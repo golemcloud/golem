@@ -6906,6 +6906,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf-to-wit"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "pretty_assertions",
+ "prost-types",
+ "regex",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "psm"
 version = "0.1.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"

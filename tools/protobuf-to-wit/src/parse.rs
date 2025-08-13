@@ -46,8 +46,10 @@ pub struct ServiceDef {
 
 pub fn parse_messages(src: &str) -> Vec<MessageDef> {
     // Extremely naive regex-based parser for demo/golden tests
-    let msg_re = Regex::new(r"(?s)message\s+([A-Za-z0-9_]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}").unwrap();
-    let field_re = Regex::new(r"(?m)^\s*([A-Za-z0-9_\.]+)\s+([A-Za-z0-9_]+)\s*=\s*[0-9]+\s*;\s*$").unwrap();
+    let msg_re =
+        Regex::new(r"(?s)message\s+([A-Za-z0-9_]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}").unwrap();
+    let field_re =
+        Regex::new(r"(?m)^\s*([A-Za-z0-9_\.]+)\s+([A-Za-z0-9_]+)\s*=\s*[0-9]+\s*;\s*$").unwrap();
     let oneof_re = Regex::new(r"(?s)oneof\s+([A-Za-z0-9_]+)\s*\{(.*?)\}").unwrap();
     let mut out = Vec::new();
     for caps in msg_re.captures_iter(src) {
@@ -69,9 +71,16 @@ pub fn parse_messages(src: &str) -> Vec<MessageDef> {
                 let fname = f.get(2).unwrap().as_str().to_string();
                 options.push(OneofField { name: fname, ty });
             }
-            oneofs.push(OneofDef { name: oname, options });
+            oneofs.push(OneofDef {
+                name: oname,
+                options,
+            });
         }
-        out.push(MessageDef { name, fields, oneofs });
+        out.push(MessageDef {
+            name,
+            fields,
+            oneofs,
+        });
     }
     out
 }
@@ -139,4 +148,4 @@ message User {
         assert_eq!(user.oneofs[0].name, "id");
         assert_eq!(user.oneofs[0].options.len(), 2);
     }
-} 
+}

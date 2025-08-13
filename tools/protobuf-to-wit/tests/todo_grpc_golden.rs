@@ -22,5 +22,7 @@ fn renders_header_and_interface() {
     assert!(wit.starts_with("package core:v1@1.0.0;"));
     assert!(wit.contains("record todo-add-request {"));
     assert!(wit.contains("interface todo-service {"));
-    assert!(wit.contains("todo-add: func(request: todo-add-request) -> result<todo-add-response, todo-error>;"));
-} 
+    assert!(wit.contains(
+        "todo-add: func(request: todo-add-request) -> result<todo-add-response, todo-error>;"
+    ));
+}

@@ -11,7 +11,10 @@ impl WitPackage {
         let parts: Vec<&str> = proto_pkg.split('.').collect();
         let leaf = parts.last().copied().unwrap_or("api");
         let name = format!("core:{}", to_wit_ident(leaf));
-        Self { name, version: version.to_string() }
+        Self {
+            name,
+            version: version.to_string(),
+        }
     }
 
     pub fn header(&self) -> String {
@@ -60,7 +63,11 @@ pub fn render_oneof_variant(msg_name: &str, oneof: &OneofDef) -> String {
     let mut out = String::new();
     out.push_str(&format!("variant {} {{\n", vname));
     for opt in &oneof.options {
-        out.push_str(&format!("    {}({},),\n", to_wit_ident(&opt.name), map_proto_scalar(&opt.ty)));
+        out.push_str(&format!(
+            "    {}({},),\n",
+            to_wit_ident(&opt.name),
+            map_proto_scalar(&opt.ty)
+        ));
     }
     out.push_str("}\n\n");
     out
@@ -92,7 +99,10 @@ fn render_rpc(rpc: &RpcDef) -> String {
     let rname = to_wit_ident(&rpc.name);
     let input = to_wit_ident(&rpc.input);
     let output = to_wit_ident(&rpc.output);
-    format!("    {}: func(request: {}) -> result<{}, todo-error>;\n", rname, input, output)
+    format!(
+        "    {}: func(request: {}) -> result<{}, todo-error>;\n",
+        rname, input, output
+    )
 }
 
 #[cfg(test)]
@@ -102,28 +112,57 @@ mod tests {
 
     #[test]
     fn renders_message_and_service() {
-        let msg = MessageDef { name: "TodoAddRequest".into(), fields: vec![MessageField { name: "user_id".into(), ty: "string".into() }], oneofs: vec![] };
+        let msg = MessageDef {
+            name: "TodoAddRequest".into(),
+            fields: vec![MessageField {
+                name: "user_id".into(),
+                ty: "string".into(),
+            }],
+            oneofs: vec![],
+        };
         let rec = render_message_record(&msg);
         assert!(rec.contains("record todo-add-request {"));
         assert!(rec.contains("user-id: string,"));
 
-        let svc = ServiceDef { name: "TodoService".into(), rpcs: vec![RpcDef { name: "TodoAdd".into(), input: "TodoAddRequest".into(), output: "TodoAddResponse".into() }] };
+        let svc = ServiceDef {
+            name: "TodoService".into(),
+            rpcs: vec![RpcDef {
+                name: "TodoAdd".into(),
+                input: "TodoAddRequest".into(),
+                output: "TodoAddResponse".into(),
+            }],
+        };
         let iface = render_service_interface(&svc);
         assert!(iface.contains("interface todo-service {"));
-        assert!(iface.contains("todo-add: func(request: todo-add-request) -> result<todo-add-response, todo-error>;"));
+        assert!(iface.contains(
+            "todo-add: func(request: todo-add-request) -> result<todo-add-response, todo-error>;"
+        ));
     }
 
     #[test]
     fn renders_oneof_variant_and_field() {
-        let oneof = OneofDef { name: "id".into(), options: vec![
-            OneofField { name: "ssn".into(), ty: "string".into() },
-            OneofField { name: "employee_id".into(), ty: "int32".into() },
-        ]};
-        let rec = render_message_record(&MessageDef { name: "User".into(), fields: vec![], oneofs: vec![oneof.clone()] });
+        let oneof = OneofDef {
+            name: "id".into(),
+            options: vec![
+                OneofField {
+                    name: "ssn".into(),
+                    ty: "string".into(),
+                },
+                OneofField {
+                    name: "employee_id".into(),
+                    ty: "int32".into(),
+                },
+            ],
+        };
+        let rec = render_message_record(&MessageDef {
+            name: "User".into(),
+            fields: vec![],
+            oneofs: vec![oneof.clone()],
+        });
         assert!(rec.contains("id: user-id"));
         let v = render_oneof_variant("User", &oneof);
         assert!(v.contains("variant user-id {"));
         assert!(v.contains("ssn(string,)"));
         assert!(v.contains("employee-id(s32,)"));
     }
-} 
+}
