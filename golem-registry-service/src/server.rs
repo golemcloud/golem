@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::Error;
 use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_registry_service::api::make_open_api_service;
@@ -26,7 +27,7 @@ use prometheus::Registry;
 use std::path::Path;
 use tracing::error;
 
-fn main() -> Result<(), std::io::Error> {
+fn main() -> Result<(), Error> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -57,8 +58,11 @@ fn main() -> Result<(), std::io::Error> {
     }
 }
 
-async fn dump_openapi_yaml() -> Result<(), std::io::Error> {
-    let open_api_service = make_open_api_service();
+async fn dump_openapi_yaml() -> Result<(), Error> {
+    let config = RegistryServiceConfig::default();
+    let services = Services::new(&config).await?;
+
+    let open_api_service = make_open_api_service(&services);
     println!("{}", open_api_service.spec_yaml());
     Ok(())
 }
@@ -66,7 +70,7 @@ async fn dump_openapi_yaml() -> Result<(), std::io::Error> {
 async fn async_main(
     config: &RegistryServiceConfig,
     _prometheus_registry: Registry,
-) -> Result<(), std::io::Error> {
+) -> Result<(), Error> {
     let _grpc_port = config.grpc_port;
     let _http_port = config.http_port;
 

@@ -15,7 +15,9 @@
 use super::ApiResult;
 use super::model::UpdateComponentRequest;
 use crate::model::component::Component;
+use crate::services::component::ComponentService;
 use golem_common::api::Page;
+use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::{ComponentId, Revision};
 use golem_common::recorded_http_api_request;
@@ -25,12 +27,20 @@ use poem::Body;
 use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::{Binary, Json};
+use std::sync::Arc;
 use tracing::Instrument;
+use uuid::uuid;
 
-pub struct ComponentsApi {}
+pub struct ComponentsApi {
+    component_service: Arc<ComponentService>,
+}
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentsApi {
+    pub fn new(component_service: Arc<ComponentService>) -> Self {
+        Self { component_service }
+    }
+
     /// Get a component by id
     #[oai(
         path = "/:component_id",
@@ -57,10 +67,11 @@ impl ComponentsApi {
 
     async fn get_component_internal(
         &self,
-        _component_id: ComponentId,
+        component_id: ComponentId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        todo!()
+        let component = self.component_service.get_component(&component_id).await?;
+        Ok(Json(component))
     }
 
     /// Get all revisions for a component
@@ -127,11 +138,15 @@ impl ComponentsApi {
 
     async fn get_component_revision_internal(
         &self,
-        _component_id: ComponentId,
-        _revision: Revision,
+        component_id: ComponentId,
+        revision: Revision,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        todo!()
+        let component = self
+            .component_service
+            .get_component_revision(&component_id, revision)
+            .await?;
+        Ok(Json(component))
     }
 
     /// Get the component wasm binary of a specific revision
@@ -202,10 +217,37 @@ impl ComponentsApi {
 
     async fn update_component_internal(
         &self,
-        _component_id: ComponentId,
-        _payload: UpdateComponentRequest,
+        component_id: ComponentId,
+        payload: UpdateComponentRequest,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        todo!()
+        let data = if let Some(upload) = payload.component {
+            Some(upload.into_vec().await?)
+        } else {
+            None
+        };
+
+        // TODO
+        let account_id: AccountId = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
+
+        let new_files_archive = payload.new_files.map(|f| f.into_file());
+
+        let response = self
+            .component_service
+            .update(
+                &component_id,
+                data,
+                payload.component_type,
+                payload.removed_files.unwrap_or_default().0,
+                new_files_archive,
+                payload.new_file_options.unwrap_or_default().0,
+                payload.dynamic_linking.map(|v| v.0),
+                payload.env.map(|v| v.0),
+                payload.agent_types.map(|v| v.0),
+                &account_id,
+            )
+            .await?;
+
+        Ok(Json(response))
     }
 }

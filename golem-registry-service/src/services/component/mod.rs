@@ -19,29 +19,30 @@ pub use self::error::ComponentError;
 use super::component_compilation::ComponentCompilationService;
 use super::component_object_store::ComponentObjectStore;
 use super::component_transformer_plugin_caller::ComponentTransformerPluginCaller;
-use crate::model::component::PluginInstallation;
-use crate::model::component::{Component, InitialComponentFilesArchiveAndPermissions};
+use crate::model::component::Component;
+use crate::model::component::{
+    ComponentFileOptions, FinalizedComponentRevision, NewComponentRevision,
+};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRevisionRecord, ComponentRevisionRepoError};
-use crate::services::account_usage::AccountUsageService;
-use anyhow::{Context, anyhow};
-use golem_common::model::InitialComponentFile;
+use crate::services::account_usage::{AccountUsage, AccountUsageService};
+use anyhow::Context;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::ComponentName;
-use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::{InitialComponentFile, InitialComponentFileKey, Revision};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::vec;
+use tempfile::NamedTempFile;
 use tracing::info;
 
 pub struct ComponentService {
@@ -78,12 +79,11 @@ impl ComponentService {
     pub async fn create(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
         component_name: &ComponentName,
         component_type: ComponentType,
-        data: Vec<u8>,
-        files: Option<InitialComponentFilesArchiveAndPermissions>,
-        installed_plugins: Vec<PluginInstallation>,
+        wasm: Vec<u8>,
+        files_archive: Option<NamedTempFile>,
+        file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         agent_types: Vec<AgentType>,
@@ -100,155 +100,225 @@ impl ComponentService {
                 )))
             })?;
 
-        let uploaded_files = match files {
-            Some(files) => self.upload_component_files(environment_id, files).await?,
-            None => vec![],
+        let mut account_usage = self
+            .account_usage_service
+            .add_component(actor, wasm.len() as i64)
+            .await?;
+
+        let initial_component_files: Vec<InitialComponentFile> = self
+            .initial_component_files_for_new_component(environment_id, files_archive, file_options)
+            .await?;
+
+        let component_id = ComponentId::new_v4();
+        let wasm_hash: Hash = blake3::hash(wasm.as_slice()).into();
+        let wasm_object_store_key = self
+            .upload_component_wasm(environment_id, wasm.clone())
+            .await?;
+
+        let new_revision = NewComponentRevision::new(
+            environment_id.clone(),
+            component_id.clone(),
+            component_name.clone(),
+            component_type,
+            initial_component_files,
+            env,
+            wasm_hash,
+            wasm_object_store_key,
+            dynamic_linking,
+            agent_types,
+        );
+
+        let finalized_revision = self
+            .finalize_new_component_revision(environment_id, new_revision, wasm)
+            .await?;
+
+        let record = ComponentRevisionRecord::from_model(finalized_revision.clone(), actor);
+
+        let result = self
+            .component_repo
+            .create(&environment_id.0, &component_name.0, record)
+            .await;
+
+        let stored_component: Component = match result? {
+            Ok(record) => record.into(),
+            Err(ComponentRevisionRepoError::ConcurrentModification) => {
+                Err(ComponentError::ConcurrentUpdate {
+                    component_id: component_id.clone(),
+                    version: 0,
+                })?
+            }
+            Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),
         };
 
-        self.create_unchecked(
-            environment_id,
-            component_id,
-            component_name,
-            component_type,
-            data,
-            uploaded_files,
-            installed_plugins,
-            dynamic_linking,
-            env,
-            agent_types,
-            actor,
-        )
-        .await
-    }
+        account_usage.ack();
 
-    pub async fn create_internal(
-        &self,
-        environment_id: &EnvironmentId,
-        component_id: &ComponentId,
-        component_name: &ComponentName,
-        component_type: ComponentType,
-        data: Vec<u8>,
-        files: Vec<InitialComponentFile>,
-        installed_plugins: Vec<PluginInstallation>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        env: BTreeMap<String, String>,
-        agent_types: Vec<AgentType>,
-        actor: &AccountId,
-    ) -> Result<Component, ComponentError> {
-        info!(environment_id = %environment_id, "Create component");
+        self.component_compilation
+            .enqueue_compilation(
+                environment_id,
+                &component_id,
+                stored_component.versioned_component_id.version,
+            )
+            .await;
 
-        self.component_repo
-            .get_staged_by_name(&environment_id.0, &component_name.0)
-            .await?
-            .map_or(Ok(()), |rec| {
-                Err(ComponentError::AlreadyExists(ComponentId(
-                    rec.revision.component_id,
-                )))
-            })?;
-
-        for file in &files {
-            let exists = self
-                .initial_component_files_service
-                .exists(environment_id, &file.key)
-                .await
-                .map_err(|e| anyhow!(e).context("Error checking if file exists"))?;
-
-            if !exists {
-                return Err(ComponentError::initial_component_file_not_found(
-                    &file.path, &file.key,
-                ));
-            }
-        }
-
-        self.create_unchecked(
-            environment_id,
-            component_id,
-            component_name,
-            component_type,
-            data,
-            files,
-            installed_plugins,
-            dynamic_linking,
-            env,
-            agent_types,
-            actor,
-        )
-        .await
+        Ok(stored_component)
     }
 
     pub async fn update(
         &self,
-        environment_id: &EnvironmentId,
         component_id: &ComponentId,
-        data: Vec<u8>,
+        data: Option<Vec<u8>>,
         component_type: Option<ComponentType>,
-        files: Option<InitialComponentFilesArchiveAndPermissions>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        env: BTreeMap<String, String>,
-        agent_types: Vec<AgentType>,
+        removed_files: Vec<ComponentFilePath>,
+        new_files_archive: Option<NamedTempFile>,
+        new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
+        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+        env: Option<BTreeMap<String, String>>,
+        agent_types: Option<Vec<AgentType>>,
         actor: &AccountId,
     ) -> Result<Component, ComponentError> {
+        let component: Component = self
+            .component_repo
+            .get_staged_by_id(&component_id.0)
+            .await?
+            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?
+            .into();
+
+        let environment_id = component.environment_id.clone();
+        let component_id = component.versioned_component_id.component_id.clone();
+        let current_revision = component.versioned_component_id.version;
+
         info!(environment_id = %environment_id, "Update component");
 
-        let uploaded_files = match files {
-            Some(files) => Some(self.upload_component_files(environment_id, files).await?),
-            None => None,
+        let mut account_usage: Option<AccountUsage> = None;
+
+        // TODO:
+        // let constraints = self
+        //     .component_repo
+        //     .get_constraint(&owner.to_string(), component_id.0)
+        //     .await?;
+
+        // let new_type_registry = FunctionDictionary::from_exports(&metadata.exports)
+        //     .map_err(|e| anyhow!(e).context("Failed to convert exports to function dictionary"))?;
+
+        // TODO:
+        // if let Some(constraints) = constraints {
+        //     let conflicts = self::utils::find_component_metadata_conflicts(&constraints, &new_type_registry);
+        //     if !conflicts.is_empty() {
+        //         return Err(ComponentError::ComponentConstraintConflictError(conflicts));
+        //     }
+        // }
+
+        let (wasm, wasm_object_store_key, wasm_hash) = if let Some(new_data) = data {
+            let actual_account_usage = self
+                .account_usage_service
+                .add_component(actor, new_data.len() as i64)
+                .await?;
+
+            let _ = account_usage.insert(actual_account_usage);
+
+            let object_store_key = self
+                .upload_component_wasm(&environment_id, new_data.clone())
+                .await?;
+            let wasm_hash: Hash = blake3::hash(new_data.as_slice()).into();
+            (new_data, object_store_key, wasm_hash)
+        } else {
+            let old_data = self
+                .object_store
+                .get(&environment_id, &component.object_store_key)
+                .await?;
+            (old_data, component.object_store_key, component.wasm_hash)
         };
 
-        self.update_unchecked(
-            environment_id,
-            component_id,
-            data,
-            component_type,
-            uploaded_files,
-            dynamic_linking,
-            env,
-            agent_types,
-            actor,
-        )
-        .await
+        let new_revision = NewComponentRevision::new(
+            environment_id.clone(),
+            component_id.clone(),
+            component.component_name,
+            component_type.unwrap_or(component.component_type),
+            self.initial_component_files_for_updated_component(
+                &environment_id,
+                component.files,
+                removed_files,
+                new_files_archive,
+                new_file_options,
+            )
+            .await?,
+            env.unwrap_or(component.env),
+            wasm_hash,
+            wasm_object_store_key,
+            dynamic_linking.unwrap_or(component.metadata.dynamic_linking),
+            agent_types.unwrap_or(component.metadata.agent_types),
+        );
+
+        let finalized_revision = self
+            .finalize_new_component_revision(&environment_id, new_revision, wasm)
+            .await?;
+
+        let record = ComponentRevisionRecord::from_model(finalized_revision, actor);
+
+        let result = self
+            .component_repo
+            .update(current_revision as i64, record)
+            .await;
+
+        let stored_component: Component = match result? {
+            Ok(record) => record.into(),
+            Err(ComponentRevisionRepoError::ConcurrentModification) => {
+                Err(ComponentError::ConcurrentUpdate {
+                    component_id: component_id.clone(),
+                    version: current_revision,
+                })?
+            }
+            Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),
+        };
+
+        self.component_compilation
+            .enqueue_compilation(
+                &environment_id,
+                &component_id,
+                stored_component.versioned_component_id.version,
+            )
+            .await;
+
+        if let Some(mut account_usage) = account_usage {
+            account_usage.ack();
+        };
+
+        Ok(stored_component)
     }
 
-    pub async fn update_internal(
+    pub async fn get_component(
         &self,
-        environment_id: &EnvironmentId,
         component_id: &ComponentId,
-        data: Vec<u8>,
-        component_type: Option<ComponentType>,
-        files: Option<Vec<InitialComponentFile>>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        env: BTreeMap<String, String>,
-        agent_types: Vec<AgentType>,
-        actor: &AccountId,
     ) -> Result<Component, ComponentError> {
-        info!(environment_id = %environment_id, "Update component");
+        info!(component_id = %component_id, "Get component");
 
-        for file in files.iter().flatten() {
-            let exists = self
-                .initial_component_files_service
-                .exists(environment_id, &file.key)
-                .await
-                .map_err(|e| anyhow!(e).context("Error checking if file exists"))?;
+        let record = self
+            .component_repo
+            .get_staged_by_id(&component_id.0)
+            .await?;
 
-            if !exists {
-                return Err(ComponentError::initial_component_file_not_found(
-                    &file.path, &file.key,
-                ));
-            }
+        match record {
+            Some(record) => Ok(record.into()),
+            None => Err(ComponentError::UnknownComponentId(component_id.clone())),
         }
+    }
 
-        self.update_unchecked(
-            environment_id,
-            component_id,
-            data,
-            component_type,
-            files,
-            dynamic_linking,
-            env,
-            agent_types,
-            actor,
-        )
-        .await
+    pub async fn get_component_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: Revision,
+    ) -> Result<Component, ComponentError> {
+        info!(component_id = %component_id, "Get component revision");
+
+        let record = self
+            .component_repo
+            .get_by_id_and_revision(&component_id.0, revision as i64)
+            .await?;
+
+        match record {
+            Some(record) => Ok(record.into()),
+            None => Err(ComponentError::UnknownComponentId(component_id.clone())),
+        }
     }
 
     // TODO:
@@ -753,289 +823,142 @@ impl ComponentService {
 
     //     Ok(result)
     // }
-
-    // All files must be confirmed to be in the blob store before calling this method
-    async fn create_unchecked(
+    async fn upload_component_wasm(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
-        component_name: &ComponentName,
-        component_type: ComponentType,
         data: Vec<u8>,
-        uploaded_files: Vec<InitialComponentFile>,
-        installed_plugins: Vec<PluginInstallation>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        env: BTreeMap<String, String>,
-        agent_types: Vec<AgentType>,
-        actor: &AccountId,
-    ) -> Result<Component, ComponentError> {
-        let mut account_usage = self
-            .account_usage_service
-            .add_component(actor, data.len() as i64)
-            .await?;
+    ) -> Result<String, ComponentError> {
+        let object_key = self.object_store.put(environment_id, data).await?;
+        Ok(object_key)
+    }
 
-        let wasm_hash: Hash = blake3::hash(data.as_slice()).into();
+    async fn initial_component_files_for_new_component(
+        &self,
+        environment_id: &EnvironmentId,
+        files_archive: Option<NamedTempFile>,
+        file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
+    ) -> Result<Vec<InitialComponentFile>, ComponentError> {
+        let uploaded_files = match files_archive {
+            Some(files) => self.upload_component_files(environment_id, files).await?,
+            None => HashMap::new(),
+        };
 
-        let component = Component::new(
-            environment_id.clone(),
-            component_id.clone(),
-            component_name.clone(),
-            component_type,
-            &data,
-            uploaded_files,
-            installed_plugins,
-            dynamic_linking,
-            env,
-            agent_types,
-            wasm_hash,
-        )?;
+        let mut result = Vec::new();
 
-        // TODO:
-        // let (component, transformed_data) =
-        //     self.apply_transformations(component, data.clone()).await?;
-
-        if let Some(known_root_package_name) = &component.metadata.root_package_name
-            && &component_name.0 != known_root_package_name
-        {
-            Err(ComponentError::InvalidComponentName {
-                actual: component_name.0.clone(),
-                expected: known_root_package_name.clone(),
-            })?;
+        for (path, key) in uploaded_files {
+            let options = file_options.get(&path).cloned().unwrap_or_default();
+            result.push(InitialComponentFile {
+                path,
+                key,
+                permissions: options.permissions,
+            });
         }
 
-        tokio::try_join!(
-            self.upload_user_component(&component, data),
-            // TODO:
-            // self.upload_protected_component(&component, transformed_data)
-        )?;
-
-        info!(
-            environment_id = %environment_id,
-            exports = ?component.metadata.exports,
-            dynamic_linking = ?component.metadata.dynamic_linking,
-            "Uploaded component",
-        );
-
-        let record = ComponentRevisionRecord::from_model(component.clone(), actor);
-
-        let result = self
-            .component_repo
-            .create(&environment_id.0, &component_name.0, record)
-            .await;
-        let stored_component: Component = match result? {
-            Ok(record) => record.into(),
-            Err(ComponentRevisionRepoError::ConcurrentModification) => {
-                Err(ComponentError::ConcurrentUpdate {
-                    component_id: component_id.clone(),
-                    version: 0,
-                })?
-            }
-            Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),
-        };
-
-        account_usage.ack();
-
-        self.component_compilation
-            .enqueue_compilation(
-                environment_id,
-                component_id,
-                stored_component.versioned_component_id.version,
-            )
-            .await;
-
-        Ok(stored_component)
+        Ok(result)
     }
 
-    async fn update_unchecked(
+    async fn initial_component_files_for_updated_component(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
-        data: Vec<u8>,
-        component_type: Option<ComponentType>,
-        files: Option<Vec<InitialComponentFile>>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        env: BTreeMap<String, String>,
-        agent_types: Vec<AgentType>,
-        actor: &AccountId,
-    ) -> Result<Component, ComponentError> {
-        let mut account_usage = self
-            .account_usage_service
-            .add_component(actor, data.len() as i64)
-            .await?;
-
-        let metadata = ComponentMetadata::analyse_component(&data, dynamic_linking, agent_types)
-            .map_err(ComponentError::ComponentProcessingError)?;
-
-        // TODO:
-        // let constraints = self
-        //     .component_repo
-        //     .get_constraint(&owner.to_string(), component_id.0)
-        //     .await?;
-
-        // let new_type_registry = FunctionDictionary::from_exports(&metadata.exports)
-        //     .map_err(|e| anyhow!(e).context("Failed to convert exports to function dictionary"))?;
-
-        // TODO:
-        // if let Some(constraints) = constraints {
-        //     let conflicts = self::utils::find_component_metadata_conflicts(&constraints, &new_type_registry);
-        //     if !conflicts.is_empty() {
-        //         return Err(ComponentError::ComponentConstraintConflictError(conflicts));
-        //     }
-        // }
-
-        info!(
-            environment_id = %environment_id,
-            component_id = %component_id,
-            exports = ?metadata.exports,
-            dynamic_linking = ?metadata.dynamic_linking,
-            "Uploaded component",
-        );
-
-        let mut component: Component = self
-            .component_repo
-            .get_staged_by_id(&component_id.0)
-            .await?
-            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?
-            .into();
-
-        let current_revision = component.versioned_component_id.version;
-
-        // make sure we are storing data under new keys so we don't clobber old data.
-        component.regenerate_object_store_key();
-        component.regenerate_transformed_object_store_key();
-        component.files = files.unwrap_or(component.files);
-        component.metadata = metadata;
-        component.env = env;
-        component.component_type = component_type.unwrap_or(component.component_type);
-
-        // reset transformations so that plugins see original data of the component
-        component.reset_transformations();
-
-        // TODO:
-        // let (component, transformed_data) =
-        //     self.apply_transformations(component, data.clone()).await?;
-
-        tokio::try_join!(
-            self.upload_user_component(&component, data),
-            // TODO:
-            // self.upload_protected_component(&component, transformed_data)
-        )?;
-
-        let record = ComponentRevisionRecord::from_model(component, actor);
-
-        let result = self
-            .component_repo
-            .update(current_revision as i64, record)
-            .await;
-
-        let stored_component: Component = match result? {
-            Ok(record) => record.into(),
-            Err(ComponentRevisionRepoError::ConcurrentModification) => {
-                Err(ComponentError::ConcurrentUpdate {
-                    component_id: component_id.clone(),
-                    version: current_revision,
-                })?
-            }
-            Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),
+        previous: Vec<InitialComponentFile>,
+        removed_files: Vec<ComponentFilePath>,
+        new_files_archive: Option<NamedTempFile>,
+        new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
+    ) -> Result<Vec<InitialComponentFile>, ComponentError> {
+        let uploaded_files = match new_files_archive {
+            Some(files) => self.upload_component_files(environment_id, files).await?,
+            None => HashMap::new(),
         };
 
-        self.component_compilation
-            .enqueue_compilation(
-                environment_id,
-                component_id,
-                stored_component.versioned_component_id.version,
-            )
-            .await;
+        let removed_files: HashSet<ComponentFilePath> = HashSet::from_iter(removed_files);
 
-        account_usage.ack();
+        let mut result = HashMap::new();
+        for file in previous {
+            if !removed_files.contains(&file.path) {
+                result.insert(file.path.clone(), file);
+            }
+        }
 
-        Ok(stored_component)
-    }
+        for (path, key) in uploaded_files {
+            result.insert(
+                path.clone(),
+                InitialComponentFile {
+                    key,
+                    path,
+                    permissions: ComponentFilePermissions::default(),
+                },
+            );
+        }
 
-    async fn upload_user_component(
-        &self,
-        component: &Component,
-        data: Vec<u8>,
-    ) -> Result<(), ComponentError> {
-        self.object_store
-            .put(
-                &component.environment_id,
-                &component.full_object_store_key(),
-                data,
-            )
-            .await
-            .map_err(|e| {
-                ComponentError::component_store_error("Failed to upload user component", e)
-            })
-    }
+        for (path, options) in new_file_options {
+            let entry = result.get_mut(&path);
+            if let Some(entry) = entry {
+                entry.permissions = options.permissions;
+            }
+        }
 
-    async fn _upload_protected_component(
-        &self,
-        component: &Component,
-        data: Vec<u8>,
-    ) -> Result<(), ComponentError> {
-        self.object_store
-            .put(
-                &component.environment_id,
-                &component.full_transformed_object_store_key(),
-                data,
-            )
-            .await
-            .map_err(|e| {
-                ComponentError::component_store_error("Failed to upload protected component", e)
-            })
+        Ok(result.into_values().collect())
     }
 
     async fn upload_component_files(
         &self,
         environment_id: &EnvironmentId,
-        payload: InitialComponentFilesArchiveAndPermissions,
-    ) -> Result<Vec<InitialComponentFile>, ComponentError> {
-        let path_permissions: HashMap<ComponentFilePath, ComponentFilePermissions> =
-            HashMap::from_iter(
-                payload
-                    .files
-                    .iter()
-                    .map(|f| (f.path.clone(), f.permissions)),
-            );
+        archive: NamedTempFile,
+    ) -> Result<HashMap<ComponentFilePath, InitialComponentFileKey>, ComponentError> {
+        let to_upload = self::utils::prepare_component_files_for_upload(archive).await?;
 
-        let to_upload =
-            self::utils::prepare_component_files_for_upload(&path_permissions, payload).await?;
+        let tasks = to_upload.into_iter().map(|(path, stream)| async move {
+            info!("Uploading file: {}", path.to_string());
 
-        let tasks = to_upload
-            .into_iter()
-            .map(|(path, permissions, stream)| async move {
-                info!("Uploading file: {}", path.to_string());
+            let key = self
+                .initial_component_files_service
+                .put_if_not_exists(environment_id, &stream)
+                .await
+                .context("Failed to upload component files")?;
 
-                let key = self
-                    .initial_component_files_service
-                    .put_if_not_exists(environment_id, &stream)
-                    .await
-                    .context("Failed to upload component files")?;
-
-                Ok::<_, ComponentError>(InitialComponentFile {
-                    key,
-                    path,
-                    permissions,
-                })
-            });
+            Ok::<_, ComponentError>((path, key))
+        });
 
         let uploaded = futures::future::try_join_all(tasks).await?;
 
-        let uploaded_paths = uploaded
-            .iter()
-            .map(|f| f.path.clone())
-            .collect::<HashSet<_>>();
+        Ok(HashMap::from_iter(uploaded))
+    }
 
-        for path in path_permissions.keys() {
-            if !uploaded_paths.contains(path) {
-                return Err(ComponentError::MalformedComponentArchive {
-                    message: format!("Didn't find expected file in the archive: {path}"),
-                });
-            }
+    async fn finalize_new_component_revision(
+        &self,
+        environment_id: &EnvironmentId,
+        new_revision: NewComponentRevision,
+        wasm: Vec<u8>,
+    ) -> Result<FinalizedComponentRevision, ComponentError> {
+        // TODO:
+        // let (component, transformed_data) =
+        //     self.apply_transformations(component, data.clone()).await?;
+
+        let transformed_data = wasm.clone();
+        let transformed_object_store_key = self
+            .upload_component_wasm(environment_id, transformed_data.clone())
+            .await?;
+
+        let finalized_revision = new_revision
+            .with_transformed_component(transformed_object_store_key, &transformed_data)?;
+
+        if let Some(known_root_package_name) = &finalized_revision.metadata.root_package_name
+            && &finalized_revision.component_name.0 != known_root_package_name
+        {
+            Err(ComponentError::InvalidComponentName {
+                actual: finalized_revision.component_name.0.clone(),
+                expected: known_root_package_name.clone(),
+            })?;
         }
 
-        Ok(uploaded)
+        info!(
+            environment_id = %environment_id,
+            exports = ?finalized_revision.metadata.exports,
+            dynamic_linking = ?finalized_revision.metadata.dynamic_linking,
+            "Finalized component",
+        );
+
+        Ok(finalized_revision)
     }
 
     // TODO:

@@ -16,7 +16,8 @@ use anyhow::{Error, anyhow};
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use golem_common::model::environment::EnvironmentId;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+use golem_service_base::replayable_stream::ContentHash;
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
 use golem_service_base::stream::LoggedByteStream;
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -110,15 +111,18 @@ impl ComponentObjectStore {
     pub async fn put(
         &self,
         environment_id: &EnvironmentId,
-        object_key: &str,
         data: Vec<u8>,
-    ) -> Result<(), Error> {
+    ) -> Result<String, Error> {
+        let object_key = data.content_hash().await?;
+
         self.logged(
             "Putting object",
             environment_id,
-            object_key,
-            self.put_internal(environment_id, object_key, data).await,
-        )
+            &object_key,
+            self.put_internal(environment_id, &object_key, data).await,
+        )?;
+
+        Ok(object_key)
     }
 
     async fn put_internal(
@@ -127,49 +131,38 @@ impl ComponentObjectStore {
         object_key: &str,
         data: Vec<u8>,
     ) -> Result<(), Error> {
-        self.blob_storage
-            .put_raw(
-                COMPONENT_FILES_LABEL,
-                "put",
-                BlobStorageNamespace::Components {
-                    environment_id: environment_id.clone(),
-                },
-                &PathBuf::from(object_key),
-                &data,
-            )
-            .await
-            .map_err(|e| anyhow!(e))
-    }
+        let namespace = BlobStorageNamespace::Components {
+            environment_id: environment_id.clone(),
+        };
 
-    pub async fn delete(
-        &self,
-        environment_id: &EnvironmentId,
-        object_key: &str,
-    ) -> Result<(), Error> {
-        self.logged(
-            "Deleting object",
-            environment_id,
-            object_key,
-            self.delete_internal(environment_id, object_key).await,
-        )
-    }
+        let path = &PathBuf::from(object_key);
 
-    async fn delete_internal(
-        &self,
-        environment_id: &EnvironmentId,
-        object_key: &str,
-    ) -> Result<(), Error> {
-        self.blob_storage
-            .delete(
-                COMPONENT_FILES_LABEL,
-                "delete",
-                BlobStorageNamespace::Components {
-                    environment_id: environment_id.clone(),
-                },
-                &PathBuf::from(object_key),
-            )
-            .await
-            .map_err(|e| anyhow!(e))
+        let exists_result = self
+            .blob_storage
+            .exists(COMPONENT_FILES_LABEL, "put", namespace.clone(), path)
+            .await?;
+
+        match exists_result {
+            ExistsResult::DoesNotExist => {
+                self.blob_storage
+                    .put_raw(
+                        COMPONENT_FILES_LABEL,
+                        "put",
+                        BlobStorageNamespace::Components {
+                            environment_id: environment_id.clone(),
+                        },
+                        &PathBuf::from(object_key),
+                        &data,
+                    )
+                    .await?;
+            }
+            ExistsResult::File => {}
+            ExistsResult::Directory => Err(anyhow!(
+                "Found directory where file or no data was expected"
+            ))?,
+        };
+
+        Ok(())
     }
 
     fn logged<R>(

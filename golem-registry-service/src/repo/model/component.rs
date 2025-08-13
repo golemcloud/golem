@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::Component;
+use crate::model::component::{Component, FinalizedComponentRevision};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
 };
@@ -403,20 +402,22 @@ impl ComponentRevisionRecord {
         self
     }
 
-    pub fn from_model(value: Component, actor: &AccountId) -> Self {
+    pub fn from_model(value: FinalizedComponentRevision, actor: &AccountId) -> Self {
+        let component_id = value.component_id.0;
+
         Self {
             files: value
                 .files
                 .into_iter()
-                .map(|f| ComponentFileRecord::from_model(f, &value.versioned_component_id, actor))
+                .map(|f| ComponentFileRecord::from_model(f, component_id, actor))
                 .collect(),
             original_files: value
                 .original_files
                 .into_iter()
-                .map(|f| ComponentFileRecord::from_model(f, &value.versioned_component_id, actor))
+                .map(|f| ComponentFileRecord::from_model(f, component_id, actor))
                 .collect(),
-            component_id: value.versioned_component_id.component_id.0,
-            revision_id: value.versioned_component_id.version as i64,
+            component_id,
+            revision_id: 0,
             version: value
                 .metadata
                 .root_package_version
@@ -453,6 +454,7 @@ impl From<ComponentExtRevisionRecord> for Component {
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ComponentFileRecord {
     pub component_id: Uuid,
+    // Note: Set by repo during insert
     pub revision_id: i64,
     pub file_path: String,
     pub hash: SqlBlake3Hash, // NOTE: expected to be set by service-layer
@@ -475,14 +477,10 @@ impl ComponentFileRecord {
         }
     }
 
-    fn from_model(
-        file: InitialComponentFile,
-        versioned_component_id: &VersionedComponentId,
-        actor: &AccountId,
-    ) -> Self {
+    fn from_model(file: InitialComponentFile, component_id: Uuid, actor: &AccountId) -> Self {
         Self {
-            component_id: versioned_component_id.component_id.0,
-            revision_id: versioned_component_id.version as i64,
+            component_id,
+            revision_id: 0,
             file_path: file.path.to_string(),
             file_key: file.key.0.clone(),
             file_permissions: file.permissions.into(),

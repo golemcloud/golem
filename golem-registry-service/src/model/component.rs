@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::Utc;
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::{ComponentName, VersionedComponentId};
 use golem_common::model::component_metadata::{
@@ -21,8 +20,8 @@ use golem_common::model::component_metadata::{
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{
-    ComponentFilePathWithPermissions, ComponentId, ComponentType, InitialComponentFile,
-    PluginInstallationId,
+    ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentId, ComponentType,
+    InitialComponentFile, PluginInstallationId,
 };
 use golem_wasm_ast::analysis::AnalysedType;
 use poem_openapi::Object;
@@ -30,7 +29,104 @@ use rib::FunctionName;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use tempfile::NamedTempFile;
-use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub struct NewComponentRevision {
+    pub environment_id: EnvironmentId,
+    pub component_id: ComponentId,
+    pub component_name: ComponentName,
+    pub component_type: ComponentType,
+    pub original_files: Vec<InitialComponentFile>,
+    pub files: Vec<InitialComponentFile>,
+    pub original_env: BTreeMap<String, String>,
+    pub env: BTreeMap<String, String>,
+    pub wasm_hash: golem_common::model::diff::Hash,
+    pub object_store_key: String,
+    pub installed_plugins: Vec<PluginInstallation>,
+
+    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+    pub agent_types: Vec<AgentType>,
+}
+
+impl NewComponentRevision {
+    pub fn new(
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_name: ComponentName,
+        component_type: ComponentType,
+        files: Vec<InitialComponentFile>,
+        env: BTreeMap<String, String>,
+        wasm_hash: Hash,
+        object_store_key: String,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        agent_types: Vec<AgentType>,
+    ) -> Self {
+        Self {
+            environment_id,
+            component_id,
+            component_name,
+            component_type,
+            original_files: files.clone(),
+            files,
+            original_env: env.clone(),
+            env,
+            wasm_hash,
+            object_store_key,
+            installed_plugins: Vec::new(),
+            dynamic_linking,
+            agent_types,
+        }
+    }
+
+    pub fn with_transformed_component(
+        self,
+        transformed_object_store_key: String,
+        transformed_data: &[u8],
+    ) -> Result<FinalizedComponentRevision, ComponentProcessingError> {
+        let metadata = ComponentMetadata::analyse_component(
+            transformed_data,
+            self.dynamic_linking,
+            self.agent_types,
+        )?;
+
+        Ok(FinalizedComponentRevision {
+            environment_id: self.environment_id,
+            component_id: self.component_id,
+            component_name: self.component_name,
+            component_type: self.component_type,
+            original_files: self.original_files,
+            files: self.files,
+            original_env: self.original_env,
+            env: self.env,
+            wasm_hash: self.wasm_hash,
+            object_store_key: self.object_store_key,
+            installed_plugins: self.installed_plugins,
+
+            transformed_object_store_key,
+            metadata,
+            component_size: transformed_data.len() as u64,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FinalizedComponentRevision {
+    pub environment_id: EnvironmentId,
+    pub component_id: ComponentId,
+    pub component_name: ComponentName,
+    pub component_type: ComponentType,
+    pub original_files: Vec<InitialComponentFile>,
+    pub files: Vec<InitialComponentFile>,
+    pub original_env: BTreeMap<String, String>,
+    pub env: BTreeMap<String, String>,
+    pub wasm_hash: golem_common::model::diff::Hash,
+    pub object_store_key: String,
+    pub installed_plugins: Vec<PluginInstallation>,
+
+    pub transformed_object_store_key: String,
+    pub metadata: ComponentMetadata,
+    pub component_size: u64,
+}
 
 #[derive(Debug, Clone, Object)]
 #[oai(rename_all = "camelCase")]
@@ -60,64 +156,23 @@ pub struct Component {
 }
 
 impl Component {
-    pub fn new(
-        environment_id: EnvironmentId,
-        component_id: ComponentId,
-        component_name: ComponentName,
-        component_type: ComponentType,
-        data: &[u8],
-        files: Vec<InitialComponentFile>,
-        installed_plugins: Vec<PluginInstallation>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        env: BTreeMap<String, String>,
-        agent_types: Vec<AgentType>,
-        wasm_hash: Hash,
-    ) -> Result<Self, ComponentProcessingError> {
-        let metadata = ComponentMetadata::analyse_component(data, dynamic_linking, agent_types)?;
+    pub fn into_new_revision(self) -> NewComponentRevision {
+        NewComponentRevision {
+            environment_id: self.environment_id,
+            component_id: self.versioned_component_id.component_id,
+            component_name: self.component_name,
+            component_type: self.component_type,
+            original_files: self.original_files,
+            files: self.files,
+            original_env: self.original_env,
+            env: self.env,
+            wasm_hash: self.wasm_hash,
+            object_store_key: self.object_store_key,
+            installed_plugins: self.installed_plugins,
 
-        let versioned_component_id = VersionedComponentId {
-            component_id: component_id.clone(),
-            version: 0,
-        };
-
-        Ok(Self {
-            environment_id,
-            component_name,
-            component_size: data.len() as u64,
-            metadata,
-            created_at: Utc::now(),
-            object_store_key: Uuid::new_v4().to_string(),
-            transformed_object_store_key: Uuid::new_v4().to_string(),
-            versioned_component_id,
-            component_type,
-            original_files: files.clone(),
-            files,
-            installed_plugins,
-            original_env: env.clone(),
-            env,
-            wasm_hash,
-        })
-    }
-
-    pub fn full_object_store_key(&self) -> String {
-        format!("{}:user", self.object_store_key)
-    }
-
-    pub fn full_transformed_object_store_key(&self) -> String {
-        format!("{}:protected", self.transformed_object_store_key)
-    }
-
-    pub fn regenerate_object_store_key(&mut self) {
-        self.object_store_key = Uuid::new_v4().to_string();
-    }
-
-    pub fn regenerate_transformed_object_store_key(&mut self) {
-        self.transformed_object_store_key = Uuid::new_v4().to_string();
-    }
-
-    pub fn reset_transformations(&mut self) {
-        self.env = self.original_env.clone();
-        self.files = self.original_files.clone();
+            agent_types: self.metadata.agent_types,
+            dynamic_linking: self.metadata.dynamic_linking,
+        }
     }
 }
 
@@ -256,4 +311,10 @@ fn convert_to_pretty_type(analysed_type: &Option<AnalysedType>) -> String {
             rib::TypeName::try_from(x.clone()).map_or("unknown".to_string(), |x| x.to_string())
         })
         .unwrap_or("unit".to_string())
+}
+
+#[derive(Clone, Debug, Object, Default)]
+pub struct ComponentFileOptions {
+    /// Path of the file in the uploaded archive
+    pub permissions: ComponentFilePermissions,
 }

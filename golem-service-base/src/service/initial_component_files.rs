@@ -79,7 +79,7 @@ impl InitialComponentFilesService {
     pub async fn put_if_not_exists(
         &self,
         environment_id: &EnvironmentId,
-        data: impl ReplayableStream<Item = Result<Bytes, Error>, Error = Error>,
+        data: impl ReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<InitialComponentFileKey, Error> {
         let hash = data.content_hash().await?;
 

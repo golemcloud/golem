@@ -588,7 +588,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, Error>, Error = Error>,
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
@@ -598,7 +598,7 @@ impl BlobStorage for S3BlobStorage {
                 Client,
                 &String,
                 PathBuf,
-                &dyn ErasedReplayableStream<Item = Result<Bytes, Error>, Error = Error>,
+                &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
             ),
         ) -> Pin<
             Box<dyn Future<Output = Result<(), SdkErrorOrCustomError<PutObjectError>>> + 'a + Send>,
