@@ -18,6 +18,8 @@ use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
+use crate::services::account::AccountError;
+use crate::services::plan::PlanError;
 
 #[derive(ApiResponse, Debug, Clone)]
 pub enum ApiError {
@@ -74,6 +76,32 @@ impl From<std::io::Error> for ApiError {
         Self::InternalError(Json(ErrorBody {
             error: value.to_string(),
         }))
+    }
+}
+
+impl From<AccountError> for ApiError {
+    fn from(value: AccountError) -> Self {
+        match value {
+            AccountError::AccountNotFound(_) => {
+                Self::NotFound(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+
+            AccountError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+        }
+    }
+}
+
+impl From<PlanError> for ApiError {
+    fn from(value: PlanError) -> Self {
+        match value {
+            PlanError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+        }
     }
 }
 

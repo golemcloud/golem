@@ -25,11 +25,23 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::Instrument;
+use crate::services::account::AccountService;
+use std::sync::Arc;
 
-pub struct AccountsApi {}
+pub struct AccountsApi {
+    account_service: Arc<AccountService>
+}
 
 #[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Account)]
 impl AccountsApi {
+    pub fn new(
+        account_service: Arc<AccountService>
+    ) -> Self {
+        Self {
+            account_service
+        }
+    }
+
     /// Find accounts
     ///
     /// Find matching accounts. Only your own account or accounts you have at least one grant from will be returned
@@ -59,35 +71,6 @@ impl AccountsApi {
         todo!()
     }
 
-    /// Create account
-    ///
-    /// Create a new account. The response is the created account data.
-    #[oai(path = "/", method = "post", operation_id = "create_account")]
-    async fn post_account(
-        &self,
-        data: Json<AccountData>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Account>> {
-        let record = recorded_http_api_request!("create_account", account_name = data.name.clone());
-
-        let auth = AuthCtx::new(token.secret());
-
-        let response = self
-            .post_account_internal(data.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn post_account_internal(
-        &self,
-        _data: AccountData,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Account>> {
-        todo!()
-    }
-
     /// Get account
     ///
     /// Retrieve an account for a given Account ID
@@ -112,10 +95,11 @@ impl AccountsApi {
 
     async fn get_account_internal(
         &self,
-        _account_id: AccountId,
+        account_id: AccountId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        todo!()
+        let result = self.account_service.get(&account_id).await?;
+        Ok(Json(result))
     }
 
     /// Get account's plan
