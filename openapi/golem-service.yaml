@@ -9646,6 +9646,21 @@ components:
       required:
       - oplogIdx
       - data
+    CreateAgentInstanceParameters:
+      title: CreateAgentInstanceParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        key:
+          $ref: '#/components/schemas/AgentInstanceKey'
+        parameters:
+          $ref: '#/components/schemas/DataValue'
+      required:
+      - timestamp
+      - key
+      - parameters
     CreateParameters:
       title: CreateParameters
       type: object
@@ -9787,6 +9802,18 @@ components:
       required:
       - projectId
       - domainName
+    DropAgentInstanceParameters:
+      title: DropAgentInstanceParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        key:
+          $ref: '#/components/schemas/AgentInstanceKey'
+      required:
+      - timestamp
+      - key
     ElementValue:
       discriminator:
         propertyName: type
@@ -10643,6 +10670,8 @@ components:
           FinishSpan: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
           SetSpanAttribute: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
           ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
+          CreateAgentInstance: '#/components/schemas/PublicOplogEntry_CreateAgentInstanceParameters'
+          DropAgentInstance: '#/components/schemas/PublicOplogEntry_DropAgentInstanceParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -10678,6 +10707,8 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_CreateAgentInstanceParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_DropAgentInstanceParameters'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
       type: object
@@ -10774,6 +10805,27 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ChangeRetryPolicyParameters'
+    PublicOplogEntry_CreateAgentInstanceParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CreateAgentInstance
+            type: string
+            enum:
+            - CreateAgentInstance
+        required:
+        - type
+      - $ref: '#/components/schemas/CreateAgentInstanceParameters'
     PublicOplogEntry_CreateParameters:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -10837,6 +10889,27 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/DescribeResourceParameters'
+    PublicOplogEntry_DropAgentInstanceParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: DropAgentInstance
+            type: string
+            enum:
+            - DropAgentInstance
+        required:
+        - type
+      - $ref: '#/components/schemas/DropAgentInstanceParameters'
     PublicOplogEntry_EndRegionParameters:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
