@@ -77,9 +77,10 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
     let instance = linker.instantiate_async(&mut store, &component).await?;
 
     let func = find_discover_function(&mut store, &instance)?;
-    let typed_func = func.typed::<(), (
-        Vec<crate::model::agent::bindings::golem::agent::common::AgentType>,
-    )>(&mut store)?;
+    let typed_func = func
+        .typed::<(), (Vec<crate::model::agent::bindings::golem::agent::common::AgentType>,)>(
+            &mut store,
+        )?;
     let results = typed_func.call_async(&mut store, ()).await?;
     typed_func.post_return_async(&mut store).await?;
 

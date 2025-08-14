@@ -7,6 +7,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataSuccessResponse,
 };
 use golem_common::config::RedisConfig;
+use golem_common::model::agent::DataValue;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -98,7 +99,6 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
-use golem_common::model::agent::DataValue;
 
 pub struct TestWorkerExecutor {
     _join_set: Option<JoinSet<anyhow::Result<()>>>,

@@ -46,6 +46,7 @@ use crate::workerctx::{
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::ProjectId;
+use golem_common::model::agent::DataValue;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -71,7 +72,6 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
-use golem_common::model::agent::DataValue;
 
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
