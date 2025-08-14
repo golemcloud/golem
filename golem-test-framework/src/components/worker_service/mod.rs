@@ -1439,6 +1439,46 @@ async fn env_vars(
 fn http_worker_metadata_to_grpc(
     worker_metadata: golem_client::model::WorkerMetadata,
 ) -> WorkerMetadata {
+    let mut owned_resources = Vec::new();
+    for instance in worker_metadata.exported_resource_instances {
+        owned_resources.push(
+            golem_api_grpc::proto::golem::worker::ResourceDescription {
+                description: Some(
+                    golem_api_grpc::proto::golem::worker::resource_description::Description::ExportedResourceInstance(
+                        golem_api_grpc::proto::golem::worker::ExportedResourceInstanceDescription {
+                            resource_id: instance.key.resource_id,
+                            resource_name: instance.description.resource_name,
+                            resource_owner: instance.description.resource_owner,
+                            created_at: Some(SystemTime::from(instance.description.created_at).into()),
+                            is_indexed: instance.description.resource_params.is_some(),
+                            resource_params: instance.description.resource_params.unwrap_or_default(),
+                        },
+                    ),
+                ),
+            },
+        );
+    }
+    for instance in worker_metadata.agent_instances {
+        owned_resources.push(
+            golem_api_grpc::proto::golem::worker::ResourceDescription {
+                description: Some(
+                    golem_api_grpc::proto::golem::worker::resource_description::Description::AgentInstance(
+                        golem_api_grpc::proto::golem::worker::AgentInstanceDescription {
+                            agent_type: instance.key.agent_type,
+                            agent_id: instance.key.agent_id,
+                            created_at: Some(SystemTime::from(instance.description.created_at).into()),
+                            agent_parameters: instance
+                                .description
+                                .agent_parameters
+                                .into_iter()
+                                .map(|v| v.into())
+                                .collect(),
+                        },
+                    ),
+                ),
+            },
+        );
+    }
     WorkerMetadata {
         worker_id: Some(worker_metadata.worker_id.into()),
         created_by: Some(AccountId {
@@ -1493,11 +1533,7 @@ fn http_worker_metadata_to_grpc(
         last_error: worker_metadata.last_error,
         component_size: worker_metadata.component_size,
         total_linear_memory_size: worker_metadata.total_linear_memory_size,
-        owned_resources: worker_metadata
-            .owned_resources
-            .into_iter()
-            .map(|(k, v)| (k.parse().unwrap(), v.into()))
-            .collect(),
+        owned_resources,
         active_plugins: worker_metadata
             .active_plugins
             .into_iter()

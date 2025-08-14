@@ -3430,6 +3430,42 @@ components:
     ActivatePluginResponse:
       type: object
       title: ActivatePluginResponse
+    AgentInstanceDescription:
+      type: object
+      title: AgentInstanceDescription
+      required:
+      - createdAt
+      - agentParameters
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        agentParameters:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValueAndType'
+    AgentInstanceKey:
+      type: object
+      title: AgentInstanceKey
+      required:
+      - agentType
+      - agentId
+      properties:
+        agentType:
+          type: string
+        agentId:
+          type: string
+    AgentInstanceMetadata:
+      type: object
+      title: AgentInstanceMetadata
+      required:
+      - key
+      - description
+      properties:
+        key:
+          $ref: '#/components/schemas/AgentInstanceKey'
+        description:
+          $ref: '#/components/schemas/AgentInstanceDescription'
     AnalysedResourceMode:
       type: string
       enum:
@@ -4171,6 +4207,45 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
+    ExportedResourceInstanceDescription:
+      type: object
+      title: ExportedResourceInstanceDescription
+      required:
+      - createdAt
+      - resourceOwner
+      - resourceName
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        resourceOwner:
+          type: string
+        resourceName:
+          type: string
+        resourceParams:
+          type: array
+          items:
+            type: string
+    ExportedResourceInstanceKey:
+      type: object
+      title: ExportedResourceInstanceKey
+      required:
+      - resourceId
+      properties:
+        resourceId:
+          type: integer
+          format: uint64
+    ExportedResourceMetadata:
+      type: object
+      title: ExportedResourceMetadata
+      required:
+      - key
+      - description
+      properties:
+        key:
+          $ref: '#/components/schemas/ExportedResourceInstanceKey'
+        description:
+          $ref: '#/components/schemas/ExportedResourceInstanceDescription'
     FailedUpdate:
       type: object
       title: FailedUpdate
@@ -6321,7 +6396,8 @@ components:
       - createdAt
       - componentSize
       - totalLinearMemorySize
-      - ownedResources
+      - exportedResourceInstances
+      - agentInstances
       - activePlugins
       - skippedRegions
       - deletedRegions
@@ -6371,10 +6447,14 @@ components:
         totalLinearMemorySize:
           type: integer
           format: uint64
-        ownedResources:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/WorkerResourceDescription'
+        exportedResourceInstances:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportedResourceMetadata'
+        agentInstances:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentInstanceMetadata'
         activePlugins:
           type: array
           items:
@@ -6422,25 +6502,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/WorkerFilter'
-    WorkerResourceDescription:
-      type: object
-      title: WorkerResourceDescription
-      required:
-      - createdAt
-      - resourceOwner
-      - resourceName
-      properties:
-        createdAt:
-          type: string
-          format: date-time
-        resourceOwner:
-          type: string
-        resourceName:
-          type: string
-        resourceParams:
-          type: array
-          items:
-            type: string
     WorkerStatus:
       type: string
       description: |-

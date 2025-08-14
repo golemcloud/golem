@@ -2,14 +2,13 @@ use crate::services::{HasConfig, HasOplogService};
 use crate::worker::is_worker_error_retriable;
 use async_recursion::async_recursion;
 use golem_common::base_model::{OplogIndex, PluginInstallationId};
-use golem_common::model::oplog::{
-    OplogEntry, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
-};
+use golem_common::model::oplog::{OplogEntry, TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig, SuccessfulUpdateRecord,
+    ExportedResourceInstanceDescription, ExportedResourceInstanceKey, FailedUpdateRecord,
+    IdempotencyKey, OwnedWorkerId, RetryConfig, SuccessfulUpdateRecord,
     TimestampedWorkerInvocation, WorkerInvocation, WorkerMetadata, WorkerResourceDescription,
-    WorkerStatus, WorkerStatusRecord,
+    WorkerResourceKey, WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -604,10 +603,10 @@ fn calculate_total_linear_memory_size(
 }
 
 fn calculate_owned_resources(
-    initial: HashMap<WorkerResourceId, WorkerResourceDescription>,
+    initial: HashMap<WorkerResourceKey, WorkerResourceDescription>,
     skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> HashMap<WorkerResourceId, WorkerResourceDescription> {
+) -> HashMap<WorkerResourceKey, WorkerResourceDescription> {
     let mut result = initial;
     for (idx, entry) in entries {
         // Skipping entries in deleted regions as they are not applied during replay
@@ -622,25 +621,42 @@ fn calculate_owned_resources(
                 resource_type_id,
             } => {
                 result.insert(
-                    *id,
-                    WorkerResourceDescription {
-                        created_at: *timestamp,
-                        resource_owner: resource_type_id.owner.clone(),
-                        resource_name: resource_type_id.name.clone(),
-                        resource_params: None,
-                    },
+                    WorkerResourceKey::ExportedResourceInstanceKey(ExportedResourceInstanceKey {
+                        resource_id: *id,
+                    }),
+                    WorkerResourceDescription::ExportedResourceInstance(
+                        ExportedResourceInstanceDescription {
+                            created_at: *timestamp,
+                            resource_owner: resource_type_id.owner.clone(),
+                            resource_name: resource_type_id.name.clone(),
+                            resource_params: None,
+                        },
+                    ),
                 );
             }
             OplogEntry::DropResource { id, .. } => {
-                result.remove(id);
+                result.remove(&WorkerResourceKey::ExportedResourceInstanceKey(
+                    ExportedResourceInstanceKey { resource_id: *id },
+                ));
             }
             OplogEntry::DescribeResource {
                 id,
                 indexed_resource_parameters,
                 ..
             } => {
-                if let Some(description) = result.get_mut(id) {
-                    description.resource_params = Some(indexed_resource_parameters.clone());
+                if let Some(description) =
+                    result.get_mut(&WorkerResourceKey::ExportedResourceInstanceKey(
+                        ExportedResourceInstanceKey { resource_id: *id },
+                    ))
+                {
+                    if let WorkerResourceDescription::ExportedResourceInstance(
+                        ExportedResourceInstanceDescription {
+                            resource_params, ..
+                        },
+                    ) = description
+                    {
+                        *resource_params = Some(indexed_resource_parameters.clone());
+                    }
                 }
             }
             _ => {}

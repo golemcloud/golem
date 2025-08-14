@@ -59,9 +59,9 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{worker_enumeration, HasAll, HasConfig, HasOplogService};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    AgentStore, DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
+    IndexedResourceStore, InvocationContextManagement, InvocationHooks, InvocationManagement,
+    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
@@ -342,6 +342,31 @@ impl IndexedResourceStore for DebugContext {
     ) {
         self.durable_ctx
             .drop_indexed_resource(resource_owner, resource_name, resource_params)
+    }
+}
+
+#[async_trait]
+impl AgentStore for DebugContext {
+    async fn store_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: Vec<ValueAndType>,
+    ) {
+        self.durable_ctx
+            .store_agent_instance(agent_type, agent_id, parameters)
+            .await;
+    }
+
+    async fn remove_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: Vec<ValueAndType>,
+    ) {
+        self.durable_ctx
+            .remove_agent_instance(agent_type, agent_id, parameters)
+            .await;
     }
 }
 

@@ -33,7 +33,7 @@ use golem_wasm_ast::{
     IgnoreAllButMetadata,
 };
 use heck::ToKebabCase;
-use poem_openapi::registry::MetaSchemaRef;
+use poem_openapi::registry::{MetaSchemaRef, Registry};
 use poem_openapi::types::ParseResult;
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 use serde::{Deserialize, Serialize, Serializer};
@@ -222,6 +222,10 @@ impl poem_openapi::types::Type for ComponentMetadata {
         <ComponentMetadataInnerData as poem_openapi::types::Type>::schema_ref()
     }
 
+    fn register(registry: &mut Registry) {
+        <ComponentMetadataInnerData as poem_openapi::types::Type>::register(registry);
+    }
+
     fn as_raw_value(&self) -> Option<&Self::RawValueType> {
         <ComponentMetadataInnerData as poem_openapi::types::Type>::as_raw_value(&self.data)
     }
@@ -299,7 +303,7 @@ impl poem_openapi::types::ToYAML for ComponentMetadata {
     feature = "poem",
     oai(rename = "ComponentMetadata", rename_all = "camelCase")
 )]
-#[serde(rename_all = "camelCase")]
+#[serde(rename = "ComponentMetadata", rename_all = "camelCase")]
 pub struct ComponentMetadataInnerData {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<Producers>,

@@ -37,6 +37,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         true,
         &[
             ("AgentType", "golem_common::model::agent::AgentType"),
+            ("AgentInstanceKey", "golem_common::model::AgentInstanceKey"),
+            ("AgentInstanceDescription", "golem_common::model::AgentInstanceDescription"),
             ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
             ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
             ("PluginScope", "golem_common::model::plugin::PluginScope"),
@@ -56,6 +58,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             ("ErrorBody", "golem_common::model::error::ErrorBody"),
             ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
+            ("ExportedResourceInstanceKey", "golem_common::model::ExportedResourceInstanceKey"),
+            ("ExportedResourceInstanceDescription", "golem_common::model::ExportedResourceInstanceDescription"),
             ("GolemError", "golem_common::model::error::GolemError"),
             (
                 "PluginInstallationAction",

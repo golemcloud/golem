@@ -26,12 +26,13 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
-    AccountId, IdempotencyKey, OwnedWorkerId, RetryConfig, ScheduledAction, Timestamp,
-    WorkerInvocation, WorkerResourceDescription,
+    AccountId, AgentInstanceDescription, ExportedResourceInstanceDescription, IdempotencyKey,
+    OwnedWorkerId, RetryConfig, ScheduledAction, Timestamp, WorkerInvocation,
+    WorkerResourceDescription,
 };
 use golem_common::serialization::deserialize;
 use golem_wasm_rpc::wasmtime::ResourceTypeId;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
@@ -452,19 +453,26 @@ pub fn oplog_entry() {
 
 #[test]
 pub fn worker_resource_description() {
-    let wrd1 = WorkerResourceDescription {
+    let wrd1 =
+        WorkerResourceDescription::ExportedResourceInstance(ExportedResourceInstanceDescription {
+            created_at: Timestamp::from(1724701938466),
+            resource_owner: "owner".to_string(),
+            resource_name: "name".to_string(),
+            resource_params: None,
+        });
+    let wrd2 =
+        WorkerResourceDescription::ExportedResourceInstance(ExportedResourceInstanceDescription {
+            created_at: Timestamp::from(1724701938466),
+            resource_owner: "rpc:counters-export/api".to_string(),
+            resource_name: "counter".to_string(),
+            resource_params: Some(vec!["a".to_string(), "b".to_string()]),
+        });
+    let wrd3 = WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
         created_at: Timestamp::from(1724701938466),
-        resource_owner: "owner".to_string(),
-        resource_name: "name".to_string(),
-        resource_params: None,
-    };
-    let wrd2 = WorkerResourceDescription {
-        created_at: Timestamp::from(1724701938466),
-        resource_owner: "rpc:counters-export/api".to_string(),
-        resource_name: "counter".to_string(),
-        resource_params: Some(vec!["a".to_string(), "b".to_string()]),
-    };
+        agent_parameters: vec!["a".into_value_and_type(), 10.into_value_and_type()],
+    });
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_resource_description", &mut mint, wrd1);
     backward_compatible("worker_resource_description_indexed", &mut mint, wrd2);
+    backward_compatible("worker_resource_description_agent", &mut mint, wrd3);
 }

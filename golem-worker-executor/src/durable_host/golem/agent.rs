@@ -14,27 +14,33 @@
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::golem::agent::host::{Host, ValueAndType};
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{AgentStore, WorkerCtx};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn register_agent(
         &mut self,
         agent_type: String,
         agent_id: String,
-        _parameters: Vec<ValueAndType>,
+        parameters: Vec<ValueAndType>,
     ) -> anyhow::Result<()> {
-        // TODO: log
-        // TODO
+        let parameters = parameters.into_iter().map(|v| v.into()).collect::<Vec<_>>();
+
+        self.store_agent_instance(agent_type, agent_id, parameters)
+            .await;
 
         Ok(())
     }
 
     async fn unregister_agent(
         &mut self,
+        agent_type: String,
         agent_id: String,
-        _parameters: Vec<ValueAndType>,
+        parameters: Vec<ValueAndType>,
     ) -> anyhow::Result<()> {
-        // TODO: log
+        let parameters = parameters.into_iter().map(|v| v.into()).collect::<Vec<_>>();
+
+        self.remove_agent_instance(agent_type, agent_id, parameters)
+            .await;
 
         Ok(())
     }

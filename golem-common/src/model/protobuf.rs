@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{WorkerResourceDescription, WorkerWasiConfigVarsFilter};
-use crate::model::oplog::OplogIndex;
+use super::{
+    AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
+    ExportedResourceInstanceKey, WorkerResourceDescription, WorkerResourceKey,
+    WorkerWasiConfigVarsFilter,
+};
+use crate::model::oplog::{OplogIndex, WorkerResourceId};
 use crate::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentType, FilterComparator, IdempotencyKey,
@@ -27,6 +31,7 @@ use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
 use golem_api_grpc::proto::golem::worker::Cursor;
+use golem_wasm_rpc::ValueAndType;
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
 
@@ -758,31 +763,106 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
     }
 }
 
-impl From<WorkerResourceDescription> for golem::worker::ResourceMetadata {
-    fn from(value: WorkerResourceDescription) -> Self {
-        Self {
-            created_at: Some(value.created_at.into()),
-            resource_owner: value.resource_owner,
-            resource_name: value.resource_name,
-            is_indexed: value.resource_params.is_some(),
-            resource_params: value.resource_params.unwrap_or_default(),
-        }
+pub fn to_protobuf_resource_description(
+    key: WorkerResourceKey,
+    description: WorkerResourceDescription,
+) -> Result<golem::worker::ResourceDescription, String> {
+    match (key, description) {
+        (
+            WorkerResourceKey::ExportedResourceInstanceKey(key),
+            WorkerResourceDescription::ExportedResourceInstance(description),
+        ) => Ok(golem::worker::ResourceDescription {
+            description: Some(
+                golem::worker::resource_description::Description::ExportedResourceInstance(
+                    golem::worker::ExportedResourceInstanceDescription {
+                        created_at: Some(description.created_at.into()),
+                        resource_id: key.resource_id.0,
+                        resource_owner: description.resource_owner,
+                        resource_name: description.resource_name,
+                        is_indexed: description.resource_params.is_some(),
+                        resource_params: description
+                            .resource_params
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|vnt| vnt.into())
+                            .collect(),
+                    },
+                ),
+            ),
+        }),
+        (
+            WorkerResourceKey::AgentInstanceKey(key),
+            WorkerResourceDescription::AgentInstance(description),
+        ) => Ok(golem::worker::ResourceDescription {
+            description: Some(
+                golem::worker::resource_description::Description::AgentInstance(
+                    golem::worker::AgentInstanceDescription {
+                        created_at: Some(description.created_at.into()),
+                        agent_type: key.agent_type,
+                        agent_id: key.agent_id,
+                        agent_parameters: description
+                            .agent_parameters
+                            .into_iter()
+                            .map(|vnt| vnt.into())
+                            .collect(),
+                    },
+                ),
+            ),
+        }),
+        _ => Err("Invalid key/description combination".to_string()),
     }
 }
 
-impl TryFrom<golem::worker::ResourceMetadata> for WorkerResourceDescription {
-    type Error = String;
-
-    fn try_from(value: golem::worker::ResourceMetadata) -> Result<Self, Self::Error> {
-        Ok(Self {
-            created_at: value.created_at.ok_or("Missing created_at")?.into(),
-            resource_owner: value.resource_owner,
-            resource_name: value.resource_name,
-            resource_params: if value.is_indexed {
-                Some(value.resource_params)
-            } else {
-                None
+pub fn from_protobuf_resource_description(
+    description: golem::worker::ResourceDescription,
+) -> Result<(WorkerResourceKey, WorkerResourceDescription), String> {
+    match description.description {
+        Some(golem::worker::resource_description::Description::ExportedResourceInstance(
+            golem::worker::ExportedResourceInstanceDescription {
+                created_at,
+                resource_id,
+                resource_owner,
+                resource_name,
+                is_indexed,
+                resource_params,
             },
-        })
+        )) => Ok((
+            WorkerResourceKey::ExportedResourceInstanceKey(ExportedResourceInstanceKey {
+                resource_id: WorkerResourceId(resource_id),
+            }),
+            WorkerResourceDescription::ExportedResourceInstance(
+                ExportedResourceInstanceDescription {
+                    created_at: created_at.ok_or("Missing created_at")?.into(),
+                    resource_owner,
+                    resource_name,
+                    resource_params: if is_indexed {
+                        Some(resource_params)
+                    } else {
+                        None
+                    },
+                },
+            ),
+        )),
+        Some(golem::worker::resource_description::Description::AgentInstance(
+            golem::worker::AgentInstanceDescription {
+                created_at,
+                agent_type,
+                agent_id,
+                agent_parameters,
+            },
+        )) => Ok((
+            WorkerResourceKey::AgentInstanceKey(AgentInstanceKey {
+                agent_type,
+                agent_id,
+            }),
+            WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
+                created_at: created_at.ok_or("Missing created_at")?.into(),
+                agent_parameters: agent_parameters
+                    .into_iter()
+                    .map(ValueAndType::try_from)
+                    .collect::<Result<Vec<_>, _>>()?,
+            }),
+        )),
+        None => Err("Missing description".to_string()),
     }
 }

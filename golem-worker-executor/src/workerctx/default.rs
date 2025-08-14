@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::LogEventEmitBehaviour;
+use super::{AgentStore, LogEventEmitBehaviour};
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{
@@ -468,6 +468,31 @@ impl IndexedResourceStore for Context {
     ) {
         self.durable_ctx
             .drop_indexed_resource(resource_owner, resource_name, resource_params)
+    }
+}
+
+#[async_trait]
+impl AgentStore for Context {
+    async fn store_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: Vec<ValueAndType>,
+    ) {
+        self.durable_ctx
+            .store_agent_instance(agent_type, agent_id, parameters)
+            .await
+    }
+
+    async fn remove_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: Vec<ValueAndType>,
+    ) {
+        self.durable_ctx
+            .remove_agent_instance(agent_type, agent_id, parameters)
+            .await
     }
 }
 

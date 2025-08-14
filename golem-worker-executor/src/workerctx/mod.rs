@@ -76,6 +76,7 @@ pub trait WorkerCtx:
     + FileSystemReading
     + DynamicLinking<Self>
     + InvocationContextManagement
+    + AgentStore
     + Send
     + Sync
     + Sized
@@ -365,6 +366,24 @@ pub trait IndexedResourceStore {
         resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
+    );
+}
+
+/// Stores information about living agent instances
+#[async_trait]
+pub trait AgentStore {
+    async fn store_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: Vec<ValueAndType>,
+    );
+
+    async fn remove_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: Vec<ValueAndType>,
     );
 }
 

@@ -79,9 +79,9 @@ use golem_worker_executor::services::{
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    AgentStore, DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
+    IndexedResourceStore, InvocationContextManagement, InvocationHooks, InvocationManagement,
+    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
@@ -397,6 +397,31 @@ impl IndexedResourceStore for TestWorkerCtx {
     ) {
         self.durable_ctx
             .drop_indexed_resource(resource_owner, resource_name, resource_params)
+    }
+}
+
+#[async_trait]
+impl AgentStore for TestWorkerCtx {
+    async fn store_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: Vec<ValueAndType>,
+    ) {
+        self.durable_ctx
+            .store_agent_instance(agent_type, agent_id, parameters)
+            .await;
+    }
+
+    async fn remove_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: Vec<ValueAndType>,
+    ) {
+        self.durable_ctx
+            .remove_agent_instance(agent_type, agent_id, parameters)
+            .await;
     }
 }
 

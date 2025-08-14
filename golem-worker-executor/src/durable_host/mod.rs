@@ -69,9 +69,9 @@ use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
 use crate::worker::status::calculate_last_known_status;
 use crate::worker::{interpret_function_result, is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    AgentStore, ExternalOperations, FileSystemReading, IndexedResourceStore,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -89,7 +89,10 @@ use golem_common::model::oplog::{
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{AccountId, PluginInstallationId, ProjectId};
+use golem_common::model::{
+    AccountId, AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
+    ExportedResourceInstanceKey, PluginInstallationId, ProjectId, WorkerResourceKey,
+};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
@@ -1199,13 +1202,17 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
             self.state.oplog.add(entry.clone()).await;
             self.update_worker_status(move |status| {
                 status.owned_resources.insert(
-                    resource_id,
-                    WorkerResourceDescription {
-                        created_at: entry.timestamp(),
-                        resource_owner: name.owner,
-                        resource_name: name.name,
-                        resource_params: None,
-                    },
+                    WorkerResourceKey::ExportedResourceInstanceKey(ExportedResourceInstanceKey {
+                        resource_id,
+                    }),
+                    WorkerResourceDescription::ExportedResourceInstance(
+                        ExportedResourceInstanceDescription {
+                            created_at: entry.timestamp(),
+                            resource_owner: name.owner,
+                            resource_name: name.name,
+                            resource_params: None,
+                        },
+                    ),
                 );
             })
             .await;
@@ -1223,7 +1230,11 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
                     .add(OplogEntry::drop_resource(id, resource_type_id.clone()))
                     .await;
                 self.update_worker_status(move |status| {
-                    status.owned_resources.remove(&id);
+                    status
+                        .owned_resources
+                        .remove(&WorkerResourceKey::ExportedResourceInstanceKey(
+                            ExportedResourceInstanceKey { resource_id: id },
+                        ));
                 })
                 .await;
             }
@@ -1377,8 +1388,20 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
                 ))
                 .await;
             self.update_worker_status(|status| {
-                if let Some(description) = status.owned_resources.get_mut(&resource) {
-                    description.resource_params = Some(key.resource_params);
+                if let Some(description) =
+                    status
+                        .owned_resources
+                        .get_mut(&WorkerResourceKey::ExportedResourceInstanceKey(
+                            ExportedResourceInstanceKey {
+                                resource_id: resource,
+                            },
+                        ))
+                {
+                    if let WorkerResourceDescription::ExportedResourceInstance(description) =
+                        description
+                    {
+                        description.resource_params = Some(resource_params.to_vec());
+                    }
                 }
             })
             .await;
@@ -1397,6 +1420,62 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
             resource_params: resource_params.to_vec(),
         };
         self.state.indexed_resources.remove(&key);
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> AgentStore for DurableWorkerCtx<Ctx> {
+    async fn store_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: Vec<ValueAndType>,
+    ) {
+        let key = AgentInstanceKey {
+            agent_type,
+            agent_id,
+        };
+        let description = AgentInstanceDescription {
+            created_at: Timestamp::now_utc(),
+            agent_parameters: parameters,
+        };
+        self.state
+            .agent_instances
+            .insert(key.clone(), description.clone());
+        if self.state.is_live() {
+            // TODO: oplog entry
+            self.update_worker_status(|status| {
+                status.owned_resources.insert(
+                    WorkerResourceKey::AgentInstanceKey(key),
+                    WorkerResourceDescription::AgentInstance(description.clone()),
+                );
+            })
+            .await;
+        }
+    }
+
+    async fn remove_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        _parameters: Vec<ValueAndType>,
+    ) {
+        let key = AgentInstanceKey {
+            agent_type,
+            agent_id,
+        };
+
+        self.state.agent_instances.remove(&key);
+
+        if self.state.is_live() {
+            // TODO: oplog entry
+            self.update_worker_status(|status| {
+                status
+                    .owned_resources
+                    .remove(&WorkerResourceKey::AgentInstanceKey(key));
+            })
+            .await;
+        }
     }
 }
 
@@ -2416,6 +2495,8 @@ struct PrivateDurableWorkerState {
     snapshotting_mode: Option<PersistenceLevel>,
 
     indexed_resources: HashMap<IndexedResourceKey, WorkerResourceId>,
+    agent_instances: HashMap<AgentInstanceKey, AgentInstanceDescription>,
+
     component_metadata: golem_service_base::model::Component,
 
     total_linear_memory_size: u64,
@@ -2504,6 +2585,7 @@ impl PrivateDurableWorkerState {
             open_http_requests: HashMap::new(),
             snapshotting_mode: None,
             indexed_resources: HashMap::new(),
+            agent_instances: HashMap::new(),
             component_metadata,
             total_linear_memory_size,
             replay_state,
@@ -3033,7 +3115,7 @@ async fn update_filesystem(
                             return Ok(UpdateFileSystemResult::NoChanges);
                         }
 
-                        // Try removing it if it's an empty directory, this will fail otherwise and we can report the error.
+                        // Try removing it if it's an empty directory, this will fail otherwise, and we can report the error.
                         tokio::fs::remove_dir(&path).await.map_err(|e|
                             WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
