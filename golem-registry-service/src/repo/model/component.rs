@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{Component, FinalizedComponentRevision};
+use crate::model::component::{Component, FinalizedComponentRevision, PluginInstallation};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::model::account::AccountId;
@@ -282,12 +282,11 @@ pub struct ComponentRevisionRecord {
 
     #[sqlx(skip)]
     pub original_files: Vec<ComponentFileRecord>,
+    #[sqlx(skip)]
+    pub plugins: Vec<ComponentPluginInstallationRecord>,
 
     #[sqlx(skip)]
     pub files: Vec<ComponentFileRecord>,
-    // TODO:
-    //#[sqlx(skip)]
-    //pub installed_plugins: Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>,
 }
 
 impl ComponentRevisionRecord {
@@ -332,8 +331,9 @@ impl ComponentRevisionRecord {
             object_store_key: "".to_string(),
             binary_hash: SqlBlake3Hash::empty(),
             transformed_object_store_key: "".to_string(),
-            files: vec![],
             original_files: vec![],
+            plugins: vec![],
+            files: vec![],
         }
     }
 
@@ -411,6 +411,11 @@ impl ComponentRevisionRecord {
                 .into_iter()
                 .map(|f| ComponentFileRecord::from_model(f, component_id, actor))
                 .collect(),
+            plugins: value
+                .installed_plugins
+                .into_iter()
+                .map(|p| ComponentPluginInstallationRecord::from_model(p, component_id, actor))
+                .collect(),
             original_files: value
                 .original_files
                 .into_iter()
@@ -487,6 +492,53 @@ impl ComponentFileRecord {
             audit: RevisionAuditFields::new(actor.0),
             // TODO: The key is the content hash currently, reuse it here
             hash: SqlBlake3Hash::empty(),
+        }
+    }
+}
+
+// TODO: Ext variant with plugin name and version
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ComponentPluginInstallationRecord {
+    pub component_id: Uuid,
+    // Note: Set by repo during insert
+    pub revision_id: i64,
+    pub plugin_id: Uuid,
+    #[sqlx(flatten)]
+    pub audit: RevisionAuditFields,
+    pub priority: i32,
+    pub parameters: Json<BTreeMap<String, String>>,
+}
+
+impl ComponentPluginInstallationRecord {
+    pub fn ensure_component(self, component_id: Uuid, revision_id: i64, created_by: Uuid) -> Self {
+        Self {
+            component_id,
+            revision_id,
+            audit: RevisionAuditFields {
+                created_by,
+                ..self.audit
+            },
+            ..self
+        }
+    }
+
+    fn from_model(
+        plugin_installation: PluginInstallation,
+        component_id: Uuid,
+        actor: &AccountId,
+    ) -> Self {
+        Self {
+            component_id,
+            revision_id: 0,
+            plugin_id: plugin_installation.id.0,
+            audit: RevisionAuditFields::new(actor.0),
+            priority: plugin_installation.priority,
+            parameters: Json::from(
+                plugin_installation
+                    .parameters
+                    .into_iter()
+                    .collect::<BTreeMap<_, _>>(),
+            ),
         }
     }
 }

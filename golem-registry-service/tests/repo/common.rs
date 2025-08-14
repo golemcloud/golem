@@ -25,7 +25,8 @@ use golem_registry_service::repo::model::audit::{
     AuditFields, DeletableRevisionAuditFields, RevisionAuditFields,
 };
 use golem_registry_service::repo::model::component::{
-    ComponentFileRecord, ComponentRevisionRecord, ComponentRevisionRepoError,
+    ComponentFileRecord, ComponentPluginInstallationRecord, ComponentRevisionRecord,
+    ComponentRevisionRepoError,
 };
 use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
@@ -475,6 +476,24 @@ pub async fn test_component_stage(deps: &Deps) {
             file_key: "xdxd".to_string(),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
         }],
+        plugins: vec![
+            ComponentPluginInstallationRecord {
+                component_id,
+                revision_id: 0,
+                plugin_id: new_repo_uuid(),
+                audit: RevisionAuditFields::new(user.account_id),
+                priority: 1,
+                parameters: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
+            },
+            ComponentPluginInstallationRecord {
+                component_id,
+                revision_id: 0,
+                plugin_id: new_repo_uuid(),
+                audit: RevisionAuditFields::new(user.account_id),
+                priority: 2,
+                parameters: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
+            },
+        ],
         files: vec![ComponentFileRecord {
             component_id,
             revision_id: 0,
@@ -556,6 +575,14 @@ pub async fn test_component_stage(deps: &Deps) {
                 ..file.clone()
             })
             .collect(),
+        plugins: revision_0
+            .plugins
+            .iter()
+            .map(|plugin| ComponentPluginInstallationRecord {
+                revision_id: 1,
+                ..plugin.clone()
+            })
+            .collect(),
         files: revision_0
             .files
             .iter()
@@ -598,6 +625,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let other_component_revision_0 = ComponentRevisionRecord {
         component_id: other_component_id,
         original_files: Default::default(),
+        plugins: Default::default(),
         files: Default::default(),
         ..revision_0.clone()
     }
@@ -651,6 +679,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let revision_after_delete = ComponentRevisionRecord {
         component_id: new_repo_uuid(),
         original_files: Default::default(),
+        plugins: Default::default(),
         files: Default::default(),
         ..revision_0.clone()
     };
@@ -1231,6 +1260,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     transformed_object_store_key: "".to_string(),
                     binary_hash: SqlBlake3Hash::empty(),
                     original_files: vec![],
+                    plugins: vec![],
                     files: vec![],
                 },
             )
