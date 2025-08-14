@@ -38,6 +38,7 @@ k8s-openapi = { workspace = true }
 kill_tree = { version = "0.2.4", features = ["tokio"] }
 kube = { workspace = true }
 postgres = { workspace = true }
+prometheus = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

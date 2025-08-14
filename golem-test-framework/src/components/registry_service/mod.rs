@@ -65,6 +65,7 @@ use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 use url::Url;
 use uuid::Uuid;
+use golem_common::model::component::InitialComponentFile;
 
 #[async_trait]
 pub trait RegistryService: Send + Sync {
@@ -77,8 +78,10 @@ pub trait RegistryService: Send + Sync {
 
     async fn base_http_client(&self) -> reqwest::Client;
 
+    async fn kill(&mut self);
+
     async fn component_http_client(&self, token: &Uuid) -> ComponentServiceHttpClientLive {
-        let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
+        let url = format!("http://{}:{}", self.http_port(), self.http_port());
         ComponentServiceHttpClientLive {
             context: Context {
                 client: self.base_http_client().await,
@@ -88,64 +91,6 @@ pub trait RegistryService: Send + Sync {
         }
     }
 
-    async fn kill(&self);
-}
-
-async fn wait_for_startup(
-    protocol: GolemClientProtocol,
-    host: &str,
-    grpc_port: u16,
-    http_port: u16,
-    timeout: Duration,
-) {
-    wait_for_startup_http(host, http_port, "golem-registry-service", timeout).await
-}
-
-async fn env_vars(
-    http_port: u16,
-    grpc_port: u16,
-    component_compilation_service: Option<(&str, u16)>,
-    rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-    verbosity: Level,
-    private_rdb_connection: bool,
-    cloud_service: &Arc<dyn CloudService>,
-) -> HashMap<String, String> {
-    let mut builder = EnvVarBuilder::golem_service(verbosity)
-        .with_str("GOLEM__COMPONENT_STORE__TYPE", "Local")
-        .with_str("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", "")
-        .with_str(
-            "GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH",
-            "/tmp/ittest-local-object-store/golem",
-        )
-        .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
-        .with_str(
-            "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
-            "/tmp/ittest-local-object-store/golem",
-        )
-        .with("GOLEM__CLOUD_SERVICE__HOST", cloud_service.private_host())
-        .with(
-            "GOLEM__CLOUD_SERVICE__PORT",
-            cloud_service.private_grpc_port().to_string(),
-        )
-        .with(
-            "GOLEM__CLOUD_SERVICE__ACCESS_TOKEN",
-            cloud_service.admin_token().to_string(),
-        )
-        .with("GOLEM__GRPC_PORT", grpc_port.to_string())
-        .with("GOLEM__HTTP_PORT", http_port.to_string())
-        .with_all(rdb.info().env("golem_component", private_rdb_connection));
-
-    match component_compilation_service {
-        Some((host, port)) => {
-            builder = builder
-                .with_str("GOLEM__COMPILATION__TYPE", "Enabled")
-                .with("GOLEM__COMPILATION__CONFIG__HOST", host.to_string())
-                .with("GOLEM__COMPILATION__CONFIG__PORT", port.to_string());
-        }
-        _ => builder = builder.with_str("GOLEM__COMPILATION__TYPE", "Disabled"),
-    };
-
-    builder.build()
 }
 
 async fn build_ifs_archive(

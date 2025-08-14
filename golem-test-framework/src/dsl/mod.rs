@@ -539,7 +539,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
 
         let source_path = if !unverified {
             rename_component_if_needed(
-                self.deps.borrow().component_temp_directory(),
+                self.deps.borrow().temp_directory(),
                 &source_path,
                 &component_name,
             )

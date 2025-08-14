@@ -13,7 +13,7 @@ members = [
     "golem-registry-service",
     "golem-rib",
     "golem-rib-repl",
-    # "golem-test-framework",
+    "golem-test-framework",
     # "golem-shard-manager",
     # "golem-worker-executor",
     # "golem-worker-service",

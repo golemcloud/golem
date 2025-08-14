@@ -37,6 +37,7 @@ pub mod redis;
 pub mod redis_monitor;
 pub mod service;
 pub mod registry_service;
+pub mod blob_storage;
 // pub mod shard_manager;
 // pub mod worker_executor;
 // pub mod worker_executor_cluster;

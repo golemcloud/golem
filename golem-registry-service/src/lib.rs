@@ -20,20 +20,17 @@ pub mod model;
 pub mod repo;
 pub mod services;
 
-use include_dir::include_dir;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use self::config::RegistryServiceConfig;
 use self::bootstrap::Services;
-use tracing::info;
-use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
-use golem_common::config::DbConfig;
-use golem_service_base::db;
-use anyhow::Context;
+use tracing::{info, Instrument};
 use tokio::task::JoinSet;
 use poem::{EndpointExt, Route};
 use poem_openapi::OpenApiService;
 use poem::middleware::CookieJarManager;
 use poem::listener::Listener;
+use poem::middleware::Cors;
+use poem::listener::Acceptor;
 
 #[cfg(test)]
 test_r::enable!();
@@ -43,7 +40,7 @@ pub struct RunDetails {
     pub http_port: u16,
 }
 
-pub struct TrafficReadyEndpoints {
+pub struct SingleExecutableRunDetails {
     // pub grpc_port: u16,
     pub endpoint: BoxEndpoint<'static>,
 }
@@ -71,14 +68,12 @@ impl RegistryService {
         })
     }
 
-    pub async fn run(
+    pub async fn start(
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<RunDetails, anyhow::Error> {
         let http_port = self.start_http_server(join_set).await?;
         // let grpc_port = self.start_grpc_server(join_set).await?;
-
-        info!("Started registry service on ports: http: {http_port}, grpc: {grpc_port}");
 
         Ok(RunDetails {
             http_port,
@@ -87,14 +82,14 @@ impl RegistryService {
     }
 
     /// Endpoints are only valid until joinset is dropped
-    pub async fn start_endpoints(
+    pub async fn start_for_single_executable(
         &self,
-        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-    ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
+        _join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    ) -> Result<SingleExecutableRunDetails, anyhow::Error> {
         // let grpc_port = self.start_grpc_server(join_set).await?;
         let endpoint = api::make_open_api_service(&self.services).boxed();
 
-        Ok(TrafficReadyEndpoints {
+        Ok(SingleExecutableRunDetails {
             // grpc_port,
             endpoint,
         })
@@ -108,13 +103,16 @@ impl RegistryService {
     //     &self,
     //     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     // ) -> Result<u16, anyhow::Error> {
-    //     grpcapi::start_grpc_server(
+    //     let port = grpcapi::start_grpc_server(
     //         SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), self.config.grpc_port).into(),
     //         &self.services,
     //         join_set,
     //     )
     //     .await
-    //     .map_err(|err| anyhow!(err).context("gRPC server failed"))
+    //     .map_err(|err| anyhow!(err).context("gRPC server failed"))?
+
+     //    info!("Started registry-service grpc server on port {port}");
+     //    Ok(port)
     // }
 
     async fn start_http_server(
@@ -158,6 +156,8 @@ impl RegistryService {
             }
             .in_current_span(),
         );
+
+        info!("Started registry-service http server on port {port}");
 
         Ok(port)
     }

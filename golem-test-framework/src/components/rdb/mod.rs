@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tracing::{error, info};
+use golem_common::config::{DbConfig, DbPostgresConfig, DbSqliteConfig};
 
 pub mod docker_mysql;
 pub mod docker_postgres;
@@ -42,6 +43,54 @@ pub enum DbInfo {
 }
 
 impl DbInfo {
+    pub fn config(
+        &self,
+        service_namespace: &str,
+        private_connection: bool,
+    ) -> DbConfig {
+        match self {
+            DbInfo::Postgres(pg) => {
+                let host = if private_connection {
+                    pg.private_host.clone()
+                } else {
+                    pg.public_host.clone()
+                };
+
+                let port = if private_connection {
+                    pg.private_port
+                } else {
+                    pg.public_port
+                };
+
+                DbConfig::Postgres(DbPostgresConfig {
+                    host,
+                    port,
+                    database: pg.database_name.clone(),
+                    username: pg.username.clone(),
+                    password: pg.password.clone(),
+                    max_connections: 10,
+                    schema: Some(service_namespace.to_string())
+                })
+            },
+            DbInfo::Mysql(_) => {
+                todo!()
+            },
+            DbInfo::Sqlite(db_path) => {
+                let database =  db_path
+                    .join(service_namespace)
+                    .to_str()
+                    .expect("Invalid Sqlite database path")
+                    .to_string();
+
+                DbConfig::Sqlite(DbSqliteConfig {
+                    database,
+                    max_connections: 10,
+                    foreign_keys: false
+                })
+            }
+        }
+    }
+
     pub fn env(
         &self,
         service_namespace: &str,
