@@ -20,6 +20,8 @@ use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
 use crate::services::account::AccountError;
 use crate::services::plan::PlanError;
+use crate::services::application::ApplicationError;
+use crate::services::environment::EnvironmentError;
 
 #[derive(ApiResponse, Debug, Clone)]
 pub enum ApiError {
@@ -94,6 +96,39 @@ impl From<AccountError> for ApiError {
         }
     }
 }
+
+impl From<ApplicationError> for ApiError {
+    fn from(value: ApplicationError) -> Self {
+        match value {
+            ApplicationError::ApplicationNotFound(_) => {
+                Self::NotFound(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+
+            ApplicationError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+        }
+    }
+}
+
+impl From<EnvironmentError> for ApiError {
+    fn from(value: EnvironmentError) -> Self {
+        match value {
+            EnvironmentError::EnvironmentNotFound(_) => {
+                Self::NotFound(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+
+            EnvironmentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+        }
+    }
+}
+
 
 impl From<PlanError> for ApiError {
     fn from(value: PlanError) -> Self {

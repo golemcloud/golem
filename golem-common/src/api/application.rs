@@ -16,10 +16,6 @@ use crate::declare_structs;
 use crate::model::application::ApplicationName;
 
 declare_structs! {
-    pub struct CreateApplicationRequest {
-        pub name: ApplicationName,
-    }
-
     pub struct UpdateApplicationRequest {
         // pub previous_revision: ApplicationRevision,
     }

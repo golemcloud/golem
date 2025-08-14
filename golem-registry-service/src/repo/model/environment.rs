@@ -18,6 +18,9 @@ use golem_common::model::diff;
 use golem_common::model::diff::Hashable;
 use sqlx::FromRow;
 use uuid::Uuid;
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName, NewEnvironmentData};
+use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationId;
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct EnvironmentRecord {
@@ -42,6 +45,22 @@ pub struct EnvironmentRevisionRecord {
 }
 
 impl EnvironmentRevisionRecord {
+    pub fn from_new_model(
+        environment_id: EnvironmentId,
+        data: NewEnvironmentData,
+        actor: AccountId
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            revision_id: 0,
+            hash: SqlBlake3Hash::empty(),
+            audit: DeletableRevisionAuditFields::new(actor.0),
+            compatibility_check: data.compatibility_check,
+            version_check: data.version_check,
+            security_overrides: data.security_overrides
+        }
+    }
+
     pub fn ensure_first(self) -> Self {
         Self {
             revision_id: 0,
@@ -94,4 +113,17 @@ pub struct EnvironmentExtRevisionRecord {
     pub application_id: Uuid,
     #[sqlx(flatten)]
     pub revision: EnvironmentRevisionRecord,
+}
+
+impl From<EnvironmentExtRevisionRecord> for Environment {
+    fn from(value: EnvironmentExtRevisionRecord) -> Self {
+        Self {
+            id: EnvironmentId(value.revision.environment_id),
+            application_id: ApplicationId(value.application_id),
+            name: EnvironmentName(value.name),
+            compatibility_check: value.revision.compatibility_check,
+            version_check: value.revision.version_check,
+            security_overrides: value.revision.security_overrides
+        }
+    }
 }

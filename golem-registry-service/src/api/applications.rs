@@ -29,7 +29,6 @@
 use super::ApiResult;
 use golem_common::api::Page;
 use golem_common::api::application::UpdateApplicationRequest;
-use golem_common::api::environment::CreateEnvironmentRequest;
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::environment::*;
@@ -40,11 +39,29 @@ use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use tracing::Instrument;
+use std::sync::Arc;
+use crate::services::application::ApplicationService;
+use crate::services::environment::EnvironmentService;
+use golem_common::model::account::AccountId;
+use uuid::Uuid;
 
-pub struct ApplicationsApi {}
+pub struct ApplicationsApi {
+    application_service: Arc<ApplicationService>,
+    environment_service: Arc<EnvironmentService>
+}
 
 #[OpenApi(prefix_path = "/v1/apps", tag = ApiTags::Application)]
 impl ApplicationsApi {
+    pub fn new(
+        application_service: Arc<ApplicationService>,
+        environment_service: Arc<EnvironmentService>
+    ) -> Self {
+        Self {
+            application_service,
+            environment_service
+        }
+    }
+
     /// Get application by id.
     #[oai(
         path = "/:application_id",
@@ -160,7 +177,7 @@ impl ApplicationsApi {
     pub async fn create_application_environment(
         &self,
         application_id: Path<ApplicationId>,
-        data: Json<CreateEnvironmentRequest>,
+        data: Json<NewEnvironmentData>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Environment>> {
         let record = recorded_http_api_request!(
@@ -180,11 +197,15 @@ impl ApplicationsApi {
 
     async fn create_application_environment_internal(
         &self,
-        _application_id: ApplicationId,
-        _data: CreateEnvironmentRequest,
+        application_id: ApplicationId,
+        data: NewEnvironmentData,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
-        todo!()
+        // TODO
+        let actor = AccountId(Uuid::nil());
+        let result = self.environment_service.create(application_id, data, actor).await?;
+
+        Ok(Json(result))
     }
 
     /// Get application environment by name

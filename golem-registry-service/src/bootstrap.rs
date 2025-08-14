@@ -32,12 +32,16 @@ use std::sync::Arc;
 use include_dir::include_dir;
 use golem_service_base::db;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
+use crate::services::application::ApplicationService;
+use crate::services::environment::EnvironmentService;
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 #[derive(Clone)]
 pub struct Services {
     pub component_service: Arc<ComponentService>,
+    pub application_service: Arc<ApplicationService>,
+    pub environment_service: Arc<EnvironmentService>
 }
 
 struct Repos {

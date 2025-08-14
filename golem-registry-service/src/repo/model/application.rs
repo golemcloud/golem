@@ -15,7 +15,7 @@
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use sqlx::FromRow;
 use uuid::Uuid;
-use golem_common::model::application::{Application, ApplicationId, ApplicationName, ApplicationRevision, NewApplicationData};
+use golem_common::model::application::{Application, ApplicationId, ApplicationName, NewApplicationData};
 use golem_common::model::account::AccountId;
 
 #[derive(Debug, Clone, FromRow, PartialEq)]

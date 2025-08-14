@@ -20,3 +20,4 @@ pub mod component_object_store;
 pub mod component_transformer_plugin_caller;
 pub mod account;
 pub mod plan;
+pub mod environment;
