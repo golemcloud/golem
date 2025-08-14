@@ -81,6 +81,7 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
+use golem_common::model::agent::DataValue;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -128,7 +129,6 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
-use golem_common::model::agent::DataValue;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -1389,7 +1389,7 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
                 ))
                 .await;
             self.update_worker_status(|status| {
-                if let Some(description) =
+                if let Some(WorkerResourceDescription::ExportedResourceInstance(description)) =
                     status
                         .owned_resources
                         .get_mut(&WorkerResourceKey::ExportedResourceInstanceKey(
@@ -1398,11 +1398,7 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
                             },
                         ))
                 {
-                    if let WorkerResourceDescription::ExportedResourceInstance(description) =
-                        description
-                    {
-                        description.resource_params = Some(resource_params.to_vec());
-                    }
+                    description.resource_params = Some(resource_params.to_vec());
                 }
             })
             .await;
@@ -1438,13 +1434,16 @@ impl<Ctx: WorkerCtx> AgentStore for DurableWorkerCtx<Ctx> {
         };
         let description = AgentInstanceDescription {
             created_at: Timestamp::now_utc(),
-            agent_parameters: parameters,
+            agent_parameters: parameters.clone(),
         };
         self.state
             .agent_instances
             .insert(key.clone(), description.clone());
         if self.state.is_live() {
-            // TODO: oplog entry
+            self.state
+                .oplog
+                .add(OplogEntry::create_agent_instance(key.clone(), parameters))
+                .await;
             self.update_worker_status(|status| {
                 status.owned_resources.insert(
                     WorkerResourceKey::AgentInstanceKey(key),
@@ -1469,7 +1468,10 @@ impl<Ctx: WorkerCtx> AgentStore for DurableWorkerCtx<Ctx> {
         self.state.agent_instances.remove(&key);
 
         if self.state.is_live() {
-            // TODO: oplog entry
+            self.state
+                .oplog
+                .add(OplogEntry::drop_agent_instance(key.clone()))
+                .await;
             self.update_worker_status(|status| {
                 status
                     .owned_resources

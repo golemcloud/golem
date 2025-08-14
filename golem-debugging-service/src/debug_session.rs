@@ -522,6 +522,19 @@ fn get_oplog_entry_from_public_oplog_entry(
                 level: change_persistence_level.persistence_level,
             })
         }
+        PublicOplogEntry::CreateAgentInstance(create_agent_instance) => {
+            Ok(OplogEntry::CreateAgentInstance {
+                timestamp: create_agent_instance.timestamp,
+                key: create_agent_instance.key,
+                parameters: create_agent_instance.parameters,
+            })
+        }
+        PublicOplogEntry::DropAgentInstance(drop_agent_instance) => {
+            Ok(OplogEntry::DropAgentInstance {
+                timestamp: drop_agent_instance.timestamp,
+                key: drop_agent_instance.key,
+            })
+        }
     }
 }
 

@@ -414,6 +414,7 @@ impl TestComponentService {
                 HashMap::new(),
                 Some("golem:it".to_string()),
                 None,
+                vec![],
             ),
             created_at: Utc::now(),
             component_type: ComponentType::Durable,

@@ -6,6 +6,7 @@ import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
 import "golem/common/plugin_installation_id.proto";
 import "golem/common/project_id.proto";
+import "golem/component/agent.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/worker_id.proto";
@@ -48,6 +49,8 @@ message OplogEntry {
     FinishSpanParameters FinishSpan = 31;
     SetSpanAttributeParameters SetSpanAttribute = 32;
     ChangePersistenceLevelParameters ChangePersistenceLevel = 33;
+    CreateAgentInstanceParameters CreateAgentInstance = 34;
+    DropAgentInstanceParameters DropAgentInstance = 35;
   }
 }
 
@@ -270,7 +273,20 @@ message SetSpanAttributeParameters {
 
 message ChangePersistenceLevelParameters {
   google.protobuf.Timestamp timestamp = 1;
-  PersistenceLevel persistence_level = 3;
+  PersistenceLevel persistence_level = 2;
+}
+
+message CreateAgentInstanceParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string agent_type = 2;
+  string agent_id = 3;
+  golem.component.DataValue agent_parameters = 4;
+}
+
+message DropAgentInstanceParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string agent_type = 2;
+  string agent_id = 3;
 }
 
 enum OplogLogLevel {

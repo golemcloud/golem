@@ -5,8 +5,8 @@ use golem_common::base_model::{OplogIndex, PluginInstallationId};
 use golem_common::model::oplog::{OplogEntry, TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    ExportedResourceInstanceDescription, ExportedResourceInstanceKey, FailedUpdateRecord,
-    IdempotencyKey, OwnedWorkerId, RetryConfig, SuccessfulUpdateRecord,
+    AgentInstanceDescription, ExportedResourceInstanceDescription, ExportedResourceInstanceKey,
+    FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig, SuccessfulUpdateRecord,
     TimestampedWorkerInvocation, WorkerInvocation, WorkerMetadata, WorkerResourceDescription,
     WorkerResourceKey, WorkerStatus, WorkerStatusRecord,
 };
@@ -109,11 +109,8 @@ where
                 &new_entries,
             );
 
-            let owned_resources = calculate_owned_resources(
-                last_known.owned_resources,
-                &skipped_regions,
-                &new_entries,
-            );
+            let owned_resources =
+                collect_resources(last_known.owned_resources, &skipped_regions, &new_entries);
 
             let active_plugins =
                 calculate_active_plugins(active_plugins, &deleted_regions, &new_entries);
@@ -255,6 +252,8 @@ fn calculate_latest_worker_status(
             OplogEntry::ChangePersistenceLevel { .. } => {
                 result = WorkerStatus::Running;
             }
+            OplogEntry::CreateAgentInstance { .. } => {}
+            OplogEntry::DropAgentInstance { .. } => {}
         }
     }
     result
@@ -602,7 +601,7 @@ fn calculate_total_linear_memory_size(
     result
 }
 
-fn calculate_owned_resources(
+fn collect_resources(
     initial: HashMap<WorkerResourceKey, WorkerResourceDescription>,
     skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
@@ -644,20 +643,31 @@ fn calculate_owned_resources(
                 indexed_resource_parameters,
                 ..
             } => {
-                if let Some(description) =
-                    result.get_mut(&WorkerResourceKey::ExportedResourceInstanceKey(
-                        ExportedResourceInstanceKey { resource_id: *id },
-                    ))
-                {
-                    if let WorkerResourceDescription::ExportedResourceInstance(
-                        ExportedResourceInstanceDescription {
-                            resource_params, ..
-                        },
-                    ) = description
-                    {
-                        *resource_params = Some(indexed_resource_parameters.clone());
-                    }
+                if let Some(WorkerResourceDescription::ExportedResourceInstance(
+                    ExportedResourceInstanceDescription {
+                        resource_params, ..
+                    },
+                )) = result.get_mut(&WorkerResourceKey::ExportedResourceInstanceKey(
+                    ExportedResourceInstanceKey { resource_id: *id },
+                )) {
+                    *resource_params = Some(indexed_resource_parameters.clone());
                 }
+            }
+            OplogEntry::CreateAgentInstance {
+                timestamp,
+                key,
+                parameters,
+            } => {
+                result.insert(
+                    WorkerResourceKey::AgentInstanceKey(key.clone()),
+                    WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
+                        created_at: *timestamp,
+                        agent_parameters: parameters.clone(),
+                    }),
+                );
+            }
+            OplogEntry::DropAgentInstance { key, .. } => {
+                result.remove(&WorkerResourceKey::AgentInstanceKey(key.clone()));
             }
             _ => {}
         }

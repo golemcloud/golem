@@ -2172,7 +2172,7 @@ pub fn to_worker_metadata(
                                 )
                             }
                             None => {
-                                panic!("Invalid resource description: {:?}", description);
+                                panic!("Invalid resource description: {description:?}");
                             }
                         }
                     })

@@ -13,9 +13,13 @@
 // limitations under the License.
 
 pub use crate::base_model::OplogIndex;
+use crate::model::agent::DataValue;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
-use crate::model::{AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId, WorkerInvocation};
+use crate::model::{
+    AccountId, AgentInstanceKey, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp,
+    WorkerId, WorkerInvocation,
+};
 use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
@@ -466,12 +470,17 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         level: PersistenceLevel,
     },
-    //Created an agent instance
-    // CreateAgentInstance {
-    //     timestamp: Timestamp,
-    //     key: AgentInstanceKey,
-    //     parameters: DataValue
-    // }
+    /// Created an agent instance
+    CreateAgentInstance {
+        timestamp: Timestamp,
+        key: AgentInstanceKey,
+        parameters: DataValue,
+    },
+    /// Dropped an agent instance
+    DropAgentInstance {
+        timestamp: Timestamp,
+        key: AgentInstanceKey,
+    },
 }
 
 impl OplogEntry {
@@ -728,6 +737,21 @@ impl OplogEntry {
         }
     }
 
+    pub fn create_agent_instance(key: AgentInstanceKey, parameters: DataValue) -> OplogEntry {
+        OplogEntry::CreateAgentInstance {
+            timestamp: Timestamp::now_utc(),
+            key,
+            parameters,
+        }
+    }
+
+    pub fn drop_agent_instance(key: AgentInstanceKey) -> OplogEntry {
+        OplogEntry::DropAgentInstance {
+            timestamp: Timestamp::now_utc(),
+            key,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -781,6 +805,8 @@ impl OplogEntry {
                 | OplogEntry::DeactivatePlugin { .. }
                 | OplogEntry::Revert { .. }
                 | OplogEntry::CancelPendingInvocation { .. }
+                | OplogEntry::CreateAgentInstance { .. }
+                | OplogEntry::DropAgentInstance { .. }
         )
     }
 
@@ -818,7 +844,9 @@ impl OplogEntry {
             | OplogEntry::StartSpan { timestamp, .. }
             | OplogEntry::FinishSpan { timestamp, .. }
             | OplogEntry::SetSpanAttribute { timestamp, .. }
-            | OplogEntry::ChangePersistenceLevel { timestamp, .. } => *timestamp,
+            | OplogEntry::ChangePersistenceLevel { timestamp, .. }
+            | OplogEntry::CreateAgentInstance { timestamp, .. }
+            | OplogEntry::DropAgentInstance { timestamp, .. } => *timestamp,
         }
     }
 

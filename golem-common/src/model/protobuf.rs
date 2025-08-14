@@ -779,12 +779,7 @@ pub fn to_protobuf_resource_description(
                         resource_owner: description.resource_owner,
                         resource_name: description.resource_name,
                         is_indexed: description.resource_params.is_some(),
-                        resource_params: description
-                            .resource_params
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|vnt| vnt.into())
-                            .collect(),
+                        resource_params: description.resource_params.unwrap_or_default(),
                     },
                 ),
             ),

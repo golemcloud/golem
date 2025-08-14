@@ -961,10 +961,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )
         .await;
 
-        Ok(Self::create_proto_metadata(
+        Self::create_proto_metadata(
             metadata,
             last_error_and_retry_count,
-        )?)
+        )
     }
 
     async fn get_running_workers_metadata_internal(

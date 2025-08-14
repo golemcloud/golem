@@ -388,7 +388,7 @@ impl ComponentMetadataInnerData {
         Ok(self
             .agent_types
             .iter()
-            .find(|t| &t.type_name == agent_type)
+            .find(|t| t.type_name == agent_type)
             .cloned())
     }
 

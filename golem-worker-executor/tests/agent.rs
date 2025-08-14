@@ -114,5 +114,6 @@ async fn agent_resource_registration(
     // TODO: create second agent from guest side
     // TODO: call something using indexed resource syntax on the second agent
 
+    executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 }

@@ -44,13 +44,14 @@ use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
-    ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters,
-    DescribeResourceParameters, EndRegionParameters, ErrorParameters,
-    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
-    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
-    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
-    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
-    PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
+    ChangeRetryPolicyParameters, CreateAgentInstanceParameters, CreateParameters,
+    DeactivatePluginParameters, DescribeResourceParameters, DropAgentInstanceParameters,
+    EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
+    ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
+    FinishSpanParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters,
+    LogParameters, ManualUpdateParameters, PendingUpdateParameters,
+    PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttribute,
+    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
     PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
     SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters,
     SuccessfulUpdateParameters, TimestampParameter,
@@ -651,8 +652,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     },
                 );
                 let constructor_def = metadata.metadata.find_function(&resource_constructor_name.to_string()).await?.ok_or(
-                        format!("Resource constructor {resource_constructor_name} not found in component {} version {component_version}", owned_worker_id.component_id())
-                    )?;
+                    format!("Resource constructor {resource_constructor_name} not found in component {} version {component_version}", owned_worker_id.component_id())
+                )?;
 
                 let mut resource_params = Vec::new();
                 for (value_str, param) in indexed_resource_parameters
@@ -793,6 +794,20 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     persistence_level: level,
                 }),
+            ),
+            OplogEntry::CreateAgentInstance {
+                timestamp,
+                key,
+                parameters,
+            } => Ok(PublicOplogEntry::CreateAgentInstance(
+                CreateAgentInstanceParameters {
+                    timestamp,
+                    key,
+                    parameters,
+                },
+            )),
+            OplogEntry::DropAgentInstance { timestamp, key } => Ok(
+                PublicOplogEntry::DropAgentInstance(DropAgentInstanceParameters { timestamp, key }),
             ),
         }
     }
