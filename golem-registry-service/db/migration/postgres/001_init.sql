@@ -274,11 +274,11 @@ CREATE TABLE component_revisions
     component_type               INTEGER   NOT NULL,
     size                         INTEGER   NOT NULL,
     metadata                     BYTEA     NOT NULL,
-    original_env                          JSONB     NOT NULL,
+    original_env                 JSONB     NOT NULL,
     env                          JSONB     NOT NULL,
     object_store_key             TEXT      NOT NULL,
     binary_hash                  BYTEA     NOT NULL,
-    transformed_object_store_key TEXT NOT NULL,
+    transformed_object_store_key TEXT      NOT NULL,
 
     CONSTRAINT component_revisions_pk
         PRIMARY KEY (component_id, revision_id),
