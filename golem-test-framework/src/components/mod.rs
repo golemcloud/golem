@@ -27,19 +27,20 @@ use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
 use url::Url;
 
-pub mod cloud_service;
-pub mod component_compilation_service;
-pub mod component_service;
+// pub mod cloud_service;
+// pub mod component_compilation_service;
+// pub mod component_service;
 mod docker;
 pub mod k8s;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
 pub mod service;
-pub mod shard_manager;
-pub mod worker_executor;
-pub mod worker_executor_cluster;
-pub mod worker_service;
+pub mod registry_service;
+// pub mod shard_manager;
+// pub mod worker_executor;
+// pub mod worker_executor_cluster;
+// pub mod worker_service;
 
 pub struct ChildProcessLogger {
     _out_handle: JoinHandle<()>,

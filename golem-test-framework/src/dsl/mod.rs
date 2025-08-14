@@ -50,17 +50,20 @@ use golem_common::model::plugin::PluginWasmFileKey;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentFilePermissions, PluginInstallationId, ProjectId,
+    PluginInstallationId, ProjectId,
     WorkerStatus,
 };
+use golem_common::model::component::{
+    ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision, ComponentType, InitialComponentFile, InitialComponentFileKey
+};
 use golem_common::model::{
-    ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
-    IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ScanCursor,
+    ComponentFileSystemNode, ComponentId, FailedUpdateRecord,
+    IdempotencyKey, ScanCursor,
     SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatusRecord,
 };
 use golem_common::widen_infallible;
-use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex, RevertWorkerTarget};
+use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::borrow::Borrow;
@@ -75,6 +78,7 @@ use tokio::sync::oneshot::Sender;
 use tracing::{debug, info, Instrument};
 use uuid::Uuid;
 use wasm_metadata::AddMetadata;
+use golem_common::model::account::AccountId;
 
 pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     dsl: &'a DSL,
@@ -237,21 +241,21 @@ pub trait TestDsl {
         component_id: &ComponentId,
     ) -> crate::Result<ComponentMetadata>;
 
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
+    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision;
 
     async fn update_component_with_files(
         &self,
         component_id: &ComponentId,
         name: &str,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
-    ) -> ComponentVersion;
+    ) -> ComponentRevision;
 
     async fn update_component_with_env(
         &self,
         component_id: &ComponentId,
         name: &str,
         files: &[(String, String)],
-    ) -> ComponentVersion;
+    ) -> ComponentRevision;
 
     async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
 
@@ -418,12 +422,12 @@ pub trait TestDsl {
     async fn auto_update_worker(
         &self,
         worker_id: &WorkerId,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
     ) -> crate::Result<()>;
     async fn manual_update_worker(
         &self,
         worker_id: &WorkerId,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
     ) -> crate::Result<()>;
     async fn get_oplog(
         &self,
@@ -672,7 +676,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         Ok(key)
     }
 
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
+    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision {
         let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         let component_env = HashMap::new();
         self.deps
@@ -695,7 +699,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         component_id: &ComponentId,
         name: &str,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
-    ) -> ComponentVersion {
+    ) -> ComponentRevision {
         let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         self.deps
             .component_service()
@@ -717,7 +721,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         component_id: &ComponentId,
         name: &str,
         env: &[(String, String)],
-    ) -> ComponentVersion {
+    ) -> ComponentRevision {
         let map = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
         let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
@@ -1383,7 +1387,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
     async fn auto_update_worker(
         &self,
         worker_id: &WorkerId,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
     ) -> crate::Result<()> {
         let response = self
             .deps
@@ -1412,7 +1416,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
     async fn manual_update_worker(
         &self,
         worker_id: &WorkerId,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
     ) -> crate::Result<()> {
         let response = self
             .deps
@@ -2193,20 +2197,20 @@ pub trait TestDslUnsafe {
 
     async fn get_latest_component_metadata(&self, component_id: &ComponentId) -> ComponentMetadata;
 
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
+    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision;
     async fn update_component_with_files(
         &self,
         component_id: &ComponentId,
         name: &str,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
-    ) -> ComponentVersion;
+    ) -> ComponentRevision;
 
     async fn update_component_with_env(
         &self,
         component_id: &ComponentId,
         name: &str,
         env: &[(String, String)],
-    ) -> ComponentVersion;
+    ) -> ComponentRevision;
 
     async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
 
@@ -2330,8 +2334,8 @@ pub trait TestDslUnsafe {
     async fn resume(&self, worker_id: &WorkerId, force: bool);
     async fn interrupt(&self, worker_id: &WorkerId);
     async fn simulated_crash(&self, worker_id: &WorkerId);
-    async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
-    async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
+    async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision);
+    async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision);
     async fn get_oplog(
         &self,
         worker_id: &WorkerId,
@@ -2448,7 +2452,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to add plugin wasm")
     }
 
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
+    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision {
         <T as TestDsl>::update_component(self, component_id, name).await
     }
 
@@ -2457,7 +2461,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         component_id: &ComponentId,
         name: &str,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
-    ) -> ComponentVersion {
+    ) -> ComponentRevision {
         <T as TestDsl>::update_component_with_files(self, component_id, name, files).await
     }
 
@@ -2466,7 +2470,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         component_id: &ComponentId,
         name: &str,
         env: &[(String, String)],
-    ) -> ComponentVersion {
+    ) -> ComponentRevision {
         <T as TestDsl>::update_component_with_env(self, component_id, name, env).await
     }
 
@@ -2680,13 +2684,13 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to crash worker")
     }
 
-    async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion) {
+    async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision) {
         <T as TestDsl>::auto_update_worker(self, worker_id, target_version)
             .await
             .expect("Failed to update worker")
     }
 
-    async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion) {
+    async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision) {
         <T as TestDsl>::manual_update_worker(self, worker_id, target_version)
             .await
             .expect("Failed to update worker")

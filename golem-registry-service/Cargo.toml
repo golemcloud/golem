@@ -42,6 +42,7 @@ figment = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
+include_dir = { workspace = true }
 hyper = { workspace = true }
 indoc = { workspace = true }
 jsonwebtoken = "9.2.0"

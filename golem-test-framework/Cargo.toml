@@ -20,6 +20,7 @@ golem-rib = { path = "../golem-rib", version = "=0.0.0" }
 golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-registry-service = { path = "../golem-registry-service", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-dropper = { version = "0.3.1", features = ["simple", "tokio"] }

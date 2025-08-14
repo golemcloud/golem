@@ -19,7 +19,7 @@ use crate::services::account_usage::AccountUsageService;
 use crate::services::component::ComponentService;
 use crate::services::component_compilation::ComponentCompilationServiceDisabled;
 use crate::services::component_object_store::ComponentObjectStore;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use golem_common::config::DbConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::postgres::PostgresPool;
@@ -29,6 +29,11 @@ use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use std::sync::Arc;
+use include_dir::include_dir;
+use golem_service_base::db;
+use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
+
+static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 #[derive(Clone)]
 pub struct Services {
@@ -69,8 +74,14 @@ impl Services {
 }
 
 async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
+    let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
+
     match db_config {
         DbConfig::Postgres(postgres_config) => {
+            db::postgres::migrate(&postgres_config, migrations.postgres_migrations())
+                .await
+                .context("Postgres DB migration")?;
+
             let db_pool = PostgresPool::configured(postgres_config).await?;
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
             let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool));
@@ -79,8 +90,12 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 account_usage_repo,
             })
         }
-        DbConfig::Sqlite(db_config) => {
-            let db_pool = SqlitePool::configured(db_config).await?;
+        DbConfig::Sqlite(sqlite_config) => {
+            db::sqlite::migrate(&sqlite_config, migrations.postgres_migrations())
+                .await
+                .context("Postgres DB migration")?;
+
+            let db_pool = SqlitePool::configured(sqlite_config).await?;
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
             let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool));
             Ok(Repos {
