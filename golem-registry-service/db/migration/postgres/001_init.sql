@@ -329,6 +329,27 @@ CREATE TABLE component_files
         FOREIGN KEY (component_id, revision_id) REFERENCES component_revisions
 );
 
+CREATE TABLE component_plugin_installations
+(
+    component_id UUID      NOT NULL,
+    revision_id  BIGINT    NOT NULL,
+    plugin_id    UUID      NOT NULL,
+
+    created_at   TIMESTAMP NOT NULL,
+    created_by   UUID      NOT NULL,
+
+    priority     INT       NOT NULL,
+    parameters   JSONB     NOT NULL,
+
+    CONSTRAINT component_plugin_installations_pk
+        PRIMARY KEY (component_id, revision_id, plugin_id),
+    CONSTRAINT component_plugin_installations_components_fk
+        FOREIGN KEY (component_id, revision_id) REFERENCES component_revisions,
+    -- TODO: plugin FK
+    CONSTRAINT component_plugin_installations_priority_uk
+        UNIQUE (component_id, revision_id, priority)
+);
+
 CREATE TABLE deployment_revisions
 (
     environment_id UUID      NOT NULL,
