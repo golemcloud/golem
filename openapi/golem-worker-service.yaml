@@ -3441,9 +3441,7 @@ components:
           type: string
           format: date-time
         agentParameters:
-          type: array
-          items:
-            $ref: '#/components/schemas/ValueAndType'
+          $ref: '#/components/schemas/DataValue'
     AgentInstanceKey:
       type: object
       title: AgentInstanceKey
@@ -3863,6 +3861,62 @@ components:
           type: string
         subdomain:
           type: string
+    BinaryReference:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/BinaryReference_Url'
+      - $ref: '#/components/schemas/BinaryReference_BinarySource'
+      discriminator:
+        propertyName: type
+        mapping:
+          Url: '#/components/schemas/BinaryReference_Url'
+          Inline: '#/components/schemas/BinaryReference_BinarySource'
+    BinaryReference_BinarySource:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Inline
+            example: Inline
+      - $ref: '#/components/schemas/BinarySource'
+    BinaryReference_Url:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Url
+            example: Url
+      - $ref: '#/components/schemas/Url'
+    BinarySource:
+      type: object
+      title: BinarySource
+      required:
+      - data
+      - binaryType
+      properties:
+        data:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        binaryType:
+          $ref: '#/components/schemas/BinaryType'
+    BinaryType:
+      type: object
+      title: BinaryType
+      required:
+      - mimeType
+      properties:
+        mimeType:
+          type: string
     CancelInvocationParameters:
       type: object
       title: CancelInvocationParameters
@@ -4017,6 +4071,40 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
+    DataValue:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DataValue_ElementValues'
+      - $ref: '#/components/schemas/DataValue_NamedElementValues'
+      discriminator:
+        propertyName: type
+        mapping:
+          Tuple: '#/components/schemas/DataValue_ElementValues'
+          Multimodal: '#/components/schemas/DataValue_NamedElementValues'
+    DataValue_ElementValues:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Tuple
+            example: Tuple
+      - $ref: '#/components/schemas/ElementValues'
+    DataValue_NamedElementValues:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Multimodal
+            example: Multimodal
+      - $ref: '#/components/schemas/NamedElementValues'
     DeactivatePluginParameters:
       type: object
       title: DeactivatePluginParameters
@@ -4071,6 +4159,64 @@ components:
           format: uuid
         domainName:
           type: string
+    ElementValue:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ElementValue_ValueAndType'
+      - $ref: '#/components/schemas/ElementValue_TextReference'
+      - $ref: '#/components/schemas/ElementValue_BinaryReference'
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentModel: '#/components/schemas/ElementValue_ValueAndType'
+          UnstructuredText: '#/components/schemas/ElementValue_TextReference'
+          UnstructuredBinary: '#/components/schemas/ElementValue_BinaryReference'
+    ElementValue_BinaryReference:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UnstructuredBinary
+            example: UnstructuredBinary
+      - $ref: '#/components/schemas/BinaryReference'
+    ElementValue_TextReference:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UnstructuredText
+            example: UnstructuredText
+      - $ref: '#/components/schemas/TextReference'
+    ElementValue_ValueAndType:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentModel
+            example: ComponentModel
+      - $ref: '#/components/schemas/ValueAndType'
+    ElementValues:
+      type: object
+      title: ElementValues
+      required:
+      - elements
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/ElementValue'
     Empty:
       type: object
       title: Empty
@@ -4626,6 +4772,27 @@ components:
           type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
+    NamedElementValue:
+      type: object
+      title: NamedElementValue
+      required:
+      - name
+      - value
+      properties:
+        name:
+          type: string
+        value:
+          $ref: '#/components/schemas/ElementValue'
+    NamedElementValues:
+      type: object
+      title: NamedElementValues
+      required:
+      - elements
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamedElementValue'
     OpenApiHttpApiDefinitionResponse:
       type: object
       title: OpenApiHttpApiDefinitionResponse
@@ -5880,6 +6047,58 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
+    TextReference:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/TextReference_Url'
+      - $ref: '#/components/schemas/TextReference_TextSource'
+      discriminator:
+        propertyName: type
+        mapping:
+          Url: '#/components/schemas/TextReference_Url'
+          Inline: '#/components/schemas/TextReference_TextSource'
+    TextReference_TextSource:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Inline
+            example: Inline
+      - $ref: '#/components/schemas/TextSource'
+    TextReference_Url:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Url
+            example: Url
+      - $ref: '#/components/schemas/Url'
+    TextSource:
+      type: object
+      title: TextSource
+      required:
+      - data
+      properties:
+        data:
+          type: string
+        textType:
+          $ref: '#/components/schemas/TextType'
+    TextType:
+      type: object
+      title: TextType
+      required:
+      - languageCode
+      properties:
+        languageCode:
+          type: string
     TimestampParameter:
       type: object
       title: TimestampParameter
@@ -6113,6 +6332,14 @@ components:
     UpdateWorkerResponse:
       type: object
       title: UpdateWorkerResponse
+    Url:
+      type: object
+      title: Url
+      required:
+      - value
+      properties:
+        value:
+          type: string
     ValueAndOptionalType:
       type: object
       required:

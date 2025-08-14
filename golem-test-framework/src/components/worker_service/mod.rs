@@ -1446,10 +1446,10 @@ fn http_worker_metadata_to_grpc(
                 description: Some(
                     golem_api_grpc::proto::golem::worker::resource_description::Description::ExportedResourceInstance(
                         golem_api_grpc::proto::golem::worker::ExportedResourceInstanceDescription {
-                            resource_id: instance.key.resource_id,
+                            resource_id: instance.key.resource_id.0,
                             resource_name: instance.description.resource_name,
                             resource_owner: instance.description.resource_owner,
-                            created_at: Some(SystemTime::from(instance.description.created_at).into()),
+                            created_at: Some(instance.description.created_at.into()),
                             is_indexed: instance.description.resource_params.is_some(),
                             resource_params: instance.description.resource_params.unwrap_or_default(),
                         },
@@ -1466,13 +1466,11 @@ fn http_worker_metadata_to_grpc(
                         golem_api_grpc::proto::golem::worker::AgentInstanceDescription {
                             agent_type: instance.key.agent_type,
                             agent_id: instance.key.agent_id,
-                            created_at: Some(SystemTime::from(instance.description.created_at).into()),
-                            agent_parameters: instance
+                            created_at: Some(instance.description.created_at.into()),
+                            agent_parameters: Some(instance
                                 .description
                                 .agent_parameters
-                                .into_iter()
-                                .map(|v| v.into())
-                                .collect(),
+                                .into()),
                         },
                     ),
                 ),

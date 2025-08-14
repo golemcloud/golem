@@ -69,6 +69,7 @@ impl ComponentMetadata {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         root_package_name: Option<String>,
         root_package_version: Option<String>,
+        agent_types: Vec<AgentType>,
     ) -> Self {
         Self {
             data: Arc::new(ComponentMetadataInnerData {
@@ -79,7 +80,7 @@ impl ComponentMetadata {
                 root_package_name,
                 root_package_version,
                 dynamic_linking,
-                agent_types: vec![],
+                agent_types,
             }),
             cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
         }
@@ -130,6 +131,13 @@ impl ComponentMetadata {
             .lock()
             .await
             .find_parsed_function(&self.data, parsed)
+    }
+
+    pub async fn find_agent_type(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+        self.cache
+            .lock()
+            .await
+            .find_agent_type(&self.data, agent_type)
     }
 }
 
@@ -376,6 +384,14 @@ impl ComponentMetadataInnerData {
             ))
     }
 
+    pub fn find_agent_type(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+        Ok(self
+            .agent_types
+            .iter()
+            .find(|t| &t.type_name == agent_type)
+            .cloned())
+    }
+
     /// Finds a function ignoring the function site's version. Returns None if it was not found.
     fn find_parsed_function_ignoring_version(
         &self,
@@ -527,6 +543,7 @@ struct ComponentMetadataInnerCache {
     save_snapshot: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
+    agent_types: HashMap<String, Result<Option<AgentType>, String>>,
 }
 
 impl ComponentMetadataInnerCache {
@@ -582,6 +599,21 @@ impl ComponentMetadataInnerCache {
         } else {
             let result = data.find_parsed_function(parsed);
             self.functions_parsed.insert(parsed.clone(), result.clone());
+            result
+        }
+    }
+
+    pub fn find_agent_type(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+        agent_type: &str,
+    ) -> Result<Option<AgentType>, String> {
+        if let Some(cached) = self.agent_types.get(agent_type) {
+            cached.clone()
+        } else {
+            let result = data.find_agent_type(agent_type);
+            self.agent_types
+                .insert(agent_type.to_string(), result.clone());
             result
         }
     }

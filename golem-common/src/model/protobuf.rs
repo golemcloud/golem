@@ -31,7 +31,6 @@ use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
 use golem_api_grpc::proto::golem::worker::Cursor;
-use golem_wasm_rpc::ValueAndType;
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
 
@@ -800,11 +799,7 @@ pub fn to_protobuf_resource_description(
                         created_at: Some(description.created_at.into()),
                         agent_type: key.agent_type,
                         agent_id: key.agent_id,
-                        agent_parameters: description
-                            .agent_parameters
-                            .into_iter()
-                            .map(|vnt| vnt.into())
-                            .collect(),
+                        agent_parameters: Some(description.agent_parameters.into()),
                     },
                 ),
             ),
@@ -858,9 +853,8 @@ pub fn from_protobuf_resource_description(
             WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
                 created_at: created_at.ok_or("Missing created_at")?.into(),
                 agent_parameters: agent_parameters
-                    .into_iter()
-                    .map(ValueAndType::try_from)
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .ok_or("Missing agent_parameters")?
+                    .try_into()?,
             }),
         )),
         None => Err("Missing description".to_string()),

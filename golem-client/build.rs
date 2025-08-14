@@ -51,6 +51,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::ComponentFilePathWithPermissionsList",
             ),
             ("ComponentType", "golem_common::model::ComponentType"),
+            ("DataValue", "golem_common::model::agent::DataValue"),
             ("Empty", "golem_common::model::Empty"),
             (
                 "InitialComponentFile",

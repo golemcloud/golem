@@ -20,6 +20,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
 use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata, VersionedComponentId};
+use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::{
     component_metadata::{LinearMemory, RawComponentMetadata},
@@ -124,6 +125,8 @@ impl FileSystemComponentService {
                 })?
         };
 
+        let agent_types = extract_agent_types(&target_path).await.unwrap_or_default();
+
         let size = tokio::fs::metadata(&target_path)
             .await
             .map_err(|err| {
@@ -145,6 +148,7 @@ impl FileSystemComponentService {
             dynamic_linking: dynamic_linking.clone(),
             wasm_filename,
             env: env.clone(),
+            agent_types,
         };
         write_metadata_to_file(
             metadata,

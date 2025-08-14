@@ -43,6 +43,7 @@ pub mod trim_date;
 pub mod worker;
 
 pub use crate::base_model::*;
+use crate::model::agent::DataValue;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
@@ -52,7 +53,7 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm_ast::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
+use golem_wasm_rpc::{IntoValue, Value};
 use golem_wasm_rpc_derive::IntoValue;
 use http::Uri;
 use rand::prelude::IteratorRandom;
@@ -603,7 +604,7 @@ pub struct AgentInstanceKey {
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 pub struct AgentInstanceDescription {
     pub created_at: Timestamp,
-    pub agent_parameters: Vec<ValueAndType>,
+    pub agent_parameters: DataValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]

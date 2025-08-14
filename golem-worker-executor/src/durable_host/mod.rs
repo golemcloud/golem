@@ -128,6 +128,7 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
+use golem_common::model::agent::DataValue;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -1429,7 +1430,7 @@ impl<Ctx: WorkerCtx> AgentStore for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type: String,
         agent_id: String,
-        parameters: Vec<ValueAndType>,
+        parameters: DataValue,
     ) {
         let key = AgentInstanceKey {
             agent_type,
@@ -1458,7 +1459,7 @@ impl<Ctx: WorkerCtx> AgentStore for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type: String,
         agent_id: String,
-        _parameters: Vec<ValueAndType>,
+        _parameters: DataValue,
     ) {
         let key = AgentInstanceKey {
             agent_type,

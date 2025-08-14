@@ -15,6 +15,7 @@
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
 use derive_more::FromStr;
+use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::WasiConfigVars;
 use golem_common::model::{
@@ -28,7 +29,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use uuid::Uuid;
-use golem_common::model::oplog::WorkerResourceId;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -113,7 +113,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
                             },
                             description: AgentInstanceDescription {
                                 created_at: agent_instance.created_at.ok_or("Missing created_at")?.into(),
-                                agent_parameters: agent_instance.agent_parameters.into_iter().map(|v| v.try_into()).collect::<Result<Vec<_>, _>>()?,
+                                agent_parameters: agent_instance.agent_parameters.ok_or("Missing agent_parameters")?.try_into()?,
                             },
                         }
                     );
@@ -195,12 +195,10 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
                                 agent_type: instance.key.agent_type,
                                 agent_id: instance.key.agent_id,
                                 created_at: Some(instance.description.created_at.into()),
-                                agent_parameters: instance
+                                agent_parameters: Some(instance
                                     .description
                                     .agent_parameters
-                                    .into_iter()
-                                    .map(|v| v.into())
-                                    .collect(),
+                                    .into()),
                             },
                         ),
                     ),

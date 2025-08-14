@@ -376,14 +376,14 @@ pub trait AgentStore {
         &mut self,
         agent_type: String,
         agent_id: String,
-        parameters: Vec<ValueAndType>,
+        parameters: golem_common::model::agent::DataValue,
     );
 
     async fn remove_agent_instance(
         &mut self,
         agent_type: String,
         agent_id: String,
-        parameters: Vec<ValueAndType>,
+        parameters: golem_common::model::agent::DataValue,
     );
 }
 

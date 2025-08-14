@@ -13,18 +13,26 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::preview2::golem::agent::host::{Host, ValueAndType};
 use crate::workerctx::{AgentStore, WorkerCtx};
+use anyhow::anyhow;
+use golem_common::model::agent::bindings::golem::agent::host::{DataValue, Host};
+use golem_common::model::agent::DataSchema;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn register_agent(
         &mut self,
         agent_type: String,
         agent_id: String,
-        parameters: Vec<ValueAndType>,
+        parameters: DataValue,
     ) -> anyhow::Result<()> {
-        let parameters = parameters.into_iter().map(|v| v.into()).collect::<Vec<_>>();
-
+        let agent = self
+            .component_metadata()
+            .metadata
+            .find_agent_type(&agent_type)
+            .await
+            .map_err(|e| anyhow!(e))?
+            .ok_or_else(|| anyhow!("Unknown agent type: {}", agent_type))?;
+        let parameters = get_data_value(parameters, agent.constructor.input_schema)?;
         self.store_agent_instance(agent_type, agent_id, parameters)
             .await;
 
@@ -35,13 +43,29 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type: String,
         agent_id: String,
-        parameters: Vec<ValueAndType>,
+        parameters: DataValue,
     ) -> anyhow::Result<()> {
-        let parameters = parameters.into_iter().map(|v| v.into()).collect::<Vec<_>>();
-
+        let agent = self
+            .component_metadata()
+            .metadata
+            .find_agent_type(&agent_type)
+            .await
+            .map_err(|e| anyhow!(e))?
+            .ok_or_else(|| anyhow!("Unknown agent type: {}", agent_type))?;
+        let parameters = get_data_value(parameters, agent.constructor.input_schema)?;
         self.remove_agent_instance(agent_type, agent_id, parameters)
             .await;
 
         Ok(())
     }
+}
+
+fn get_data_value(
+    value: DataValue,
+    schema: DataSchema,
+) -> anyhow::Result<golem_common::model::agent::DataValue> {
+    let parameters = golem_common::model::agent::DataValue::try_from_bindings(value, schema.into())
+        .map_err(|err| anyhow!(err))?;
+
+    Ok(parameters)
 }

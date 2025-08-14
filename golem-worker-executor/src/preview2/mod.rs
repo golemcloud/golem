@@ -55,6 +55,6 @@ pub type OutputStream = wasmtime_wasi::DynOutputStream;
 pub type Pollable = golem_wasm_rpc::wasi::io::poll::Pollable;
 
 // reexports so that we don't have to change version numbers everywhere
-pub use self::golem::agent as golem_agent;
 pub use self::golem::api1_1_7 as golem_api_1_x;
 pub use self::golem::durability as golem_durability;
+pub use golem_common::model::agent::bindings::golem::agent as golem_agent;

@@ -18,6 +18,7 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{Component, ComponentName};
+use golem_common::model::agent::AgentType;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
@@ -46,6 +47,8 @@ pub struct LocalFileSystemComponentMetadata {
 
     #[serde(default)]
     pub env: HashMap<String, String>,
+
+    pub agent_types: Vec<AgentType>,
 }
 
 impl From<LocalFileSystemComponentMetadata> for Component {
@@ -67,6 +70,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 value.dynamic_linking,
                 None,
                 None,
+                value.agent_types,
             ),
             created_at: Default::default(),
             component_type: value.component_type,

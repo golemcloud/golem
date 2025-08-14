@@ -368,6 +368,11 @@ impl ToAnalysedType for TypeDef {
             )
             .with_optional_name(self.name.clone())
             .with_optional_owner(get_owner_name(resolve, &self.owner))),
+            TypeDefKind::FixedSizeList(ty, _) => Ok(analysed_type::list(
+                ty.to_analysed_type(resolve, resource_map)?,
+            )
+            .with_optional_name(self.name.clone())
+            .with_optional_owner(get_owner_name(resolve, &self.owner))),
             TypeDefKind::Future(_) => {
                 Err("to_analysed_type not implemented for future type".to_string())
             }

@@ -14,7 +14,7 @@
 
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use golem_common::model::agent::DataValue;
+use golem_common::model::agent::{DataValue, ElementValues};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::wit_parser::SharedAnalysedTypeResolve;
@@ -57,7 +57,7 @@ async fn agent_resource_registration(
             "golem:agent/guest.{[static]agent.create}",
             vec![
                 "test-agent-type".into_value_and_type(),
-                DataValue::Tuple(vec![]).into_value_and_type(),
+                DataValue::Tuple(ElementValues { elements: vec![] }).into_value_and_type(),
             ],
         )
         .await

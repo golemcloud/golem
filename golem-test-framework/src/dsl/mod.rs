@@ -2167,7 +2167,7 @@ pub fn to_worker_metadata(
                                     }),
                                     WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
                                         created_at: desc.created_at.expect("Missing created_at").into(),
-                                        agent_parameters: desc.agent_parameters.iter().cloned().map(|v| v.try_into().expect("invalid agent parameter")).collect(),
+                                        agent_parameters: desc.clone().agent_parameters.expect("Missing agent_parameters").try_into().expect("invalid agent_parameters"),
                                     })
                                 )
                             }

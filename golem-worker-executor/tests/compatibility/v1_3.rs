@@ -17,6 +17,7 @@ use goldenfile::Mint;
 use golem_common::base_model::{
     ComponentId, OplogIndex, PluginInstallationId, ProjectId, PromiseId, WorkerId,
 };
+use golem_common::model::agent::{DataValue, ElementValue, ElementValues};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextStack, SpanId, TraceId,
 };
@@ -469,7 +470,12 @@ pub fn worker_resource_description() {
         });
     let wrd3 = WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
         created_at: Timestamp::from(1724701938466),
-        agent_parameters: vec!["a".into_value_and_type(), 10.into_value_and_type()],
+        agent_parameters: DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::ComponentModel("a".into_value_and_type()),
+                ElementValue::ComponentModel(10.into_value_and_type()),
+            ],
+        }),
     });
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_resource_description", &mut mint, wrd1);

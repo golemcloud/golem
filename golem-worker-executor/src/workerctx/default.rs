@@ -71,6 +71,7 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
+use golem_common::model::agent::DataValue;
 
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
@@ -477,7 +478,7 @@ impl AgentStore for Context {
         &mut self,
         agent_type: String,
         agent_id: String,
-        parameters: Vec<ValueAndType>,
+        parameters: DataValue,
     ) {
         self.durable_ctx
             .store_agent_instance(agent_type, agent_id, parameters)
@@ -488,7 +489,7 @@ impl AgentStore for Context {
         &mut self,
         agent_type: String,
         agent_id: String,
-        parameters: Vec<ValueAndType>,
+        parameters: DataValue,
     ) {
         self.durable_ctx
             .remove_agent_instance(agent_type, agent_id, parameters)

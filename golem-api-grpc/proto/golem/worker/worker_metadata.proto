@@ -5,6 +5,7 @@ package golem.worker;
 import "golem/common/account_id.proto";
 import "golem/common/project_id.proto";
 import "golem/common/plugin_installation_id.proto";
+import "golem/component/agent.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";
 import "golem/worker/wasi_config_vars.proto";
@@ -66,7 +67,7 @@ message AgentInstanceDescription {
   google.protobuf.Timestamp created_at = 1;
   string agent_type = 2;
   string agent_id = 3;
-  repeated wasm.rpc.ValueAndType agent_parameters = 4;
+  golem.component.DataValue agent_parameters = 4;
 }
 
 message ResourceDescription {
