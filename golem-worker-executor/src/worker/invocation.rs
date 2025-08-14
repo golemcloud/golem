@@ -544,10 +544,7 @@ async fn invoke<Ctx: WorkerCtx>(
                 }
             }
         }
-        Err(err) => {
-            println!("err: {err:?}");
-            Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err))
-        }
+        Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
     }
 }
 
