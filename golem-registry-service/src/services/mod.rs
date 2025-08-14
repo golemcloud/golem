@@ -17,3 +17,5 @@ pub mod component;
 pub mod component_compilation;
 pub mod component_object_store;
 pub mod component_transformer_plugin_caller;
+pub mod account;
+pub mod plan;

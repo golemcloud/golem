@@ -15,6 +15,8 @@
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use sqlx::FromRow;
 use uuid::Uuid;
+use golem_common::model::account::{Account, AccountId};
+use golem_common::model::PlanId;
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountRecord {
@@ -24,6 +26,17 @@ pub struct AccountRecord {
     pub audit: AuditFields,
     pub name: String,
     pub plan_id: Uuid,
+}
+
+impl From<AccountRecord> for Account {
+    fn from(value: AccountRecord) -> Self {
+        Self {
+            id: AccountId(value.account_id),
+            name: value.name,
+            email: value.email,
+            plan_id: PlanId(value.plan_id)
+        }
+    }
 }
 
 #[derive(FromRow, Debug, Clone, PartialEq)]

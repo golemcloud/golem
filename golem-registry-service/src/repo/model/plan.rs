@@ -19,6 +19,8 @@ use sqlx::FromRow;
 use std::collections::BTreeMap;
 use strum::IntoEnumIterator;
 use uuid::Uuid;
+use golem_common::model::account::{Plan, PlanData};
+use golem_common::model::PlanId;
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct PlanRecord {
@@ -65,5 +67,33 @@ impl PlanRecord {
     pub fn with_limit_placeholders(mut self) -> Self {
         self.add_limit_placeholders();
         self
+    }
+}
+
+impl TryFrom<PlanRecord> for Plan {
+    type Error = RepoError;
+
+    fn try_from(value: PlanRecord) -> Result<Self, Self::Error> {
+        // apply defaults here to migrate old data when new limits are added.
+        let app_limit = value.limit(UsageType::TotalAppCount)?.unwrap_or(10);
+        let env_limit = value.limit(UsageType::TotalEnvCount)?.unwrap_or(40);
+        let component_limit = value.limit(UsageType::TotalComponentCount)?.unwrap_or(100);
+        let worker_limit = value.limit(UsageType::TotalWorkerCount)?.unwrap_or(10000);
+        let storage_limit = value.limit(UsageType::TotalComponentStorageBytes)?.unwrap_or(500000000);
+        let monthly_gas_limit = value.limit(UsageType::MonthlyGasLimit)?.unwrap_or(1000000000000);
+        let monthly_upload_limit = value.limit(UsageType::MonthlyComponentUploadLimitBytes)?.unwrap_or(1000000000);
+
+        Ok(Self {
+            plan_id: PlanId(value.plan_id),
+            plan_data: PlanData {
+                app_limit,
+                env_limit,
+                component_limit,
+                worker_limit,
+                storage_limit,
+                monthly_gas_limit,
+                monthly_upload_limit
+            }
+        })
     }
 }
