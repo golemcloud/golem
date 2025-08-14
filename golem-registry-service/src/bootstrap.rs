@@ -34,19 +34,30 @@ use golem_service_base::db;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use crate::services::application::ApplicationService;
 use crate::services::environment::EnvironmentService;
+use crate::services::account::AccountService;
+use crate::repo::account::{AccountRepo, DbAccountRepo};
+use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
+use crate::repo::environment::{DbEnvironmentRepo, EnvironmentRepo};
+use crate::services::plan::PlanService;
+use crate::repo::plan::{DbPlanRepo, PlanRepo};
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 #[derive(Clone)]
 pub struct Services {
+    pub account_service: Arc<AccountService>,
     pub component_service: Arc<ComponentService>,
     pub application_service: Arc<ApplicationService>,
     pub environment_service: Arc<EnvironmentService>
 }
 
 struct Repos {
-    component_repo: Arc<dyn ComponentRepo>,
+    account_repo: Arc<dyn AccountRepo>,
     account_usage_repo: Arc<dyn AccountUsageRepo>,
+    application_repo: Arc<dyn ApplicationRepo>,
+    component_repo: Arc<dyn ComponentRepo>,
+    environment_repo: Arc<dyn EnvironmentRepo>,
+    plan_repo: Arc<dyn PlanRepo>
 }
 
 impl Services {
@@ -60,20 +71,28 @@ impl Services {
         let plugin_wasm_files = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
         let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage));
 
-        let component_compilation = Arc::new(ComponentCompilationServiceDisabled);
+        let component_compilation_service = Arc::new(ComponentCompilationServiceDisabled);
 
-        let account_usage = Arc::new(AccountUsageService::new(repos.account_usage_repo));
+        let account_usage_service = Arc::new(AccountUsageService::new(repos.account_usage_repo));
+
+        let plan_service = Arc::new(PlanService::new(repos.plan_repo, config.plans.clone()));
+
+        let account_service = Arc::new(AccountService::new(repos.account_repo.clone(), plan_service.clone(), config.accounts.clone()));
+
+        let application_service = Arc::new(ApplicationService::new(repos.application_repo.clone()));
+
+        let environment_service = Arc::new(EnvironmentService::new(repos.environment_repo.clone()));
 
         let component_service = Arc::new(ComponentService::new(
             repos.component_repo,
             component_object_store,
-            component_compilation,
+            component_compilation_service,
             initial_component_files,
             plugin_wasm_files,
-            account_usage,
+            account_usage_service,
         ));
 
-        Ok(Services { component_service })
+        Ok(Services { component_service, account_service, application_service, environment_service })
     }
 }
 
@@ -86,12 +105,23 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 .await
                 .context("Postgres DB migration")?;
 
-            let db_pool = PostgresPool::configured(postgres_config).await?;
+            let db_pool: PostgresPool = PostgresPool::configured(postgres_config).await?;
+
+            let account_repo = Arc::new(DbAccountRepo::logged(db_pool.clone()));
+            let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool.clone()));
+            let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
-            let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool));
+            let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
+            let plan_repo = Arc::new(DbPlanRepo::logged(db_pool));
+
+
             Ok(Repos {
-                component_repo,
+                account_repo,
                 account_usage_repo,
+                application_repo,
+                component_repo,
+                environment_repo,
+                plan_repo
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
@@ -100,11 +130,21 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 .context("Postgres DB migration")?;
 
             let db_pool = SqlitePool::configured(sqlite_config).await?;
+
+            let account_repo = Arc::new(DbAccountRepo::logged(db_pool.clone()));
+            let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool.clone()));
+            let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
-            let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool));
+            let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
+            let plan_repo =  Arc::new(DbPlanRepo::logged(db_pool));
+
             Ok(Repos {
-                component_repo,
+                account_repo,
                 account_usage_repo,
+                application_repo,
+                component_repo,
+                environment_repo,
+                plan_repo
             })
         }
     }

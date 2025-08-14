@@ -96,15 +96,22 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
         (
             HealthcheckApi,
             (
-                AccountApplicationsApi {},
+                AccountApplicationsApi::new(
+                    services.application_service.clone()
+                ),
                 AccountGrantsApi {},
                 AccountTokensApi {},
-                AccountsApi {},
+                AccountsApi::new(
+                    services.account_service.clone()
+                ),
             ),
             ApiDefinitionsApi {},
             ApiDeploymentsApi {},
             ApiDomainsApi {},
-            ApplicationsApi {},
+            ApplicationsApi::new(
+                services.application_service.clone(),
+                services.environment_service.clone()
+            ),
             CertificatesApi {},
             ComponentsApi::new(services.component_service.clone()),
             (
