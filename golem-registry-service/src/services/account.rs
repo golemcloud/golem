@@ -19,7 +19,7 @@ use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{error, info};
-use golem_common::model::account::{Account, AccountId, AccountData};
+use golem_common::model::account::{Account, AccountId, NewAccountData};
 use super::plan::{PlanError, PlanService};
 use crate::repo::model::audit::AuditFields;
 use anyhow::anyhow;
@@ -36,7 +36,7 @@ pub enum AccountError {
 impl SafeDisplay for AccountError {
     fn to_safe_string(&self) -> String {
         match self {
-            AccountError::AccountNotFound(_) => self.to_string(),
+            Self::AccountNotFound(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -82,7 +82,7 @@ impl AccountService {
             match existing_account {
                 None => {
                     info!("Creating initial account {} with id {}", name, account.id);
-                    self.create_with_id(account_id, AccountData { name: account.name.clone(), email: account.email.clone() }).await?;
+                    self.create_with_id(account_id, NewAccountData { name: account.name.clone(), email: account.email.clone() }).await?;
                 }
                 Some(existing_account) => {
                     let needs_update =
@@ -100,7 +100,7 @@ impl AccountService {
     }
 
 
-    pub async fn create(&self, account: AccountData) -> Result<Account, AccountError> {
+    pub async fn create(&self, account: NewAccountData) -> Result<Account, AccountError> {
         let id = AccountId::new_v4();
         self.create_with_id(id, account).await
     }
@@ -198,7 +198,7 @@ impl AccountService {
     //     }
     // }
 
-    async fn create_with_id(&self, id: AccountId, account: AccountData) -> Result<Account, AccountError> {
+    async fn create_with_id(&self, id: AccountId, account: NewAccountData) -> Result<Account, AccountError> {
         let plan_id = self.get_default_plan_id().await?;
         info!("Creating account: {}", id);
         match self

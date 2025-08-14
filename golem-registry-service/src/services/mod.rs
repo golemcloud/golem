@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod application;
 pub mod account_usage;
 pub mod component;
 pub mod component_compilation;

@@ -15,7 +15,7 @@
 use super::ApiResult;
 use golem_common::api::Page;
 use golem_common::model::Empty;
-use golem_common::model::account::{Account, AccountData, AccountId, Plan};
+use golem_common::model::account::{Account, NewAccountData, AccountId, Plan};
 use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -144,7 +144,7 @@ impl AccountsApi {
     async fn put_account(
         &self,
         account_id: Path<AccountId>,
-        data: Json<AccountData>,
+        data: Json<NewAccountData>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Account>> {
         let record =
@@ -163,7 +163,7 @@ impl AccountsApi {
     async fn put_account_internal(
         &self,
         _account_id: AccountId,
-        _data: AccountData,
+        _data: NewAccountData,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
         todo!()

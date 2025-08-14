@@ -76,13 +76,13 @@ impl PlanService {
                 }
                 Some(existing_plan) => {
                     let needs_update =
-                        existing_plan.plan_data.app_limit != plan.app_limit ||
-                        existing_plan.plan_data.env_limit != plan.env_limit ||
-                        existing_plan.plan_data.component_limit != plan.component_limit ||
-                        existing_plan.plan_data.storage_limit != plan.storage_limit ||
-                        existing_plan.plan_data.worker_limit != plan.worker_limit ||
-                        existing_plan.plan_data.monthly_gas_limit != plan.monthly_gas_limit ||
-                        existing_plan.plan_data.monthly_upload_limit != plan.app_limit;
+                        existing_plan.app_limit != plan.app_limit ||
+                        existing_plan.env_limit != plan.env_limit ||
+                        existing_plan.component_limit != plan.component_limit ||
+                        existing_plan.storage_limit != plan.storage_limit ||
+                        existing_plan.worker_limit != plan.worker_limit ||
+                        existing_plan.monthly_gas_limit != plan.monthly_gas_limit ||
+                        existing_plan.monthly_upload_limit != plan.app_limit;
 
                     if needs_update {
                         info!("Updating initial plan {}", plan.plan_id);

@@ -20,13 +20,18 @@ newtype_uuid!(ApplicationId);
 declare_transparent_newtypes! {
     pub struct ApplicationName(pub String);
 
-    pub struct ApplicationRevision(pub u64);
+    // pub struct ApplicationRevision(pub u64);
 }
 
 declare_structs! {
     pub struct Application {
         pub id: ApplicationId,
+        // pub revision: ApplicationRevision,
         pub account_id: AccountId,
+        pub name: ApplicationName,
+    }
+
+    pub struct NewApplicationData {
         pub name: ApplicationName,
     }
 }
