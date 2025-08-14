@@ -15,6 +15,7 @@
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use golem_common::model::agent::{DataValue, ElementValues};
+use golem_common::model::{AgentInstanceKey, WorkerResourceKey};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::wit_parser::SharedAnalysedTypeResolve;
@@ -91,8 +92,51 @@ async fn agent_resource_registration(
     debug!("Agent1 ID: {:?}", agent1_id);
 
     let (metadata1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
-
     debug!("Worker metadata after creating agent1: {:#?}", metadata1);
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:agent/guest.{[method]agent.invoke}",
+            vec![
+                ValueAndType::new(
+                    *agent1.clone(),
+                    get_id_function.analysed_export.parameters[0].typ.clone(),
+                ),
+                "create-inner".into_value_and_type(),
+                DataValue::Tuple(ElementValues { elements: vec![] }).into_value_and_type(),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    debug!(
+        "Worker metadata after creating inner agent: {:#?}",
+        metadata2
+    );
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:agent/guest.{[method]agent.invoke}",
+            vec![
+                ValueAndType::new(
+                    *agent1.clone(),
+                    get_id_function.analysed_export.parameters[0].typ.clone(),
+                ),
+                "drop-all-inner".into_value_and_type(),
+                DataValue::Tuple(ElementValues { elements: vec![] }).into_value_and_type(),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let (metadata3, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    debug!(
+        "Worker metadata after dropping inner agent: {:#?}",
+        metadata3
+    );
 
     let _ = executor
         .invoke_and_await(
@@ -106,14 +150,80 @@ async fn agent_resource_registration(
         .await
         .unwrap();
 
-    let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
-
-    debug!("Worker metadata after dropping agent1: {:#?}", metadata2);
-
-    // TODO: call something using indexed resource syntax on the first agent
-    // TODO: create second agent from guest side
-    // TODO: call something using indexed resource syntax on the second agent
+    let (metadata4, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    debug!("Worker metadata after dropping agent1: {:#?}", metadata4);
 
     executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
+
+    let mut ids1 = metadata1
+        .last_known_status
+        .owned_resources
+        .iter()
+        .filter_map(|(key, _)| match key {
+            WorkerResourceKey::ExportedResourceInstanceKey(_) => None,
+            WorkerResourceKey::AgentInstanceKey(key) => Some(key.clone()),
+        })
+        .collect::<Vec<_>>();
+    let mut ids2 = metadata2
+        .last_known_status
+        .owned_resources
+        .iter()
+        .filter_map(|(key, _)| match key {
+            WorkerResourceKey::ExportedResourceInstanceKey(_) => None,
+            WorkerResourceKey::AgentInstanceKey(key) => Some(key.clone()),
+        })
+        .collect::<Vec<_>>();
+    let mut ids3 = metadata3
+        .last_known_status
+        .owned_resources
+        .iter()
+        .filter_map(|(key, _)| match key {
+            WorkerResourceKey::ExportedResourceInstanceKey(_) => None,
+            WorkerResourceKey::AgentInstanceKey(key) => Some(key.clone()),
+        })
+        .collect::<Vec<_>>();
+    let mut ids4 = metadata4
+        .last_known_status
+        .owned_resources
+        .iter()
+        .filter_map(|(key, _)| match key {
+            WorkerResourceKey::ExportedResourceInstanceKey(_) => None,
+            WorkerResourceKey::AgentInstanceKey(key) => Some(key.clone()),
+        })
+        .collect::<Vec<_>>();
+
+    ids1.sort();
+    ids2.sort();
+    ids3.sort();
+    ids4.sort();
+
+    assert_eq!(
+        ids1,
+        vec![AgentInstanceKey {
+            agent_type: "TestAgent".to_string(),
+            agent_id: "agent-1".to_string()
+        }]
+    );
+    assert_eq!(
+        ids2,
+        vec![
+            AgentInstanceKey {
+                agent_type: "TestAgent".to_string(),
+                agent_id: "agent-1".to_string()
+            },
+            AgentInstanceKey {
+                agent_type: "TestAgent".to_string(),
+                agent_id: "agent-2".to_string()
+            }
+        ]
+    );
+    assert_eq!(
+        ids3,
+        vec![AgentInstanceKey {
+            agent_type: "TestAgent".to_string(),
+            agent_id: "agent-1".to_string()
+        }]
+    );
+    assert_eq!(ids4, vec![]);
 }

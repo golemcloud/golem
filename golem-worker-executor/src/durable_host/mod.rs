@@ -1428,6 +1428,8 @@ impl<Ctx: WorkerCtx> AgentStore for DurableWorkerCtx<Ctx> {
         agent_id: String,
         parameters: DataValue,
     ) {
+        debug!(%agent_type, %agent_id, "Agent instance created");
+
         let key = AgentInstanceKey {
             agent_type,
             agent_id,
@@ -1460,6 +1462,8 @@ impl<Ctx: WorkerCtx> AgentStore for DurableWorkerCtx<Ctx> {
         agent_id: String,
         _parameters: DataValue,
     ) {
+        debug!(%agent_type, %agent_id, "Agent instance dropped");
+
         let key = AgentInstanceKey {
             agent_type,
             agent_id,

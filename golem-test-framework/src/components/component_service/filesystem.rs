@@ -125,7 +125,11 @@ impl FileSystemComponentService {
                 })?
         };
 
-        let agent_types = extract_agent_types(&target_path).await.unwrap_or_default();
+        let agent_types = if skip_analysis {
+            vec![]
+        } else {
+            extract_agent_types(&target_path).await.unwrap_or_default()
+        };
 
         let size = tokio::fs::metadata(&target_path)
             .await
