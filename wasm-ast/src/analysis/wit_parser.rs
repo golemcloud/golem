@@ -209,10 +209,9 @@ impl GetResourceId for WitAnalysisContext {
         let mut resource_ids = self.resource_ids.borrow_mut();
 
         Some(
-            resource_ids
+            *resource_ids
                 .entry(type_id)
-                .or_insert_with(|| AnalysedResourceId(new_unique_id))
-                .clone(),
+                .or_insert_with(|| AnalysedResourceId(new_unique_id)),
         )
     }
 }

@@ -51,7 +51,7 @@ impl ValueAndTypeJsonExtensions for ValueAndType {
             AnalysedType::Tuple(TypeTuple { items, .. }) => get_tuple(json_val, items),
             AnalysedType::Handle(TypeHandle {
                 resource_id, mode, ..
-            }) => get_handle(json_val, resource_id.clone(), mode.clone()),
+            }) => get_handle(json_val, *resource_id, mode.clone()),
         }
     }
 

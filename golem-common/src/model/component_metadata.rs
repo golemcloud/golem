@@ -21,7 +21,10 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedInstance};
+use golem_wasm_ast::analysis::{
+    AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
+    AnalysedType, TypeHandle,
+};
 use golem_wasm_ast::core::Mem;
 use golem_wasm_ast::metadata::Producers as WasmAstProducers;
 use golem_wasm_ast::{
@@ -880,48 +883,112 @@ impl Display for ComponentProcessingError {
     }
 }
 
+fn collect_resource_types(
+    resource_types: &mut HashMap<AnalysedResourceId, AnalysedFunction>,
+    fun: &AnalysedFunction,
+) {
+    if fun.is_constructor() {
+        if let AnalysedType::Handle(TypeHandle {
+            mode: AnalysedResourceMode::Owned,
+            resource_id,
+            ..
+        }) = &fun.result.as_ref().unwrap().typ
+        {
+            resource_types.insert(*resource_id, fun.clone());
+        }
+    } else if fun.is_method() {
+        if let AnalysedType::Handle(TypeHandle {
+            mode: AnalysedResourceMode::Borrowed,
+            resource_id,
+            ..
+        }) = &fun.parameters[0].typ
+        {
+            resource_types.insert(*resource_id, fun.clone());
+        }
+    }
+}
+
 fn add_resource_drops(exports: &mut Vec<AnalysedExport>) {
     // Components are not exporting explicit drop functions for exported resources, but
     // worker executor does. So we keep golem-wasm-ast as a universal library and extend
     // its result with the explicit drops here, for each resource, identified by an exported
     // constructor.
 
-    let mut to_add = Vec::new();
+    let mut top_level_resource_types = HashMap::new();
     for export in exports.iter_mut() {
         match export {
             AnalysedExport::Function(fun) => {
-                if fun.is_constructor() {
-                    to_add.push(AnalysedExport::Function(drop_from_constructor(fun)));
-                }
+                collect_resource_types(&mut top_level_resource_types, fun);
             }
             AnalysedExport::Instance(instance) => {
-                let mut to_add = Vec::new();
+                let mut instance_resource_types = HashMap::new();
                 for fun in &instance.functions {
-                    if fun.is_constructor() {
-                        to_add.push(drop_from_constructor(fun));
-                    }
+                    collect_resource_types(&mut instance_resource_types, fun);
                 }
-                instance.functions.extend(to_add.into_iter());
+
+                for fun in instance_resource_types.values() {
+                    instance
+                        .functions
+                        .push(drop_from_constructor_or_method(fun));
+                }
             }
         }
     }
 
-    exports.extend(to_add);
+    for fun in top_level_resource_types.values() {
+        exports.push(AnalysedExport::Function(drop_from_constructor_or_method(
+            fun,
+        )));
+    }
 }
 
-fn drop_from_constructor(constructor: &AnalysedFunction) -> AnalysedFunction {
-    let drop_name = constructor.name.replace("[constructor]", "[drop]");
-    AnalysedFunction {
-        name: drop_name,
-        parameters: constructor
-            .result
-            .iter()
-            .map(|result| AnalysedFunctionParameter {
-                name: "self".to_string(),
-                typ: result.typ.clone(),
-            })
-            .collect(),
-        result: None,
+fn drop_from_constructor_or_method(fun: &AnalysedFunction) -> AnalysedFunction {
+    if fun.is_constructor() {
+        let drop_name = fun.name.replace("[constructor]", "[drop]");
+        AnalysedFunction {
+            name: drop_name,
+            parameters: fun
+                .result
+                .iter()
+                .map(|result| AnalysedFunctionParameter {
+                    name: "self".to_string(),
+                    typ: result.typ.clone(),
+                })
+                .collect(),
+            result: None,
+        }
+    } else {
+        let name = fun.name.replace("[method]", "[drop]");
+        let (drop_name, _) = name.split_once('.').unwrap();
+        AnalysedFunction {
+            name: drop_name.to_string(),
+            parameters: fun
+                .parameters
+                .first()
+                .map(|param| AnalysedFunctionParameter {
+                    name: "self".to_string(),
+                    typ: {
+                        let AnalysedType::Handle(TypeHandle {
+                            mode: _,
+                            resource_id,
+                            name,
+                            owner,
+                        }) = &param.typ
+                        else {
+                            panic!("Expected handle type for resource drop")
+                        };
+                        AnalysedType::Handle(TypeHandle {
+                            mode: AnalysedResourceMode::Owned,
+                            resource_id: *resource_id,
+                            name: name.clone(),
+                            owner: owner.clone(),
+                        })
+                    },
+                })
+                .into_iter()
+                .collect(),
+            result: None,
+        }
     }
 }
 

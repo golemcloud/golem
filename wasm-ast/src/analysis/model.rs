@@ -650,7 +650,7 @@ pub enum AnalysedResourceMode {
     Borrowed,
 }
 
-#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::NewType))]

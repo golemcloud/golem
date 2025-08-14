@@ -18,6 +18,7 @@ use crate::components::component_service::{AddComponentError, ComponentService};
 use crate::config::GolemClientProtocol;
 use anyhow::Context;
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
 use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata, VersionedComponentId};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::{
@@ -402,6 +403,18 @@ impl ComponentService for FileSystemComponentService {
             .collect::<Vec<u64>>();
         versions.sort();
         *versions.last().unwrap_or(&0)
+    }
+
+    async fn get_latest_component_metadata(
+        &self,
+        token: &Uuid,
+        request: GetLatestComponentRequest,
+    ) -> crate::Result<Component> {
+        let component_id: ComponentId = request.component_id.unwrap().try_into().unwrap();
+        let version = self.get_latest_version(token, &component_id).await;
+        let metadata = self.load_metadata(&component_id, version).await?;
+        let component: golem_service_base::model::Component = metadata.into();
+        Ok(component.into())
     }
 
     async fn get_component_size(

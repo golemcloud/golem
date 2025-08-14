@@ -13,54 +13,28 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::preview2::golem::agent::host::{Agent, Host, ValueAndType};
-use crate::workerctx::{IndexedResourceStore, WorkerCtx};
-use golem_common::model::oplog::WorkerResourceId;
-use wasmtime::component::Resource;
+use crate::preview2::golem::agent::host::{Host, ValueAndType};
+use crate::workerctx::WorkerCtx;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn register_agent(
         &mut self,
-        agent: Resource<Agent>,
-        id: String,
+        agent_type: String,
+        agent_id: String,
         _parameters: Vec<ValueAndType>,
     ) -> anyhow::Result<()> {
         // TODO: log
-
-        // For now, we index agents by their ID and not their constructor parameters
-        // let resource_params = parameters
-        //     .into_iter()
-        //     .map(|v| print_value_and_type(&v.into()))
-        //     .collect::<Result<Vec<_>, _>>()?;
-
-        let resource_params = vec![id];
-        let resource_id = agent.rep() as u64; // TODO: this needs to be verified whether it's safe to store this ID and can be used to access
-
-        // TODO: need to add to ResourceStore with `add`
-
-        self.store_indexed_resource(
-            "golem:agent/guest",
-            "agent",
-            &resource_params,
-            WorkerResourceId(resource_id),
-        )
-        .await;
+        // TODO
 
         Ok(())
     }
 
     async fn unregister_agent(
         &mut self,
-        _agent: Resource<Agent>,
-        id: String,
+        agent_id: String,
         _parameters: Vec<ValueAndType>,
     ) -> anyhow::Result<()> {
         // TODO: log
-
-        // For now, we index agents by their ID and not their constructor parameters
-        self.drop_indexed_resource("golem:agent/guest", "agent", &[id]);
-
-        // TODO: need to drop from ResourceStore with `add`
 
         Ok(())
     }

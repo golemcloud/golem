@@ -15,6 +15,10 @@ interface guest {
 
   get-agent: func(agent-type: string, agent-id: string) -> agent;
 
+  /// Invokes an agent method on an agent of a given type and ID.
+  /// Equivalent of getting an agent with `get-agent` and calling `invoke` on that.
+  invoke-agent: func(agent-type: string, agent-id: string, method-name: string, input: data-value) -> result<data-value, agent-error>;
+
   discover-agents: func() -> list<agent>;
 
   discover-agent-types: func() -> list<agent-type>;
