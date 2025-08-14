@@ -619,7 +619,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     JOIN deployment_component_revisions dcr
                         ON dcr.environment_id = cd.environment_id AND dcr.deployment_revision_id = dr.revision_id
                                AND dcr.component_revision_id = cr.revision_id
-                    WHERE c.component_id = $1 AND c.deleted_at IS NULL
+                    WHERE c.component_id = $1
                 "#})
                     .bind(component_id),
             )
@@ -652,7 +652,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     JOIN deployment_component_revisions dcr
                         ON dcr.environment_id = cd.environment_id AND dcr.deployment_revision_id = dr.revision_id
                                AND dcr.component_revision_id = cr.revision_id
-                    WHERE c.environment_id = $1 AND c.name = $2 AND c.deleted_at IS NULL
+                    WHERE c.environment_id = $1 AND c.name = $2
                 "#})
                     .bind(environment_id)
                     .bind(name),
@@ -773,7 +773,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            AND dcr.deployment_revision_id = dr.revision_id
                            AND dcr.component_id = c.component_id
                            AND dcr.component_revision_id = cr.revision_id
-                    WHERE c.environment_id = $1 AND c.deleted_at IS NULL
+                    WHERE c.environment_id = $1
                     ORDER BY c.name
                 "#})
                     .bind(environment_id),
@@ -804,7 +804,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     JOIN deployment_component_revisions dcr
                         ON dcr.component_id = c.component_id
                            AND dcr.component_revision_id = cr.revision_id
-                    WHERE dcr.environment_id = $1 AND dcr.deployment_revision_id = $2 AND c.deleted_at IS NULL
+                    WHERE dcr.environment_id = $1 AND dcr.deployment_revision_id = $2
                     ORDER BY c.name
                 "#})
                     .bind(environment_id)

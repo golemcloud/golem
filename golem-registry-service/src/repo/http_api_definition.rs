@@ -588,7 +588,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                             AND dhadr.deployment_revision_id = dr.revision_id
                             AND dhadr.http_api_definition_id = hadr.http_api_definition_id
                             AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                    WHERE had.http_api_definition_id = $1 AND had.deleted_at IS NULL
+                    WHERE had.http_api_definition_id = $1
                 "#})
                 .bind(http_api_definition_id),
             )
@@ -616,7 +616,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                             AND dhadr.deployment_revision_id = dr.revision_id
                             AND dhadr.http_api_definition_id = hadr.http_api_definition_id
                             AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                    WHERE had.environment_id = $1 AND had.name = $2 AND had.deleted_at IS NULL
+                    WHERE had.environment_id = $1 AND had.name = $2
                 "#})
                 .bind(environment_id)
                 .bind(name),
@@ -638,7 +638,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                     FROM http_api_definitions d
                     JOIN http_api_definition_revisions dr
                         ON d.http_api_definition_id = dr.http_api_definition_id
-                    WHERE d.http_api_definition_id = $1 AND dr.revision_id = $2 AND d.deleted_at IS NULL
+                    WHERE d.http_api_definition_id = $1 AND dr.revision_id = $2 AND dr.deleted = FALSE
                 "#})
                     .bind(http_api_definition_id)
                     .bind(revision_id),
@@ -711,7 +711,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                             AND dhadr.deployment_revision_id = dr.revision_id
                             AND dhadr.http_api_definition_id = hadr.http_api_definition_id
                             AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                    WHERE had.environment_id = $1 AND had.deleted_at IS NULL
+                    WHERE had.environment_id = $1 AND
                     ORDER BY had.name
                 "#})
                 .bind(environment_id),
@@ -735,7 +735,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                     JOIN deployment_http_api_definition_revisions dhadr
                         ON dhadr.http_api_definition_id = hadr.http_api_definition_id
                             AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                    WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2 AND hadr.deleted = FALSE
+                    WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
                     ORDER BY had.name
                 "#})
                     .bind(environment_id)

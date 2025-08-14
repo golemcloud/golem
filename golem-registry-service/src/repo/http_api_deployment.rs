@@ -633,7 +633,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                             AND dhadr.deployment_revision_id = dr.revision_id
                             AND dhadr.http_api_definition_id = hadr.http_api_deployment_id
                             AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                    WHERE had.http_api_deployment_id = $1 AND had.deleted_at IS NULL
+                    WHERE had.http_api_deployment_id = $1
                 "#})
                     .bind(http_api_deployment_id),
             )
@@ -669,7 +669,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                                     AND dhadr.deployment_revision_id = dr.revision_id
                                     AND dhadr.http_api_definition_id = hadr.http_api_deployment_id
                                     AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                            WHERE had.environment_id = $1 AND had.host = $2 AND had.subdomain = $3 AND had.deleted_at IS NULL
+                            WHERE had.environment_id = $1 AND had.host = $2 AND had.subdomain = $3
                         "#})
                             .bind(environment_id)
                             .bind(host)
@@ -691,7 +691,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                                     AND dhadr.deployment_revision_id = dr.revision_id
                                     AND dhadr.http_api_definition_id = hadr.http_api_deployment_id
                                     AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                            WHERE had.environment_id = $1 AND had.host = $2 AND had.subdomain IS NULL AND had.deleted_at IS NULL
+                            WHERE had.environment_id = $1 AND had.host = $2 AND had.subdomain IS NULL
                         "#})
                             .bind(environment_id)
                             .bind(host)
@@ -825,7 +825,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                             AND dhadr.deployment_revision_id = dr.revision_id
                             AND dhadr.http_api_definition_id = hadr.http_api_deployment_id
                             AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                    WHERE had.environment_id = $1 AND had.deleted_at IS NULL
+                    WHERE had.environment_id = $1
                     ORDER BY had.host, had.subdomain
                 "#})
                     .bind(environment_id),
@@ -855,7 +855,6 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                         ON dhadr.http_api_definition_id = hadr.http_api_deployment_id
                             AND dhadr.http_api_definition_revision_id = hadr.revision_id
                     WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
-                        AND hadr.deleted = FALSE
                     ORDER BY had.host, had.subdomain
                 "#})
                     .bind(environment_id)
