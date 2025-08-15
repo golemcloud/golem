@@ -3,7 +3,7 @@ name: "Desktop CI"
 on:
   pull_request:
     paths:
-    - "desktop-app/**"
+    - "cli/desktop-app/**"
     - ".github/workflows/desktop-ci.yaml"
   push:
     branches:
@@ -11,7 +11,7 @@ on:
     tags:
     - "v*.*.*"
     paths:
-    - "desktop-app/**"
+    - "cli/desktop-app/**"
     - ".github/workflows/desktop-ci.yaml"
 
 jobs:
@@ -49,13 +49,13 @@ jobs:
       if: matrix.platform == 'ubuntu-22.04'
       uses: useblacksmith/rust-cache@v3
       with:
-        workspaces: "./desktop-app/src-tauri -> target"
+        workspaces: "./cli/desktop-app/src-tauri -> target"
 
     - name: Setup Rust cache (macOS and Windows)
       if: matrix.platform != 'ubuntu-22.04'
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: "./desktop-app/src-tauri -> target"
+        workspaces: "./cli/desktop-app/src-tauri -> target"
 
     - name: Install dependencies (Ubuntu only)
       if: matrix.platform == 'ubuntu-22.04'
@@ -65,19 +65,19 @@ jobs:
 
     - name: Install frontend dependencies
       run: npm install
-      working-directory: ./desktop-app
+      working-directory: ./cli/desktop-app
 
     - name: Run frontend tests
       run: npm test
-      working-directory: ./desktop-app
+      working-directory: ./cli/desktop-app
 
     - name: Check Code Format
       run: npm run format:check
-      working-directory: ./desktop-app
+      working-directory: ./cli/desktop-app
 
     - name: Lint Check
       run: npm run lint
-      working-directory: ./desktop-app
+      working-directory: ./cli/desktop-app
 
     - name: Build Tauri apps
       id: tauri-build
@@ -86,14 +86,14 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
-        projectPath: "./desktop-app"
+        projectPath: "./cli/desktop-app"
 
     - name: Upload macOS DMG artifact
       if: matrix.platform == 'macos-latest' && matrix.target != ''
       uses: actions/upload-artifact@v4
       with:
         name: GolemDesktop-${{ matrix.target }}-dmg
-        path: ./desktop-app/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+        path: ./cli/desktop-app/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
         if-no-files-found: ignore
 
     - name: Upload macOS App artifact
@@ -101,7 +101,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: GolemDesktop-${{ matrix.target }}-app
-        path: ./desktop-app/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
+        path: ./cli/desktop-app/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
         if-no-files-found: ignore
 
     - name: Upload Linux AppImage artifact
@@ -109,7 +109,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: GolemDesktop-linux-appimage
-        path: ./desktop-app/src-tauri/target/release/bundle/appimage/*.AppImage
+        path: ./cli/desktop-app/src-tauri/target/release/bundle/appimage/*.AppImage
         if-no-files-found: ignore
 
     - name: Upload Linux Deb artifact
@@ -117,7 +117,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: GolemDesktop-linux-deb
-        path: ./desktop-app/src-tauri/target/release/bundle/deb/*.deb
+        path: ./cli/desktop-app/src-tauri/target/release/bundle/deb/*.deb
         if-no-files-found: ignore
 
     - name: Upload Linux RPM artifact
@@ -125,7 +125,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: GolemDesktop-linux-rpm
-        path: ./desktop-app/src-tauri/target/release/bundle/rpm/*.rpm
+        path: ./cli/desktop-app/src-tauri/target/release/bundle/rpm/*.rpm
         if-no-files-found: ignore
 
     - name: Upload Windows MSI artifact
@@ -133,7 +133,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: GolemDesktop-windows-msi
-        path: ./desktop-app/src-tauri/target/release/bundle/msi/*.msi
+        path: ./cli/desktop-app/src-tauri/target/release/bundle/msi/*.msi
         if-no-files-found: ignore
 
     - name: Upload Windows EXE artifact
@@ -141,7 +141,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: GolemDesktop-windows-exe
-        path: ./desktop-app/src-tauri/target/release/bundle/nsis/*.exe
+        path: ./cli/desktop-app/src-tauri/target/release/bundle/nsis/*.exe
         if-no-files-found: ignore
 
   publish-release:
