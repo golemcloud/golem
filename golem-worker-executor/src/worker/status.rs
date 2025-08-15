@@ -2,14 +2,13 @@ use crate::services::{HasConfig, HasOplogService};
 use crate::worker::is_worker_error_retriable;
 use async_recursion::async_recursion;
 use golem_common::base_model::{OplogIndex, PluginInstallationId};
-use golem_common::model::oplog::{
-    OplogEntry, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
-};
+use golem_common::model::oplog::{OplogEntry, TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
+    AgentInstanceDescription, ExportedResourceInstanceDescription, ExportedResourceInstanceKey,
     FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig, SuccessfulUpdateRecord,
     TimestampedWorkerInvocation, WorkerInvocation, WorkerMetadata, WorkerResourceDescription,
-    WorkerStatus, WorkerStatusRecord,
+    WorkerResourceKey, WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -110,11 +109,8 @@ where
                 &new_entries,
             );
 
-            let owned_resources = calculate_owned_resources(
-                last_known.owned_resources,
-                &skipped_regions,
-                &new_entries,
-            );
+            let owned_resources =
+                collect_resources(last_known.owned_resources, &skipped_regions, &new_entries);
 
             let active_plugins =
                 calculate_active_plugins(active_plugins, &deleted_regions, &new_entries);
@@ -256,6 +252,8 @@ fn calculate_latest_worker_status(
             OplogEntry::ChangePersistenceLevel { .. } => {
                 result = WorkerStatus::Running;
             }
+            OplogEntry::CreateAgentInstance { .. } => {}
+            OplogEntry::DropAgentInstance { .. } => {}
         }
     }
     result
@@ -603,11 +601,11 @@ fn calculate_total_linear_memory_size(
     result
 }
 
-fn calculate_owned_resources(
-    initial: HashMap<WorkerResourceId, WorkerResourceDescription>,
+fn collect_resources(
+    initial: HashMap<WorkerResourceKey, WorkerResourceDescription>,
     skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> HashMap<WorkerResourceId, WorkerResourceDescription> {
+) -> HashMap<WorkerResourceKey, WorkerResourceDescription> {
     let mut result = initial;
     for (idx, entry) in entries {
         // Skipping entries in deleted regions as they are not applied during replay
@@ -616,26 +614,60 @@ fn calculate_owned_resources(
         }
 
         match entry {
-            OplogEntry::CreateResource { id, timestamp } => {
+            OplogEntry::CreateResource {
+                id,
+                timestamp,
+                resource_type_id,
+            } => {
                 result.insert(
-                    *id,
-                    WorkerResourceDescription {
-                        created_at: *timestamp,
-                        indexed_resource_key: None,
-                    },
+                    WorkerResourceKey::ExportedResourceInstanceKey(ExportedResourceInstanceKey {
+                        resource_id: *id,
+                    }),
+                    WorkerResourceDescription::ExportedResourceInstance(
+                        ExportedResourceInstanceDescription {
+                            created_at: *timestamp,
+                            resource_owner: resource_type_id.owner.clone(),
+                            resource_name: resource_type_id.name.clone(),
+                            resource_params: None,
+                        },
+                    ),
                 );
             }
             OplogEntry::DropResource { id, .. } => {
-                result.remove(id);
+                result.remove(&WorkerResourceKey::ExportedResourceInstanceKey(
+                    ExportedResourceInstanceKey { resource_id: *id },
+                ));
             }
             OplogEntry::DescribeResource {
                 id,
-                indexed_resource,
+                indexed_resource_parameters,
                 ..
             } => {
-                if let Some(description) = result.get_mut(id) {
-                    description.indexed_resource_key = Some(indexed_resource.clone());
+                if let Some(WorkerResourceDescription::ExportedResourceInstance(
+                    ExportedResourceInstanceDescription {
+                        resource_params, ..
+                    },
+                )) = result.get_mut(&WorkerResourceKey::ExportedResourceInstanceKey(
+                    ExportedResourceInstanceKey { resource_id: *id },
+                )) {
+                    *resource_params = Some(indexed_resource_parameters.clone());
                 }
+            }
+            OplogEntry::CreateAgentInstance {
+                timestamp,
+                key,
+                parameters,
+            } => {
+                result.insert(
+                    WorkerResourceKey::AgentInstanceKey(key.clone()),
+                    WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
+                        created_at: *timestamp,
+                        agent_parameters: parameters.clone(),
+                    }),
+                );
+            }
+            OplogEntry::DropAgentInstance { key, .. } => {
+                result.remove(&WorkerResourceKey::AgentInstanceKey(key.clone()));
             }
             _ => {}
         }

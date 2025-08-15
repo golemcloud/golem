@@ -330,17 +330,7 @@ impl ComponentRevisionRecord {
             audit: DeletableRevisionAuditFields::deletion(created_by),
             component_type: 0,
             size: 0,
-            metadata: ComponentMetadata {
-                exports: vec![],
-                producers: vec![],
-                memories: vec![],
-                binary_wit: Default::default(),
-                root_package_name: None,
-                root_package_version: None,
-                dynamic_linking: Default::default(),
-                agent_types: Default::default(),
-            }
-            .into(),
+            metadata: ComponentMetadata::default().into(),
             env: Default::default(),
             status: ComponentStatus::Created,
             object_store_key: "".to_string(),

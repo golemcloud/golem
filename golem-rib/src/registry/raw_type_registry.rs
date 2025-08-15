@@ -86,7 +86,7 @@ impl FunctionTypeRegistry {
         }
     }
 
-    pub fn from_export_metadata(exports: &Vec<AnalysedExport>) -> Self {
+    pub fn from_export_metadata(exports: &[AnalysedExport]) -> Self {
         let mut map = HashMap::new();
 
         let mut types = HashSet::new();

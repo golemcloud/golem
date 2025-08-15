@@ -345,7 +345,7 @@ dependencies = [
 [[package]]
 name = "golem-rust"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-rust?branch=golem-rpc-0.2.2#ab09bbf6d84fe882eaa3d6b59908da71e253a52a"
+source = "git+https://github.com/golemcloud/golem-rust?branch=type-owner#bbe9c53581733248d91f27858489ae2df653bed4"
 dependencies = [
  "golem-rust-macro",
  "golem-wasm-rpc",
@@ -358,7 +358,7 @@ dependencies = [
 [[package]]
 name = "golem-rust-macro"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-rust?branch=golem-rpc-0.2.2#ab09bbf6d84fe882eaa3d6b59908da71e253a52a"
+source = "git+https://github.com/golemcloud/golem-rust?branch=type-owner#bbe9c53581733248d91f27858489ae2df653bed4"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -369,7 +369,7 @@ dependencies = [
 [[package]]
 name = "golem-wasm-rpc"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem?branch=type-names#aa8937287522422ddaf9298c72c4e79bbc3e9545"
+source = "git+https://github.com/golemcloud/golem?branch=resource-improvements#b65adf9d20167fd33c71503e015a0b478a1234cb"
 dependencies = [
  "cargo_metadata",
  "chrono",

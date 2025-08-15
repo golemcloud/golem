@@ -28,7 +28,12 @@ pub fn parse_value_and_type(
 }
 
 pub fn print_value_and_type(value: &ValueAndType) -> Result<String, String> {
-    to_string(value).map_err(|err| err.to_string())
+    println!("[print_value_and_type] value: {value:?}");
+    if value.typ.contains_handle() {
+        Err("Cannot print handle type".to_string())
+    } else {
+        to_string(value).map_err(|err| err.to_string())
+    }
 }
 
 impl WasmValue for ValueAndType {
@@ -293,14 +298,14 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_string(&self) -> Cow<str> {
+    fn unwrap_string(&self) -> Cow<'_, str> {
         match &self.value {
             Value::String(val) => Cow::Borrowed(val),
             _ => panic!("Expected string, found {self:?}"),
         }
     }
 
-    fn unwrap_list(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
+    fn unwrap_list(&self) -> Box<dyn Iterator<Item = Cow<'_, Self>> + '_> {
         match (&self.value, &self.typ) {
             (Value::List(vals), AnalysedType::List(typ)) => Box::new(vals.iter().map(|v| {
                 Cow::Owned(ValueAndType {
@@ -312,7 +317,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_record(&self) -> Box<dyn Iterator<Item = (Cow<str>, Cow<Self>)> + '_> {
+    fn unwrap_record(&self) -> Box<dyn Iterator<Item = (Cow<'_, str>, Cow<'_, Self>)> + '_> {
         match (&self.value, &self.typ) {
             (Value::Record(vals), AnalysedType::Record(typ)) => {
                 Box::new(vals.iter().zip(typ.fields.iter()).map(|(v, f)| {
@@ -329,7 +334,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_tuple(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
+    fn unwrap_tuple(&self) -> Box<dyn Iterator<Item = Cow<'_, Self>> + '_> {
         match (&self.value, &self.typ) {
             (Value::Tuple(vals), AnalysedType::Tuple(typ)) => {
                 Box::new(vals.iter().zip(typ.items.iter()).map(|(v, t)| {
@@ -343,7 +348,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_variant(&self) -> (Cow<str>, Option<Cow<Self>>) {
+    fn unwrap_variant(&self) -> (Cow<'_, str>, Option<Cow<'_, Self>>) {
         match (&self.value, &self.typ) {
             (
                 Value::Variant {
@@ -371,7 +376,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_enum(&self) -> Cow<str> {
+    fn unwrap_enum(&self) -> Cow<'_, str> {
         match (&self.value, &self.typ) {
             (Value::Enum(case_idx), AnalysedType::Enum(typ)) => {
                 Cow::Borrowed(&typ.cases[*case_idx as usize])
@@ -380,7 +385,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_option(&self) -> Option<Cow<Self>> {
+    fn unwrap_option(&self) -> Option<Cow<'_, Self>> {
         match (&self.value, &self.typ) {
             (Value::Option(Some(val)), AnalysedType::Option(typ)) => {
                 Some(Cow::Owned(ValueAndType {
@@ -393,7 +398,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_result(&self) -> Result<Option<Cow<Self>>, Option<Cow<Self>>> {
+    fn unwrap_result(&self) -> Result<Option<Cow<'_, Self>>, Option<Cow<'_, Self>>> {
         match (&self.value, &self.typ) {
             (Value::Result(Ok(Some(val))), AnalysedType::Result(typ)) => {
                 Ok(Some(Cow::Owned(ValueAndType {
@@ -421,7 +426,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_flags(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
+    fn unwrap_flags(&self) -> Box<dyn Iterator<Item = Cow<'_, str>> + '_> {
         match (&self.value, &self.typ) {
             (Value::Flags(bitmap), AnalysedType::Flags(typ)) => Box::new(
                 bitmap

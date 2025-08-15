@@ -29,7 +29,6 @@ use crate::workerctx::{InvocationContextManagement, InvocationManagement, Worker
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::model::exports::function_by_name;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
 use golem_common::model::{
@@ -1165,11 +1164,11 @@ async fn try_get_typed_parameters(
         .get_metadata(project_id, component_id, None)
         .await
     {
-        if let Ok(Some(function)) = function_by_name(&component.metadata.exports, function_name) {
-            if function.parameters.len() == params.len() {
+        if let Ok(Some(function)) = component.metadata.find_function(function_name).await {
+            if function.analysed_export.parameters.len() == params.len() {
                 return params
                     .iter()
-                    .zip(function.parameters)
+                    .zip(function.analysed_export.parameters)
                     .map(|(value, def)| ValueAndType::new(value.clone().into(), def.typ.clone()))
                     .collect();
             }

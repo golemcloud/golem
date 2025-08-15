@@ -10,8 +10,8 @@ interface client-api {
 }
 
 world client {
-  import wasi:clocks/wall-clock@0.2.0;
-  import golem:api/host@1.1.6;
+  import wasi:clocks/wall-clock@0.2.3;
+  import golem:api/host@1.1.7;
 
   export client-api;
 }

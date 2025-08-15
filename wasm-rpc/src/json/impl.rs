@@ -51,7 +51,7 @@ impl ValueAndTypeJsonExtensions for ValueAndType {
             AnalysedType::Tuple(TypeTuple { items, .. }) => get_tuple(json_val, items),
             AnalysedType::Handle(TypeHandle {
                 resource_id, mode, ..
-            }) => get_handle(json_val, resource_id.clone(), mode.clone()),
+            }) => get_handle(json_val, *resource_id, mode.clone()),
         }
     }
 
@@ -478,6 +478,7 @@ fn get_enum(input_json: &JsonValue, names: &[String]) -> Result<ValueAndType, Ve
         Value::Enum(enum_value as u32),
         AnalysedType::Enum(TypeEnum {
             name: None,
+            owner: None,
             cases: names.to_vec(),
         }),
     ))
@@ -514,6 +515,7 @@ fn get_result(
                     ok: ok_type.clone(),
                     err: err_type.clone(),
                     name: None,
+                    owner: None,
                 }),
             ))
         }
@@ -527,6 +529,7 @@ fn get_result(
                         ok: ok_type.clone(),
                         err: err_type.clone(),
                         name: None,
+                        owner: None,
                     }),
                 ))
             }
@@ -621,6 +624,7 @@ fn get_flag(input_json: &JsonValue, names: &[String]) -> Result<ValueAndType, Ve
             AnalysedType::Flags(TypeFlags {
                 names: names.to_vec(),
                 name: None,
+                owner: None,
             }),
         ))
     } else {
@@ -702,6 +706,7 @@ fn get_handle(
                                 resource_id: id,
                                 mode: resource_mode,
                                 name: None,
+                                owner: None,
                             }),
                         ))
                     }

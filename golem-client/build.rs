@@ -37,6 +37,11 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         true,
         &[
             ("AgentType", "golem_common::model::agent::AgentType"),
+            ("AgentInstanceKey", "golem_common::model::AgentInstanceKey"),
+            (
+                "AgentInstanceDescription",
+                "golem_common::model::AgentInstanceDescription",
+            ),
             ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
             ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
             ("PluginScope", "golem_common::model::plugin::PluginScope"),
@@ -49,6 +54,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::ComponentFilePathWithPermissionsList",
             ),
             ("ComponentType", "golem_common::model::ComponentType"),
+            ("DataValue", "golem_common::model::agent::DataValue"),
             ("Empty", "golem_common::model::Empty"),
             (
                 "InitialComponentFile",
@@ -56,6 +62,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             ("ErrorBody", "golem_common::model::error::ErrorBody"),
             ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
+            (
+                "ExportedResourceInstanceKey",
+                "golem_common::model::ExportedResourceInstanceKey",
+            ),
+            (
+                "ExportedResourceInstanceDescription",
+                "golem_common::model::ExportedResourceInstanceDescription",
+            ),
             ("GolemError", "golem_common::model::error::GolemError"),
             (
                 "PluginInstallationAction",
@@ -102,6 +116,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "WorkerBindingType",
                 "golem_common::model::WorkerBindingType",
+            ),
+            (
+                "WorkerResourceDescription",
+                "golem_common::model::WorkerResourceDescription",
             ),
             ("WorkerStatus", "golem_common::model::WorkerStatus"),
         ],

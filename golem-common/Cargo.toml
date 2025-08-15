@@ -25,6 +25,7 @@ default = [
     "tokio",
 ]
 
+agent-extraction = ["dep:wasmtime-wasi", "dep:wit-parser"]
 base-model = []
 config = ["model", "dep:figment"]
 model = [
@@ -110,6 +111,7 @@ dashmap = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true, optional = true }
 fred = { workspace = true, optional = true }
+heck = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 iso8601-timestamp = { workspace = true }
@@ -146,6 +148,8 @@ typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true, optional = true }
+wasmtime-wasi = { workspace = true, optional = true }
+wit-parser = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

@@ -1,7 +1,7 @@
 package golem:agent;
 
 interface common {
-  use golem:rpc/types@0.2.2.{wit-type, wit-value};
+  use golem:rpc/types@0.2.2.{value-and-type, wit-type, wit-value};
 
   type url = string;
 
@@ -103,6 +103,6 @@ interface common {
     invalid-method(string),
     invalid-type(string),
     invalid-agent-id(string),
-    custom-error(data-value),
+    custom-error(value-and-type),
   }
 }

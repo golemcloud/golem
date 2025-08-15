@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
-use crate::gateway_api_definition::http::{HttpApiDefinitionRequest, RouteRequest};
+use crate::gateway_api_definition::http::{
+    HttpApiDefinitionRequest, OpenApiHttpApiDefinition, RouteRequest,
+};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_api_definition_transformer::transform_http_api_definition;
+use crate::gateway_binding::SwaggerUiBinding;
 use crate::gateway_binding::{
     FileServerBindingCompiled, GatewayBinding, GatewayBindingCompiled, IdempotencyKeyCompiled,
     InvocationContextCompiled, ResponseMappingCompiled, StaticBinding, WorkerNameCompiled,
@@ -28,6 +31,7 @@ use crate::gateway_security::SecuritySchemeReference;
 use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
+use crate::service::gateway::BoxConversionContext;
 use bincode::{Decode, Encode};
 use golem_common::model::auth::Namespace;
 use golem_common::model::component::VersionedComponentId;
@@ -229,6 +233,7 @@ impl CompiledHttpApiDefinition {
         http_api_definition: &HttpApiDefinition,
         metadata_dictionary: &ComponentMetadataDictionary,
         namespace: &Namespace,
+        conversion_context: &BoxConversionContext<'_>,
     ) -> Result<Self, RouteCompilationErrors> {
         let mut compiled_routes = vec![];
 
@@ -237,14 +242,45 @@ impl CompiledHttpApiDefinition {
             compiled_routes.push(compiled_route);
         }
 
-        Ok(CompiledHttpApiDefinition {
+        let mut result = CompiledHttpApiDefinition {
             id: http_api_definition.id.clone(),
             version: http_api_definition.version.clone(),
             routes: compiled_routes,
             draft: http_api_definition.draft,
             created_at: http_api_definition.created_at,
             namespace: namespace.clone(),
-        })
+        };
+        // Update SwaggerUI routes with actual OpenAPI spec
+        result.update_swagger_ui_openapi_specs(conversion_context);
+        Ok(result)
+    }
+
+    pub fn update_swagger_ui_openapi_specs(
+        &mut self,
+        conversion_context: &BoxConversionContext<'_>,
+    ) {
+        let openapi_spec_json = self.generate_openapi_spec_json(conversion_context).ok();
+
+        // Update all SwaggerUI routes with the actual OpenAPI spec
+        for route in &mut self.routes {
+            if let crate::gateway_binding::GatewayBindingCompiled::SwaggerUi(swagger_binding) =
+                &mut route.binding
+            {
+                swagger_binding.openapi_spec_json = openapi_spec_json.clone();
+            }
+        }
+    }
+
+    /// Generates the OpenAPI specification JSON for this compiled API definition
+    fn generate_openapi_spec_json(
+        &self,
+        conversion_context: &BoxConversionContext<'_>,
+    ) -> Result<String, String> {
+        let openapi = futures::executor::block_on(
+            OpenApiHttpApiDefinition::from_compiled_http_api_definition(self, conversion_context),
+        )?;
+        serde_json::to_string_pretty(&openapi.0)
+            .map_err(|e| format!("Failed to serialize OpenAPI to JSON: {e}"))
     }
 }
 
@@ -644,13 +680,13 @@ impl ComponentMetadataDictionary {
             let component_info = ComponentDependencyKey {
                 component_name: component.component_name.0.clone(),
                 component_id: component.versioned_component_id.component_id.0,
-                root_package_name: component.metadata.root_package_name.clone(),
-                root_package_version: component.metadata.root_package_version.clone(),
+                root_package_name: component.metadata.root_package_name().clone(),
+                root_package_version: component.metadata.root_package_version().clone(),
             };
 
             let component_details = ComponentDetails {
                 component_info,
-                metadata: component.metadata.exports.clone(),
+                metadata: component.metadata.exports().to_vec(),
             };
 
             metadata.insert(component.versioned_component_id.clone(), component_details);
@@ -784,6 +820,16 @@ impl CompiledRoute {
                 binding: GatewayBindingCompiled::Static(static_binding.clone()),
                 middlewares: route.middlewares.clone(),
             }),
+
+            GatewayBinding::SwaggerUi(_) => {
+                // SwaggerUI binding starts with None - will be populated after full compilation
+                Ok(CompiledRoute {
+                    method: route.method.clone(),
+                    path: route.path.clone(),
+                    binding: GatewayBindingCompiled::SwaggerUi(SwaggerUiBinding::new()),
+                    middlewares: route.middlewares.clone(),
+                })
+            }
         }
     }
 

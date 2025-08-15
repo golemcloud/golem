@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
 use golem_common::model::public_oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
@@ -363,6 +364,20 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 &params.persistence_level,
             );
         }
+        PublicOplogEntry::CreateAgentInstance(params) => {
+            let _ = writeln!(result, "CREATE AGENT INSTANCE");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}agent type:        {}", &params.key.agent_type);
+            let _ = writeln!(result, "{pad}agent id:          {}", &params.key.agent_id);
+            let _ = writeln!(result, "{pad}constructor params:");
+            log_data_value(&mut result, pad, &params.parameters);
+        }
+        PublicOplogEntry::DropAgentInstance(params) => {
+            let _ = writeln!(result, "DROP AGENT INSTANCE");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}agent type:        {}", &params.key.agent_type);
+            let _ = writeln!(result, "{pad}agent id:          {}", &params.key.agent_id);
+        }
     }
 
     result
@@ -382,5 +397,50 @@ fn log_plugin_description(output: &mut String, pad: &str, value: &PluginInstalla
 }
 
 fn value_to_string(value: &ValueAndType) -> String {
-    print_value_and_type(value).expect("Failed to convert value to string")
+    print_value_and_type(value).unwrap_or_else(|_| format!("{value:?}"))
+}
+
+fn log_data_value(output: &mut String, pad: &str, value: &DataValue) {
+    match value {
+        DataValue::Tuple(values) => {
+            let _ = writeln!(output, "{pad}  tuple:");
+            for value in &values.elements {
+                log_element_value(output, &format!("{pad}    "), value);
+            }
+        }
+        DataValue::Multimodal(values) => {
+            let _ = writeln!(output, "{pad}  multi-modal:");
+            for value in &values.elements {
+                log_element_value(output, &format!("{pad}    "), &value.value);
+            }
+        }
+    }
+}
+
+fn log_element_value(output: &mut String, pad: &str, value: &ElementValue) {
+    match value {
+        ElementValue::ComponentModel(value) => {
+            let _ = writeln!(output, "{pad}- {}", value_to_string(value));
+        }
+        ElementValue::UnstructuredText(value) => match value {
+            TextReference::Url(url) => {
+                let _ = writeln!(output, "{pad}- URL: {}", url.value);
+            }
+            TextReference::Inline(inline) => {
+                let _ = writeln!(output, "{pad}- Inline: {}", inline.data);
+                if let Some(text_type) = &inline.text_type {
+                    let _ = writeln!(output, "{pad}  Language code: {}", text_type.language_code);
+                }
+            }
+        },
+        ElementValue::UnstructuredBinary(value) => match value {
+            BinaryReference::Url(url) => {
+                let _ = writeln!(output, "{pad}- URL: {}", url.value);
+            }
+            BinaryReference::Inline(inline) => {
+                let _ = writeln!(output, "{pad}- Inline: {} bytes", inline.data.len());
+                let _ = writeln!(output, "{pad}  MIME type: {}", inline.binary_type.mime_type);
+            }
+        },
+    }
 }

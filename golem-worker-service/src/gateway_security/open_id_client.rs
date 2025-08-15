@@ -23,7 +23,7 @@ impl OpenIdClient {
         OpenIdClient { client }
     }
 
-    pub fn id_token_verifier(&self) -> CoreIdTokenVerifier {
+    pub fn id_token_verifier(&self) -> CoreIdTokenVerifier<'_> {
         self.client.id_token_verifier()
     }
 }
