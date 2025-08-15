@@ -4,7 +4,7 @@ package golem:api@1.1.7;
 /// the durability and transactional guarantees the executor provides.
 interface host {
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
-    use golem:rpc/types@0.2.2.{component-id, uuid, worker-id};
+    use golem:rpc/types@0.2.2.{component-id, uuid, value-and-type, worker-id};
 
     /// An index into the persistent log storing all performed operations of a worker
     type oplog-index = u64;
@@ -22,6 +22,11 @@ interface host {
     /// Represents a Golem Cloud account
     record account-id {
         value: string
+    }
+
+    /// Represents a Golem project
+    record project-id {
+      uuid: uuid,
     }
 
     /// Configures how the executor retries failures

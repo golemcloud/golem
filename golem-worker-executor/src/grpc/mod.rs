@@ -35,7 +35,7 @@ use futures::Stream;
 use futures::StreamExt;
 use gethostname::gethostname;
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
@@ -56,6 +56,7 @@ use golem_common::grpc::{
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
+use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentType, GetFileSystemNodeResult,
     IdempotencyKey, OwnedWorkerId, PluginInstallationId, ProjectId, ScanCursor, ShardId,
@@ -960,10 +961,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )
         .await;
 
-        Ok(Self::create_proto_metadata(
-            metadata,
-            last_error_and_retry_count,
-        ))
+        Self::create_proto_metadata(metadata, last_error_and_retry_count)
     }
 
     async fn get_running_workers_metadata_internal(
@@ -988,7 +986,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let result: Vec<golem::worker::WorkerMetadata> = workers
             .into_iter()
             .map(|worker_metadata| Self::create_proto_metadata(worker_metadata, None))
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(result)
     }
@@ -1040,7 +1038,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &worker_metadata.last_known_status,
             )
             .await;
-            let metadata = Self::create_proto_metadata(worker_metadata, last_error_and_retry_count);
+            let metadata =
+                Self::create_proto_metadata(worker_metadata, last_error_and_retry_count)?;
             result.push(metadata);
         }
 
@@ -1687,7 +1686,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     fn create_proto_metadata(
         metadata: WorkerMetadata,
         last_error_and_retry_count: Option<LastError>,
-    ) -> golem::worker::WorkerMetadata {
+    ) -> Result<golem::worker::WorkerMetadata, WorkerExecutorError> {
         let mut updates = Vec::new();
 
         let latest_status = metadata.last_known_status;
@@ -1740,20 +1739,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 + record.timestamp.as_ref().unwrap().nanos as i64
         });
 
-        let mut owned_resources = HashMap::new();
+        let mut owned_resources = Vec::new();
         for (resource_id, resource) in latest_status.owned_resources {
-            owned_resources.insert(
-                resource_id.0,
-                ResourceMetadata {
-                    created_at: Some(resource.created_at.into()),
-                    indexed: resource.indexed_resource_key.map(|t| t.into()),
-                },
+            owned_resources.push(
+                to_protobuf_resource_description(resource_id, resource).map_err(|err| {
+                    WorkerExecutorError::unknown(format!("Failed to create worker metadata: {err}"))
+                })?,
             );
         }
 
         let active_plugins = latest_status.active_plugins;
 
-        golem::worker::WorkerMetadata {
+        Ok(golem::worker::WorkerMetadata {
             worker_id: Some(metadata.worker_id.into()),
             project_id: Some(metadata.project_id.into()),
             args: metadata.args.clone(),
@@ -1786,7 +1783,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .into_regions()
                 .map(|region| region.into())
                 .collect(),
-        }
+        })
     }
 }
 

@@ -22,7 +22,7 @@ path = "wit-generated"
 "golem:rpc/types@0.2.2" = "golem_rust::wasm_rpc::golem_rpc_0_2_x::types"
 
 [dependencies]
-golem-rust = { version = "1.4.0" }
+golem-rust = { git = "https://github.com/golemcloud/golem-rust", branch = "type-owner" }
 once_cell = "1.19.0"
 rand = "0.8.5"
 

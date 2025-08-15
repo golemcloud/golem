@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::LogEventEmitBehaviour;
+use super::{AgentStore, LogEventEmitBehaviour};
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{
@@ -46,6 +46,7 @@ use crate::workerctx::{
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::ProjectId;
+use golem_common::model::agent::DataValue;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -60,7 +61,7 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
-use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{
     CancellationTokenEntry, ComponentId, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
 };
@@ -391,15 +392,15 @@ impl ResourceStore for Context {
         self.durable_ctx.self_uri()
     }
 
-    async fn add(&mut self, resource: ResourceAny) -> u64 {
-        self.durable_ctx.add(resource).await
+    async fn add(&mut self, resource: ResourceAny, name: ResourceTypeId) -> u64 {
+        self.durable_ctx.add(resource, name).await
     }
 
-    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+    async fn get(&mut self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         ResourceStore::get(&mut self.durable_ctx, resource_id).await
     }
 
-    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+    async fn borrow(&self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         self.durable_ctx.borrow(resource_id).await
     }
 }
@@ -440,27 +441,59 @@ impl UpdateManagement for Context {
 impl IndexedResourceStore for Context {
     fn get_indexed_resource(
         &self,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
     ) -> Option<WorkerResourceId> {
         self.durable_ctx
-            .get_indexed_resource(resource_name, resource_params)
+            .get_indexed_resource(resource_owner, resource_name, resource_params)
     }
 
     async fn store_indexed_resource(
         &mut self,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
         resource: WorkerResourceId,
     ) {
         self.durable_ctx
-            .store_indexed_resource(resource_name, resource_params, resource)
+            .store_indexed_resource(resource_owner, resource_name, resource_params, resource)
             .await
     }
 
-    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
+    fn drop_indexed_resource(
+        &mut self,
+        resource_owner: &str,
+        resource_name: &str,
+        resource_params: &[String],
+    ) {
         self.durable_ctx
-            .drop_indexed_resource(resource_name, resource_params)
+            .drop_indexed_resource(resource_owner, resource_name, resource_params)
+    }
+}
+
+#[async_trait]
+impl AgentStore for Context {
+    async fn store_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: DataValue,
+    ) {
+        self.durable_ctx
+            .store_agent_instance(agent_type, agent_id, parameters)
+            .await
+    }
+
+    async fn remove_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: DataValue,
+    ) {
+        self.durable_ctx
+            .remove_agent_instance(agent_type, agent_id, parameters)
+            .await
     }
 }
 

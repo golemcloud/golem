@@ -49,7 +49,7 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                 ComponentItem::ComponentInstance(ref inst) => {
                     match component_metadata
                         .metadata
-                        .dynamic_linking
+                        .dynamic_linking()
                         .get(&name.to_string())
                     {
                         Some(DynamicLinkedInstance::WasmRpc(rpc_metadata)) => {

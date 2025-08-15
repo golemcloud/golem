@@ -15,6 +15,7 @@
 use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::agent::DataValue;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -29,7 +30,7 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
-use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{CancellationTokenEntry, ComponentId, Value, ValueAndType};
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
 use golem_worker_executor::durable_host::{
@@ -59,9 +60,9 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{worker_enumeration, HasAll, HasConfig, HasOplogService};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    AgentStore, DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
+    IndexedResourceStore, InvocationContextManagement, InvocationHooks, InvocationManagement,
+    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
@@ -160,7 +161,7 @@ impl ExternalOperations<Self> for DebugContext {
 
     async fn on_shard_assignment_changed<This: HasAll<Self> + Send + Sync + 'static>(
         this: &This,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), Error> {
         DurableWorkerCtx::<Self>::on_shard_assignment_changed(this).await
     }
 
@@ -194,15 +195,15 @@ impl InvocationManagement for DebugContext {
         self.durable_ctx.get_current_idempotency_key().await
     }
 
-    async fn get_current_invocation_context(&self) -> InvocationContextStack {
-        self.durable_ctx.get_current_invocation_context().await
-    }
-
     async fn set_current_invocation_context(
         &mut self,
         stack: InvocationContextStack,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.set_current_invocation_context(stack).await
+    }
+
+    async fn get_current_invocation_context(&self) -> InvocationContextStack {
+        self.durable_ctx.get_current_invocation_context().await
     }
 
     fn is_live(&self) -> bool {
@@ -314,27 +315,59 @@ impl UpdateManagement for DebugContext {
 impl IndexedResourceStore for DebugContext {
     fn get_indexed_resource(
         &self,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
     ) -> Option<WorkerResourceId> {
         self.durable_ctx
-            .get_indexed_resource(resource_name, resource_params)
+            .get_indexed_resource(resource_owner, resource_name, resource_params)
     }
 
     async fn store_indexed_resource(
         &mut self,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
         resource: WorkerResourceId,
     ) {
         self.durable_ctx
-            .store_indexed_resource(resource_name, resource_params, resource)
+            .store_indexed_resource(resource_owner, resource_name, resource_params, resource)
             .await
     }
 
-    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
+    fn drop_indexed_resource(
+        &mut self,
+        resource_owner: &str,
+        resource_name: &str,
+        resource_params: &[String],
+    ) {
         self.durable_ctx
-            .drop_indexed_resource(resource_name, resource_params)
+            .drop_indexed_resource(resource_owner, resource_name, resource_params)
+    }
+}
+
+#[async_trait]
+impl AgentStore for DebugContext {
+    async fn store_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: DataValue,
+    ) {
+        self.durable_ctx
+            .store_agent_instance(agent_type, agent_id, parameters)
+            .await;
+    }
+
+    async fn remove_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: DataValue,
+    ) {
+        self.durable_ctx
+            .remove_agent_instance(agent_type, agent_id, parameters)
+            .await;
     }
 }
 
@@ -344,15 +377,15 @@ impl ResourceStore for DebugContext {
         self.durable_ctx.self_uri()
     }
 
-    async fn add(&mut self, resource: ResourceAny) -> u64 {
-        self.durable_ctx.add(resource).await
+    async fn add(&mut self, resource: ResourceAny, name: ResourceTypeId) -> u64 {
+        self.durable_ctx.add(resource, name).await
     }
 
-    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+    async fn get(&mut self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         ResourceStore::get(&mut self.durable_ctx, resource_id).await
     }
 
-    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+    async fn borrow(&self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         self.durable_ctx.borrow(resource_id).await
     }
 }

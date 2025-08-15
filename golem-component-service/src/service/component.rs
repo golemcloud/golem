@@ -883,15 +883,15 @@ impl ComponentServiceDefault {
 
         info!(
             owner = %owner,
-            exports = ?component.metadata.exports,
-            dynamic_linking = ?component.metadata.dynamic_linking,
+            exports = ?component.metadata.exports(),
+            dynamic_linking = ?component.metadata.dynamic_linking(),
             "Uploaded component",
         );
 
         let (component, transformed_data) =
             self.apply_transformations(component, data.clone()).await?;
 
-        if let Some(known_root_package_name) = &component.metadata.root_package_name {
+        if let Some(known_root_package_name) = &component.metadata.root_package_name() {
             if &component_name.0 != known_root_package_name {
                 Err(ComponentError::InvalidComponentName {
                     actual: component_name.0.clone(),
@@ -954,7 +954,7 @@ impl ComponentServiceDefault {
             .get_constraint(&owner.to_string(), component_id.0)
             .await?;
 
-        let new_type_registry = FunctionDictionary::from_exports(&metadata.exports)
+        let new_type_registry = FunctionDictionary::from_exports(metadata.exports())
             .map_err(|e| ComponentError::conversion_error("exports", e))?;
 
         if let Some(constraints) = constraints {
@@ -967,8 +967,8 @@ impl ComponentServiceDefault {
 
         info!(
             owner = %owner,
-            exports = ?metadata.exports,
-            dynamic_linking = ?metadata.dynamic_linking,
+            exports = ?metadata.exports(),
+            dynamic_linking = ?metadata.dynamic_linking(),
             "Uploaded component",
         );
 
@@ -1121,8 +1121,8 @@ impl ComponentServiceDefault {
 
         component.metadata = ComponentMetadata::analyse_component(
             &data,
-            component.metadata.dynamic_linking,
-            component.metadata.agent_types,
+            component.metadata.dynamic_linking().clone(),
+            component.metadata.agent_types().to_vec(),
         )
         .map_err(ComponentError::ComponentProcessingError)?;
 

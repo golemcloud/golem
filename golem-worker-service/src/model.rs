@@ -15,18 +15,38 @@
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
 use derive_more::FromStr;
+use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::WasiConfigVars;
-use golem_common::model::{AccountId, PluginInstallationId, ScanCursor, WorkerId};
+use golem_common::model::{
+    AccountId, AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
+    ExportedResourceInstanceKey, PluginInstallationId, ScanCursor, WorkerId,
+};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
-use golem_service_base::model::{ResourceMetadata, UpdateRecord};
+use golem_service_base::model::UpdateRecord;
 use poem_openapi::{NewType, Object};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct AgentInstanceMetadata {
+    pub key: AgentInstanceKey,
+    pub description: AgentInstanceDescription,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ExportedResourceMetadata {
+    pub key: ExportedResourceInstanceKey,
+    pub description: ExportedResourceInstanceDescription,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerMetadata {
@@ -45,7 +65,8 @@ pub struct WorkerMetadata {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub owned_resources: HashMap<u64, ResourceMetadata>,
+    pub exported_resource_instances: Vec<ExportedResourceMetadata>,
+    pub agent_instances: Vec<AgentInstanceMetadata>,
     pub active_plugins: HashSet<PluginInstallationId>,
     /// Oplog regions that are skipped during the worker's state recovery, but describe
     /// the history of the worker. For example if an atomic region gets restarted, its partially
@@ -61,6 +82,45 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
     fn try_from(
         value: golem_api_grpc::proto::golem::worker::WorkerMetadata,
     ) -> Result<Self, Self::Error> {
+        let mut exported_resource_instances = Vec::new();
+        let mut agent_instances = Vec::new();
+
+        for desc in value.owned_resources {
+            match desc.description {
+                Some(golem_api_grpc::proto::golem::worker::resource_description::Description::ExportedResourceInstance(exported_resource)) => {
+                    exported_resource_instances.push(
+                        ExportedResourceMetadata {
+                            key: ExportedResourceInstanceKey { resource_id: WorkerResourceId(exported_resource.resource_id) },
+                            description: ExportedResourceInstanceDescription {
+                                created_at: exported_resource.created_at.ok_or("Missing created_at")?.into(),
+                                resource_owner: exported_resource.resource_owner,
+                                resource_name: exported_resource.resource_name,
+                                resource_params: if exported_resource.is_indexed {
+                                    Some(exported_resource.resource_params)
+                                } else {
+                                    None
+                                },
+                            }
+                        }
+                    );
+                }
+                Some(golem_api_grpc::proto::golem::worker::resource_description::Description::AgentInstance(agent_instance)) => {
+                    agent_instances.push(
+                        AgentInstanceMetadata {
+                            key: AgentInstanceKey {
+                                agent_type: agent_instance.agent_type,
+                                agent_id: agent_instance.agent_id,
+                            },
+                            description: AgentInstanceDescription {
+                                created_at: agent_instance.created_at.ok_or("Missing created_at")?.into(),
+                                agent_parameters: agent_instance.agent_parameters.ok_or("Missing agent_parameters")?.try_into()?,
+                            },
+                        }
+                    );
+                }
+                None => continue,
+            }
+        }
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
             project_id: value.project_id.ok_or("Missing project_id")?.try_into()?,
@@ -84,11 +144,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
-            owned_resources: value
-                .owned_resources
-                .into_iter()
-                .map(|(k, v)| v.try_into().map(|v| (k, v)))
-                .collect::<Result<HashMap<_, _>, _>>()?,
+            exported_resource_instances,
+            agent_instances,
             active_plugins: value
                 .active_plugins
                 .into_iter()
@@ -110,6 +167,45 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
 
 impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
     fn from(value: WorkerMetadata) -> Self {
+        let mut owned_resources = Vec::new();
+        for instance in value.exported_resource_instances {
+            owned_resources.push(
+                golem_api_grpc::proto::golem::worker::ResourceDescription {
+                    description: Some(
+                        golem_api_grpc::proto::golem::worker::resource_description::Description::ExportedResourceInstance(
+                            golem_api_grpc::proto::golem::worker::ExportedResourceInstanceDescription {
+                                resource_id: instance.key.resource_id.0,
+                                resource_name: instance.description.resource_name,
+                                resource_owner: instance.description.resource_owner,
+                                created_at: Some(instance.description.created_at.into()),
+                                is_indexed: instance.description.resource_params.is_some(),
+                                resource_params: instance.description.resource_params.unwrap_or_default(),
+                            },
+                        ),
+                    ),
+                },
+            );
+        }
+        for instance in value.agent_instances {
+            owned_resources.push(
+                golem_api_grpc::proto::golem::worker::ResourceDescription {
+                    description: Some(
+                        golem_api_grpc::proto::golem::worker::resource_description::Description::AgentInstance(
+                            golem_api_grpc::proto::golem::worker::AgentInstanceDescription {
+                                agent_type: instance.key.agent_type,
+                                agent_id: instance.key.agent_id,
+                                created_at: Some(instance.description.created_at.into()),
+                                agent_parameters: Some(instance
+                                    .description
+                                    .agent_parameters
+                                    .into()),
+                            },
+                        ),
+                    ),
+                },
+            );
+        }
+
         Self {
             worker_id: Some(value.worker_id.into()),
             project_id: Some(value.project_id.into()),
@@ -126,11 +222,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
-            owned_resources: value
-                .owned_resources
-                .into_iter()
-                .map(|(k, v)| (k, v.into()))
-                .collect(),
+            owned_resources,
             active_plugins: value
                 .active_plugins
                 .into_iter()
@@ -150,7 +242,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
 pub struct WorkersMetadataResponse {
     pub workers: Vec<WorkerMetadata>,
     pub cursor: Option<ScanCursor>,

@@ -115,7 +115,7 @@ impl From<&ResourceMethodDictionary> for FunctionDictionary {
 }
 
 impl FunctionDictionary {
-    pub fn from_exports(exports: &Vec<AnalysedExport>) -> Result<FunctionDictionary, String> {
+    pub fn from_exports(exports: &[AnalysedExport]) -> Result<FunctionDictionary, String> {
         let registry = FunctionTypeRegistry::from_export_metadata(exports);
         Self::from_function_type_registry(&registry)
     }

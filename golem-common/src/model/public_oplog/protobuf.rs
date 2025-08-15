@@ -15,23 +15,23 @@
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
 use crate::model::public_oplog::{
-    ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
-    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters,
-    DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters,
-    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
-    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
-    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
-    OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters,
-    PluginInstallationDescription, PublicAttribute, PublicAttributeValue,
-    PublicDurableFunctionType, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry,
-    PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
-    RemoteTransactionParameters, ResourceParameters, RevertParameters, SetSpanAttributeParameters,
+    ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
+    ChangeRetryPolicyParameters, CreateAgentInstanceParameters, CreateParameters,
+    DeactivatePluginParameters, DescribeResourceParameters, DropAgentInstanceParameters,
+    EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
+    ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
+    FinishSpanParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters,
+    LogParameters, ManualUpdateParameters, OplogCursor, PendingUpdateParameters,
+    PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttribute,
+    PublicAttributeValue, PublicDurableFunctionType, PublicExternalSpanData, PublicLocalSpanData,
+    PublicOplogEntry, PublicRetryConfig, PublicSpanData, PublicUpdateDescription,
+    PublicWorkerInvocation, RemoteTransactionParameters, ResourceParameters, RevertParameters, SetSpanAttributeParameters,
     SnapshotBasedUpdateParameters, StartSpanParameters, StringAttributeValue,
     SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters,
     WriteRemoteTransactionParameters,
 };
 use crate::model::regions::OplogRegion;
-use crate::model::Empty;
+use crate::model::{AgentInstanceKey, Empty};
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
     invocation_span, oplog_entry, worker_invocation, wrapped_function_type, AttributeValue,
@@ -364,6 +364,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .ok_or("Missing timestamp field")?
                         .into(),
                     id: WorkerResourceId(create_resource.resource_id),
+                    name: create_resource.name,
+                    owner: create_resource.owner,
                 }))
             }
             oplog_entry::Entry::DropResource(drop_resource) => {
@@ -373,6 +375,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .ok_or("Missing timestamp field")?
                         .into(),
                     id: WorkerResourceId(drop_resource.resource_id),
+                    name: drop_resource.name,
+                    owner: drop_resource.owner,
                 }))
             }
             oplog_entry::Entry::DescribeResource(describe_resource) => Ok(
@@ -388,6 +392,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into_iter()
                         .map(TryInto::try_into)
                         .collect::<Result<Vec<ValueAndType>, String>>()?,
+                    resource_owner: describe_resource.resource_owner,
                 }),
             ),
             oplog_entry::Entry::Log(log) => Ok(PublicOplogEntry::Log(LogParameters {
@@ -485,6 +490,34 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 ChangePersistenceLevelParameters {
                     timestamp: change.timestamp.ok_or("Missing timestamp field")?.into(),
                     persistence_level: change.persistence_level().into(),
+                },
+            )),
+            Entry::CreateAgentInstance(create_agent) => Ok(PublicOplogEntry::CreateAgentInstance(
+                CreateAgentInstanceParameters {
+                    timestamp: create_agent
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                    key: AgentInstanceKey {
+                        agent_type: create_agent.agent_type,
+                        agent_id: create_agent.agent_id,
+                    },
+                    parameters: create_agent
+                        .agent_parameters
+                        .ok_or("Missing agent_parameters field")?
+                        .try_into()?,
+                },
+            )),
+            Entry::DropAgentInstance(drop_agent) => Ok(PublicOplogEntry::DropAgentInstance(
+                DropAgentInstanceParameters {
+                    timestamp: drop_agent
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                    key: AgentInstanceKey {
+                        agent_type: drop_agent.agent_type,
+                        agent_id: drop_agent.agent_id,
+                    },
                 },
             )),
             oplog_entry::Entry::BeginRemoteTransaction(value) => Ok(
@@ -760,6 +793,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::CreateResourceParameters {
                             timestamp: Some(create_resource.timestamp.into()),
                             resource_id: create_resource.id.0,
+                            name: create_resource.name,
+                            owner: create_resource.owner,
                         },
                     )),
                 }
@@ -770,6 +805,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::DropResourceParameters {
                             timestamp: Some(drop_resource.timestamp.into()),
                             resource_id: drop_resource.id.0,
+                            name: drop_resource.name,
+                            owner: drop_resource.owner,
                         },
                     )),
                 }
@@ -786,6 +823,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                                 .into_iter()
                                 .map(|value| value.into())
                                 .collect(),
+                            resource_owner: describe_resource.resource_owner,
                         },
                     )),
                 }
@@ -899,6 +937,29 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             >::into(
                                 change.persistence_level
                             ) as i32,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CreateAgentInstance(create_instance) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(Entry::CreateAgentInstance(
+                        golem_api_grpc::proto::golem::worker::CreateAgentInstanceParameters {
+                            timestamp: Some(create_instance.timestamp.into()),
+                            agent_type: create_instance.key.agent_type,
+                            agent_id: create_instance.key.agent_id,
+                            agent_parameters: Some(create_instance.parameters.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::DropAgentInstance(drop_instance) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(Entry::DropAgentInstance(
+                        golem_api_grpc::proto::golem::worker::DropAgentInstanceParameters {
+                            timestamp: Some(drop_instance.timestamp.into()),
+                            agent_type: drop_instance.key.agent_type,
+                            agent_id: drop_instance.key.agent_id,
                         },
                     )),
                 }

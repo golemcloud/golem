@@ -726,6 +726,7 @@ mod internal {
                         value: Value::Flags(bitmap),
                         typ: AnalysedType::Flags(TypeFlags {
                             names: all_flags.iter().map(|n| n.to_string()).collect(),
+                            owner: None,
                             name: None,
                         }),
                     }));
@@ -2037,6 +2038,7 @@ mod compiler_tests {
                             resource_id: AnalysedResourceId(0),
                             mode: AnalysedResourceMode::Owned,
                             name: None,
+                            owner: None,
                         }),
                     }),
                 }],
@@ -2070,6 +2072,7 @@ mod compiler_tests {
                                 resource_id: AnalysedResourceId(0),
                                 mode: AnalysedResourceMode::Owned,
                                 name: None,
+                                owner: None,
                             }),
                         }),
                     },
@@ -2082,6 +2085,7 @@ mod compiler_tests {
                                     resource_id: AnalysedResourceId(0),
                                     mode: AnalysedResourceMode::Borrowed,
                                     name: None,
+                                    owner: None,
                                 }),
                             },
                             AnalysedFunctionParameter {

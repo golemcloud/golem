@@ -1,0 +1,19 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.2.4/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.2.4/golem.schema.json
+
+# See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
+# For creating APIs see https://learn.golem.cloud/invoke/making-custom-apis
+
+components:
+  golem:it:
+    template: rust
+
+# Example for adding dependencies for Worker to Worker communication:
+# See https://learn.golem.cloud/docs/app-manifest#fields_dependencies for more information
+#
+#dependencies:
+#  golem:it:
+#  - target: <target component name to be called>
+#    type: wasm-rpc
