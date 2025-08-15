@@ -24,6 +24,9 @@ use super::plan::{PlanError, PlanService};
 use crate::repo::model::audit::AuditFields;
 use anyhow::anyhow;
 use crate::config::AccountsConfig;
+use super::token::TokenService;
+use golem_common::model::auth::TokenSecret;
+use chrono::{DateTime, Utc};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AccountError {
@@ -58,6 +61,7 @@ impl From<PlanError> for AccountError {
 pub struct AccountService {
     account_repo: Arc<dyn AccountRepo>,
     plan_service: Arc<PlanService>,
+    token_service: Arc<TokenService>,
     config: AccountsConfig,
 }
 
@@ -65,11 +69,13 @@ impl AccountService {
     pub fn new(
         account_repo: Arc<dyn AccountRepo>,
         plan_service: Arc<PlanService>,
+        token_service: Arc<TokenService>,
         config: AccountsConfig,
     ) -> Self {
         Self {
             account_repo,
             plan_service,
+            token_service,
             config
         }
     }
@@ -82,17 +88,13 @@ impl AccountService {
             match existing_account {
                 None => {
                     info!("Creating initial account {} with id {}", name, account.id);
-                    self.create_with_id(account_id, NewAccountData { name: account.name.clone(), email: account.email.clone() }).await?;
+                    self.create_with_id(account_id.clone(), NewAccountData { name: account.name.clone(), email: account.email.clone() }).await?;
+                    // TODO: Deal with failure here
+                    self.token_service.create_known_secret(account_id, TokenSecret(account.token), DateTime::<Utc>::MAX_UTC).await?;
                 }
-                Some(existing_account) => {
-                    let needs_update =
-                        existing_account.name != account.name ||
-                        existing_account.email != account.email ||
-                        existing_account.plan_id.0 != account.plan_id;
-
-                    if needs_update {
-                        todo!("update");
-                    }
+                Some(_existing_account) => {
+                    // TODO: We need to update the account here
+                    // TODO: We need to rotate the secret here
                 }
             }
         };

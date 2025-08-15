@@ -15,7 +15,7 @@
 use super::ApiResult;
 use super::model::{WebFlowCallbackResponse, WebFlowPollResponse};
 use golem_common::api::WebFlowAuthorizeUrlResponse;
-use golem_common::model::login::{OAuth2Data, Token, TokenWithSecret};
+use golem_common::model::login::{OAuth2Data};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -23,6 +23,7 @@ use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::Instrument;
+use golem_common::model::auth::{Token, TokenWithSecret};
 
 pub struct LoginApi {}
 

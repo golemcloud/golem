@@ -40,6 +40,8 @@ use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
 use crate::repo::environment::{DbEnvironmentRepo, EnvironmentRepo};
 use crate::services::plan::PlanService;
 use crate::repo::plan::{DbPlanRepo, PlanRepo};
+use crate::services::token::TokenService;
+use crate::repo::token::{DbTokenRepo, TokenRepo};
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
@@ -57,7 +59,8 @@ struct Repos {
     application_repo: Arc<dyn ApplicationRepo>,
     component_repo: Arc<dyn ComponentRepo>,
     environment_repo: Arc<dyn EnvironmentRepo>,
-    plan_repo: Arc<dyn PlanRepo>
+    plan_repo: Arc<dyn PlanRepo>,
+    token_repo: Arc<dyn TokenRepo>
 }
 
 impl Services {
@@ -78,7 +81,9 @@ impl Services {
         let plan_service = Arc::new(PlanService::new(repos.plan_repo, config.plans.clone()));
         plan_service.create_initial_plans().await?;
 
-        let account_service = Arc::new(AccountService::new(repos.account_repo.clone(), plan_service.clone(), config.accounts.clone()));
+        let token_service = Arc::new(TokenService::new(repos.token_repo));
+
+        let account_service = Arc::new(AccountService::new(repos.account_repo.clone(),  plan_service.clone(), token_service.clone(), config.accounts.clone()));
         account_service.create_initial_accounts().await?;
 
         let application_service = Arc::new(ApplicationService::new(repos.application_repo.clone()));
@@ -114,7 +119,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
             let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
-            let plan_repo = Arc::new(DbPlanRepo::logged(db_pool));
+            let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
+            let token_repo = Arc::new(DbTokenRepo::logged(db_pool));
 
 
             Ok(Repos {
@@ -123,7 +129,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 application_repo,
                 component_repo,
                 environment_repo,
-                plan_repo
+                plan_repo,
+                token_repo
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
@@ -138,7 +145,9 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
             let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
-            let plan_repo =  Arc::new(DbPlanRepo::logged(db_pool));
+            let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
+            let token_repo = Arc::new(DbTokenRepo::logged(db_pool));
+
 
             Ok(Repos {
                 account_repo,
@@ -146,7 +155,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 application_repo,
                 component_repo,
                 environment_repo,
-                plan_repo
+                plan_repo,
+                token_repo
             })
         }
     }

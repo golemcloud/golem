@@ -3169,6 +3169,7 @@ name = "golem-registry-service"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "applying",
  "assert2",
  "async-trait",
  "async_zip",

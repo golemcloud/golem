@@ -20,9 +20,28 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, FromRepr};
-use crate::{newtype_uuid};
+use crate::{declare_structs, newtype_uuid};
+use chrono::Utc;
 
+newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
 newtype_uuid!(TokenSecret, golem_api_grpc::proto::golem::token::TokenSecret);
+
+declare_structs! {
+    pub struct Token {
+        pub id: TokenId,
+        pub account_id: AccountId,
+        pub created_at: chrono::DateTime<Utc>,
+        pub expires_at: chrono::DateTime<Utc>,
+    }
+
+    pub struct TokenWithSecret {
+        pub id: TokenId,
+        pub secret: TokenSecret,
+        pub account_id: AccountId,
+        pub created_at: chrono::DateTime<Utc>,
+        pub expires_at: chrono::DateTime<Utc>,
+    }
+}
 
 #[derive(
     Debug,

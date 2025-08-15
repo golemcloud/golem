@@ -16,6 +16,8 @@ use crate::repo::model::datetime::SqlDateTime;
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
+use golem_common::model::auth::{Token, TokenId, TokenSecret, TokenWithSecret};
+use golem_common::model::account::AccountId;
 
 #[derive(FromRow, Clone, PartialEq)]
 pub struct TokenRecord {
@@ -34,5 +36,28 @@ impl Debug for TokenRecord {
             .field("created_at", &self.created_at)
             .field("expires_at", &self.expires_at)
             .finish()
+    }
+}
+
+impl From<TokenRecord> for TokenWithSecret {
+    fn from(value: TokenRecord) -> Self {
+        TokenWithSecret {
+            id: TokenId(value.token_id),
+            secret: TokenSecret(value.secret),
+            account_id: AccountId(value.account_id),
+            created_at: value.created_at.into(),
+            expires_at: value.expires_at.into(),
+        }
+    }
+}
+
+impl From<TokenRecord> for Token {
+    fn from(value: TokenRecord) -> Self {
+        Token {
+            id: TokenId(value.token_id),
+            account_id: AccountId(value.account_id),
+            created_at: value.created_at.into(),
+            expires_at: value.expires_at.into(),
+        }
     }
 }

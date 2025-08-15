@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::repo::plan::{PlanRepo};
-use golem_common::model::{PlanId, TokenId};
+use golem_common::model::{PlanId};
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
@@ -26,12 +26,17 @@ use std::collections::BTreeMap;
 use crate::repo::model::account_usage::UsageType;
 use anyhow::anyhow;
 use crate::repo::token::TokenRepo;
-use golem_common::model::auth::TokenSecret;
+use golem_common::model::auth::{TokenSecret, TokenWithSecret};
 use chrono::{DateTime, Utc};
 use crate::repo::model::token::TokenRecord;
+use golem_common::model::auth::{Token, TokenId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {
+    #[error("Token secret already exists")]
+    TokenSecretAlreadyExists,
+    #[error("Token for id not found")]
+    TokenNotFound(TokenId),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -39,6 +44,8 @@ pub enum TokenError {
 impl SafeDisplay for TokenError {
     fn to_safe_string(&self) -> String {
         match self {
+            Self::TokenSecretAlreadyExists => self.to_safe_string(),
+            Self::TokenNotFound(_) => self.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -61,25 +68,58 @@ impl TokenService {
         Self  { token_repo }
     }
 
+    pub async fn get(
+        &self,
+        token_id: &TokenId
+    ) -> anyhow::Result<TokenWithSecret> {
+        let record = self.token_repo
+            .get_by_id(&token_id.0)
+            .await?
+            .ok_or(TokenError::TokenNotFound(token_id.clone()))?;
+
+        Ok(record.into())
+    }
+
+    pub async fn get_by_secret(
+        &self,
+        _token_id: &TokenId
+    ) -> anyhow::Result<TokenWithSecret> {
+        // TODO: missing in repo
+        todo!()
+    }
+
+    pub async fn create(
+        &self,
+        account_id: AccountId,
+        expires_at: DateTime<Utc>
+    ) -> anyhow::Result<TokenWithSecret> {
+        let secret = TokenSecret::new_v4();
+        self.create_known_secret(account_id, secret, expires_at).await
+    }
+
     pub async fn create_known_secret(
         &self,
         account_id: AccountId,
         secret: TokenSecret,
-        expires_at: &DateTime<Utc>
-    ) -> anyhow::Result<()> {
+        expires_at: DateTime<Utc>
+    ) -> anyhow::Result<TokenWithSecret> {
         let created_at = Utc::now();
         let token_id = TokenId::new_v4();
 
         let record = TokenRecord {
             token_id: token_id.0,
-            secret: secret.value,
+            secret: secret.0,
             account_id: account_id.0,
             created_at: created_at.into(),
             expires_at: expires_at.into()
         };
 
+        let record = self.token_repo
+            .create(record)
+            .await?
+            .ok_or(TokenError::TokenSecretAlreadyExists)?;
 
-        let response = self.token_repo.create(token)
+        Ok(record.into())
     }
 
 }
