@@ -147,7 +147,7 @@ jobs:
           detailed_summary: true
           include_passed: true
 
-  api-and-integration-tests:
+  it:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204

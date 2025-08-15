@@ -864,10 +864,20 @@ impl TestContext {
         let ctx = Self {
             golem_path: PathBuf::from("../../target/debug/golem")
                 .canonicalize()
-                .unwrap(),
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "golem binary not found in ../../target/debug/golem, with current dir: {:?}",
+                        std::env::current_dir().unwrap()
+                    );
+                }),
             golem_cli_path: PathBuf::from("../../target/debug/golem-cli")
                 .canonicalize()
-                .unwrap(),
+                .unwrap_or_else(|_| {
+                panic!(
+                    "golem binary not found in ../../target/debug/golem-cli, with current dir: {:?}",
+                    std::env::current_dir().unwrap()
+                );
+            }),
             _test_dir: test_dir,
             config_dir: TempDir::new().unwrap(),
             data_dir: TempDir::new().unwrap(),
