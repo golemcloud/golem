@@ -174,7 +174,7 @@ impl ApiDomainRepo for DbApiDomainRepo<golem_service_base::db::postgres::Postgre
 
         self.db_pool
             .with_ro("api_domain", "get_all")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 
@@ -185,7 +185,7 @@ impl ApiDomainRepo for DbApiDomainRepo<golem_service_base::db::postgres::Postgre
 
         self.db_pool
             .with_ro("api_domain", "get_all")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 }

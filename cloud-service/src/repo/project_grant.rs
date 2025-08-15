@@ -130,7 +130,7 @@ impl ProjectGrantRepo for DbProjectGrantRepo<golem_service_base::db::postgres::P
 
         self.db_pool
             .with_ro("project_grant", "get_by_project")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 
@@ -145,7 +145,7 @@ impl ProjectGrantRepo for DbProjectGrantRepo<golem_service_base::db::postgres::P
 
         self.db_pool
             .with_ro("project_grant", "get_by_account")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 

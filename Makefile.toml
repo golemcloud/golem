@@ -158,11 +158,6 @@ description = "Builds cloud service"
 command = "cargo"
 args = ["build", "-p", "cloud-service"]
 
-[tasks.build-registry-service]
-description = "Builds registry service"
-command = "cargo"
-args = ["build", "-p", "golem-registry-service"]
-
 [tasks.build-release]
 description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
 to build for other target than the current one, can be linux/amd64 or linux/arm64. This is used for cross-compiling
@@ -447,18 +442,6 @@ script = '''
 cargo test --package integration-tests --test api -- :tag: --nocapture --report-time $JUNIT_OPTS
 '''
 
-[tasks.registry-repo-coverage]
-description = "Run registry service tests with covarage report for repository sources"
-script = '''
-cargo tarpaulin \
-    --skip-clean \
-    --target-dir target-tarpaulin \
-    --package golem-registry-service \
-    --include-files "golem-registry-service/src/repo/*" \
-    --out html \
-    --output-dir target-tarpaulin/reports
-'''
-
 ## ** CHECK-OPENAPI **
 
 [tasks.check-openapi]
@@ -542,15 +525,6 @@ cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
 ./cloud-service --dump-openapi-yaml > ../cloud-spec.yaml
-'''
-
-[tasks.generate-registry-service-openapi]
-description = "Generates openapi spec for registry service"
-dependencies = ["build-registry-service"]
-cwd = "./target/debug"
-script = '''
-mkdir -pv ../data
-./golem-registry-service --dump-openapi-yaml > ../registry-service.yaml
 '''
 
 [tasks.merge-openapi]

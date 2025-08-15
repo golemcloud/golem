@@ -266,7 +266,7 @@ impl BlobStorage for SqliteBlobStorage {
 
         self.pool
             .with_ro(target_label, op_label)
-            .fetch_all_as::<(String,), _>(query)
+            .fetch_all::<(String,), _>(query)
             .await
             .map(|r| r.into_iter().map(|row| path.join(row.0)).collect())
             .map_err(|err| err.to_safe_string())

@@ -27,7 +27,7 @@ test = false
 golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
 golem-common = { path = "../golem-common", version = "=0.0.0" }
 golem-rib = { path = "../golem-rib", version = "=0.0.0" }
-golem-service-base = { path = "../golem-service-base", version = "=0.0.0", features = ["worker-executor"] }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0", features = [ "worker-executor" ] }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host", "extra-bindings"] }
 golem-wasm-rpc-derive = { path = "../wasm-rpc-derive", version = "=0.0.0" }
