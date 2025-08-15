@@ -3440,6 +3440,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-cli"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "golem-client",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "golem-client"
 version = "0.0.0"
 dependencies = [

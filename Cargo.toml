@@ -20,6 +20,7 @@ members = [
     "wasm-ast",
     "wasm-rpc",
     "wasm-rpc-derive",
+    "golem-cli",
 ]
 
 exclude = [

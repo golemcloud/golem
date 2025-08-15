@@ -1,0 +1,14 @@
+[package]
+name = "golem-cli"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "golem"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+golem-client = { path = "../golem-client", version = "=0.0.0" }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
