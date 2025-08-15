@@ -8,6 +8,7 @@ fn main() -> Result<()> {
         env::var("GOLEM_WASM_AST_ROOT").unwrap_or_else(|_| find_package_root("golem-wasm-ast"));
 
     let mut config = prost_build::Config::new();
+    config.protoc_arg("--experimental_allow_proto3_optional");
     config.extern_path(".wasm.ast", "::golem_wasm_ast::analysis::protobuf");
     config.type_attribute(".", "#[cfg(feature = \"protobuf\")]");
     config.type_attribute(

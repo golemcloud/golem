@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub struct WorkerFilesClient {
@@ -63,12 +63,12 @@ impl WorkerFilesClient {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct GetFilesResponse {
     pub nodes: Vec<Node>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct Node {
     pub name: String,
     pub path: String,

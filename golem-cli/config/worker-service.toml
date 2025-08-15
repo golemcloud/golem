@@ -1,0 +1,17 @@
+[http]
+address = "127.0.0.1"
+port = 8080
+
+[grpc]
+address = "127.0.0.1"
+port = 9090
+
+[blob_storage]
+type = "InMemory"
+
+[database]
+type = "sqlite"
+file = ":memory:"
+
+[tracing]
+level = "info"

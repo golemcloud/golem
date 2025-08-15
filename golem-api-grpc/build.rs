@@ -8,7 +8,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wasm_rpc_root = find_package_root("golem-wasm-rpc");
     let wasm_ast_root = find_package_root("golem-wasm-ast");
 
-    tonic_build::configure()
+    let builder = tonic_build::configure()
+        .protoc_arg("--experimental_allow_proto3_optional");
+    builder
         .file_descriptor_set_path(out_dir.join("services.bin"))
         .extern_path(".wasm.rpc", "::golem_wasm_rpc::protobuf")
         .extern_path(".wasm.ast", "::golem_wasm_ast::analysis::protobuf")

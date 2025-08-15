@@ -8,7 +8,16 @@ name = "golem"
 path = "src/main.rs"
 
 [dependencies]
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "env"] }
 golem-client = { path = "../golem-client", version = "=0.0.0" }
+protoc-rust = "2.28.0"
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+httpmock = "0.7"
+tokio = { workspace = true, features = ["rt", "macros"] }
+serde_json = { workspace = true }
+tempfile = "3.8"

@@ -28,16 +28,14 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 http = { workspace = true }
 reqwest = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 percent-encoding = "2.3.0"
-
-[dev-dependencies]
-test-r = { workspace = true }
+anyhow = { workspace = true }
 
 [build-dependencies]
 golem-openapi-client-generator = "=0.0.16"
