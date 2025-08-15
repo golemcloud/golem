@@ -40,6 +40,9 @@ use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::PluginTypeSpecificDefinition;
 use golem_common::model::trim_date::TrimDateTime;
+use golem_common::model::{
+    AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
+};
 use golem_templates::model::{
     GuestLanguage, GuestLanguageTier, PackageName, Template, TemplateName,
 };
@@ -152,7 +155,7 @@ impl FromStr for PluginReference {
                 let version = segments.pop().unwrap().to_string();
                 let name = segments.pop().unwrap().to_string();
                 Ok(Self::RelativeToCurrentAccount { name, version })
-            },
+            }
             3 => {
                 let version = segments.pop().unwrap().to_string();
                 let name = segments.pop().unwrap().to_string();
@@ -462,7 +465,8 @@ pub struct WorkerMetadataView {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub owned_resources: HashMap<String, golem_client::model::ResourceMetadata>,
+    pub exported_resource_instances: HashMap<String, ExportedResourceInstanceDescription>,
+    pub agent_instances: HashMap<AgentInstanceKey, AgentInstanceDescription>,
 }
 
 impl TrimDateTime for WorkerMetadataView {
@@ -492,7 +496,8 @@ impl From<WorkerMetadata> for WorkerMetadataView {
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
-            owned_resources: value.owned_resources,
+            exported_resource_instances: value.exported_resource_instances,
+            agent_instances: value.agent_instances,
         }
     }
 }
@@ -514,14 +519,12 @@ pub struct WorkerMetadata {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub owned_resources: HashMap<String, golem_client::model::ResourceMetadata>,
+    pub exported_resource_instances: HashMap<String, ExportedResourceInstanceDescription>,
+    pub agent_instances: HashMap<AgentInstanceKey, AgentInstanceDescription>,
 }
 
 impl WorkerMetadata {
-    pub fn from_oss(
-        component_name: ComponentName,
-        value: golem_client::model::WorkerMetadata,
-    ) -> Self {
+    pub fn from(component_name: ComponentName, value: golem_client::model::WorkerMetadata) -> Self {
         WorkerMetadata {
             worker_id: value.worker_id,
             component_name,
@@ -538,31 +541,18 @@ impl WorkerMetadata {
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
-            owned_resources: value.owned_resources,
-        }
-    }
-
-    pub fn from_cloud(
-        component_name: ComponentName,
-        value: golem_client::model::WorkerMetadata,
-    ) -> Self {
-        WorkerMetadata {
-            worker_id: value.worker_id,
-            component_name,
-            created_by: Some(AccountId(value.created_by)),
-            project_id: Some(ProjectId(value.project_id)),
-            args: value.args,
-            env: value.env,
-            status: value.status,
-            component_version: value.component_version,
-            retry_count: value.retry_count,
-            pending_invocation_count: value.pending_invocation_count,
-            updates: value.updates,
-            created_at: value.created_at,
-            last_error: value.last_error,
-            component_size: value.component_size,
-            total_linear_memory_size: value.total_linear_memory_size,
-            owned_resources: value.owned_resources,
+            exported_resource_instances: HashMap::from_iter(
+                value.exported_resource_instances.into_iter().map(|desc| {
+                    let key = desc.key.resource_id.to_string();
+                    (key, desc.description)
+                }),
+            ),
+            agent_instances: HashMap::from_iter(
+                value
+                    .agent_instances
+                    .into_iter()
+                    .map(|desc| (desc.key, desc.description)),
+            ),
         }
     }
 }

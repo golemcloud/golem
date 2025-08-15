@@ -57,7 +57,7 @@ impl DiffableComponent {
             files,
             dynamic_linking: component
                 .metadata
-                .dynamic_linking
+                .dynamic_linking()
                 .iter()
                 .map(|(name, link)| {
                     (

@@ -551,6 +551,7 @@ pub fn add_client_as_dependency_to_wit_dir(config: AddClientAsDepConfig) -> anyh
         &naming::wit::client_import_exports_prefix_from_client_package_name(&client_package.name)?,
     );
     add_world_named_interface_import(package, &naming::wit::client_import_name(client_package)?);
+
     let content = package.to_string();
 
     actions.add(OverwriteSafeAction::WriteFile {

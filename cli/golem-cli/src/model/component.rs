@@ -179,14 +179,14 @@ impl ComponentView {
             component_size: value.component_size,
             created_at: value.created_at,
             project_id: value.project_id,
-            exports: show_exported_functions(&value.metadata.exports, true),
+            exports: show_exported_functions(value.metadata.exports(), true),
             dynamic_linking: value
                 .metadata
-                .dynamic_linking
-                .into_iter()
+                .dynamic_linking()
+                .iter()
                 .map(|(name, link)| {
                     (
-                        name,
+                        name.clone(),
                         match link {
                             DynamicLinkedInstance::WasmRpc(links) => links
                                 .targets
@@ -363,7 +363,7 @@ fn resolve_function<'t>(
     let parsed = ParsedFunctionName::parse(function).map_err(|err| anyhow!(err))?;
     let mut functions = Vec::new();
 
-    for export in &component.metadata.exports {
+    for export in component.metadata.exports() {
         match export {
             AnalysedExport::Instance(interface) => {
                 if matches!(parsed.site().interface_name(), Some(name) if name == interface.name) {

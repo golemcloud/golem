@@ -644,6 +644,7 @@ fn add_golem_host(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
 
 fn add_golem_agent(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
     const GOLEM_AGENT_GUEST_WIT: &str = include_str!("../../../wit/deps/golem-agent/guest.wit");
+    const GOLEM_AGENT_HOST_WIT: &str = include_str!("../../../wit/deps/golem-agent/host.wit");
     const GOLEM_AGENT_COMMON_WIT: &str = include_str!("../../../wit/deps/golem-agent/common.wit");
 
     let mut golem_agent_source = SourceMap::default();
@@ -654,6 +655,10 @@ fn add_golem_agent(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
     golem_agent_source.push(
         Path::new("wit/deps/golem-agent/guest.wit"),
         GOLEM_AGENT_GUEST_WIT,
+    );
+    golem_agent_source.push(
+        Path::new("wit/deps/golem-agent/host.wit"),
+        GOLEM_AGENT_HOST_WIT,
     );
     let golem_agent_pkg_group = golem_agent_source.parse()?;
     resolve.push_group(golem_agent_pkg_group)

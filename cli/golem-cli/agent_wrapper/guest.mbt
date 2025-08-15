@@ -91,3 +91,9 @@ pub fn discover_agents() -> Array[Agent] {
 pub fn discover_agent_types() -> Array[@common.AgentType] {
   @guest.discover_agent_types()
 }
+
+///|
+pub fn invoke_agent(agent_type : String, agent_id : String, method_name : String, input : @common.DataValue) -> Result[@common.DataValue, @common.AgentError] {
+  let inner_agent = @guest.get_agent(agent_type, agent_id)
+  inner_agent.invoke(method_name, input)
+}

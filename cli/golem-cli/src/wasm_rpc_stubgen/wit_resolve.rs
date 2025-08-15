@@ -148,7 +148,7 @@ impl ResolvedWitDir {
     }
 
     pub fn is_agent(&self) -> anyhow::Result<bool> {
-        crate::model::agent::extraction::is_agent(&self.resolve, &self.package_id, None)
+        golem_common::model::agent::extraction::is_agent(&self.resolve, &self.package_id, None)
     }
 }
 

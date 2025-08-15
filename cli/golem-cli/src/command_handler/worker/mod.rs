@@ -57,6 +57,7 @@ use golem_client::model::{
     WorkerCreationRequest as WorkerCreationRequestCloud,
 };
 use golem_common::model::public_oplog::OplogCursor;
+use golem_common::model::worker::WasiConfigVars;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
@@ -278,7 +279,7 @@ impl WorkerCommandHandler {
             .await?;
 
         let matched_function_name =
-            fuzzy_match_function_name(function_name, &component.metadata.exports);
+            fuzzy_match_function_name(function_name, component.metadata.exports());
         let function_name = match matched_function_name {
             Ok(match_) => {
                 log_fuzzy_match(&match_);
@@ -286,7 +287,7 @@ impl WorkerCommandHandler {
             }
             Err(error) => {
                 let component_functions =
-                    show_exported_functions(&component.metadata.exports, false);
+                    show_exported_functions(component.metadata.exports(), false);
 
                 match error {
                     Error::Ambiguous {
@@ -808,7 +809,7 @@ impl WorkerCommandHandler {
                 .await
                 .map_service_error()?;
 
-            WorkerMetadata::from_cloud(worker_name_match.component_name, result)
+            WorkerMetadata::from(worker_name_match.component_name, result)
         };
 
         self.ctx
@@ -861,6 +862,7 @@ impl WorkerCommandHandler {
                     name: worker_name,
                     args,
                     env,
+                    wasi_config_vars: WasiConfigVars::default(),
                 },
             )
             .await
@@ -1001,7 +1003,7 @@ impl WorkerCommandHandler {
             .await
             .map_service_error()?;
 
-        Ok(WorkerMetadata::from_cloud(component_name.clone(), result))
+        Ok(WorkerMetadata::from(component_name.clone(), result))
     }
 
     async fn delete(&self, component_id: Uuid, worker_name: &str) -> anyhow::Result<()> {
@@ -1369,7 +1371,7 @@ impl WorkerCommandHandler {
                     results
                         .workers
                         .into_iter()
-                        .map(|meta| WorkerMetadata::from_cloud(component_name.clone(), meta)),
+                        .map(|meta| WorkerMetadata::from(component_name.clone(), meta)),
                 );
 
                 results.cursor

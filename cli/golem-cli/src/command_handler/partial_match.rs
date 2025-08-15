@@ -180,10 +180,7 @@ impl ErrorHandler {
                 {
                     log_text_view(&AvailableFunctionNamesHelp {
                         component_name: worker_name_match.component_name.0,
-                        function_names: show_exported_functions(
-                            component.metadata.exports.as_slice(),
-                            true,
-                        ),
+                        function_names: show_exported_functions(component.metadata.exports(), true),
                     });
                     logln("");
                 }

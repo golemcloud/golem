@@ -25,6 +25,7 @@ use chrono::{DateTime, Utc};
 use cli_table::{format::Justify, Table};
 use colored::Colorize;
 use golem_client::model::{PublicOplogEntry, UpdateRecord};
+use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
 use golem_common::model::public_oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
@@ -798,6 +799,38 @@ impl TextView for PublicOplogEntry {
                     format_id(&format!("{:?}", &params.persistence_level))
                 ));
             }
+            PublicOplogEntry::CreateAgentInstance(params) => {
+                logln(format_message_highlight("CREATE AGENT INSTANCE"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}agent type:        {}",
+                    format_id(&params.key.agent_type)
+                ));
+                logln(format!(
+                    "{pad}agent id:          {}",
+                    format_id(&params.key.agent_id)
+                ));
+                logln(format!("{pad}constructor params:"));
+                log_data_value(pad, &params.parameters);
+            }
+            PublicOplogEntry::DropAgentInstance(params) => {
+                logln(format_message_highlight("DROP AGENT INSTANCE"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}agent type:        {}",
+                    format_id(&params.key.agent_type)
+                ));
+                logln(format!(
+                    "{pad}agent id:          {}",
+                    format_id(&params.key.agent_id)
+                ));
+            }
         }
     }
 }
@@ -822,4 +855,58 @@ fn log_plugin_description(pad: &str, value: &PluginInstallationDescription) {
 
 fn value_to_string(value: &ValueAndType) -> String {
     print_value_and_type(value).expect("Failed to convert value to string")
+}
+
+fn log_data_value(pad: &str, value: &DataValue) {
+    match value {
+        DataValue::Tuple(values) => {
+            logln(format!("{pad}  tuple:"));
+            for value in &values.elements {
+                log_element_value(&format!("{pad}    "), value);
+            }
+        }
+        DataValue::Multimodal(values) => {
+            logln(format!("{pad}  multi-modal:"));
+            for value in &values.elements {
+                log_element_value(&format!("{pad}    "), &value.value);
+            }
+        }
+    }
+}
+
+fn log_element_value(pad: &str, value: &ElementValue) {
+    match value {
+        ElementValue::ComponentModel(value) => {
+            logln(format!("{pad}- {}", value_to_string(value)));
+        }
+        ElementValue::UnstructuredText(value) => match value {
+            TextReference::Url(url) => {
+                logln(format!("{pad}- URL: {}", format_id(&url.value)));
+            }
+            TextReference::Inline(inline) => {
+                logln(format!("{pad}- Inline: {}", format_id(&inline.data)));
+                if let Some(text_type) = &inline.text_type {
+                    logln(format!(
+                        "{pad}  Language code: {}",
+                        format_id(&text_type.language_code)
+                    ));
+                }
+            }
+        },
+        ElementValue::UnstructuredBinary(value) => match value {
+            BinaryReference::Url(url) => {
+                logln(format!("{pad}- URL: {}", format_id(&url.value)));
+            }
+            BinaryReference::Inline(inline) => {
+                logln(format!(
+                    "{pad}- Inline: {} bytes",
+                    format_id(&inline.data.len().to_string())
+                ));
+                logln(format!(
+                    "{pad}  MIME type: {}",
+                    format_id(&inline.binary_type.mime_type)
+                ));
+            }
+        },
+    }
 }
