@@ -7987,11 +7987,11 @@ components:
         id:
           type: string
           format: uuid
-        pluginName:
+        name:
           type: string
-        pluginVersion:
+        version:
           type: string
-        pluginRegistered:
+        registered:
           description: Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
           type: boolean
         priority:
@@ -8003,9 +8003,9 @@ components:
             type: string
       required:
       - id
-      - pluginName
-      - pluginVersion
-      - pluginRegistered
+      - name
+      - version
+      - registered
       - priority
       - parameters
     PluginInstallationAction:

@@ -7917,20 +7917,20 @@ components:
       title: PluginInstallation
       required:
       - id
-      - pluginName
-      - pluginVersion
-      - pluginRegistered
+      - name
+      - version
+      - registered
       - priority
       - parameters
       properties:
         id:
           type: string
           format: uuid
-        pluginName:
+        name:
           type: string
-        pluginVersion:
+        version:
           type: string
-        pluginRegistered:
+        registered:
           type: boolean
           description: Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
         priority:
