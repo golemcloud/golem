@@ -14,7 +14,7 @@
 
 use crate::repo::account::{AccountRecord, AccountRepo};
 use golem_common::model::PlanId;
-use golem_common::SafeDisplay;
+use golem_common::{error_forwarders, SafeDisplay};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -45,24 +45,7 @@ impl SafeDisplay for AccountError {
     }
 }
 
-impl From<RepoError> for AccountError {
-    fn from(value: RepoError) -> Self {
-        Self::InternalError(anyhow::Error::new(value).context("from RepoError"))
-    }
-}
-
-impl From<PlanError> for AccountError {
-    fn from(value: PlanError) -> Self {
-        Self::InternalError(anyhow::Error::new(value).context("from PlanError"))
-    }
-}
-
-impl From<TokenError> for AccountError {
-    fn from(value: TokenError) -> Self {
-        Self::InternalError(anyhow::Error::new(value).context("from TokenError"))
-    }
-}
-
+error_forwarders!(AccountError, RepoError, PlanError, TokenError);
 
 pub struct AccountService {
     account_repo: Arc<dyn AccountRepo>,

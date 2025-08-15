@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::repo::account::AccountRepo;
-use golem_common::SafeDisplay;
+use golem_common::{error_forwarders, SafeDisplay};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -39,11 +39,7 @@ impl SafeDisplay for ApplicationError {
     }
 }
 
-impl From<RepoError> for ApplicationError {
-    fn from(value: RepoError) -> Self {
-        Self::InternalError(anyhow::Error::new(value).context("from RepoError"))
-    }
-}
+error_forwarders!(ApplicationError, RepoError);
 
 pub struct ApplicationService {
     application_repo: Arc<dyn ApplicationRepo>,

@@ -14,7 +14,7 @@
 
 use crate::repo::plan::{PlanRepo};
 use golem_common::model::PlanId;
-use golem_common::SafeDisplay;
+use golem_common::{error_forwarders, SafeDisplay};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -40,11 +40,7 @@ impl SafeDisplay for PlanError {
     }
 }
 
-impl From<RepoError> for PlanError {
-    fn from(value: RepoError) -> Self {
-        Self::InternalError(anyhow::Error::new(value).context("from RepoError"))
-    }
-}
+error_forwarders!(PlanError, RepoError);
 
 pub struct PlanService {
     plan_repo: Arc<dyn PlanRepo>,

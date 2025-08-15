@@ -191,7 +191,6 @@ impl From<TokenError> for ApiError {
             TokenError::TokenNotFound(_) => Self::NotFound(Json(ErrorBody {
                 error: value.to_safe_string(),
             })),
-
             TokenError::TokenSecretAlreadyExists => Self::InternalError(Json(ErrorBody {
                 error: "Internal error".to_string(),
             })),

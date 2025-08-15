@@ -38,14 +38,13 @@ pub mod grpc;
 #[cfg(feature = "poem")]
 pub mod json_yaml;
 
+mod macros;
+
 #[cfg(feature = "observability")]
 pub mod metrics;
 
 #[cfg(feature = "model")]
 pub mod model;
-
-#[cfg(any(feature = "model", feature = "base-model"))]
-pub mod newtype;
 
 #[cfg(feature = "redis")]
 pub mod redis;
