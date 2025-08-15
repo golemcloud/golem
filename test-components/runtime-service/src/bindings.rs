@@ -384,12 +384,31 @@ pub mod golem {
                 }
             }
             #[derive(Clone)]
+            pub struct WorkerWasiConfigVarsFilter {
+                pub name: _rt::String,
+                pub comparator: StringFilterComparator,
+                pub value: _rt::String,
+            }
+            impl ::core::fmt::Debug for WorkerWasiConfigVarsFilter {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("WorkerWasiConfigVarsFilter")
+                        .field("name", &self.name)
+                        .field("comparator", &self.comparator)
+                        .field("value", &self.value)
+                        .finish()
+                }
+            }
+            #[derive(Clone)]
             pub enum WorkerPropertyFilter {
                 Name(WorkerNameFilter),
                 Status(WorkerStatusFilter),
                 Version(WorkerVersionFilter),
                 CreatedAt(WorkerCreatedAtFilter),
                 Env(WorkerEnvFilter),
+                WasiConfigVars(WorkerWasiConfigVarsFilter),
             }
             impl ::core::fmt::Debug for WorkerPropertyFilter {
                 fn fmt(
@@ -417,6 +436,11 @@ pub mod golem {
                         }
                         WorkerPropertyFilter::Env(e) => {
                             f.debug_tuple("WorkerPropertyFilter::Env").field(e).finish()
+                        }
+                        WorkerPropertyFilter::WasiConfigVars(e) => {
+                            f.debug_tuple("WorkerPropertyFilter::WasiConfigVars")
+                                .field(e)
+                                .finish()
                         }
                     }
                 }
@@ -454,6 +478,7 @@ pub mod golem {
                 pub worker_id: WorkerId,
                 pub args: _rt::Vec<_rt::String>,
                 pub env: _rt::Vec<(_rt::String, _rt::String)>,
+                pub wasi_config_vars: _rt::Vec<(_rt::String, _rt::String)>,
                 pub status: WorkerStatus,
                 pub component_version: u64,
                 pub retry_count: u64,
@@ -467,6 +492,7 @@ pub mod golem {
                         .field("worker-id", &self.worker_id)
                         .field("args", &self.args)
                         .field("env", &self.env)
+                        .field("wasi-config-vars", &self.wasi_config_vars)
                         .field("status", &self.status)
                         .field("component-version", &self.component_version)
                         .field("retry-count", &self.retry_count)
@@ -590,47 +616,47 @@ pub mod golem {
                             high_bits: high_bits1,
                             low_bits: low_bits1,
                         } = uuid0;
-                        let (result14_0, result14_1, result14_2) = match filter {
+                        let (result17_0, result17_1, result17_2) = match filter {
                             Some(e) => {
                                 let WorkerAnyFilter { filters: filters2 } = e;
-                                let vec13 = filters2;
-                                let len13 = vec13.len();
-                                let layout13 = _rt::alloc::Layout::from_size_align_unchecked(
-                                    vec13.len() * (2 * ::core::mem::size_of::<*const u8>()),
+                                let vec16 = filters2;
+                                let len16 = vec16.len();
+                                let layout16 = _rt::alloc::Layout::from_size_align_unchecked(
+                                    vec16.len() * (2 * ::core::mem::size_of::<*const u8>()),
                                     ::core::mem::size_of::<*const u8>(),
                                 );
-                                let result13 = if layout13.size() != 0 {
-                                    let ptr = _rt::alloc::alloc(layout13).cast::<u8>();
+                                let result16 = if layout16.size() != 0 {
+                                    let ptr = _rt::alloc::alloc(layout16).cast::<u8>();
                                     if ptr.is_null() {
-                                        _rt::alloc::handle_alloc_error(layout13);
+                                        _rt::alloc::handle_alloc_error(layout16);
                                     }
                                     ptr
                                 } else {
                                     ::core::ptr::null_mut()
                                 };
-                                for (i, e) in vec13.into_iter().enumerate() {
-                                    let base = result13
+                                for (i, e) in vec16.into_iter().enumerate() {
+                                    let base = result16
                                         .add(i * (2 * ::core::mem::size_of::<*const u8>()));
                                     {
                                         let WorkerAllFilter { filters: filters3 } = e;
-                                        let vec12 = filters3;
-                                        let len12 = vec12.len();
-                                        let layout12 = _rt::alloc::Layout::from_size_align_unchecked(
-                                            vec12.len()
+                                        let vec15 = filters3;
+                                        let len15 = vec15.len();
+                                        let layout15 = _rt::alloc::Layout::from_size_align_unchecked(
+                                            vec15.len()
                                                 * (16 + 4 * ::core::mem::size_of::<*const u8>()),
                                             8,
                                         );
-                                        let result12 = if layout12.size() != 0 {
-                                            let ptr = _rt::alloc::alloc(layout12).cast::<u8>();
+                                        let result15 = if layout15.size() != 0 {
+                                            let ptr = _rt::alloc::alloc(layout15).cast::<u8>();
                                             if ptr.is_null() {
-                                                _rt::alloc::handle_alloc_error(layout12);
+                                                _rt::alloc::handle_alloc_error(layout15);
                                             }
                                             ptr
                                         } else {
                                             ::core::ptr::null_mut()
                                         };
-                                        for (i, e) in vec12.into_iter().enumerate() {
-                                            let base = result12
+                                        for (i, e) in vec15.into_iter().enumerate() {
+                                            let base = result15
                                                 .add(i * (16 + 4 * ::core::mem::size_of::<*const u8>()));
                                             {
                                                 match e {
@@ -709,18 +735,45 @@ pub mod golem {
                                                             .add(8 + 3 * ::core::mem::size_of::<*const u8>())
                                                             .cast::<*mut u8>() = ptr11.cast_mut();
                                                     }
+                                                    WorkerPropertyFilter::WasiConfigVars(e) => {
+                                                        *base.add(0).cast::<u8>() = (5i32) as u8;
+                                                        let WorkerWasiConfigVarsFilter {
+                                                            name: name12,
+                                                            comparator: comparator12,
+                                                            value: value12,
+                                                        } = e;
+                                                        let vec13 = name12;
+                                                        let ptr13 = vec13.as_ptr().cast::<u8>();
+                                                        let len13 = vec13.len();
+                                                        *base
+                                                            .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                            .cast::<usize>() = len13;
+                                                        *base.add(8).cast::<*mut u8>() = ptr13.cast_mut();
+                                                        *base
+                                                            .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                            .cast::<u8>() = (comparator12.clone() as i32) as u8;
+                                                        let vec14 = value12;
+                                                        let ptr14 = vec14.as_ptr().cast::<u8>();
+                                                        let len14 = vec14.len();
+                                                        *base
+                                                            .add(8 + 4 * ::core::mem::size_of::<*const u8>())
+                                                            .cast::<usize>() = len14;
+                                                        *base
+                                                            .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                                            .cast::<*mut u8>() = ptr14.cast_mut();
+                                                    }
                                                 }
                                             }
                                         }
                                         *base
                                             .add(::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>() = len12;
-                                        *base.add(0).cast::<*mut u8>() = result12;
-                                        cleanup_list.extend_from_slice(&[(result12, layout12)]);
+                                            .cast::<usize>() = len15;
+                                        *base.add(0).cast::<*mut u8>() = result15;
+                                        cleanup_list.extend_from_slice(&[(result15, layout15)]);
                                     }
                                 }
-                                cleanup_list.extend_from_slice(&[(result13, layout13)]);
-                                (1i32, result13, len13)
+                                cleanup_list.extend_from_slice(&[(result16, layout16)]);
+                                (1i32, result16, len16)
                             }
                             None => (0i32, ::core::ptr::null_mut(), 0usize),
                         };
@@ -728,7 +781,7 @@ pub mod golem {
                         #[link(wasm_import_module = "golem:api/host@1.1.7")]
                         unsafe extern "C" {
                             #[link_name = "[constructor]get-workers"]
-                            fn wit_import15(
+                            fn wit_import18(
                                 _: i64,
                                 _: i64,
                                 _: i32,
@@ -738,7 +791,7 @@ pub mod golem {
                             ) -> i32;
                         }
                         #[cfg(not(target_arch = "wasm32"))]
-                        unsafe extern "C" fn wit_import15(
+                        unsafe extern "C" fn wit_import18(
                             _: i64,
                             _: i64,
                             _: i32,
@@ -749,12 +802,12 @@ pub mod golem {
                             unreachable!()
                         }
                         let ret = unsafe {
-                            wit_import15(
+                            wit_import18(
                                 _rt::as_i64(high_bits1),
                                 _rt::as_i64(low_bits1),
-                                result14_0,
-                                result14_1,
-                                result14_2,
+                                result17_0,
+                                result17_1,
+                                result17_2,
                                 match &precise {
                                     true => 1,
                                     false => 0,
@@ -798,7 +851,7 @@ pub mod golem {
                         }
                         unsafe { wit_import1((self).handle() as i32, ptr0) };
                         let l2 = i32::from(*ptr0.add(0).cast::<u8>());
-                        let result29 = match l2 {
+                        let result38 = match l2 {
                             0 => None,
                             1 => {
                                 let e = {
@@ -808,13 +861,13 @@ pub mod golem {
                                     let l4 = *ptr0
                                         .add(2 * ::core::mem::size_of::<*const u8>())
                                         .cast::<usize>();
-                                    let base28 = l3;
-                                    let len28 = l4;
-                                    let mut result28 = _rt::Vec::with_capacity(len28);
-                                    for i in 0..len28 {
-                                        let base = base28
-                                            .add(i * (40 + 6 * ::core::mem::size_of::<*const u8>()));
-                                        let e28 = {
+                                    let base37 = l3;
+                                    let len37 = l4;
+                                    let mut result37 = _rt::Vec::with_capacity(len37);
+                                    for i in 0..len37 {
+                                        let base = base37
+                                            .add(i * (40 + 8 * ::core::mem::size_of::<*const u8>()));
+                                        let e37 = {
                                             let l5 = *base.add(0).cast::<i64>();
                                             let l6 = *base.add(8).cast::<i64>();
                                             let l7 = *base.add(16).cast::<*mut u8>();
@@ -903,16 +956,60 @@ pub mod golem {
                                                 len24 * (4 * ::core::mem::size_of::<*const u8>()),
                                                 ::core::mem::size_of::<*const u8>(),
                                             );
-                                            let l25 = i32::from(
+                                            let l25 = *base
+                                                .add(16 + 6 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<*mut u8>();
+                                            let l26 = *base
+                                                .add(16 + 7 * ::core::mem::size_of::<*const u8>())
+                                                .cast::<usize>();
+                                            let base33 = l25;
+                                            let len33 = l26;
+                                            let mut result33 = _rt::Vec::with_capacity(len33);
+                                            for i in 0..len33 {
+                                                let base = base33
+                                                    .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                                                let e33 = {
+                                                    let l27 = *base.add(0).cast::<*mut u8>();
+                                                    let l28 = *base
+                                                        .add(::core::mem::size_of::<*const u8>())
+                                                        .cast::<usize>();
+                                                    let len29 = l28;
+                                                    let bytes29 = _rt::Vec::from_raw_parts(
+                                                        l27.cast(),
+                                                        len29,
+                                                        len29,
+                                                    );
+                                                    let l30 = *base
+                                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                                        .cast::<*mut u8>();
+                                                    let l31 = *base
+                                                        .add(3 * ::core::mem::size_of::<*const u8>())
+                                                        .cast::<usize>();
+                                                    let len32 = l31;
+                                                    let bytes32 = _rt::Vec::from_raw_parts(
+                                                        l30.cast(),
+                                                        len32,
+                                                        len32,
+                                                    );
+                                                    (_rt::string_lift(bytes29), _rt::string_lift(bytes32))
+                                                };
+                                                result33.push(e33);
+                                            }
+                                            _rt::cabi_dealloc(
+                                                base33,
+                                                len33 * (4 * ::core::mem::size_of::<*const u8>()),
+                                                ::core::mem::size_of::<*const u8>(),
+                                            );
+                                            let l34 = i32::from(
                                                 *base
-                                                    .add(16 + 6 * ::core::mem::size_of::<*const u8>())
+                                                    .add(16 + 8 * ::core::mem::size_of::<*const u8>())
                                                     .cast::<u8>(),
                                             );
-                                            let l26 = *base
-                                                .add(24 + 6 * ::core::mem::size_of::<*const u8>())
+                                            let l35 = *base
+                                                .add(24 + 8 * ::core::mem::size_of::<*const u8>())
                                                 .cast::<i64>();
-                                            let l27 = *base
-                                                .add(32 + 6 * ::core::mem::size_of::<*const u8>())
+                                            let l36 = *base
+                                                .add(32 + 8 * ::core::mem::size_of::<*const u8>())
                                                 .cast::<i64>();
                                             WorkerMetadata {
                                                 worker_id: super::super::super::golem::rpc::types::WorkerId {
@@ -926,25 +1023,26 @@ pub mod golem {
                                                 },
                                                 args: result15,
                                                 env: result24,
-                                                status: WorkerStatus::_lift(l25 as u8),
-                                                component_version: l26 as u64,
-                                                retry_count: l27 as u64,
+                                                wasi_config_vars: result33,
+                                                status: WorkerStatus::_lift(l34 as u8),
+                                                component_version: l35 as u64,
+                                                retry_count: l36 as u64,
                                             }
                                         };
-                                        result28.push(e28);
+                                        result37.push(e37);
                                     }
                                     _rt::cabi_dealloc(
-                                        base28,
-                                        len28 * (40 + 6 * ::core::mem::size_of::<*const u8>()),
+                                        base37,
+                                        len37 * (40 + 8 * ::core::mem::size_of::<*const u8>()),
                                         8,
                                     );
-                                    result28
+                                    result37
                                 };
                                 Some(e)
                             }
                             _ => _rt::invalid_enum_discriminant(),
                         };
-                        result29
+                        result38
                     }
                 }
             }
@@ -1646,11 +1744,11 @@ pub mod golem {
                     struct RetArea(
                         [::core::mem::MaybeUninit<
                             u8,
-                        >; 40 + 6 * ::core::mem::size_of::<*const u8>()],
+                        >; 40 + 8 * ::core::mem::size_of::<*const u8>()],
                     );
                     let mut ret_area = RetArea(
                         [::core::mem::MaybeUninit::uninit(); 40
-                            + 6 * ::core::mem::size_of::<*const u8>()],
+                            + 8 * ::core::mem::size_of::<*const u8>()],
                     );
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
@@ -1748,18 +1846,62 @@ pub mod golem {
                         len21 * (4 * ::core::mem::size_of::<*const u8>()),
                         ::core::mem::size_of::<*const u8>(),
                     );
-                    let l22 = i32::from(
+                    let l22 = *ptr0
+                        .add(16 + 6 * ::core::mem::size_of::<*const u8>())
+                        .cast::<*mut u8>();
+                    let l23 = *ptr0
+                        .add(16 + 7 * ::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let base30 = l22;
+                    let len30 = l23;
+                    let mut result30 = _rt::Vec::with_capacity(len30);
+                    for i in 0..len30 {
+                        let base = base30
+                            .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                        let e30 = {
+                            let l24 = *base.add(0).cast::<*mut u8>();
+                            let l25 = *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let len26 = l25;
+                            let bytes26 = _rt::Vec::from_raw_parts(
+                                l24.cast(),
+                                len26,
+                                len26,
+                            );
+                            let l27 = *base
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l28 = *base
+                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let len29 = l28;
+                            let bytes29 = _rt::Vec::from_raw_parts(
+                                l27.cast(),
+                                len29,
+                                len29,
+                            );
+                            (_rt::string_lift(bytes26), _rt::string_lift(bytes29))
+                        };
+                        result30.push(e30);
+                    }
+                    _rt::cabi_dealloc(
+                        base30,
+                        len30 * (4 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let l31 = i32::from(
                         *ptr0
-                            .add(16 + 6 * ::core::mem::size_of::<*const u8>())
+                            .add(16 + 8 * ::core::mem::size_of::<*const u8>())
                             .cast::<u8>(),
                     );
-                    let l23 = *ptr0
-                        .add(24 + 6 * ::core::mem::size_of::<*const u8>())
+                    let l32 = *ptr0
+                        .add(24 + 8 * ::core::mem::size_of::<*const u8>())
                         .cast::<i64>();
-                    let l24 = *ptr0
-                        .add(32 + 6 * ::core::mem::size_of::<*const u8>())
+                    let l33 = *ptr0
+                        .add(32 + 8 * ::core::mem::size_of::<*const u8>())
                         .cast::<i64>();
-                    let result25 = WorkerMetadata {
+                    let result34 = WorkerMetadata {
                         worker_id: super::super::super::golem::rpc::types::WorkerId {
                             component_id: super::super::super::golem::rpc::types::ComponentId {
                                 uuid: super::super::super::golem::rpc::types::Uuid {
@@ -1771,11 +1913,12 @@ pub mod golem {
                         },
                         args: result12,
                         env: result21,
-                        status: WorkerStatus::_lift(l22 as u8),
-                        component_version: l23 as u64,
-                        retry_count: l24 as u64,
+                        wasi_config_vars: result30,
+                        status: WorkerStatus::_lift(l31 as u8),
+                        component_version: l32 as u64,
+                        retry_count: l33 as u64,
                     };
-                    result25
+                    result34
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
@@ -1786,11 +1929,11 @@ pub mod golem {
                     struct RetArea(
                         [::core::mem::MaybeUninit<
                             u8,
-                        >; 48 + 6 * ::core::mem::size_of::<*const u8>()],
+                        >; 48 + 8 * ::core::mem::size_of::<*const u8>()],
                     );
                     let mut ret_area = RetArea(
                         [::core::mem::MaybeUninit::uninit(); 48
-                            + 6 * ::core::mem::size_of::<*const u8>()],
+                            + 8 * ::core::mem::size_of::<*const u8>()],
                     );
                     let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id0,
@@ -1833,7 +1976,7 @@ pub mod golem {
                         )
                     };
                     let l6 = i32::from(*ptr4.add(0).cast::<u8>());
-                    let result30 = match l6 {
+                    let result39 = match l6 {
                         0 => None,
                         1 => {
                             let e = {
@@ -1925,16 +2068,60 @@ pub mod golem {
                                     len26 * (4 * ::core::mem::size_of::<*const u8>()),
                                     ::core::mem::size_of::<*const u8>(),
                                 );
-                                let l27 = i32::from(
+                                let l27 = *ptr4
+                                    .add(24 + 6 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<*mut u8>();
+                                let l28 = *ptr4
+                                    .add(24 + 7 * ::core::mem::size_of::<*const u8>())
+                                    .cast::<usize>();
+                                let base35 = l27;
+                                let len35 = l28;
+                                let mut result35 = _rt::Vec::with_capacity(len35);
+                                for i in 0..len35 {
+                                    let base = base35
+                                        .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                                    let e35 = {
+                                        let l29 = *base.add(0).cast::<*mut u8>();
+                                        let l30 = *base
+                                            .add(::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len31 = l30;
+                                        let bytes31 = _rt::Vec::from_raw_parts(
+                                            l29.cast(),
+                                            len31,
+                                            len31,
+                                        );
+                                        let l32 = *base
+                                            .add(2 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<*mut u8>();
+                                        let l33 = *base
+                                            .add(3 * ::core::mem::size_of::<*const u8>())
+                                            .cast::<usize>();
+                                        let len34 = l33;
+                                        let bytes34 = _rt::Vec::from_raw_parts(
+                                            l32.cast(),
+                                            len34,
+                                            len34,
+                                        );
+                                        (_rt::string_lift(bytes31), _rt::string_lift(bytes34))
+                                    };
+                                    result35.push(e35);
+                                }
+                                _rt::cabi_dealloc(
+                                    base35,
+                                    len35 * (4 * ::core::mem::size_of::<*const u8>()),
+                                    ::core::mem::size_of::<*const u8>(),
+                                );
+                                let l36 = i32::from(
                                     *ptr4
-                                        .add(24 + 6 * ::core::mem::size_of::<*const u8>())
+                                        .add(24 + 8 * ::core::mem::size_of::<*const u8>())
                                         .cast::<u8>(),
                                 );
-                                let l28 = *ptr4
-                                    .add(32 + 6 * ::core::mem::size_of::<*const u8>())
+                                let l37 = *ptr4
+                                    .add(32 + 8 * ::core::mem::size_of::<*const u8>())
                                     .cast::<i64>();
-                                let l29 = *ptr4
-                                    .add(40 + 6 * ::core::mem::size_of::<*const u8>())
+                                let l38 = *ptr4
+                                    .add(40 + 8 * ::core::mem::size_of::<*const u8>())
                                     .cast::<i64>();
                                 WorkerMetadata {
                                     worker_id: super::super::super::golem::rpc::types::WorkerId {
@@ -1948,16 +2135,17 @@ pub mod golem {
                                     },
                                     args: result17,
                                     env: result26,
-                                    status: WorkerStatus::_lift(l27 as u8),
-                                    component_version: l28 as u64,
-                                    retry_count: l29 as u64,
+                                    wasi_config_vars: result35,
+                                    status: WorkerStatus::_lift(l36 as u8),
+                                    component_version: l37 as u64,
+                                    retry_count: l38 as u64,
                                 }
                             };
                             Some(e)
                         }
                         _ => _rt::invalid_enum_discriminant(),
                     };
-                    result30
+                    result39
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
@@ -16113,7 +16301,7 @@ pub mod exports {
                     arg5: i32,
                 ) -> *mut u8 {
                     #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
-                    let result23 = T::get_workers(
+                    let result30 = T::get_workers(
                         super::super::super::super::golem::rpc::types::ComponentId {
                             uuid: super::super::super::super::golem::rpc::types::Uuid {
                                 high_bits: arg0 as u64,
@@ -16124,29 +16312,29 @@ pub mod exports {
                             0 => None,
                             1 => {
                                 let e = {
-                                    let base22 = arg3;
-                                    let len22 = arg4;
-                                    let mut result22 = _rt::Vec::with_capacity(len22);
-                                    for i in 0..len22 {
-                                        let base = base22
+                                    let base29 = arg3;
+                                    let len29 = arg4;
+                                    let mut result29 = _rt::Vec::with_capacity(len29);
+                                    for i in 0..len29 {
+                                        let base = base29
                                             .add(i * (2 * ::core::mem::size_of::<*const u8>()));
-                                        let e22 = {
+                                        let e29 = {
                                             let l0 = *base.add(0).cast::<*mut u8>();
                                             let l1 = *base
                                                 .add(::core::mem::size_of::<*const u8>())
                                                 .cast::<usize>();
-                                            let base21 = l0;
-                                            let len21 = l1;
-                                            let mut result21 = _rt::Vec::with_capacity(len21);
-                                            for i in 0..len21 {
-                                                let base = base21
+                                            let base28 = l0;
+                                            let len28 = l1;
+                                            let mut result28 = _rt::Vec::with_capacity(len28);
+                                            for i in 0..len28 {
+                                                let base = base28
                                                     .add(i * (16 + 4 * ::core::mem::size_of::<*const u8>()));
-                                                let e21 = {
+                                                let e28 = {
                                                     let l2 = i32::from(*base.add(0).cast::<u8>());
-                                                    use super::super::super::super::golem::api::host::WorkerPropertyFilter as V20;
-                                                    let v20 = match l2 {
+                                                    use super::super::super::super::golem::api::host::WorkerPropertyFilter as V27;
+                                                    let v27 = match l2 {
                                                         0 => {
-                                                            let e20 = {
+                                                            let e27 = {
                                                                 let l3 = i32::from(*base.add(8).cast::<u8>());
                                                                 let l4 = *base
                                                                     .add(8 + 1 * ::core::mem::size_of::<*const u8>())
@@ -16167,10 +16355,10 @@ pub mod exports {
                                                                     value: _rt::string_lift(bytes6),
                                                                 }
                                                             };
-                                                            V20::Name(e20)
+                                                            V27::Name(e27)
                                                         }
                                                         1 => {
-                                                            let e20 = {
+                                                            let e27 = {
                                                                 let l7 = i32::from(*base.add(8).cast::<u8>());
                                                                 let l8 = i32::from(*base.add(9).cast::<u8>());
                                                                 super::super::super::super::golem::api::host::WorkerStatusFilter {
@@ -16182,10 +16370,10 @@ pub mod exports {
                                                                     ),
                                                                 }
                                                             };
-                                                            V20::Status(e20)
+                                                            V27::Status(e27)
                                                         }
                                                         2 => {
-                                                            let e20 = {
+                                                            let e27 = {
                                                                 let l9 = i32::from(*base.add(8).cast::<u8>());
                                                                 let l10 = *base.add(16).cast::<i64>();
                                                                 super::super::super::super::golem::api::host::WorkerVersionFilter {
@@ -16195,10 +16383,10 @@ pub mod exports {
                                                                     value: l10 as u64,
                                                                 }
                                                             };
-                                                            V20::Version(e20)
+                                                            V27::Version(e27)
                                                         }
                                                         3 => {
-                                                            let e20 = {
+                                                            let e27 = {
                                                                 let l11 = i32::from(*base.add(8).cast::<u8>());
                                                                 let l12 = *base.add(16).cast::<i64>();
                                                                 super::super::super::super::golem::api::host::WorkerCreatedAtFilter {
@@ -16208,11 +16396,10 @@ pub mod exports {
                                                                     value: l12 as u64,
                                                                 }
                                                             };
-                                                            V20::CreatedAt(e20)
+                                                            V27::CreatedAt(e27)
                                                         }
-                                                        n => {
-                                                            debug_assert_eq!(n, 4, "invalid enum discriminant");
-                                                            let e20 = {
+                                                        4 => {
+                                                            let e27 = {
                                                                 let l13 = *base.add(8).cast::<*mut u8>();
                                                                 let l14 = *base
                                                                     .add(8 + 1 * ::core::mem::size_of::<*const u8>())
@@ -16248,31 +16435,71 @@ pub mod exports {
                                                                     value: _rt::string_lift(bytes19),
                                                                 }
                                                             };
-                                                            V20::Env(e20)
+                                                            V27::Env(e27)
+                                                        }
+                                                        n => {
+                                                            debug_assert_eq!(n, 5, "invalid enum discriminant");
+                                                            let e27 = {
+                                                                let l20 = *base.add(8).cast::<*mut u8>();
+                                                                let l21 = *base
+                                                                    .add(8 + 1 * ::core::mem::size_of::<*const u8>())
+                                                                    .cast::<usize>();
+                                                                let len22 = l21;
+                                                                let bytes22 = _rt::Vec::from_raw_parts(
+                                                                    l20.cast(),
+                                                                    len22,
+                                                                    len22,
+                                                                );
+                                                                let l23 = i32::from(
+                                                                    *base
+                                                                        .add(8 + 2 * ::core::mem::size_of::<*const u8>())
+                                                                        .cast::<u8>(),
+                                                                );
+                                                                let l24 = *base
+                                                                    .add(8 + 3 * ::core::mem::size_of::<*const u8>())
+                                                                    .cast::<*mut u8>();
+                                                                let l25 = *base
+                                                                    .add(8 + 4 * ::core::mem::size_of::<*const u8>())
+                                                                    .cast::<usize>();
+                                                                let len26 = l25;
+                                                                let bytes26 = _rt::Vec::from_raw_parts(
+                                                                    l24.cast(),
+                                                                    len26,
+                                                                    len26,
+                                                                );
+                                                                super::super::super::super::golem::api::host::WorkerWasiConfigVarsFilter {
+                                                                    name: _rt::string_lift(bytes22),
+                                                                    comparator: super::super::super::super::golem::api::host::StringFilterComparator::_lift(
+                                                                        l23 as u8,
+                                                                    ),
+                                                                    value: _rt::string_lift(bytes26),
+                                                                }
+                                                            };
+                                                            V27::WasiConfigVars(e27)
                                                         }
                                                     };
-                                                    v20
+                                                    v27
                                                 };
-                                                result21.push(e21);
+                                                result28.push(e28);
                                             }
                                             _rt::cabi_dealloc(
-                                                base21,
-                                                len21 * (16 + 4 * ::core::mem::size_of::<*const u8>()),
+                                                base28,
+                                                len28 * (16 + 4 * ::core::mem::size_of::<*const u8>()),
                                                 8,
                                             );
                                             super::super::super::super::golem::api::host::WorkerAllFilter {
-                                                filters: result21,
+                                                filters: result28,
                                             }
                                         };
-                                        result22.push(e22);
+                                        result29.push(e29);
                                     }
                                     _rt::cabi_dealloc(
-                                        base22,
-                                        len22 * (2 * ::core::mem::size_of::<*const u8>()),
+                                        base29,
+                                        len29 * (2 * ::core::mem::size_of::<*const u8>()),
                                         ::core::mem::size_of::<*const u8>(),
                                     );
                                     super::super::super::super::golem::api::host::WorkerAnyFilter {
-                                        filters: result22,
+                                        filters: result29,
                                     }
                                 };
                                 Some(e)
@@ -16281,150 +16508,197 @@ pub mod exports {
                         },
                         _rt::bool_lift(arg5 as u8),
                     );
-                    let ptr24 = (&raw mut _RET_AREA.0).cast::<u8>();
-                    let vec36 = result23;
-                    let len36 = vec36.len();
-                    let layout36 = _rt::alloc::Layout::from_size_align_unchecked(
-                        vec36.len() * (40 + 6 * ::core::mem::size_of::<*const u8>()),
+                    let ptr31 = (&raw mut _RET_AREA.0).cast::<u8>();
+                    let vec47 = result30;
+                    let len47 = vec47.len();
+                    let layout47 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec47.len() * (40 + 8 * ::core::mem::size_of::<*const u8>()),
                         8,
                     );
-                    let result36 = if layout36.size() != 0 {
-                        let ptr = _rt::alloc::alloc(layout36).cast::<u8>();
+                    let result47 = if layout47.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout47).cast::<u8>();
                         if ptr.is_null() {
-                            _rt::alloc::handle_alloc_error(layout36);
+                            _rt::alloc::handle_alloc_error(layout47);
                         }
                         ptr
                     } else {
                         ::core::ptr::null_mut()
                     };
-                    for (i, e) in vec36.into_iter().enumerate() {
-                        let base = result36
-                            .add(i * (40 + 6 * ::core::mem::size_of::<*const u8>()));
+                    for (i, e) in vec47.into_iter().enumerate() {
+                        let base = result47
+                            .add(i * (40 + 8 * ::core::mem::size_of::<*const u8>()));
                         {
                             let super::super::super::super::golem::api::host::WorkerMetadata {
-                                worker_id: worker_id25,
-                                args: args25,
-                                env: env25,
-                                status: status25,
-                                component_version: component_version25,
-                                retry_count: retry_count25,
+                                worker_id: worker_id32,
+                                args: args32,
+                                env: env32,
+                                wasi_config_vars: wasi_config_vars32,
+                                status: status32,
+                                component_version: component_version32,
+                                retry_count: retry_count32,
                             } = e;
                             let super::super::super::super::golem::rpc::types::WorkerId {
-                                component_id: component_id26,
-                                worker_name: worker_name26,
-                            } = worker_id25;
+                                component_id: component_id33,
+                                worker_name: worker_name33,
+                            } = worker_id32;
                             let super::super::super::super::golem::rpc::types::ComponentId {
-                                uuid: uuid27,
-                            } = component_id26;
+                                uuid: uuid34,
+                            } = component_id33;
                             let super::super::super::super::golem::rpc::types::Uuid {
-                                high_bits: high_bits28,
-                                low_bits: low_bits28,
-                            } = uuid27;
-                            *base.add(0).cast::<i64>() = _rt::as_i64(high_bits28);
-                            *base.add(8).cast::<i64>() = _rt::as_i64(low_bits28);
-                            let vec29 = (worker_name26.into_bytes()).into_boxed_slice();
-                            let ptr29 = vec29.as_ptr().cast::<u8>();
-                            let len29 = vec29.len();
-                            ::core::mem::forget(vec29);
+                                high_bits: high_bits35,
+                                low_bits: low_bits35,
+                            } = uuid34;
+                            *base.add(0).cast::<i64>() = _rt::as_i64(high_bits35);
+                            *base.add(8).cast::<i64>() = _rt::as_i64(low_bits35);
+                            let vec36 = (worker_name33.into_bytes()).into_boxed_slice();
+                            let ptr36 = vec36.as_ptr().cast::<u8>();
+                            let len36 = vec36.len();
+                            ::core::mem::forget(vec36);
                             *base
                                 .add(16 + 1 * ::core::mem::size_of::<*const u8>())
-                                .cast::<usize>() = len29;
-                            *base.add(16).cast::<*mut u8>() = ptr29.cast_mut();
-                            let vec31 = args25;
-                            let len31 = vec31.len();
-                            let layout31 = _rt::alloc::Layout::from_size_align_unchecked(
-                                vec31.len() * (2 * ::core::mem::size_of::<*const u8>()),
+                                .cast::<usize>() = len36;
+                            *base.add(16).cast::<*mut u8>() = ptr36.cast_mut();
+                            let vec38 = args32;
+                            let len38 = vec38.len();
+                            let layout38 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec38.len() * (2 * ::core::mem::size_of::<*const u8>()),
                                 ::core::mem::size_of::<*const u8>(),
                             );
-                            let result31 = if layout31.size() != 0 {
-                                let ptr = _rt::alloc::alloc(layout31).cast::<u8>();
+                            let result38 = if layout38.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout38).cast::<u8>();
                                 if ptr.is_null() {
-                                    _rt::alloc::handle_alloc_error(layout31);
+                                    _rt::alloc::handle_alloc_error(layout38);
                                 }
                                 ptr
                             } else {
                                 ::core::ptr::null_mut()
                             };
-                            for (i, e) in vec31.into_iter().enumerate() {
-                                let base = result31
+                            for (i, e) in vec38.into_iter().enumerate() {
+                                let base = result38
                                     .add(i * (2 * ::core::mem::size_of::<*const u8>()));
                                 {
-                                    let vec30 = (e.into_bytes()).into_boxed_slice();
-                                    let ptr30 = vec30.as_ptr().cast::<u8>();
-                                    let len30 = vec30.len();
-                                    ::core::mem::forget(vec30);
+                                    let vec37 = (e.into_bytes()).into_boxed_slice();
+                                    let ptr37 = vec37.as_ptr().cast::<u8>();
+                                    let len37 = vec37.len();
+                                    ::core::mem::forget(vec37);
                                     *base
                                         .add(::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len30;
-                                    *base.add(0).cast::<*mut u8>() = ptr30.cast_mut();
+                                        .cast::<usize>() = len37;
+                                    *base.add(0).cast::<*mut u8>() = ptr37.cast_mut();
                                 }
                             }
                             *base
                                 .add(16 + 3 * ::core::mem::size_of::<*const u8>())
-                                .cast::<usize>() = len31;
+                                .cast::<usize>() = len38;
                             *base
                                 .add(16 + 2 * ::core::mem::size_of::<*const u8>())
-                                .cast::<*mut u8>() = result31;
-                            let vec35 = env25;
-                            let len35 = vec35.len();
-                            let layout35 = _rt::alloc::Layout::from_size_align_unchecked(
-                                vec35.len() * (4 * ::core::mem::size_of::<*const u8>()),
+                                .cast::<*mut u8>() = result38;
+                            let vec42 = env32;
+                            let len42 = vec42.len();
+                            let layout42 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec42.len() * (4 * ::core::mem::size_of::<*const u8>()),
                                 ::core::mem::size_of::<*const u8>(),
                             );
-                            let result35 = if layout35.size() != 0 {
-                                let ptr = _rt::alloc::alloc(layout35).cast::<u8>();
+                            let result42 = if layout42.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout42).cast::<u8>();
                                 if ptr.is_null() {
-                                    _rt::alloc::handle_alloc_error(layout35);
+                                    _rt::alloc::handle_alloc_error(layout42);
                                 }
                                 ptr
                             } else {
                                 ::core::ptr::null_mut()
                             };
-                            for (i, e) in vec35.into_iter().enumerate() {
-                                let base = result35
+                            for (i, e) in vec42.into_iter().enumerate() {
+                                let base = result42
                                     .add(i * (4 * ::core::mem::size_of::<*const u8>()));
                                 {
-                                    let (t32_0, t32_1) = e;
-                                    let vec33 = (t32_0.into_bytes()).into_boxed_slice();
-                                    let ptr33 = vec33.as_ptr().cast::<u8>();
-                                    let len33 = vec33.len();
-                                    ::core::mem::forget(vec33);
+                                    let (t39_0, t39_1) = e;
+                                    let vec40 = (t39_0.into_bytes()).into_boxed_slice();
+                                    let ptr40 = vec40.as_ptr().cast::<u8>();
+                                    let len40 = vec40.len();
+                                    ::core::mem::forget(vec40);
                                     *base
                                         .add(::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len33;
-                                    *base.add(0).cast::<*mut u8>() = ptr33.cast_mut();
-                                    let vec34 = (t32_1.into_bytes()).into_boxed_slice();
-                                    let ptr34 = vec34.as_ptr().cast::<u8>();
-                                    let len34 = vec34.len();
-                                    ::core::mem::forget(vec34);
+                                        .cast::<usize>() = len40;
+                                    *base.add(0).cast::<*mut u8>() = ptr40.cast_mut();
+                                    let vec41 = (t39_1.into_bytes()).into_boxed_slice();
+                                    let ptr41 = vec41.as_ptr().cast::<u8>();
+                                    let len41 = vec41.len();
+                                    ::core::mem::forget(vec41);
                                     *base
                                         .add(3 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len34;
+                                        .cast::<usize>() = len41;
                                     *base
                                         .add(2 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = ptr34.cast_mut();
+                                        .cast::<*mut u8>() = ptr41.cast_mut();
                                 }
                             }
                             *base
                                 .add(16 + 5 * ::core::mem::size_of::<*const u8>())
-                                .cast::<usize>() = len35;
+                                .cast::<usize>() = len42;
                             *base
                                 .add(16 + 4 * ::core::mem::size_of::<*const u8>())
-                                .cast::<*mut u8>() = result35;
+                                .cast::<*mut u8>() = result42;
+                            let vec46 = wasi_config_vars32;
+                            let len46 = vec46.len();
+                            let layout46 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec46.len() * (4 * ::core::mem::size_of::<*const u8>()),
+                                ::core::mem::size_of::<*const u8>(),
+                            );
+                            let result46 = if layout46.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout46).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout46);
+                                }
+                                ptr
+                            } else {
+                                ::core::ptr::null_mut()
+                            };
+                            for (i, e) in vec46.into_iter().enumerate() {
+                                let base = result46
+                                    .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                                {
+                                    let (t43_0, t43_1) = e;
+                                    let vec44 = (t43_0.into_bytes()).into_boxed_slice();
+                                    let ptr44 = vec44.as_ptr().cast::<u8>();
+                                    let len44 = vec44.len();
+                                    ::core::mem::forget(vec44);
+                                    *base
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len44;
+                                    *base.add(0).cast::<*mut u8>() = ptr44.cast_mut();
+                                    let vec45 = (t43_1.into_bytes()).into_boxed_slice();
+                                    let ptr45 = vec45.as_ptr().cast::<u8>();
+                                    let len45 = vec45.len();
+                                    ::core::mem::forget(vec45);
+                                    *base
+                                        .add(3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len45;
+                                    *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>() = ptr45.cast_mut();
+                                }
+                            }
+                            *base
+                                .add(16 + 7 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len46;
                             *base
                                 .add(16 + 6 * ::core::mem::size_of::<*const u8>())
-                                .cast::<u8>() = (status25.clone() as i32) as u8;
+                                .cast::<*mut u8>() = result46;
                             *base
-                                .add(24 + 6 * ::core::mem::size_of::<*const u8>())
-                                .cast::<i64>() = _rt::as_i64(component_version25);
+                                .add(16 + 8 * ::core::mem::size_of::<*const u8>())
+                                .cast::<u8>() = (status32.clone() as i32) as u8;
                             *base
-                                .add(32 + 6 * ::core::mem::size_of::<*const u8>())
-                                .cast::<i64>() = _rt::as_i64(retry_count25);
+                                .add(24 + 8 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i64>() = _rt::as_i64(component_version32);
+                            *base
+                                .add(32 + 8 * ::core::mem::size_of::<*const u8>())
+                                .cast::<i64>() = _rt::as_i64(retry_count32);
                         }
                     }
-                    *ptr24.add(::core::mem::size_of::<*const u8>()).cast::<usize>() = len36;
-                    *ptr24.add(0).cast::<*mut u8>() = result36;
-                    ptr24
+                    *ptr31.add(::core::mem::size_of::<*const u8>()).cast::<usize>() = len47;
+                    *ptr31.add(0).cast::<*mut u8>() = result47;
+                    ptr31
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
@@ -16433,11 +16707,11 @@ pub mod exports {
                     let l1 = *arg0
                         .add(::core::mem::size_of::<*const u8>())
                         .cast::<usize>();
-                    let base16 = l0;
-                    let len16 = l1;
-                    for i in 0..len16 {
-                        let base = base16
-                            .add(i * (40 + 6 * ::core::mem::size_of::<*const u8>()));
+                    let base23 = l0;
+                    let len23 = l1;
+                    for i in 0..len23 {
+                        let base = base23
+                            .add(i * (40 + 8 * ::core::mem::size_of::<*const u8>()));
                         {
                             let l2 = *base.add(16).cast::<*mut u8>();
                             let l3 = *base
@@ -16499,11 +16773,42 @@ pub mod exports {
                                 len15 * (4 * ::core::mem::size_of::<*const u8>()),
                                 ::core::mem::size_of::<*const u8>(),
                             );
+                            let l16 = *base
+                                .add(16 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l17 = *base
+                                .add(16 + 7 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let base22 = l16;
+                            let len22 = l17;
+                            for i in 0..len22 {
+                                let base = base22
+                                    .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                                {
+                                    let l18 = *base.add(0).cast::<*mut u8>();
+                                    let l19 = *base
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>();
+                                    _rt::cabi_dealloc(l18, l19, 1);
+                                    let l20 = *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>();
+                                    let l21 = *base
+                                        .add(3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>();
+                                    _rt::cabi_dealloc(l20, l21, 1);
+                                }
+                            }
+                            _rt::cabi_dealloc(
+                                base22,
+                                len22 * (4 * ::core::mem::size_of::<*const u8>()),
+                                ::core::mem::size_of::<*const u8>(),
+                            );
                         }
                     }
                     _rt::cabi_dealloc(
-                        base16,
-                        len16 * (40 + 6 * ::core::mem::size_of::<*const u8>()),
+                        base23,
+                        len23 * (40 + 8 * ::core::mem::size_of::<*const u8>()),
                         8,
                     );
                 }
@@ -16517,6 +16822,7 @@ pub mod exports {
                         worker_id: worker_id2,
                         args: args2,
                         env: env2,
+                        wasi_config_vars: wasi_config_vars2,
                         status: status2,
                         component_version: component_version2,
                         retry_count: retry_count2,
@@ -16623,14 +16929,60 @@ pub mod exports {
                     *ptr1
                         .add(16 + 4 * ::core::mem::size_of::<*const u8>())
                         .cast::<*mut u8>() = result12;
+                    let vec16 = wasi_config_vars2;
+                    let len16 = vec16.len();
+                    let layout16 = _rt::alloc::Layout::from_size_align_unchecked(
+                        vec16.len() * (4 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
+                    let result16 = if layout16.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout16).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout16);
+                        }
+                        ptr
+                    } else {
+                        ::core::ptr::null_mut()
+                    };
+                    for (i, e) in vec16.into_iter().enumerate() {
+                        let base = result16
+                            .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let (t13_0, t13_1) = e;
+                            let vec14 = (t13_0.into_bytes()).into_boxed_slice();
+                            let ptr14 = vec14.as_ptr().cast::<u8>();
+                            let len14 = vec14.len();
+                            ::core::mem::forget(vec14);
+                            *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len14;
+                            *base.add(0).cast::<*mut u8>() = ptr14.cast_mut();
+                            let vec15 = (t13_1.into_bytes()).into_boxed_slice();
+                            let ptr15 = vec15.as_ptr().cast::<u8>();
+                            let len15 = vec15.len();
+                            ::core::mem::forget(vec15);
+                            *base
+                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len15;
+                            *base
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = ptr15.cast_mut();
+                        }
+                    }
+                    *ptr1
+                        .add(16 + 7 * ::core::mem::size_of::<*const u8>())
+                        .cast::<usize>() = len16;
                     *ptr1
                         .add(16 + 6 * ::core::mem::size_of::<*const u8>())
+                        .cast::<*mut u8>() = result16;
+                    *ptr1
+                        .add(16 + 8 * ::core::mem::size_of::<*const u8>())
                         .cast::<u8>() = (status2.clone() as i32) as u8;
                     *ptr1
-                        .add(24 + 6 * ::core::mem::size_of::<*const u8>())
+                        .add(24 + 8 * ::core::mem::size_of::<*const u8>())
                         .cast::<i64>() = _rt::as_i64(component_version2);
                     *ptr1
-                        .add(32 + 6 * ::core::mem::size_of::<*const u8>())
+                        .add(32 + 8 * ::core::mem::size_of::<*const u8>())
                         .cast::<i64>() = _rt::as_i64(retry_count2);
                     ptr1
                 }
@@ -16697,6 +17049,37 @@ pub mod exports {
                         len13 * (4 * ::core::mem::size_of::<*const u8>()),
                         ::core::mem::size_of::<*const u8>(),
                     );
+                    let l14 = *arg0
+                        .add(16 + 6 * ::core::mem::size_of::<*const u8>())
+                        .cast::<*mut u8>();
+                    let l15 = *arg0
+                        .add(16 + 7 * ::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let base20 = l14;
+                    let len20 = l15;
+                    for i in 0..len20 {
+                        let base = base20
+                            .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                        {
+                            let l16 = *base.add(0).cast::<*mut u8>();
+                            let l17 = *base
+                                .add(::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            _rt::cabi_dealloc(l16, l17, 1);
+                            let l18 = *base
+                                .add(2 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l19 = *base
+                                .add(3 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            _rt::cabi_dealloc(l18, l19, 1);
+                        }
+                    }
+                    _rt::cabi_dealloc(
+                        base20,
+                        len20 * (4 * ::core::mem::size_of::<*const u8>()),
+                        ::core::mem::size_of::<*const u8>(),
+                    );
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
@@ -16726,6 +17109,7 @@ pub mod exports {
                                 worker_id: worker_id3,
                                 args: args3,
                                 env: env3,
+                                wasi_config_vars: wasi_config_vars3,
                                 status: status3,
                                 component_version: component_version3,
                                 retry_count: retry_count3,
@@ -16832,14 +17216,60 @@ pub mod exports {
                             *ptr2
                                 .add(24 + 4 * ::core::mem::size_of::<*const u8>())
                                 .cast::<*mut u8>() = result13;
+                            let vec17 = wasi_config_vars3;
+                            let len17 = vec17.len();
+                            let layout17 = _rt::alloc::Layout::from_size_align_unchecked(
+                                vec17.len() * (4 * ::core::mem::size_of::<*const u8>()),
+                                ::core::mem::size_of::<*const u8>(),
+                            );
+                            let result17 = if layout17.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout17).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout17);
+                                }
+                                ptr
+                            } else {
+                                ::core::ptr::null_mut()
+                            };
+                            for (i, e) in vec17.into_iter().enumerate() {
+                                let base = result17
+                                    .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                                {
+                                    let (t14_0, t14_1) = e;
+                                    let vec15 = (t14_0.into_bytes()).into_boxed_slice();
+                                    let ptr15 = vec15.as_ptr().cast::<u8>();
+                                    let len15 = vec15.len();
+                                    ::core::mem::forget(vec15);
+                                    *base
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len15;
+                                    *base.add(0).cast::<*mut u8>() = ptr15.cast_mut();
+                                    let vec16 = (t14_1.into_bytes()).into_boxed_slice();
+                                    let ptr16 = vec16.as_ptr().cast::<u8>();
+                                    let len16 = vec16.len();
+                                    ::core::mem::forget(vec16);
+                                    *base
+                                        .add(3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>() = len16;
+                                    *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>() = ptr16.cast_mut();
+                                }
+                            }
+                            *ptr2
+                                .add(24 + 7 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>() = len17;
                             *ptr2
                                 .add(24 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>() = result17;
+                            *ptr2
+                                .add(24 + 8 * ::core::mem::size_of::<*const u8>())
                                 .cast::<u8>() = (status3.clone() as i32) as u8;
                             *ptr2
-                                .add(32 + 6 * ::core::mem::size_of::<*const u8>())
+                                .add(32 + 8 * ::core::mem::size_of::<*const u8>())
                                 .cast::<i64>() = _rt::as_i64(component_version3);
                             *ptr2
-                                .add(40 + 6 * ::core::mem::size_of::<*const u8>())
+                                .add(40 + 8 * ::core::mem::size_of::<*const u8>())
                                 .cast::<i64>() = _rt::as_i64(retry_count3);
                         }
                         None => {
@@ -16915,6 +17345,37 @@ pub mod exports {
                             _rt::cabi_dealloc(
                                 base14,
                                 len14 * (4 * ::core::mem::size_of::<*const u8>()),
+                                ::core::mem::size_of::<*const u8>(),
+                            );
+                            let l15 = *arg0
+                                .add(24 + 6 * ::core::mem::size_of::<*const u8>())
+                                .cast::<*mut u8>();
+                            let l16 = *arg0
+                                .add(24 + 7 * ::core::mem::size_of::<*const u8>())
+                                .cast::<usize>();
+                            let base21 = l15;
+                            let len21 = l16;
+                            for i in 0..len21 {
+                                let base = base21
+                                    .add(i * (4 * ::core::mem::size_of::<*const u8>()));
+                                {
+                                    let l17 = *base.add(0).cast::<*mut u8>();
+                                    let l18 = *base
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>();
+                                    _rt::cabi_dealloc(l17, l18, 1);
+                                    let l19 = *base
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>();
+                                    let l20 = *base
+                                        .add(3 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>();
+                                    _rt::cabi_dealloc(l19, l20, 1);
+                                }
+                            }
+                            _rt::cabi_dealloc(
+                                base21,
+                                len21 * (4 * ::core::mem::size_of::<*const u8>()),
                                 ::core::mem::size_of::<*const u8>(),
                             );
                         }
@@ -17056,11 +17517,11 @@ pub mod exports {
                 struct _RetArea(
                     [::core::mem::MaybeUninit<
                         u8,
-                    >; 48 + 6 * ::core::mem::size_of::<*const u8>()],
+                    >; 48 + 8 * ::core::mem::size_of::<*const u8>()],
                 );
                 static mut _RET_AREA: _RetArea = _RetArea(
                     [::core::mem::MaybeUninit::uninit(); 48
-                        + 6 * ::core::mem::size_of::<*const u8>()],
+                        + 8 * ::core::mem::size_of::<*const u8>()],
                 );
             }
         }
@@ -17343,12 +17804,12 @@ pub(crate) use __export_runtime_service_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 11981] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xc7\\\x01A\x02\x01A)\
-\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
-method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
-le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
-\0\x12wasi:io/poll@0.2.3\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\x01\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 12084] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xae]\x01A\x02\x01A)\x01\
+B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[meth\
+od]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.b\
+lock\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\0\
+\x12wasi:io/poll@0.2.3\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\x01\x01\
 \x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duratio\
 n\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\
 \x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\
@@ -17400,18 +17861,18 @@ d]cancellation-token.cancel\x01G\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc8\0\x04
 \x03vnt-\0+\x04\0\x0dextract-value\x01K\x01@\x01\x03vnt-\0\x20\x04\0\x0cextract-\
 type\x01L\x03\0\x15golem:rpc/types@0.2.2\x05\x05\x02\x03\0\x01\x08duration\x02\x03\
 \0\x03\x0ccomponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x0evalue-and-type\x02\
-\x03\0\x03\x09worker-id\x01B}\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\
-\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\
-\0\x04\x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\x02\x01\x0a\
-\x04\0\x09worker-id\x03\0\x08\x01w\x04\0\x0boplog-index\x03\0\x0a\x01r\x02\x09wo\
-rker-id\x09\x09oplog-idx\x0b\x04\0\x0apromise-id\x03\0\x0c\x01w\x04\0\x11compone\
-nt-version\x03\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\x01r\x01\x04\
-uuid\x05\x04\0\x0aproject-id\x03\0\x12\x01ku\x01r\x05\x0cmax-attemptsy\x09min-de\
-lay\x01\x09max-delay\x01\x0amultiplieru\x11max-jitter-factor\x14\x04\0\x0cretry-\
-policy\x03\0\x15\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effects\0\
-\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x17\x01m\x02\x09automatic\x0esn\
-apshot-based\x04\0\x0bupdate-mode\x03\0\x19\x01m\x06\x05equal\x09not-equal\x0dgr\
-eater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x1b\
+\x03\0\x03\x09worker-id\x01B\x7f\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\
+\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uu\
+id\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\x02\x01\
+\x0a\x04\0\x09worker-id\x03\0\x08\x01w\x04\0\x0boplog-index\x03\0\x0a\x01r\x02\x09\
+worker-id\x09\x09oplog-idx\x0b\x04\0\x0apromise-id\x03\0\x0c\x01w\x04\0\x11compo\
+nent-version\x03\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\x01r\x01\
+\x04uuid\x05\x04\0\x0aproject-id\x03\0\x12\x01ku\x01r\x05\x0cmax-attemptsy\x09mi\
+n-delay\x01\x09max-delay\x01\x0amultiplieru\x11max-jitter-factor\x14\x04\0\x0cre\
+try-policy\x03\0\x15\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effe\
+cts\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x17\x01m\x02\x09automatic\x0e\
+snapshot-based\x04\0\x0bupdate-mode\x03\0\x19\x01m\x06\x05equal\x09not-equal\x0d\
+greater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x1b\
 \x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\0\x18string-filter-compa\
 rator\x03\0\x1d\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retry\
 ing\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1f\x01r\x02\x0acomparator\x1e\
@@ -17419,172 +17880,174 @@ ing\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1f\x01r\x02\x0acomparator\
 e\x20\x04\0\x14worker-status-filter\x03\0#\x01r\x02\x0acomparator\x1c\x05valuew\x04\
 \0\x15worker-version-filter\x03\0%\x01r\x02\x0acomparator\x1c\x05valuew\x04\0\x18\
 worker-created-at-filter\x03\0'\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\
-\0\x11worker-env-filter\x03\0)\x01q\x05\x04name\x01\"\0\x06status\x01$\0\x07vers\
-ion\x01&\0\x0acreated-at\x01(\0\x03env\x01*\0\x04\0\x16worker-property-filter\x03\
-\0+\x01p,\x01r\x01\x07filters-\x04\0\x11worker-all-filter\x03\0.\x01p/\x01r\x01\x07\
-filters0\x04\0\x11worker-any-filter\x03\01\x01ps\x01o\x02ss\x01p4\x01r\x06\x09wo\
-rker-id\x09\x04args3\x03env5\x06status\x20\x11component-versionw\x0bretry-countw\
-\x04\0\x0fworker-metadata\x03\06\x04\0\x0bget-workers\x03\x01\x01q\x02\x15revert\
--to-oplog-index\x01\x0b\0\x17revert-last-invocations\x01w\0\x04\0\x14revert-work\
-er-target\x03\09\x01m\x02\x08original\x06forked\x04\0\x0bfork-result\x03\0;\x01k\
-2\x01i8\x01@\x03\x0ccomponent-id\x03\x06filter=\x07precise\x7f\0>\x04\0\x18[cons\
-tructor]get-workers\x01?\x01h8\x01p7\x01k\xc1\0\x01@\x01\x04self\xc0\0\0\xc2\0\x04\
-\0\x1c[method]get-workers.get-next\x01C\x01@\0\0\x0d\x04\0\x0ecreate-promise\x01\
-D\x01p}\x01@\x01\x0apromise-id\x0d\0\xc5\0\x04\0\x0dawait-promise\x01F\x01k\xc5\0\
-\x01@\x01\x0apromise-id\x0d\0\xc7\0\x04\0\x0cpoll-promise\x01H\x01@\x02\x0apromi\
-se-id\x0d\x04data\xc5\0\0\x7f\x04\0\x10complete-promise\x01I\x01@\x01\x0apromise\
--id\x0d\x01\0\x04\0\x0edelete-promise\x01J\x01@\0\0\x0b\x04\0\x0fget-oplog-index\
-\x01K\x01@\x01\x09oplog-idx\x0b\x01\0\x04\0\x0fset-oplog-index\x01L\x01@\x01\x08\
-replicas}\x01\0\x04\0\x0coplog-commit\x01M\x04\0\x14mark-begin-operation\x01K\x01\
-@\x01\x05begin\x0b\x01\0\x04\0\x12mark-end-operation\x01N\x01@\0\0\x16\x04\0\x10\
-get-retry-policy\x01O\x01@\x01\x10new-retry-policy\x16\x01\0\x04\0\x10set-retry-\
-policy\x01P\x01@\0\0\x18\x04\0\x1bget-oplog-persistence-level\x01Q\x01@\x01\x15n\
-ew-persistence-level\x18\x01\0\x04\0\x1bset-oplog-persistence-level\x01R\x01@\0\0\
-\x7f\x04\0\x14get-idempotence-mode\x01S\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14\
-set-idempotence-mode\x01T\x01@\0\0\x05\x04\0\x18generate-idempotency-key\x01U\x01\
-@\x03\x09worker-id\x09\x0etarget-version\x0f\x04mode\x1a\x01\0\x04\0\x0dupdate-w\
-orker\x01V\x01@\0\07\x04\0\x11get-self-metadata\x01W\x01k7\x01@\x01\x09worker-id\
-\x09\0\xd8\0\x04\0\x13get-worker-metadata\x01Y\x01@\x03\x10source-worker-id\x09\x10\
-target-worker-id\x09\x11oplog-idx-cut-off\x0b\x01\0\x04\0\x0bfork-worker\x01Z\x01\
-@\x02\x09worker-id\x09\x0drevert-target:\x01\0\x04\0\x0drevert-worker\x01[\x01k\x03\
-\x01@\x01\x13component-references\0\xdc\0\x04\0\x14resolve-component-id\x01]\x01\
-k\x09\x01@\x02\x13component-references\x0bworker-names\0\xde\0\x04\0\x11resolve-\
-worker-id\x01_\x04\0\x18resolve-worker-id-strict\x01_\x01@\x01\x08new-names\0<\x04\
-\0\x04fork\x01`\x03\0\x14golem:api/host@1.1.7\x05\x0b\x01B\x04\x04\0\x05error\x03\
-\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug-string\x01\x02\
-\x03\0\x13wasi:io/error@0.2.3\x05\x0c\x02\x03\0\x05\x05error\x01B(\x02\x03\x02\x01\
-\x0d\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x02\x01i\
-\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\0\x0cstream-e\
-rror\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01h\
-\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19[met\
-hod]input-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking-read\x01\x0c\x01\
-j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[method]input-stream.\
-skip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01i\x03\x01@\x01\
-\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\x01h\x08\x01@\
-\x01\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\x12\x01j\0\x01\
-\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]output-stream.w\
-rite\x01\x14\x04\0.[method]output-stream.blocking-write-and-flush\x01\x14\x01@\x01\
-\x04self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\x04\0$[method]ou\
-tput-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]o\
-utput-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method\
-]output-stream.write-zeroes\x01\x17\x04\05[method]output-stream.blocking-write-z\
-eroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[\
-method]output-stream.splice\x01\x18\x04\0%[method]output-stream.blocking-splice\x01\
-\x18\x03\0\x15wasi:io/streams@0.2.3\x05\x0e\x02\x03\0\x06\x0cinput-stream\x02\x03\
-\0\x06\x0doutput-stream\x01B\xc1\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\
-\0\x02\x03\x02\x01\x0f\x04\0\x0cinput-stream\x03\0\x02\x02\x03\x02\x01\x10\x04\0\
-\x0doutput-stream\x03\0\x04\x02\x03\x02\x01\x0d\x04\0\x08io-error\x03\0\x06\x02\x03\
-\x02\x01\x01\x04\0\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\x04head\0\0\x04post\
-\0\0\x03put\0\0\x06delete\0\0\x07connect\0\0\x07options\0\0\x05trace\0\0\x05patc\
-h\0\0\x05other\x01s\0\x04\0\x06method\x03\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\
-\x05other\x01s\0\x04\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09\
-info-code\x0f\x04\0\x11DNS-error-payload\x03\0\x10\x01k}\x01r\x02\x08alert-id\x12\
-\x0dalert-message\x0e\x04\0\x1aTLS-alert-received-payload\x03\0\x13\x01ky\x01r\x02\
-\x0afield-name\x0e\x0afield-size\x15\x04\0\x12field-size-payload\x03\0\x16\x01kw\
-\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09DNS-error\x01\x11\0\x15destination-not-fou\
-nd\0\0\x17destination-unavailable\0\0\x19destination-IP-prohibited\0\0\x19destin\
-ation-IP-unroutable\0\0\x12connection-refused\0\0\x15connection-terminated\0\0\x12\
-connection-timeout\0\0\x17connection-read-timeout\0\0\x18connection-write-timeou\
-t\0\0\x18connection-limit-reached\0\0\x12TLS-protocol-error\0\0\x15TLS-certifica\
-te-error\0\0\x12TLS-alert-received\x01\x14\0\x13HTTP-request-denied\0\0\x1cHTTP-\
-request-length-required\0\0\x16HTTP-request-body-size\x01\x18\0\x1bHTTP-request-\
-method-invalid\0\0\x18HTTP-request-URI-invalid\0\0\x19HTTP-request-URI-too-long\0\
-\0\x20HTTP-request-header-section-size\x01\x15\0\x18HTTP-request-header-size\x01\
-\x19\0!HTTP-request-trailer-section-size\x01\x15\0\x19HTTP-request-trailer-size\x01\
-\x17\0\x18HTTP-response-incomplete\0\0!HTTP-response-header-section-size\x01\x15\
-\0\x19HTTP-response-header-size\x01\x17\0\x17HTTP-response-body-size\x01\x18\0\"\
-HTTP-response-trailer-section-size\x01\x15\0\x1aHTTP-response-trailer-size\x01\x17\
-\0\x1dHTTP-response-transfer-coding\x01\x0e\0\x1cHTTP-response-content-coding\x01\
-\x0e\0\x15HTTP-response-timeout\0\0\x13HTTP-upgrade-failed\0\0\x13HTTP-protocol-\
-error\0\0\x0dloop-detected\0\0\x13configuration-error\0\0\x0einternal-error\x01\x0e\
-\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\x0einvalid-syntax\0\0\x09forbidden\0\0\
-\x09immutable\0\0\x04\0\x0cheader-error\x03\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\
-\x04\0\x0afield-name\x03\0\x1f\x01p}\x04\0\x0bfield-value\x03\0!\x04\0\x06fields\
-\x03\x01\x04\0\x07headers\x03\0#\x04\0\x08trailers\x03\0#\x04\0\x10incoming-requ\
-est\x03\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0frequest-options\x03\x01\x04\
-\0\x11response-outparam\x03\x01\x01{\x04\0\x0bstatus-code\x03\0*\x04\0\x11incomi\
-ng-response\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\0\x0ffuture-trailers\x03\x01\
-\x04\0\x11outgoing-response\x03\x01\x04\0\x0doutgoing-body\x03\x01\x04\0\x18futu\
-re-incoming-response\x03\x01\x01i#\x01@\0\02\x04\0\x13[constructor]fields\x013\x01\
-o\x02\x20\"\x01p4\x01j\x012\x01\x1d\x01@\x01\x07entries5\06\x04\0\x18[static]fie\
-lds.from-list\x017\x01h#\x01p\"\x01@\x02\x04self8\x04name\x20\09\x04\0\x12[metho\
-d]fields.get\x01:\x01@\x02\x04self8\x04name\x20\0\x7f\x04\0\x12[method]fields.ha\
-s\x01;\x01j\0\x01\x1d\x01@\x03\x04self8\x04name\x20\x05value9\0<\x04\0\x12[metho\
-d]fields.set\x01=\x01@\x02\x04self8\x04name\x20\0<\x04\0\x15[method]fields.delet\
-e\x01>\x01@\x03\x04self8\x04name\x20\x05value\"\0<\x04\0\x15[method]fields.appen\
-d\x01?\x01@\x01\x04self8\05\x04\0\x16[method]fields.entries\x01@\x01@\x01\x04sel\
-f8\02\x04\0\x14[method]fields.clone\x01A\x01h&\x01@\x01\x04self\xc2\0\0\x0b\x04\0\
-\x1f[method]incoming-request.method\x01C\x01@\x01\x04self\xc2\0\0\x0e\x04\0([met\
-hod]incoming-request.path-with-query\x01D\x01k\x0d\x01@\x01\x04self\xc2\0\0\xc5\0\
-\x04\0\x1f[method]incoming-request.scheme\x01F\x04\0\"[method]incoming-request.a\
-uthority\x01D\x01i$\x01@\x01\x04self\xc2\0\0\xc7\0\x04\0\x20[method]incoming-req\
-uest.headers\x01H\x01i-\x01j\x01\xc9\0\0\x01@\x01\x04self\xc2\0\0\xca\0\x04\0\x20\
-[method]incoming-request.consume\x01K\x01i'\x01@\x01\x07headers\xc7\0\0\xcc\0\x04\
-\0\x1d[constructor]outgoing-request\x01M\x01h'\x01i0\x01j\x01\xcf\0\0\x01@\x01\x04\
-self\xce\0\0\xd0\0\x04\0\x1d[method]outgoing-request.body\x01Q\x01@\x01\x04self\xce\
-\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01R\x01j\0\0\x01@\x02\x04self\
-\xce\0\x06method\x0b\0\xd3\0\x04\0#[method]outgoing-request.set-method\x01T\x01@\
-\x01\x04self\xce\0\0\x0e\x04\0([method]outgoing-request.path-with-query\x01U\x01\
-@\x02\x04self\xce\0\x0fpath-with-query\x0e\0\xd3\0\x04\0,[method]outgoing-reques\
-t.set-path-with-query\x01V\x01@\x01\x04self\xce\0\0\xc5\0\x04\0\x1f[method]outgo\
-ing-request.scheme\x01W\x01@\x02\x04self\xce\0\x06scheme\xc5\0\0\xd3\0\x04\0#[me\
-thod]outgoing-request.set-scheme\x01X\x04\0\"[method]outgoing-request.authority\x01\
-U\x01@\x02\x04self\xce\0\x09authority\x0e\0\xd3\0\x04\0&[method]outgoing-request\
-.set-authority\x01Y\x01@\x01\x04self\xce\0\0\xc7\0\x04\0\x20[method]outgoing-req\
-uest.headers\x01Z\x01i(\x01@\0\0\xdb\0\x04\0\x1c[constructor]request-options\x01\
-\\\x01h(\x01k\x01\x01@\x01\x04self\xdd\0\0\xde\0\x04\0'[method]request-options.c\
-onnect-timeout\x01_\x01@\x02\x04self\xdd\0\x08duration\xde\0\0\xd3\0\x04\0+[meth\
-od]request-options.set-connect-timeout\x01`\x04\0*[method]request-options.first-\
-byte-timeout\x01_\x04\0.[method]request-options.set-first-byte-timeout\x01`\x04\0\
--[method]request-options.between-bytes-timeout\x01_\x04\01[method]request-option\
-s.set-between-bytes-timeout\x01`\x01i)\x01i/\x01j\x01\xe2\0\x01\x1b\x01@\x02\x05\
-param\xe1\0\x08response\xe3\0\x01\0\x04\0\x1d[static]response-outparam.set\x01d\x01\
-h,\x01@\x01\x04self\xe5\0\0+\x04\0\x20[method]incoming-response.status\x01f\x01@\
-\x01\x04self\xe5\0\0\xc7\0\x04\0![method]incoming-response.headers\x01g\x01@\x01\
-\x04self\xe5\0\0\xca\0\x04\0![method]incoming-response.consume\x01h\x01h-\x01i\x03\
-\x01j\x01\xea\0\0\x01@\x01\x04self\xe9\0\0\xeb\0\x04\0\x1c[method]incoming-body.\
-stream\x01l\x01i.\x01@\x01\x04this\xc9\0\0\xed\0\x04\0\x1c[static]incoming-body.\
-finish\x01n\x01h.\x01i\x09\x01@\x01\x04self\xef\0\0\xf0\0\x04\0![method]future-t\
-railers.subscribe\x01q\x01i%\x01k\xf2\0\x01j\x01\xf3\0\x01\x1b\x01j\x01\xf4\0\0\x01\
-k\xf5\0\x01@\x01\x04self\xef\0\0\xf6\0\x04\0\x1b[method]future-trailers.get\x01w\
-\x01@\x01\x07headers\xc7\0\0\xe2\0\x04\0\x1e[constructor]outgoing-response\x01x\x01\
-h/\x01@\x01\x04self\xf9\0\0+\x04\0%[method]outgoing-response.status-code\x01z\x01\
-@\x02\x04self\xf9\0\x0bstatus-code+\0\xd3\0\x04\0)[method]outgoing-response.set-\
-status-code\x01{\x01@\x01\x04self\xf9\0\0\xc7\0\x04\0![method]outgoing-response.\
-headers\x01|\x01@\x01\x04self\xf9\0\0\xd0\0\x04\0\x1e[method]outgoing-response.b\
-ody\x01}\x01h0\x01i\x05\x01j\x01\xff\0\0\x01@\x01\x04self\xfe\0\0\x80\x01\x04\0\x1b\
-[method]outgoing-body.write\x01\x81\x01\x01j\0\x01\x1b\x01@\x02\x04this\xcf\0\x08\
-trailers\xf3\0\0\x82\x01\x04\0\x1c[static]outgoing-body.finish\x01\x83\x01\x01h1\
-\x01@\x01\x04self\x84\x01\0\xf0\0\x04\0*[method]future-incoming-response.subscri\
-be\x01\x85\x01\x01i,\x01j\x01\x86\x01\x01\x1b\x01j\x01\x87\x01\0\x01k\x88\x01\x01\
-@\x01\x04self\x84\x01\0\x89\x01\x04\0$[method]future-incoming-response.get\x01\x8a\
-\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8b\x01\0\x8c\x01\x04\0\x0fhttp-error-cod\
-e\x01\x8d\x01\x03\0\x15wasi:http/types@0.2.3\x05\x11\x02\x03\0\x07\x10outgoing-r\
-equest\x02\x03\0\x07\x0frequest-options\x02\x03\0\x07\x18future-incoming-respons\
-e\x02\x03\0\x07\x0aerror-code\x01B\x0f\x02\x03\x02\x01\x12\x04\0\x10outgoing-req\
-uest\x03\0\0\x02\x03\x02\x01\x13\x04\0\x0frequest-options\x03\0\x02\x02\x03\x02\x01\
-\x14\x04\0\x18future-incoming-response\x03\0\x04\x02\x03\x02\x01\x15\x04\0\x0aer\
-ror-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\x0b\x01\x07\x01@\
-\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\x03\0\x20wasi:h\
-ttp/outgoing-handler@0.2.3\x05\x16\x02\x03\0\x04\x0ccomponent-id\x02\x03\0\x04\x09\
-worker-id\x02\x03\0\x04\x11component-version\x02\x03\0\x04\x0bupdate-mode\x02\x03\
-\0\x04\x11worker-any-filter\x02\x03\0\x04\x0fworker-metadata\x02\x03\0\x04\x04uu\
-id\x01B'\x02\x03\x02\x01\x17\x04\0\x0ccomponent-id\x03\0\0\x02\x03\x02\x01\x18\x04\
-\0\x09worker-id\x03\0\x02\x02\x03\x02\x01\x19\x04\0\x11component-version\x03\0\x04\
-\x02\x03\x02\x01\x1a\x04\0\x0bupdate-mode\x03\0\x06\x02\x03\x02\x01\x1b\x04\0\x11\
-worker-any-filter\x03\0\x08\x02\x03\x02\x01\x1c\x04\0\x0fworker-metadata\x03\0\x0a\
-\x02\x03\x02\x01\x1d\x04\0\x04uuid\x03\0\x0c\x01@\0\0w\x04\0\x04jump\x01\x0e\x01\
-@\x01\x0bmax-retriesw\x01\0\x04\0\x1cfail-with-custom-max-retries\x01\x0f\x01@\x01\
-\x08replicas}\x01\0\x04\0\x0fexplicit-commit\x01\x10\x01@\0\x01\0\x04\0\x0datomi\
-c-region\x01\x11\x01@\x01\x07enabled\x7f\x01\0\x04\0\x10idempotence-flag\x01\x12\
-\x04\0\x0fpersist-nothing\x01\x11\x01k\x09\x01p\x0b\x01@\x03\x0ccomponent-id\x01\
-\x06filter\x13\x07precise\x7f\0\x14\x04\0\x0bget-workers\x01\x15\x01@\0\0\x0b\x04\
-\0\x11get-self-metadata\x01\x16\x01k\x0b\x01@\x01\x09worker-id\x03\0\x17\x04\0\x13\
-get-worker-metadata\x01\x18\x01@\x03\x09worker-id\x03\x11component-version\x05\x0b\
-update-mode\x07\x01\0\x04\0\x0dupdate-worker\x01\x19\x01o\x02\x0d\x0d\x01@\0\0\x1a\
-\x04\0\x19generate-idempotency-keys\x01\x1b\x04\0\x0cgolem:it/api\x05\x1e\x04\0\x18\
-golem:it/runtime-service\x04\0\x0b\x15\x01\0\x0fruntime-service\x03\0\0\0G\x09pr\
-oducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x06\
+\0\x11worker-env-filter\x03\0)\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\
+\0\x1eworker-wasi-config-vars-filter\x03\0+\x01q\x06\x04name\x01\"\0\x06status\x01\
+$\0\x07version\x01&\0\x0acreated-at\x01(\0\x03env\x01*\0\x10wasi-config-vars\x01\
+,\0\x04\0\x16worker-property-filter\x03\0-\x01p.\x01r\x01\x07filters/\x04\0\x11w\
+orker-all-filter\x03\00\x01p1\x01r\x01\x07filters2\x04\0\x11worker-any-filter\x03\
+\03\x01ps\x01o\x02ss\x01p6\x01r\x07\x09worker-id\x09\x04args5\x03env7\x10wasi-co\
+nfig-vars7\x06status\x20\x11component-versionw\x0bretry-countw\x04\0\x0fworker-m\
+etadata\x03\08\x04\0\x0bget-workers\x03\x01\x01q\x02\x15revert-to-oplog-index\x01\
+\x0b\0\x17revert-last-invocations\x01w\0\x04\0\x14revert-worker-target\x03\0;\x01\
+m\x02\x08original\x06forked\x04\0\x0bfork-result\x03\0=\x01k4\x01i:\x01@\x03\x0c\
+component-id\x03\x06filter?\x07precise\x7f\0\xc0\0\x04\0\x18[constructor]get-wor\
+kers\x01A\x01h:\x01p9\x01k\xc3\0\x01@\x01\x04self\xc2\0\0\xc4\0\x04\0\x1c[method\
+]get-workers.get-next\x01E\x01@\0\0\x0d\x04\0\x0ecreate-promise\x01F\x01p}\x01@\x01\
+\x0apromise-id\x0d\0\xc7\0\x04\0\x0dawait-promise\x01H\x01k\xc7\0\x01@\x01\x0apr\
+omise-id\x0d\0\xc9\0\x04\0\x0cpoll-promise\x01J\x01@\x02\x0apromise-id\x0d\x04da\
+ta\xc7\0\0\x7f\x04\0\x10complete-promise\x01K\x01@\x01\x0apromise-id\x0d\x01\0\x04\
+\0\x0edelete-promise\x01L\x01@\0\0\x0b\x04\0\x0fget-oplog-index\x01M\x01@\x01\x09\
+oplog-idx\x0b\x01\0\x04\0\x0fset-oplog-index\x01N\x01@\x01\x08replicas}\x01\0\x04\
+\0\x0coplog-commit\x01O\x04\0\x14mark-begin-operation\x01M\x01@\x01\x05begin\x0b\
+\x01\0\x04\0\x12mark-end-operation\x01P\x01@\0\0\x16\x04\0\x10get-retry-policy\x01\
+Q\x01@\x01\x10new-retry-policy\x16\x01\0\x04\0\x10set-retry-policy\x01R\x01@\0\0\
+\x18\x04\0\x1bget-oplog-persistence-level\x01S\x01@\x01\x15new-persistence-level\
+\x18\x01\0\x04\0\x1bset-oplog-persistence-level\x01T\x01@\0\0\x7f\x04\0\x14get-i\
+dempotence-mode\x01U\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-m\
+ode\x01V\x01@\0\0\x05\x04\0\x18generate-idempotency-key\x01W\x01@\x03\x09worker-\
+id\x09\x0etarget-version\x0f\x04mode\x1a\x01\0\x04\0\x0dupdate-worker\x01X\x01@\0\
+\09\x04\0\x11get-self-metadata\x01Y\x01k9\x01@\x01\x09worker-id\x09\0\xda\0\x04\0\
+\x13get-worker-metadata\x01[\x01@\x03\x10source-worker-id\x09\x10target-worker-i\
+d\x09\x11oplog-idx-cut-off\x0b\x01\0\x04\0\x0bfork-worker\x01\\\x01@\x02\x09work\
+er-id\x09\x0drevert-target<\x01\0\x04\0\x0drevert-worker\x01]\x01k\x03\x01@\x01\x13\
+component-references\0\xde\0\x04\0\x14resolve-component-id\x01_\x01k\x09\x01@\x02\
+\x13component-references\x0bworker-names\0\xe0\0\x04\0\x11resolve-worker-id\x01a\
+\x04\0\x18resolve-worker-id-strict\x01a\x01@\x01\x08new-names\0>\x04\0\x04fork\x01\
+b\x03\0\x14golem:api/host@1.1.7\x05\x0b\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01\
+@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug-string\x01\x02\x03\0\x13was\
+i:io/error@0.2.3\x05\x0c\x02\x03\0\x05\x05error\x01B(\x02\x03\x02\x01\x0d\x04\0\x05\
+error\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x02\x01i\x01\x01q\x02\x15\
+last-operation-failed\x01\x04\0\x06closed\0\0\x04\0\x0cstream-error\x03\0\x05\x04\
+\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01h\x07\x01p}\x01j\x01\
+\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19[method]input-stream.re\
+ad\x01\x0c\x04\0\"[method]input-stream.blocking-read\x01\x0c\x01j\x01w\x01\x06\x01\
+@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[method]input-stream.skip\x01\x0e\x04\0\
+\"[method]input-stream.blocking-skip\x01\x0e\x01i\x03\x01@\x01\x04self\x09\0\x0f\
+\x04\0\x1e[method]input-stream.subscribe\x01\x10\x01h\x08\x01@\x01\x04self\x11\0\
+\x0d\x04\0![method]output-stream.check-write\x01\x12\x01j\0\x01\x06\x01@\x02\x04\
+self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]output-stream.write\x01\x14\x04\0\
+.[method]output-stream.blocking-write-and-flush\x01\x14\x01@\x01\x04self\x11\0\x13\
+\x04\0\x1b[method]output-stream.flush\x01\x15\x04\0$[method]output-stream.blocki\
+ng-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]output-stream.subsc\
+ribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method]output-stream.wri\
+te-zeroes\x01\x17\x04\05[method]output-stream.blocking-write-zeroes-and-flush\x01\
+\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[method]output-strea\
+m.splice\x01\x18\x04\0%[method]output-stream.blocking-splice\x01\x18\x03\0\x15wa\
+si:io/streams@0.2.3\x05\x0e\x02\x03\0\x06\x0cinput-stream\x02\x03\0\x06\x0doutpu\
+t-stream\x01B\xc1\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\
+\x0f\x04\0\x0cinput-stream\x03\0\x02\x02\x03\x02\x01\x10\x04\0\x0doutput-stream\x03\
+\0\x04\x02\x03\x02\x01\x0d\x04\0\x08io-error\x03\0\x06\x02\x03\x02\x01\x01\x04\0\
+\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\x04head\0\0\x04post\0\0\x03put\0\0\x06\
+delete\0\0\x07connect\0\0\x07options\0\0\x05trace\0\0\x05patch\0\0\x05other\x01s\
+\0\x04\0\x06method\x03\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\
+\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09info-code\x0f\x04\0\x11\
+DNS-error-payload\x03\0\x10\x01k}\x01r\x02\x08alert-id\x12\x0dalert-message\x0e\x04\
+\0\x1aTLS-alert-received-payload\x03\0\x13\x01ky\x01r\x02\x0afield-name\x0e\x0af\
+ield-size\x15\x04\0\x12field-size-payload\x03\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-\
+timeout\0\0\x09DNS-error\x01\x11\0\x15destination-not-found\0\0\x17destination-u\
+navailable\0\0\x19destination-IP-prohibited\0\0\x19destination-IP-unroutable\0\0\
+\x12connection-refused\0\0\x15connection-terminated\0\0\x12connection-timeout\0\0\
+\x17connection-read-timeout\0\0\x18connection-write-timeout\0\0\x18connection-li\
+mit-reached\0\0\x12TLS-protocol-error\0\0\x15TLS-certificate-error\0\0\x12TLS-al\
+ert-received\x01\x14\0\x13HTTP-request-denied\0\0\x1cHTTP-request-length-require\
+d\0\0\x16HTTP-request-body-size\x01\x18\0\x1bHTTP-request-method-invalid\0\0\x18\
+HTTP-request-URI-invalid\0\0\x19HTTP-request-URI-too-long\0\0\x20HTTP-request-he\
+ader-section-size\x01\x15\0\x18HTTP-request-header-size\x01\x19\0!HTTP-request-t\
+railer-section-size\x01\x15\0\x19HTTP-request-trailer-size\x01\x17\0\x18HTTP-res\
+ponse-incomplete\0\0!HTTP-response-header-section-size\x01\x15\0\x19HTTP-respons\
+e-header-size\x01\x17\0\x17HTTP-response-body-size\x01\x18\0\"HTTP-response-trai\
+ler-section-size\x01\x15\0\x1aHTTP-response-trailer-size\x01\x17\0\x1dHTTP-respo\
+nse-transfer-coding\x01\x0e\0\x1cHTTP-response-content-coding\x01\x0e\0\x15HTTP-\
+response-timeout\0\0\x13HTTP-upgrade-failed\0\0\x13HTTP-protocol-error\0\0\x0dlo\
+op-detected\0\0\x13configuration-error\0\0\x0einternal-error\x01\x0e\0\x04\0\x0a\
+error-code\x03\0\x1a\x01q\x03\x0einvalid-syntax\0\0\x09forbidden\0\0\x09immutabl\
+e\0\0\x04\0\x0cheader-error\x03\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\x04\0\x0a\
+field-name\x03\0\x1f\x01p}\x04\0\x0bfield-value\x03\0!\x04\0\x06fields\x03\x01\x04\
+\0\x07headers\x03\0#\x04\0\x08trailers\x03\0#\x04\0\x10incoming-request\x03\x01\x04\
+\0\x10outgoing-request\x03\x01\x04\0\x0frequest-options\x03\x01\x04\0\x11respons\
+e-outparam\x03\x01\x01{\x04\0\x0bstatus-code\x03\0*\x04\0\x11incoming-response\x03\
+\x01\x04\0\x0dincoming-body\x03\x01\x04\0\x0ffuture-trailers\x03\x01\x04\0\x11ou\
+tgoing-response\x03\x01\x04\0\x0doutgoing-body\x03\x01\x04\0\x18future-incoming-\
+response\x03\x01\x01i#\x01@\0\02\x04\0\x13[constructor]fields\x013\x01o\x02\x20\"\
+\x01p4\x01j\x012\x01\x1d\x01@\x01\x07entries5\06\x04\0\x18[static]fields.from-li\
+st\x017\x01h#\x01p\"\x01@\x02\x04self8\x04name\x20\09\x04\0\x12[method]fields.ge\
+t\x01:\x01@\x02\x04self8\x04name\x20\0\x7f\x04\0\x12[method]fields.has\x01;\x01j\
+\0\x01\x1d\x01@\x03\x04self8\x04name\x20\x05value9\0<\x04\0\x12[method]fields.se\
+t\x01=\x01@\x02\x04self8\x04name\x20\0<\x04\0\x15[method]fields.delete\x01>\x01@\
+\x03\x04self8\x04name\x20\x05value\"\0<\x04\0\x15[method]fields.append\x01?\x01@\
+\x01\x04self8\05\x04\0\x16[method]fields.entries\x01@\x01@\x01\x04self8\02\x04\0\
+\x14[method]fields.clone\x01A\x01h&\x01@\x01\x04self\xc2\0\0\x0b\x04\0\x1f[metho\
+d]incoming-request.method\x01C\x01@\x01\x04self\xc2\0\0\x0e\x04\0([method]incomi\
+ng-request.path-with-query\x01D\x01k\x0d\x01@\x01\x04self\xc2\0\0\xc5\0\x04\0\x1f\
+[method]incoming-request.scheme\x01F\x04\0\"[method]incoming-request.authority\x01\
+D\x01i$\x01@\x01\x04self\xc2\0\0\xc7\0\x04\0\x20[method]incoming-request.headers\
+\x01H\x01i-\x01j\x01\xc9\0\0\x01@\x01\x04self\xc2\0\0\xca\0\x04\0\x20[method]inc\
+oming-request.consume\x01K\x01i'\x01@\x01\x07headers\xc7\0\0\xcc\0\x04\0\x1d[con\
+structor]outgoing-request\x01M\x01h'\x01i0\x01j\x01\xcf\0\0\x01@\x01\x04self\xce\
+\0\0\xd0\0\x04\0\x1d[method]outgoing-request.body\x01Q\x01@\x01\x04self\xce\0\0\x0b\
+\x04\0\x1f[method]outgoing-request.method\x01R\x01j\0\0\x01@\x02\x04self\xce\0\x06\
+method\x0b\0\xd3\0\x04\0#[method]outgoing-request.set-method\x01T\x01@\x01\x04se\
+lf\xce\0\0\x0e\x04\0([method]outgoing-request.path-with-query\x01U\x01@\x02\x04s\
+elf\xce\0\x0fpath-with-query\x0e\0\xd3\0\x04\0,[method]outgoing-request.set-path\
+-with-query\x01V\x01@\x01\x04self\xce\0\0\xc5\0\x04\0\x1f[method]outgoing-reques\
+t.scheme\x01W\x01@\x02\x04self\xce\0\x06scheme\xc5\0\0\xd3\0\x04\0#[method]outgo\
+ing-request.set-scheme\x01X\x04\0\"[method]outgoing-request.authority\x01U\x01@\x02\
+\x04self\xce\0\x09authority\x0e\0\xd3\0\x04\0&[method]outgoing-request.set-autho\
+rity\x01Y\x01@\x01\x04self\xce\0\0\xc7\0\x04\0\x20[method]outgoing-request.heade\
+rs\x01Z\x01i(\x01@\0\0\xdb\0\x04\0\x1c[constructor]request-options\x01\\\x01h(\x01\
+k\x01\x01@\x01\x04self\xdd\0\0\xde\0\x04\0'[method]request-options.connect-timeo\
+ut\x01_\x01@\x02\x04self\xdd\0\x08duration\xde\0\0\xd3\0\x04\0+[method]request-o\
+ptions.set-connect-timeout\x01`\x04\0*[method]request-options.first-byte-timeout\
+\x01_\x04\0.[method]request-options.set-first-byte-timeout\x01`\x04\0-[method]re\
+quest-options.between-bytes-timeout\x01_\x04\01[method]request-options.set-betwe\
+en-bytes-timeout\x01`\x01i)\x01i/\x01j\x01\xe2\0\x01\x1b\x01@\x02\x05param\xe1\0\
+\x08response\xe3\0\x01\0\x04\0\x1d[static]response-outparam.set\x01d\x01h,\x01@\x01\
+\x04self\xe5\0\0+\x04\0\x20[method]incoming-response.status\x01f\x01@\x01\x04sel\
+f\xe5\0\0\xc7\0\x04\0![method]incoming-response.headers\x01g\x01@\x01\x04self\xe5\
+\0\0\xca\0\x04\0![method]incoming-response.consume\x01h\x01h-\x01i\x03\x01j\x01\xea\
+\0\0\x01@\x01\x04self\xe9\0\0\xeb\0\x04\0\x1c[method]incoming-body.stream\x01l\x01\
+i.\x01@\x01\x04this\xc9\0\0\xed\0\x04\0\x1c[static]incoming-body.finish\x01n\x01\
+h.\x01i\x09\x01@\x01\x04self\xef\0\0\xf0\0\x04\0![method]future-trailers.subscri\
+be\x01q\x01i%\x01k\xf2\0\x01j\x01\xf3\0\x01\x1b\x01j\x01\xf4\0\0\x01k\xf5\0\x01@\
+\x01\x04self\xef\0\0\xf6\0\x04\0\x1b[method]future-trailers.get\x01w\x01@\x01\x07\
+headers\xc7\0\0\xe2\0\x04\0\x1e[constructor]outgoing-response\x01x\x01h/\x01@\x01\
+\x04self\xf9\0\0+\x04\0%[method]outgoing-response.status-code\x01z\x01@\x02\x04s\
+elf\xf9\0\x0bstatus-code+\0\xd3\0\x04\0)[method]outgoing-response.set-status-cod\
+e\x01{\x01@\x01\x04self\xf9\0\0\xc7\0\x04\0![method]outgoing-response.headers\x01\
+|\x01@\x01\x04self\xf9\0\0\xd0\0\x04\0\x1e[method]outgoing-response.body\x01}\x01\
+h0\x01i\x05\x01j\x01\xff\0\0\x01@\x01\x04self\xfe\0\0\x80\x01\x04\0\x1b[method]o\
+utgoing-body.write\x01\x81\x01\x01j\0\x01\x1b\x01@\x02\x04this\xcf\0\x08trailers\
+\xf3\0\0\x82\x01\x04\0\x1c[static]outgoing-body.finish\x01\x83\x01\x01h1\x01@\x01\
+\x04self\x84\x01\0\xf0\0\x04\0*[method]future-incoming-response.subscribe\x01\x85\
+\x01\x01i,\x01j\x01\x86\x01\x01\x1b\x01j\x01\x87\x01\0\x01k\x88\x01\x01@\x01\x04\
+self\x84\x01\0\x89\x01\x04\0$[method]future-incoming-response.get\x01\x8a\x01\x01\
+h\x07\x01k\x1b\x01@\x01\x03err\x8b\x01\0\x8c\x01\x04\0\x0fhttp-error-code\x01\x8d\
+\x01\x03\0\x15wasi:http/types@0.2.3\x05\x11\x02\x03\0\x07\x10outgoing-request\x02\
+\x03\0\x07\x0frequest-options\x02\x03\0\x07\x18future-incoming-response\x02\x03\0\
+\x07\x0aerror-code\x01B\x0f\x02\x03\x02\x01\x12\x04\0\x10outgoing-request\x03\0\0\
+\x02\x03\x02\x01\x13\x04\0\x0frequest-options\x03\0\x02\x02\x03\x02\x01\x14\x04\0\
+\x18future-incoming-response\x03\0\x04\x02\x03\x02\x01\x15\x04\0\x0aerror-code\x03\
+\0\x06\x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\x0b\x01\x07\x01@\x02\x07requ\
+est\x08\x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\x03\0\x20wasi:http/outgoing\
+-handler@0.2.3\x05\x16\x02\x03\0\x04\x0ccomponent-id\x02\x03\0\x04\x09worker-id\x02\
+\x03\0\x04\x11component-version\x02\x03\0\x04\x0bupdate-mode\x02\x03\0\x04\x11wo\
+rker-any-filter\x02\x03\0\x04\x0fworker-metadata\x02\x03\0\x04\x04uuid\x01B'\x02\
+\x03\x02\x01\x17\x04\0\x0ccomponent-id\x03\0\0\x02\x03\x02\x01\x18\x04\0\x09work\
+er-id\x03\0\x02\x02\x03\x02\x01\x19\x04\0\x11component-version\x03\0\x04\x02\x03\
+\x02\x01\x1a\x04\0\x0bupdate-mode\x03\0\x06\x02\x03\x02\x01\x1b\x04\0\x11worker-\
+any-filter\x03\0\x08\x02\x03\x02\x01\x1c\x04\0\x0fworker-metadata\x03\0\x0a\x02\x03\
+\x02\x01\x1d\x04\0\x04uuid\x03\0\x0c\x01@\0\0w\x04\0\x04jump\x01\x0e\x01@\x01\x0b\
+max-retriesw\x01\0\x04\0\x1cfail-with-custom-max-retries\x01\x0f\x01@\x01\x08rep\
+licas}\x01\0\x04\0\x0fexplicit-commit\x01\x10\x01@\0\x01\0\x04\0\x0datomic-regio\
+n\x01\x11\x01@\x01\x07enabled\x7f\x01\0\x04\0\x10idempotence-flag\x01\x12\x04\0\x0f\
+persist-nothing\x01\x11\x01k\x09\x01p\x0b\x01@\x03\x0ccomponent-id\x01\x06filter\
+\x13\x07precise\x7f\0\x14\x04\0\x0bget-workers\x01\x15\x01@\0\0\x0b\x04\0\x11get\
+-self-metadata\x01\x16\x01k\x0b\x01@\x01\x09worker-id\x03\0\x17\x04\0\x13get-wor\
+ker-metadata\x01\x18\x01@\x03\x09worker-id\x03\x11component-version\x05\x0bupdat\
+e-mode\x07\x01\0\x04\0\x0dupdate-worker\x01\x19\x01o\x02\x0d\x0d\x01@\0\0\x1a\x04\
+\0\x19generate-idempotency-keys\x01\x1b\x04\0\x0cgolem:it/api\x05\x1e\x04\0\x18g\
+olem:it/runtime-service\x04\0\x0b\x15\x01\0\x0fruntime-service\x03\0\0\0G\x09pro\
+ducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x06\
 0.41.0";
 #[inline(never)]
 #[doc(hidden)]

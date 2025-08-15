@@ -121,12 +121,19 @@ interface host {
         value: string
     }
 
+    record worker-wasi-config-vars-filter {
+        name: string,
+        comparator: string-filter-comparator,
+        value: string
+    }
+
     variant worker-property-filter {
         name(worker-name-filter),
         status(worker-status-filter),
         version(worker-version-filter),
         created-at(worker-created-at-filter),
-        env(worker-env-filter)
+        env(worker-env-filter),
+        wasi-config-vars(worker-wasi-config-vars-filter)
     }
 
     record worker-all-filter {
@@ -141,6 +148,7 @@ interface host {
         worker-id: worker-id,
         args: list<string>,
         env: list<tuple<string, string>>,
+        wasi-config-vars: list<tuple<string, string>>,
         status: worker-status,
         component-version: u64,
         retry-count: u64
