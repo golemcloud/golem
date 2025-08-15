@@ -17,7 +17,7 @@ mod worker;
 
 use crate::grpcapi::worker::WorkerGrpcApi;
 use crate::service::Services;
-use futures::TryFutureExt;
+use futures_util::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerServiceServer;

@@ -17,7 +17,7 @@ use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentByNameAndVersion, ComponentConstraints};
 use crate::service::component::ComponentService;
 use bytes::Bytes;
-use futures::stream::BoxStream;
+use futures_util::stream::BoxStream;
 use golem_common::model::agent::AgentType;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;

@@ -164,7 +164,7 @@ impl TokenRepo for DbTokenRepo<golem_service_base::db::postgres::PostgresPool> {
 
         self.db_pool
             .with_ro("tokens", "get_by_account")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 
@@ -175,7 +175,7 @@ impl TokenRepo for DbTokenRepo<golem_service_base::db::postgres::PostgresPool> {
 
         self.db_pool
             .with_ro("tokens", "get_by_account")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 

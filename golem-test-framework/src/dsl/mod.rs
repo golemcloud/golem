@@ -50,9 +50,9 @@ use golem_common::model::plugin::PluginWasmFileKey;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AccountId, AgentInstanceDescription, AgentInstanceKey, ComponentFilePath,
-    ComponentFilePermissions, ExportedResourceInstanceDescription, ExportedResourceInstanceKey,
-    PluginInstallationId, ProjectId, WorkerResourceDescription, WorkerResourceKey, WorkerStatus,
+    AccountId, AgentInstanceDescription, AgentInstanceKey, ComponentFilePermissions,
+    ExportedResourceInstanceDescription, ExportedResourceInstanceKey, PluginInstallationId,
+    ProjectId, WorkerResourceDescription, WorkerResourceKey, WorkerStatus,
 };
 use golem_common::model::{
     ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,

@@ -193,18 +193,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
 
 [[package]]
-name = "arrayref"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
-
-[[package]]
-name = "arrayvec"
-version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
-
-[[package]]
 name = "assert2"
 version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1176,20 +1164,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blake3"
-version = "1.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3888aaa89e4b2a40fca9848e400f6a658a5a3978de7be858e209cafa8be9a4a0"
-dependencies = [
- "arrayref",
- "arrayvec",
- "cc",
- "cfg-if",
- "constant_time_eq",
- "rayon-core",
-]
-
-[[package]]
 name = "block-buffer"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1623,6 +1597,7 @@ dependencies = [
  "darling 0.20.11",
  "figment",
  "futures",
+ "futures-util",
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
@@ -1818,12 +1793,6 @@ dependencies = [
  "quote",
  "unicode-xid",
 ]
-
-[[package]]
-name = "constant_time_eq"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "convert_case"
@@ -3562,6 +3531,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
+ "futures-util",
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
@@ -3596,6 +3566,7 @@ dependencies = [
  "darling 0.20.11",
  "figment",
  "futures",
+ "futures-util",
  "golem-api-grpc",
  "golem-common",
  "golem-rib",
@@ -3655,6 +3626,7 @@ dependencies = [
  "bincode",
  "bytes 1.10.1",
  "futures",
+ "futures-util",
  "gethostname 0.5.0",
  "golem-api-grpc",
  "golem-common",
@@ -3703,74 +3675,6 @@ dependencies = [
  "openapiv3",
  "serde",
  "serde_yaml",
-]
-
-[[package]]
-name = "golem-registry-service"
-version = "0.0.0"
-dependencies = [
- "assert2",
- "async-trait",
- "aws-config",
- "aws-sdk-s3",
- "bigdecimal",
- "blake3",
- "bytes 1.10.1",
- "chrono",
- "conditional-trait-gen",
- "console-subscriber",
- "darling 0.20.11",
- "figment",
- "futures",
- "golem-api-grpc",
- "golem-common",
- "golem-rib",
- "golem-service-base",
- "golem-wasm-ast",
- "golem-wasm-rpc",
- "http 1.3.1",
- "humantime-serde",
- "hyper 1.6.0",
- "indoc",
- "jsonwebtoken",
- "lazy_static",
- "mappable-rc",
- "num-traits",
- "opentelemetry 0.28.0",
- "opentelemetry-prometheus 0.28.0",
- "opentelemetry_sdk 0.28.0",
- "poem",
- "poem-derive",
- "poem-openapi",
- "poem-openapi-derive",
- "prometheus 0.13.4",
- "prost",
- "reqwest 0.12.18",
- "serde",
- "serde_json",
- "serde_with",
- "serde_yaml",
- "similar",
- "sqlx",
- "strum",
- "strum_macros",
- "tap",
- "tempfile",
- "test-r",
- "testcontainers",
- "testcontainers-modules",
- "thiserror 2.0.12",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tonic-health",
- "tonic-reflection",
- "tracing",
- "tracing-subscriber",
- "tryhard",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -3926,7 +3830,7 @@ dependencies = [
  "clap",
  "cli-table",
  "colored",
- "futures",
+ "futures-util",
  "golem-api-grpc",
  "golem-client",
  "golem-common",
@@ -4060,6 +3964,7 @@ dependencies = [
  "fred",
  "fs-set-times",
  "futures",
+ "futures-util",
  "gethostname 1.0.2",
  "goldenfile",
  "golem-api-grpc",
@@ -4133,6 +4038,7 @@ dependencies = [
  "figment",
  "fred",
  "futures",
+ "futures-util",
  "golem-api-grpc",
  "golem-common",
  "golem-rib",

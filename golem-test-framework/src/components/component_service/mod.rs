@@ -27,7 +27,7 @@ use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use futures::{stream, StreamExt, TryStreamExt};
+use futures_util::{stream, StreamExt, TryStreamExt};
 pub use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
 pub use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::{

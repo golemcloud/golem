@@ -172,7 +172,7 @@ fn label(event: &InternalWorkerEvent) -> &'static str {
 mod tests {
     use crate::model::event::InternalWorkerEvent;
     use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
-    use futures::StreamExt;
+    use futures_util::StreamExt;
     use std::sync::Arc;
     use std::time::Duration;
     use test_r::{test, timeout};

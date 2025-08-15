@@ -23,6 +23,7 @@ golem-worker-executor = { version = "=0.0.0", path = "../golem-worker-executor" 
 
 async-trait = { workspace = true }
 futures = { workspace = true }
+futures-util = "0.3.31"
 http = { workspace = true }
 lazy_static.workspace = true
 prometheus = { workspace = true }

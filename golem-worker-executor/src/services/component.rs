@@ -480,7 +480,7 @@ mod grpc {
     use crate::services::plugins::PluginsObservations;
     use crate::services::projects::ProjectService;
     use async_trait::async_trait;
-    use futures::TryStreamExt;
+    use futures_util::TryStreamExt;
     use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
     use golem_api_grpc::proto::golem::component::v1::{
         download_component_response, get_component_metadata_response, ComponentError,

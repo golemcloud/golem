@@ -20,7 +20,7 @@ use crate::model::{
     ComponentEnv, DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use crate::model::{ComponentQuery, ComponentSearch};
-use futures::{stream, StreamExt, TryStreamExt};
+use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::agent::AgentTypes;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::VersionedComponentId;

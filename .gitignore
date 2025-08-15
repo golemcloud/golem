@@ -1,9 +1,9 @@
 ### Rust template
 debug/
 target/
-target-tarpaulin/
 **/*.rs.bk
 *.pdb
+golem-worker-executor/data/
 golem-worker-executor/data/
 golem-worker-executor/golem-wit/
 zig-cache/

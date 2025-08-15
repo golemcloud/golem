@@ -21,9 +21,9 @@ use crate::services::rdbms::{
 use async_dropper_simple::AsyncDrop;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use futures::future::BoxFuture;
-use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures_util::future::BoxFuture;
+use futures_util::stream::BoxStream;
+use futures_util::StreamExt;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::WorkerId;
 use itertools::Either;
@@ -479,7 +479,7 @@ where
         'p: 'e,
         E: 'q + Execute<'q, Self::Database>,
     {
-        use futures::TryStreamExt;
+        use futures_util::TryStreamExt;
         let tx = self.clone();
         Box::pin(sqlx_core::try_stream! {
             let mut tx_conn = tx.0.lock().await;

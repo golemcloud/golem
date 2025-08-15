@@ -19,7 +19,7 @@ use conditional_trait_gen::trait_gen;
 use futures::{future, TryFutureExt};
 use golem_common::model::ProjectId;
 use golem_common::repo::PluginOwnerRow;
-use golem_service_base::db::{LabelledPoolTransaction, Pool};
+use golem_service_base::db::Pool;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
 };
@@ -182,7 +182,10 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
 
         transaction.execute(query).await?;
 
-        transaction.commit().await?;
+        self.db_pool
+            .with_rw("project", "create")
+            .commit(transaction)
+            .await?;
 
         Ok(())
     }
@@ -214,7 +217,7 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
 
         self.db_pool
             .with_ro("project", "get_all")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 
@@ -247,7 +250,7 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
 
         self.db_pool
             .with_ro("project", "get_owned")
-            .fetch_all_as(query.build_query_as::<ProjectRecord>())
+            .fetch_all(query.build_query_as::<ProjectRecord>())
             .await
     }
 
@@ -293,7 +296,7 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
 
         self.db_pool
             .with_ro("project", "get_by_ids")
-            .fetch_all_as(query.build_query_as::<OwnerAccountIdRow>())
+            .fetch_all(query.build_query_as::<OwnerAccountIdRow>())
             .await
             .map(|vs| vs.into_iter().map(|v| v.owner_account_id).collect())
     }
@@ -333,7 +336,10 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
             .execute(sqlx::query("DELETE FROM projects WHERE project_id = $1").bind(project_id))
             .await?;
 
-        transaction.commit().await?;
+        self.db_pool
+            .with_rw("project", "delete")
+            .commit(transaction)
+            .await?;
 
         Ok(())
     }
@@ -354,7 +360,7 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
         Ok(self
             .db_pool
             .with_ro("project", "get_installed_plugins")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await?)
     }
 

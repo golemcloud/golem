@@ -17,7 +17,7 @@ use crate::model::*;
 use crate::service::api_mapper::ApiMapper;
 use crate::service::auth::AuthService;
 use crate::service::project::ProjectService;
-use futures::{stream, StreamExt, TryStreamExt};
+use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::auth::{AccountAction, ProjectAction, ProjectPermission};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};

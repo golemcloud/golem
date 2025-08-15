@@ -15,8 +15,8 @@
 use crate::common::{start, start_customized, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
