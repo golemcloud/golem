@@ -2,9 +2,9 @@
 name = "golem"
 version = "0.0.0"
 edition = "2021"
-license-file = "../LICENSE"
+license-file = "../../LICENSE"
 homepage = "https://golem.cloud/"
-repository = "https://github.com/golemcloud/golem-cli"
+repository = "https://github.com/golemcloud/golem"
 readme = "README.md"
 description = "Single Golem executable for testing"
 
@@ -17,20 +17,17 @@ path = "src/main.rs"
 test = false
 
 [dependencies]
-# Repo deps
 golem-cli = { path = "../golem-cli", features = [
     "server-commands",
 ], version = "=0.0.0" }
-
-# Golem - git deps
-golem-common = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
-golem-service-base = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
-cloud-service = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
-golem-component-compilation-service = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
-golem-component-service = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
-golem-shard-manager = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
-golem-worker-executor = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
-golem-worker-service = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
+golem-common = { path = "../../golem-common" }
+golem-service-base = { path = "../../golem-service-base" }
+cloud-service = { path = "../../cloud-service" }
+golem-component-compilation-service = { path = "../../golem-component-compilation-service" }
+golem-component-service = { path = "../../golem-component-service" }
+golem-shard-manager = { path = "../../golem-shard-manager" }
+golem-worker-executor = { path = "../../golem-worker-executor" }
+golem-worker-service = { path = "../../golem-worker-service" }
 
 # External deps
 anyhow = { workspace = true }

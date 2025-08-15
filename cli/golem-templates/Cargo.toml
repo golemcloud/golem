@@ -3,9 +3,9 @@ name = "golem-templates"
 version = "0.0.0"
 edition = "2021"
 homepage = "https://golem.cloud"
-repository = "https://github.com/golemcloud/golem-cli"
+repository = "https://github.com/golemcloud/golem"
 description = "Golem templates"
-license-file = "../LICENSE"
+license-file = "../../LICENSE"
 
 default-run = "golem-templates-test-cli"
 autotests = false

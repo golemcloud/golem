@@ -3,9 +3,9 @@ name = "golem-cli"
 version = "0.0.0"
 edition = "2021"
 homepage = "https://golem.cloud/"
-repository = "https://github.com/golemcloud/golem-cli"
+repository = "https://github.com/golemcloud/golem"
 description = "Command line interface for Golem."
-license-file = "../LICENSE"
+license-file = "../../LICENSE"
 
 autotests = false
 build = "build.rs"
@@ -29,17 +29,14 @@ test = true
 harness = false
 
 [dependencies]
-# Workspace deps
 golem-templates = { path = "../golem-templates", version = "=0.0.0" }
-
-# Golem deps
-golem-client = { workspace = true }
-golem-common = { workspace = true }
-golem-rib = { workspace = true }
-golem-rib-repl = { workspace = true }
-golem-wasm-ast = { workspace = true }
-golem-wasm-rpc = { workspace = true }
-golem-wasm-rpc-derive = { workspace = true }
+golem-client = { path = "../../golem-client" }
+golem-common = { path = "../../golem-common", features = ["agent-extraction"] }
+golem-rib = { path = "../../golem-rib" }
+golem-rib-repl = { path = "../../golem-rib-repl" }
+golem-wasm-ast = { path = "../../wasm-ast" }
+golem-wasm-rpc = { path = "../../wasm-rpc" }
+golem-wasm-rpc-derive = { path = "../../wasm-rpc-derive" }
 golem-wit = { workspace = true }
 
 # External deps

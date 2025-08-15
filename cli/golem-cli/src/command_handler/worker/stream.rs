@@ -82,7 +82,7 @@ impl WorkerConnection {
     }
 
     /// Creates a new worker connection and every time the connection is dropped tries to
-    /// reconnect. If there was an idempotency_key goal and it has been reached, the loop
+    /// reconnect. If there was an idempotency_key goal, and it has been reached, the loop
     /// exits.
     pub async fn run_forever(self) {
         while !self.goal_reached.load(Ordering::Acquire) {
@@ -198,7 +198,9 @@ impl WorkerConnection {
             interval.tick().await;
 
             let ping_result = write
-                .send(Message::Ping(Bytes::from(cnt.to_ne_bytes().to_vec())))
+                .send(Message::Ping(
+                    Bytes::from(cnt.to_ne_bytes().to_vec()).into(),
+                ))
                 .await
                 .context("Failed to send ping");
 
@@ -353,7 +355,8 @@ impl WorkerConnection {
                 }
             }
             Message::Binary(data) => {
-                let parsed: serde_json::Result<WorkerEvent> = serde_json::from_slice(data.as_ref());
+                let parsed: serde_json::Result<WorkerEvent> =
+                    serde_json::from_slice(data.as_slice());
                 match parsed {
                     Ok(parsed) => Some(parsed),
                     Err(err) => {
