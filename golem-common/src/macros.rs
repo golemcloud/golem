@@ -188,3 +188,18 @@ macro_rules! newtype_uuid {
         )?
     };
 }
+
+#[macro_export]
+macro_rules! error_forwarders {
+    ($target:ty, $( $sub:ty ),* $(,)?) => {
+        $(
+            impl From<$sub> for $target {
+                fn from(value: $sub) -> Self {
+                    Self::InternalError(
+                        anyhow::Error::new(value).context(concat!("from ", stringify!($sub)))
+                    )
+                }
+            }
+        )*
+    };
+}

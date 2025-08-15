@@ -34,10 +34,11 @@ pub struct RegistryServiceConfig {
     pub db: DbConfig,
     pub login: LoginConfig,
     pub cors_origin_regex: String,
-    pub component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig, // TODO:
-    // pub plans: PlansConfig,
-    // pub accounts: AccountsConfig,
+    pub component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig,
     pub blob_storage: BlobStorageConfig,
+
+    pub plans: PlansConfig,
+    pub accounts: AccountsConfig,
 }
 
 impl Default for RegistryServiceConfig {
@@ -53,6 +54,8 @@ impl Default for RegistryServiceConfig {
             cors_origin_regex: "https://*.golem.cloud".to_string(),
             component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig::default(),
             blob_storage: BlobStorageConfig::default(),
+            plans: PlansConfig::default(),
+            accounts: AccountsConfig::default(),
         }
     }
 }
@@ -115,30 +118,32 @@ impl Default for GitHubOAuth2Config {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AccountsConfig {
-    pub accounts: HashMap<String, AccountConfig>,
+    pub accounts: HashMap<String, PrecreatedAccount>,
 }
 
 impl Default for AccountsConfig {
     fn default() -> Self {
-        let mut accounts = HashMap::new();
+        let mut accounts = HashMap::with_capacity(2);
         accounts.insert(
             "root".to_string(),
-            AccountConfig {
-                id: "root".to_string(),
+            PrecreatedAccount {
+                id: uuid!("e71a6160-4144-4720-9e34-e5943458d129"),
                 name: "Initial User".to_string(),
                 email: "initial@user".to_string(),
                 token: uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1"),
                 role: Role::Admin,
+                plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"),
             },
         );
         accounts.insert(
             "marketing".to_string(),
-            AccountConfig {
-                id: "marketing".to_string(),
+            PrecreatedAccount {
+                id: uuid!("0e8a0431-94b9-4644-89ca-fbf403edb6e7"),
                 name: "Marketing User".to_string(),
                 email: "marketing@user".to_string(),
                 token: uuid!("39c8e462-1a4c-464c-91d5-5265e1e1b0e5"),
                 role: Role::MarketingAdmin,
+                plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"),
             },
         );
         AccountsConfig { accounts }
@@ -146,17 +151,56 @@ impl Default for AccountsConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AccountConfig {
-    pub id: String,
+pub struct PrecreatedAccount {
+    pub id: Uuid,
     pub name: String,
     pub email: String,
     pub token: Uuid,
+    pub plan_id: Uuid,
     pub role: Role,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ComponentTransformerPluginCallerConfig {
     pub retries: RetryConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlansConfig {
+    pub plans: HashMap<String, PrecreatedPlan>,
+}
+
+impl Default for PlansConfig {
+    fn default() -> Self {
+        let mut plans = HashMap::with_capacity(1);
+        plans.insert(
+            "default".to_string(),
+            PrecreatedPlan {
+                plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"),
+                app_limit: 10,
+                env_limit: 40,
+                component_limit: 100,
+                worker_limit: 10000,
+                storage_limit: 500000000,
+                monthly_gas_limit: 1000000000000,
+                monthly_upload_limit: 1000000000,
+            },
+        );
+
+        PlansConfig { plans }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PrecreatedPlan {
+    pub plan_id: Uuid,
+    pub app_limit: i64,
+    pub env_limit: i64,
+    pub component_limit: i64,
+    pub worker_limit: i64,
+    pub storage_limit: i64,
+    pub monthly_gas_limit: i64,
+    pub monthly_upload_limit: i64,
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

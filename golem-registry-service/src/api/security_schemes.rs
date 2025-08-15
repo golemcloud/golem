@@ -27,7 +27,11 @@ use tracing::Instrument;
 
 pub struct SecuritySchemesApi {}
 
-#[OpenApi(prefix_path = "/v1/security-schemes", tag = ApiTags::ApiSecurity)]
+#[OpenApi(
+    prefix_path = "/v1/security-schemes",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::ApiSecurity
+)]
 impl SecuritySchemesApi {
     /// Get api security scheme by id
     #[oai(

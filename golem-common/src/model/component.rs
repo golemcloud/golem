@@ -16,11 +16,13 @@ use super::environment::EnvironmentId;
 use super::PluginInstallationId;
 use crate::base_model::ComponentId;
 use crate::model::account::AccountId;
+use crate::model::component_metadata::ComponentMetadata;
 use crate::{declare_structs, declare_transparent_newtypes};
 use bincode::{Decode, Encode};
 use core::fmt;
 use golem_wasm_rpc_derive::IntoValue;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
@@ -35,10 +37,34 @@ declare_transparent_newtypes! {
 }
 
 declare_structs! {
+    pub struct Component {
+        pub environment_id: EnvironmentId,
+        pub versioned_component_id: VersionedComponentId,
+        pub component_name: ComponentName,
+        pub component_size: u64,
+        pub metadata: ComponentMetadata,
+        pub created_at: chrono::DateTime<chrono::Utc>,
+        pub component_type: ComponentType,
+        pub files: Vec<InitialComponentFile>,
+        pub installed_plugins: Vec<PluginInstallation>,
+        pub env: BTreeMap<String, String>,
+        pub wasm_hash: crate::model::diff::Hash,
+    }
+
     #[derive(Default)]
     pub struct ComponentFileOptions {
         /// Path of the file in the uploaded archive
         pub permissions: ComponentFilePermissions,
+    }
+
+    pub struct PluginInstallation {
+        pub id: PluginInstallationId,
+        pub name: String,
+        pub version: String,
+        /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
+        pub registered: bool,
+        pub priority: i32,
+        pub parameters: HashMap<String, String>,
     }
 }
 
@@ -122,6 +148,10 @@ impl ComponentFilePath {
 
     pub fn as_path(&self) -> &Utf8UnixPathBuf {
         &self.0
+    }
+
+    pub fn to_abs_string(&self) -> String {
+        self.0.to_string()
     }
 
     pub fn to_rel_string(&self) -> String {
@@ -235,20 +265,6 @@ impl Default for ComponentFilePermissions {
     fn default() -> Self {
         Self::ReadOnly
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct PluginInstallation {
-    pub id: PluginInstallationId,
-    pub name: String,
-    pub version: String,
-    /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
-    pub registered: bool,
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
 }
 
 #[cfg(feature = "protobuf")]

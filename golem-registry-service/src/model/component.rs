@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::ComponentId;
 use golem_common::model::agent::AgentType;
-use golem_common::model::component::{ComponentName, VersionedComponentId};
+use golem_common::model::component::{ComponentName, PluginInstallation, VersionedComponentId};
 use golem_common::model::component::{ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{ComponentId, PluginInstallationId};
 use golem_wasm_ast::analysis::AnalysedType;
 use poem_openapi::Object;
 use rib::FunctionName;
@@ -171,18 +171,6 @@ impl Component {
             dynamic_linking: self.metadata.dynamic_linking,
         }
     }
-}
-
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
-pub struct PluginInstallation {
-    pub id: PluginInstallationId,
-    pub plugin_name: String,
-    pub plugin_version: String,
-    /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
-    pub plugin_registered: bool,
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
 }
 
 #[derive(Debug)]

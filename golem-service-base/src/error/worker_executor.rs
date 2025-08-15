@@ -14,7 +14,7 @@
 
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem;
-use golem_common::metrics::api::TraceErrorKind;
+use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use golem_common::SafeDisplay;
@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 use tonic::Status;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
@@ -343,7 +344,7 @@ impl Error for WorkerExecutorError {
     }
 }
 
-impl TraceErrorKind for WorkerExecutorError {
+impl ApiErrorDetails for WorkerExecutorError {
     fn trace_error_kind(&self) -> &'static str {
         match self {
             Self::InvalidRequest { .. } => "InvalidRequest",
@@ -404,6 +405,10 @@ impl TraceErrorKind for WorkerExecutorError {
             | Self::ShardingNotReady
             | Self::FileSystemError { .. } => false,
         }
+    }
+
+    fn take_cause(&mut self) -> Option<Arc<anyhow::Error>> {
+        todo!()
     }
 }
 

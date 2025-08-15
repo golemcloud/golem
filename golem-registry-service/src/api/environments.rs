@@ -28,7 +28,11 @@ use tracing::Instrument;
 
 pub struct EnvironmentsApi {}
 
-#[OpenApi(prefix_path = "/v1/envs", tag = ApiTags::Environment)]
+#[OpenApi(
+    prefix_path = "/v1/envs",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Environment
+)]
 impl EnvironmentsApi {
     /// Get environment by id.
     #[oai(

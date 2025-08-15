@@ -30,7 +30,12 @@ use tracing::Instrument;
 
 pub struct EnvironmentApiDefinitionsApi {}
 
-#[OpenApi(prefix_path = "/v1/envs", tag = ApiTags::Environment, tag = ApiTags::ApiDefinition)]
+#[OpenApi(
+    prefix_path = "/v1/envs",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Environment,
+    tag = ApiTags::ApiDefinition
+)]
 impl EnvironmentApiDefinitionsApi {
     /// Create a new api-definition in the environment
     #[oai(

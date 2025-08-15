@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::services::account::AccountService;
 use golem_common::api::Page;
 use golem_common::model::Empty;
-use golem_common::model::account::{Account, AccountData, AccountId, Plan};
+use golem_common::model::account::{Account, AccountId, NewAccountData, Plan};
 use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -24,12 +25,23 @@ use param::Query;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct AccountsApi {}
+pub struct AccountsApi {
+    account_service: Arc<AccountService>,
+}
 
-#[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Account)]
+#[OpenApi(
+    prefix_path = "/v1/accounts",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Account
+)]
 impl AccountsApi {
+    pub fn new(account_service: Arc<AccountService>) -> Self {
+        Self { account_service }
+    }
+
     /// Find accounts
     ///
     /// Find matching accounts. Only your own account or accounts you have at least one grant from will be returned
@@ -63,9 +75,9 @@ impl AccountsApi {
     ///
     /// Create a new account. The response is the created account data.
     #[oai(path = "/", method = "post", operation_id = "create_account")]
-    async fn post_account(
+    async fn create_account(
         &self,
-        data: Json<AccountData>,
+        data: Json<NewAccountData>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Account>> {
         let record = recorded_http_api_request!("create_account", account_name = data.name.clone());
@@ -73,19 +85,20 @@ impl AccountsApi {
         let auth = AuthCtx::new(token.secret());
 
         let response = self
-            .post_account_internal(data.0, auth)
+            .create_account_internal(data.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn post_account_internal(
+    async fn create_account_internal(
         &self,
-        _data: AccountData,
+        data: NewAccountData,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        todo!()
+        let result = self.account_service.create(data).await?;
+        Ok(Json(result))
     }
 
     /// Get account
@@ -112,10 +125,11 @@ impl AccountsApi {
 
     async fn get_account_internal(
         &self,
-        _account_id: AccountId,
+        account_id: AccountId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        todo!()
+        let result = self.account_service.get(&account_id).await?;
+        Ok(Json(result))
     }
 
     /// Get account's plan
@@ -160,7 +174,7 @@ impl AccountsApi {
     async fn put_account(
         &self,
         account_id: Path<AccountId>,
-        data: Json<AccountData>,
+        data: Json<NewAccountData>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Account>> {
         let record =
@@ -179,7 +193,7 @@ impl AccountsApi {
     async fn put_account_internal(
         &self,
         _account_id: AccountId,
-        _data: AccountData,
+        _data: NewAccountData,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
         todo!()

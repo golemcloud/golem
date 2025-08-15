@@ -103,7 +103,7 @@ impl PluginServiceClient for PluginServiceClientDefault {
                                     name: name.to_string(),
                                     version: version.to_string(),
                                 },
-                                &token.value,
+                                &token.0,
                             );
                             Box::pin(client.get_plugin(request))
                         })
@@ -148,7 +148,7 @@ impl PluginServiceClient for PluginServiceClientDefault {
                                 golem_api_grpc::proto::golem::component::v1::GetPluginByIdRequest {
                                     id: Some(id.clone().into()),
                                 },
-                                &token.value,
+                                &token.0,
                             );
                             Box::pin(client.get_plugin_by_id(request))
                         })

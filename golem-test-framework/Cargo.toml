@@ -20,8 +20,10 @@ golem-rib = { path = "../golem-rib", version = "=0.0.0" }
 golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-registry-service = { path = "../golem-registry-service", version = "=0.0.0" }
 
 anyhow = { workspace = true }
+applying = { workspace = true }
 async-dropper = { version = "0.3.1", features = ["simple", "tokio"] }
 async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio"] }
 async-trait = { workspace = true }
@@ -37,6 +39,7 @@ k8s-openapi = { workspace = true }
 kill_tree = { version = "0.2.4", features = ["tokio"] }
 kube = { workspace = true }
 postgres = { workspace = true }
+prometheus = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

@@ -16,10 +16,6 @@ use crate::declare_structs;
 use crate::model::environment::EnvironmentRevision;
 
 declare_structs! {
-    pub struct CreateEnvironmentRequest {
-        pub name: String,
-    }
-
     pub struct UpdateEnvironmentRequest {
         pub previous_revision: EnvironmentRevision,
     }

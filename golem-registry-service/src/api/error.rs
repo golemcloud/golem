@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::account::AccountError;
+use crate::services::application::ApplicationError;
 use crate::services::component::ComponentError;
+use crate::services::environment::EnvironmentError;
+use crate::services::plan::PlanError;
+use crate::services::token::TokenError;
 use golem_common::SafeDisplay;
-use golem_common::metrics::api::TraceErrorKind;
+use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
+use std::sync::Arc;
 
 #[derive(ApiResponse, Debug, Clone)]
 pub enum ApiError {
@@ -43,7 +49,7 @@ pub enum ApiError {
     InternalError(Json<ErrorBody>),
 }
 
-impl TraceErrorKind for ApiError {
+impl ApiErrorDetails for ApiError {
     fn trace_error_kind(&self) -> &'static str {
         match &self {
             ApiError::BadRequest(_) => "BadRequest",
@@ -67,13 +73,80 @@ impl TraceErrorKind for ApiError {
             ApiError::LimitExceeded(_) => true,
         }
     }
+
+    fn take_cause(&mut self) -> Option<Arc<anyhow::Error>> {
+        match self {
+            Self::InternalError(inner) => inner.cause.take(),
+            _ => None,
+        }
+    }
 }
 
 impl From<std::io::Error> for ApiError {
     fn from(value: std::io::Error) -> Self {
         Self::InternalError(Json(ErrorBody {
-            error: value.to_string(),
+            error: "Internal Error".to_string(),
+            cause: Some(Arc::new(value.into())),
         }))
+    }
+}
+
+impl From<AccountError> for ApiError {
+    fn from(value: AccountError) -> Self {
+        match value {
+            AccountError::AccountNotFound(_) => Self::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
+            })),
+
+            AccountError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
+            })),
+        }
+    }
+}
+
+impl From<ApplicationError> for ApiError {
+    fn from(value: ApplicationError) -> Self {
+        match value {
+            ApplicationError::ApplicationNotFound(_) => Self::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
+            })),
+
+            ApplicationError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
+            })),
+        }
+    }
+}
+
+impl From<EnvironmentError> for ApiError {
+    fn from(value: EnvironmentError) -> Self {
+        match value {
+            EnvironmentError::EnvironmentNotFound(_) => Self::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
+            })),
+
+            EnvironmentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
+            })),
+        }
+    }
+}
+
+impl From<PlanError> for ApiError {
+    fn from(value: PlanError) -> Self {
+        match value {
+            PlanError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
+            })),
+        }
     }
 }
 
@@ -82,6 +155,7 @@ impl From<ComponentError> for ApiError {
         match value {
             ComponentError::Unauthorized(_) => Self::Unauthorized(Json(ErrorBody {
                 error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
             })),
 
             ComponentError::LimitExceeded { .. } => Self::BadRequest(Json(ErrorsBody {
@@ -90,6 +164,7 @@ impl From<ComponentError> for ApiError {
 
             ComponentError::AlreadyExists(_) => Self::Conflict(Json(ErrorBody {
                 error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
             })),
 
             ComponentError::ComponentProcessingError(_)
@@ -112,11 +187,32 @@ impl From<ComponentError> for ApiError {
             | ComponentError::UnknownEnvironmentComponentName { .. } => {
                 Self::NotFound(Json(ErrorBody {
                     error: value.to_safe_string(),
+                    cause: Some(Arc::new(value.into())),
                 }))
             }
 
             ComponentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
+            })),
+        }
+    }
+}
+
+impl From<TokenError> for ApiError {
+    fn from(value: TokenError) -> Self {
+        match value {
+            TokenError::TokenNotFound(_) => Self::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
+            })),
+            TokenError::TokenSecretAlreadyExists => Self::InternalError(Json(ErrorBody {
+                error: "Internal error".to_string(),
+                cause: Some(Arc::new(value.into())),
+            })),
+            TokenError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+                cause: Some(Arc::new(value.into())),
             })),
         }
     }

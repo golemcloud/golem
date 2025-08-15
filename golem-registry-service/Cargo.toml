@@ -26,6 +26,7 @@ golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
 
 anyhow = { workspace = true}
+applying = {workspace = true }
 assert2 = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
@@ -42,6 +43,7 @@ figment = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
+include_dir = { workspace = true }
 hyper = { workspace = true }
 indoc = { workspace = true }
 jsonwebtoken = "9.2.0"

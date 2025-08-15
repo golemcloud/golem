@@ -12,36 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::TokenId;
-use crate::model::account::AccountId;
+use crate::declare_structs;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct Token {
-    pub id: TokenId,
-    pub account_id: AccountId,
-    pub created_at: chrono::DateTime<Utc>,
-    pub expires_at: chrono::DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-pub struct TokenWithSecret {
-    pub data: Token,
-    pub secret: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct OAuth2Data {
-    pub url: String,
-    pub user_code: String,
-    pub expires: chrono::DateTime<Utc>,
-    pub encoded_session: String,
+declare_structs! {
+    pub struct OAuth2Data {
+        pub url: String,
+        pub user_code: String,
+        pub expires: chrono::DateTime<Utc>,
+        pub encoded_session: String,
+    }
 }

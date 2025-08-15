@@ -21,7 +21,7 @@ newtype_uuid!(
 );
 
 declare_transparent_newtypes! {
-    pub struct EnvironmentName(String);
+    pub struct EnvironmentName(pub String);
 
     pub struct EnvironmentRevision(pub u64);
 }
@@ -31,6 +31,16 @@ declare_structs! {
         pub id: EnvironmentId,
         pub application_id: ApplicationId,
         pub name: EnvironmentName,
+        pub compatibility_check: bool,
+        pub version_check: bool,
+        pub security_overrides: bool,
+    }
+
+    pub struct NewEnvironmentData {
+        pub name: EnvironmentName,
+        pub compatibility_check: bool,
+        pub version_check: bool,
+        pub security_overrides: bool,
     }
 
     pub struct EnvironmentHash {

@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::plugin::PluginScope;
 use golem_common::model::plugin::PluginTypeSpecificDefinition;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct PluginDefinitionCreation {
@@ -40,4 +42,11 @@ impl From<PluginDefinitionCreation>
             scope: Some(value.scope.into()),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct IFSEntry {
+    pub source_path: PathBuf,
+    pub target_path: ComponentFilePath,
+    pub permissions: ComponentFilePermissions,
 }
