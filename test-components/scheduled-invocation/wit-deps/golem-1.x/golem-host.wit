@@ -1,10 +1,10 @@
-package golem:api@1.1.6;
+package golem:api@1.1.7;
 
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
 interface host {
-    use wasi:clocks/monotonic-clock@0.2.0.{duration};
-    use golem:rpc/types@0.2.0.{component-id, uuid, worker-id};
+    use wasi:clocks/monotonic-clock@0.2.3.{duration};
+    use golem:rpc/types@0.2.2.{component-id, uuid, value-and-type, worker-id};
 
     /// An index into the persistent log storing all performed operations of a worker
     type oplog-index = u64;
@@ -22,6 +22,11 @@ interface host {
     /// Represents a Golem Cloud account
     record account-id {
         value: string
+    }
+
+    /// Represents a Golem project
+    record project-id {
+      uuid: uuid,
     }
 
     /// Configures how the executor retries failures
@@ -116,12 +121,19 @@ interface host {
         value: string
     }
 
+    record worker-wasi-config-vars-filter {
+        name: string,
+        comparator: string-filter-comparator,
+        value: string
+    }
+
     variant worker-property-filter {
         name(worker-name-filter),
         status(worker-status-filter),
         version(worker-version-filter),
         created-at(worker-created-at-filter),
-        env(worker-env-filter)
+        env(worker-env-filter),
+        wasi-config-vars(worker-wasi-config-vars-filter)
     }
 
     record worker-all-filter {
@@ -136,6 +148,7 @@ interface host {
         worker-id: worker-id,
         args: list<string>,
         env: list<tuple<string, string>>,
+        wasi-config-vars: list<tuple<string, string>>,
         status: worker-status,
         component-version: u64,
         retry-count: u64
@@ -153,6 +166,14 @@ interface host {
         revert-to-oplog-index(oplog-index),
         /// Revert the last N invocations.
         revert-last-invocations(u64)
+    }
+
+    /// Indicates which worker the code is running on after `fork`
+    enum fork-result {
+        /// The original worker that called `fork`
+        original,
+        /// The new worker
+        forked
     }
 
     /// Create a new promise
@@ -256,6 +277,11 @@ interface host {
     /// Get the worker-id for a given component and worker name.
     /// Returns none when no component for the specified component-reference or no worker with the specified worker-name exists.
     resolve-worker-id-strict: func(component-reference: string, worker-name: string) -> option<worker-id>;
+
+    /// Forks the current worker at the current execution point. The new worker gets the `new-name` worker name,
+    /// and this worker continues running as well. The return value is going to be different in this worker and
+    /// the forked worker.
+    fork: func(new-name: string) -> fork-result;
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
