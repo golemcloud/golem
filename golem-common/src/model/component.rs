@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 use typed_path::Utf8UnixPathBuf;
+use crate::model::component_metadata::ComponentMetadata;
+use std::collections::BTreeMap;
 
 declare_transparent_newtypes! {
     // TODO: Add validations (non-empty, no "/", no " ", ...)
@@ -35,10 +37,34 @@ declare_transparent_newtypes! {
 }
 
 declare_structs! {
+    pub struct Component {
+        pub environment_id: EnvironmentId,
+        pub versioned_component_id: VersionedComponentId,
+        pub component_name: ComponentName,
+        pub component_size: u64,
+        pub metadata: ComponentMetadata,
+        pub created_at: chrono::DateTime<chrono::Utc>,
+        pub component_type: ComponentType,
+        pub files: Vec<InitialComponentFile>,
+        pub installed_plugins: Vec<PluginInstallation>,
+        pub env: BTreeMap<String, String>,
+        pub wasm_hash: crate::model::diff::Hash,
+    }
+
     #[derive(Default)]
     pub struct ComponentFileOptions {
         /// Path of the file in the uploaded archive
         pub permissions: ComponentFilePermissions,
+    }
+
+    pub struct PluginInstallation {
+        pub id: PluginInstallationId,
+        pub name: String,
+        pub version: String,
+        /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
+        pub registered: bool,
+        pub priority: i32,
+        pub parameters: HashMap<String, String>,
     }
 }
 
@@ -235,20 +261,6 @@ impl Default for ComponentFilePermissions {
     fn default() -> Self {
         Self::ReadOnly
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct PluginInstallation {
-    pub id: PluginInstallationId,
-    pub name: String,
-    pub version: String,
-    /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
-    pub registered: bool,
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
 }
 
 #[cfg(feature = "protobuf")]

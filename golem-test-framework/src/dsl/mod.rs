@@ -17,8 +17,8 @@ pub mod debug_render;
 
 use crate::config::{TestDependencies, TestDependenciesDsl};
 use crate::dsl::debug_render::debug_render_oplog_entry;
-use crate::model::PluginDefinitionCreation;
-use anyhow::anyhow;
+use crate::model::{IFSEntry, PluginDefinitionCreation};
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
@@ -39,7 +39,6 @@ use golem_api_grpc::proto::golem::worker::v1::{
     WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
-use golem_client::model::Account;
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, RawComponentMetadata,
 };
@@ -54,7 +53,7 @@ use golem_common::model::{
     WorkerStatus,
 };
 use golem_common::model::component::{
-    ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision, ComponentType, InitialComponentFile, InitialComponentFileKey
+    Component, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision, ComponentType, InitialComponentFile, InitialComponentFileKey
 };
 use golem_common::model::{
     ComponentFileSystemNode, ComponentId, FailedUpdateRecord,
@@ -71,41 +70,49 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
-use tempfile::Builder;
+use tempfile::{Builder, TempDir};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
 use tracing::{debug, info, Instrument};
 use uuid::Uuid;
 use wasm_metadata::AddMetadata;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountId, NewAccountData};
+use golem_client::api::RegistryServiceClient;
+use golem_common::model::application::{ApplicationId, ApplicationName, NewApplicationData};
+use golem_common::model::environment::{EnvironmentId, EnvironmentName, NewEnvironmentData};
+use golem_common::api::component::CreateComponentRequestMetadata;
+use tokio::fs::File;
+use async_zip::tokio::write::ZipFileWriter;
+use async_zip::{Compression, ZipEntryBuilder};
+use applying::Apply;
 
 pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     dsl: &'a DSL,
+    environment_id: EnvironmentId,
     name: String,
     wasm_name: String,
     component_type: ComponentType,
     unique: bool,
     unverified: bool,
-    files: Vec<(PathBuf, InitialComponentFile)>,
-    dynamic_linking: Vec<(&'static str, DynamicLinkedInstance)>,
-    env: HashMap<String, String>,
-    project_id: Option<ProjectId>,
+    files: Vec<IFSEntry>,
+    dynamic_linking: BTreeMap<String, DynamicLinkedInstance>,
+    env: BTreeMap<String, String>,
 }
 
 impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
-    pub fn new(dsl: &'a DSL, name: impl AsRef<str>) -> Self {
+    pub fn new(dsl: &'a DSL, environment_id: EnvironmentId, name: String) -> Self {
         Self {
             dsl,
-            name: name.as_ref().to_string(),
-            wasm_name: name.as_ref().to_string(),
+            environment_id,
+            wasm_name: name.clone(),
+            name,
             component_type: ComponentType::Durable,
             unique: false,
             unverified: false,
             files: vec![],
-            dynamic_linking: vec![],
-            env: HashMap::new(),
-            project_id: None,
+            dynamic_linking: BTreeMap::new(),
+            env: BTreeMap::new()
         }
     }
 
@@ -152,87 +159,95 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
     }
 
     /// Set the initial files for the component
-    pub fn with_files(mut self, files: &[(PathBuf, InitialComponentFile)]) -> Self {
+    pub fn with_files(mut self, files: &[IFSEntry]) -> Self {
         self.files = files.to_vec();
         self
     }
 
     /// Adds an initial file to the component
-    pub fn add_file(mut self, source: PathBuf, file: InitialComponentFile) -> Self {
-        self.files.push((source, file));
-        self
+    pub fn add_file(mut self, target: &str, source: &str, permissions: ComponentFilePermissions) -> anyhow::Result<Self> {
+        let source_path = PathBuf::from(source);
+        let target_path = ComponentFilePath::from_abs_str(target).map_err(|e| anyhow!(e))?;
+        let ifs_entry  = IFSEntry {
+            source_path,
+            target_path,
+            permissions
+        };
+
+        self.files.push(ifs_entry);
+        Ok(self)
+    }
+
+    pub fn add_ro_file(self, target: &str, source: &str) -> anyhow::Result<Self> {
+        self.add_file(target, source, ComponentFilePermissions::ReadOnly)
+    }
+
+    pub fn add_rw_file(mut self, target: &str, source: &str) -> anyhow::Result<Self> {
+        self.add_file(target, source, ComponentFilePermissions::ReadWrite)
     }
 
     /// Set the dynamic linking for the component
     pub fn with_dynamic_linking(
         mut self,
-        dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+        dynamic_linking: &[(&str, DynamicLinkedInstance)],
     ) -> Self {
-        self.dynamic_linking = dynamic_linking.to_vec();
+        self.dynamic_linking = dynamic_linking.into_iter().map(|(k, v) | (k.to_string(), v.clone())).collect();
         self
     }
 
     /// Adds a dynamic linked instance to the component
     pub fn add_dynamic_linking(
         mut self,
-        name: &'static str,
+        name: &str,
         instance: DynamicLinkedInstance,
     ) -> Self {
-        self.dynamic_linking.push((name, instance));
+        self.dynamic_linking.insert(name.to_string(), instance);
         self
     }
 
     pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
-        let map = env.into_iter().collect::<HashMap<_, _>>();
+        let map = env.into_iter().collect::<BTreeMap<_, _>>();
         self.env = map;
         self
     }
 
-    pub fn with_project(mut self, project_id: ProjectId) -> Self {
-        let _ = self.project_id.insert(project_id);
-        self
+    /// Stores the component and returns the final component name too which is useful when used
+    /// together with unique
+    pub async fn store(self) -> anyhow::Result<Component> {
+        self.dsl
+            .store_component_with(
+                &self.wasm_name,
+                self.environment_id,
+                &self.name,
+                self.component_type,
+                self.unique,
+                self.unverified,
+                self.files,
+                self.dynamic_linking,
+                self.env,
+            )
+            .await
     }
-
-    // /// Stores the component
-    // pub async fn store(self) -> ComponentId {
-    //     self.store_and_get_name().await.0
-    // }
-
-    // /// Stores the component and returns the final component name too which is useful when used
-    // /// together with unique
-    // pub async fn store_and_get_name(self) -> (ComponentId, ComponentName) {
-    //     self.dsl
-    //         .store_component_with(
-    //             &self.wasm_name,
-    //             &self.name,
-    //             self.component_type,
-    //             self.unique,
-    //             self.unverified,
-    //             &self.files,
-    //             &self.dynamic_linking,
-    //             &self.env,
-    //             self.project_id,
-    //         )
-    //         .await
-    // }
 }
 
 #[async_trait]
 pub trait TestDsl {
-    fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self>;
+    fn component(&self, environment_id: &EnvironmentId,  name: &str) -> StoreComponentBuilder<'_, Self>;
 
-    // async fn store_component_with(
-    //     &self,
-    //     wasm_name: &str,
-    //     name: &str,
-    //     component_type: ComponentType,
-    //     unique: bool,
-    //     unverified: bool,
-    //     files: &[(PathBuf, InitialComponentFile)],
-    //     dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    //     env: &HashMap<String, String>,
-    //     project_id: Option<ProjectId>,
-    // ) -> (ComponentId, ComponentName);
+    async fn app_and_env(&self) -> anyhow::Result<(ApplicationId, EnvironmentId)>;
+
+    async fn store_component_with(
+        &self,
+        wasm_name: &str,
+        environment_id: EnvironmentId,
+        name: &str,
+        component_type: ComponentType,
+        unique: bool,
+        unverified: bool,
+        files: Vec<IFSEntry>,
+        dynamic_linking: BTreeMap<String, DynamicLinkedInstance>,
+        env: BTreeMap<String, String>,
+    ) -> anyhow::Result<Component>;
 
     // async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
 
@@ -502,98 +517,102 @@ pub trait TestDsl {
 
 #[async_trait]
 impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
-    fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self> {
-        StoreComponentBuilder::new(self, name)
+    fn component(&self, environment_id: &EnvironmentId,  name: &str) -> StoreComponentBuilder<'_, Self> {
+        StoreComponentBuilder::new(self, environment_id.clone(), name.to_string())
     }
 
-    // async fn store_component_with(
-    //     &self,
-    //     wasm_name: &str,
-    //     name: &str,
-    //     component_type: ComponentType,
-    //     unique: bool,
-    //     unverified: bool,
-    //     files: &[(PathBuf, InitialComponentFile)],
-    //     dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    //     env: &HashMap<String, String>,
-    //     project_id: Option<ProjectId>,
-    // ) -> (ComponentId, ComponentName) {
-    //     let source_path = self
-    //         .deps
-    //         .component_directory()
-    //         .join(format!("{wasm_name}.wasm"));
-    //     let component_name = if unique {
-    //         let uuid = Uuid::new_v4();
-    //         format!("{name}-{uuid}")
-    //     } else {
-    //         match component_type {
-    //             ComponentType::Durable => name.to_string(),
-    //             ComponentType::Ephemeral => format!("{name}-ephemeral"),
-    //         }
-    //     };
-    //     let dynamic_linking = HashMap::from_iter(
-    //         dynamic_linking
-    //             .iter()
-    //             .map(|(k, v)| (k.to_string(), v.clone())),
-    //     );
+    async fn app_and_env(&self) -> anyhow::Result<(ApplicationId, EnvironmentId)> {
+        let client = self.deps.registry_service().client(&self.token).await;
+        let app_name = ApplicationName(Uuid::new_v4().to_string());
+        let env_name = EnvironmentName(Uuid::new_v4().to_string());
 
-    //     let source_path = if !unverified {
-    //         rename_component_if_needed(
-    //             self.deps.borrow().temp_directory(),
-    //             &source_path,
-    //             &component_name,
-    //         )
-    //         .expect("Failed to verify and change component metadata")
-    //     } else {
-    //         source_path
-    //     };
+        let application = client.create_application(&self.account_id.0, &NewApplicationData {
+            name: app_name
+        }).await?;
 
-    //     let component = {
-    //         if unique {
-    //             self.deps
-    //                 .component_service()
-    //                 .add_component(
-    //                     &self.token,
-    //                     &source_path,
-    //                     &component_name,
-    //                     component_type,
-    //                     files,
-    //                     &dynamic_linking,
-    //                     unverified,
-    //                     env,
-    //                     project_id,
-    //                 )
-    //                 .await
-    //                 .expect("Failed to add component")
-    //         } else {
-    //             self.deps
-    //                 .component_service()
-    //                 .get_or_add_component(
-    //                     &self.token,
-    //                     &source_path,
-    //                     &component_name,
-    //                     component_type,
-    //                     files,
-    //                     &dynamic_linking,
-    //                     unverified,
-    //                     env,
-    //                     project_id,
-    //                 )
-    //                 .await
-    //         }
-    //     };
+        let environment = client.create_application_environment(&application.id.0, &NewEnvironmentData {
+            name: env_name,
+            compatibility_check: false,
+            version_check: false,
+            security_overrides: false
+        }).await?;
 
-    //     (
-    //         component
-    //             .versioned_component_id
-    //             .unwrap()
-    //             .component_id
-    //             .unwrap()
-    //             .try_into()
-    //             .unwrap(),
-    //         ComponentName(component_name),
-    //     )
-    // }
+        Ok((application.id, environment.id))
+    }
+
+    async fn store_component_with(
+        &self,
+        wasm_name: &str,
+        environment_id: EnvironmentId,
+        name: &str,
+        component_type: ComponentType,
+        unique: bool,
+        unverified: bool,
+        files: Vec<IFSEntry>,
+        dynamic_linking: BTreeMap<String, DynamicLinkedInstance>,
+        env: BTreeMap<String, String>,
+    ) -> anyhow::Result<Component> {
+        let component_directy = self.deps.component_directory();
+
+        let source_path = component_directy.join(format!("{wasm_name}.wasm"));
+
+        let component_name = if unique {
+            let uuid = Uuid::new_v4();
+            ComponentName(format!("{name}-{uuid}"))
+        } else {
+            match component_type {
+                ComponentType::Durable => ComponentName(name.to_string()),
+                ComponentType::Ephemeral => ComponentName(format!("{name}-ephemeral")),
+            }
+        };
+        let dynamic_linking = HashMap::from_iter(
+            dynamic_linking
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone())),
+        );
+
+        let source_path = if !unverified {
+            rename_component_if_needed(
+                self.deps.borrow().temp_directory(),
+                &source_path,
+                &component_name.0,
+            )
+            .expect("Failed to verify and change component metadata")
+        } else {
+            source_path
+        };
+
+        let (_tmp_dir, maybe_ifs_archive) = if !files.is_empty() {
+            let (tmp_dir, ifs_archive) = build_ifs_archive(&component_directy, &files).await?;
+            (Some(tmp_dir), Some(File::open(ifs_archive).await?))
+        } else {
+            (None, None)
+        };
+
+
+        let file_options = files
+            .into_iter()
+            .map(|f| (f.target_path, ComponentFileOptions { permissions: f.permissions }))
+            .apply(BTreeMap::from_iter);
+
+        let client = self.deps.registry_service().client(&self.token).await;
+
+        let component = client.create_component(
+            &environment_id.0,
+            &CreateComponentRequestMetadata {
+                component_name,
+                component_type: Some(component_type),
+                file_options: Some(file_options),
+                dynamic_linking: Some(dynamic_linking),
+                env: Some(env),
+                agent_types: None,
+            },
+            File::open(source_path).await?,
+            maybe_ifs_archive
+        ).await?;
+
+        Ok(component)
+    }
 
     // async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
     //     let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
@@ -2179,7 +2198,7 @@ pub fn worker_error_logs(error: &Error) -> Option<String> {
 pub trait TestDslUnsafe {
     type Safe: TestDsl;
 
-    fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self::Safe>;
+    // fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self::Safe>;
 
     // async fn store_component_with(
     //     &self,
@@ -2406,9 +2425,9 @@ pub trait TestDslUnsafe {
 impl<T: TestDsl + Sync> TestDslUnsafe for T {
     type Safe = T;
 
-    fn component(&self, name: &str) -> StoreComponentBuilder<'_, T> {
-        StoreComponentBuilder::new(self, name)
-    }
+    // fn component(&self, name: &str) -> StoreComponentBuilder<'_, T> {
+    //     StoreComponentBuilder::new(self, name)
+    // }
 
     // async fn store_component_with(
     //     &self,
@@ -2885,4 +2904,32 @@ fn rename_component_if_needed(temp_dir: &Path, path: &Path, name: &str) -> anyho
         std::fs::write(&new_path, updated_wasm)?;
         Ok(new_path.path().to_path_buf())
     }
+}
+
+async fn build_ifs_archive(
+    component_directory: &Path,
+    ifs_files: &[IFSEntry],
+) -> anyhow::Result<(TempDir, PathBuf)> {
+    static ARCHIVE_NAME: &str = "ifs.zip";
+
+    let temp_dir = tempfile::Builder::new()
+        .prefix("golem-test-framework-ifs-zip")
+        .tempdir()?;
+    let temp_file = File::create(temp_dir.path().join(ARCHIVE_NAME)).await?;
+    let mut zip_writer = ZipFileWriter::with_tokio(temp_file);
+
+    for ifs_file in ifs_files {
+        zip_writer
+            .write_entry_whole(
+                ZipEntryBuilder::new(ifs_file.target_path.to_string().into(), Compression::Deflate),
+                &(tokio::fs::read(&component_directory.join(&ifs_file.source_path))
+                    .await
+                    .with_context(|| format!("source file path: {}", ifs_file.source_path.display()))?),
+            )
+            .await?;
+    }
+
+    zip_writer.close().await?;
+    let file_path = temp_dir.path().join(ARCHIVE_NAME);
+    Ok((temp_dir, file_path))
 }

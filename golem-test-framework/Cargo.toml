@@ -23,6 +23,7 @@ golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = 
 golem-registry-service = { path = "../golem-registry-service", version = "=0.0.0" }
 
 anyhow = { workspace = true }
+applying = { workspace = true }
 async-dropper = { version = "0.3.1", features = ["simple", "tokio"] }
 async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio"] }
 async-trait = { workspace = true }

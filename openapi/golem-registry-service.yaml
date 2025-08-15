@@ -4160,7 +4160,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: post_component
+      operationId: create_component
     get:
       tags:
       - RegistryService
@@ -8356,13 +8356,27 @@ components:
       type: object
       title: TokenWithSecret
       required:
-      - data
+      - id
       - secret
+      - accountId
+      - createdAt
+      - expiresAt
       properties:
-        data:
-          $ref: '#/components/schemas/Token'
+        id:
+          type: string
+          format: uuid
         secret:
           type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
     TypeBool:
       type: object
       title: TypeBool

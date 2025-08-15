@@ -3409,6 +3409,7 @@ name = "golem-test-framework"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "applying",
  "async-dropper",
  "async-dropper-simple",
  "async-trait",

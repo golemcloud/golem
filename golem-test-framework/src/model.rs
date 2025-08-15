@@ -14,6 +14,8 @@
 
 use golem_common::model::plugin::PluginScope;
 use golem_common::model::plugin::PluginTypeSpecificDefinition;
+use std::path::PathBuf;
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 
 #[derive(Debug, Clone)]
 pub struct PluginDefinitionCreation {
@@ -40,4 +42,11 @@ impl From<PluginDefinitionCreation>
             scope: Some(value.scope.into()),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct IFSEntry {
+    pub source_path: PathBuf,
+    pub target_path: ComponentFilePath,
+    pub permissions: ComponentFilePermissions
 }

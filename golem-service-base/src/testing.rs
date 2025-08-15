@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::Component;
+use golem_common::model::component::Component;
 use golem_common::model::account::AccountId;
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{ComponentName, ComponentRevision, VersionedComponentId};
@@ -24,7 +24,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::ComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,7 +45,9 @@ pub struct LocalFileSystemComponentMetadata {
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
 
     #[serde(default)]
-    pub env: HashMap<String, String>,
+    pub env: BTreeMap<String, String>,
+
+    pub wasm_hash: golem_common::model::diff::Hash
 }
 
 impl From<LocalFileSystemComponentMetadata> for Component {
@@ -73,6 +75,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             files: value.files,
             installed_plugins: vec![],
             env: value.env,
+            wasm_hash: value.wasm_hash
         }
     }
 }

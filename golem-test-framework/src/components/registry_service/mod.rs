@@ -98,36 +98,3 @@ pub trait RegistryService: Send + Sync {
     }
 
 }
-
-async fn build_ifs_archive(
-    component_directory: &Path,
-    files: Option<&[(PathBuf, InitialComponentFile)]>,
-) -> crate::Result<Option<(TempDir, PathBuf)>> {
-    static ARCHIVE_NAME: &str = "ifs.zip";
-
-    let Some(files) = files else { return Ok(None) };
-    if files.is_empty() {
-        return Ok(None);
-    }
-
-    let temp_dir = tempfile::Builder::new()
-        .prefix("golem-test-framework-ifs-zip")
-        .tempdir()?;
-    let temp_file = File::create(temp_dir.path().join(ARCHIVE_NAME)).await?;
-    let mut zip_writer = ZipFileWriter::with_tokio(temp_file);
-
-    for (source_file, ifs_file) in files {
-        zip_writer
-            .write_entry_whole(
-                ZipEntryBuilder::new(ifs_file.path.to_string().into(), Compression::Deflate),
-                &(fs::read(&component_directory.join(source_file))
-                    .await
-                    .with_context(|| format!("source file path: {}", source_file.display()))?),
-            )
-            .await?;
-    }
-
-    zip_writer.close().await?;
-    let file_path = temp_dir.path().join(ARCHIVE_NAME);
-    Ok(Some((temp_dir, file_path)))
-}

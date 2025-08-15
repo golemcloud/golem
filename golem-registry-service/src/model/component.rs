@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::agent::AgentType;
-use golem_common::model::component::{ComponentName, VersionedComponentId};
+use golem_common::model::component::{ComponentName, PluginInstallation, VersionedComponentId};
 use golem_common::model::component::{ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
@@ -171,18 +171,6 @@ impl Component {
             dynamic_linking: self.metadata.dynamic_linking,
         }
     }
-}
-
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
-pub struct PluginInstallation {
-    pub id: PluginInstallationId,
-    pub plugin_name: String,
-    pub plugin_version: String,
-    /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
-    pub plugin_registered: bool,
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
 }
 
 #[derive(Debug)]

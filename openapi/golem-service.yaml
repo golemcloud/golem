@@ -4184,7 +4184,7 @@ paths:
       - Component
       summary: Create a new component in the environment
       description: The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-      operationId: post_component
+      operationId: create_component
       parameters:
       - in: path
         name: environment_id
@@ -8424,13 +8424,27 @@ components:
       title: TokenWithSecret
       type: object
       properties:
-        data:
-          $ref: '#/components/schemas/Token'
+        id:
+          type: string
+          format: uuid
         secret:
           type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
       required:
-      - data
+      - id
       - secret
+      - accountId
+      - createdAt
+      - expiresAt
     TypeBool:
       title: TypeBool
       type: object

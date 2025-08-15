@@ -15,17 +15,25 @@
 use super::Tracing;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use test_r::{inherit_test_dep, test};
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::{TestDsl, TestDslUnsafe};
+use golem_client::api::RegistryServiceClient;
+use assert2::assert;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-async fn create_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
 
-    Err(anyhow::anyhow!("foo"))?;
+    let component = user.component(&env, "shopping-cart").store().await?;
 
-    todo!()
+    let component_from_get = client.get_component(&component.versioned_component_id.component_id.0).await?;
+
+    assert!(component_from_get == component);
+
+    Ok(())
 }

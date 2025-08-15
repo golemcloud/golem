@@ -54,7 +54,7 @@ impl EnvironmentComponentsApi {
     #[oai(
         path = "/:environment_id/components",
         method = "post",
-        operation_id = "post_component"
+        operation_id = "create_component"
     )]
     async fn create_component(
         &self,
