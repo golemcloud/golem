@@ -24,7 +24,7 @@ use goldenfile::differs::Differ;
 use goldenfile::Mint;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, LogLevel, OplogIndex, OplogPayload, PayloadId,
+    DurableFunctionType, LogLevel, OplogIndex, OplogPayload, PayloadId,
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
@@ -32,7 +32,7 @@ use golem_common::model::RetryConfig;
 use golem_common::model::{
     AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, PromiseId, ShardId,
     SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
-    WorkerResourceDescription, WorkerStatus,
+    WorkerStatus,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -392,24 +392,6 @@ pub fn idempotency_key() {
 pub fn timestamp() {
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("timestamp", &mut mint, Timestamp::from(1724701938466));
-}
-
-#[test]
-pub fn worker_resource_description() {
-    let wrd1 = WorkerResourceDescription {
-        created_at: Timestamp::from(1724701938466),
-        indexed_resource_key: None,
-    };
-    let wrd2 = WorkerResourceDescription {
-        created_at: Timestamp::from(1724701938466),
-        indexed_resource_key: Some(IndexedResourceKey {
-            resource_name: "r1".to_string(),
-            resource_params: vec!["a".to_string(), "b".to_string()],
-        }),
-    };
-    let mut mint = Mint::new("tests/goldenfiles");
-    backward_compatible("worker_resource_description", &mut mint, wrd1);
-    backward_compatible("worker_resource_description_indexed", &mut mint, wrd2);
 }
 
 #[test]

@@ -42,6 +42,7 @@ use uuid::Uuid;
 
 mod common;
 
+pub mod agent;
 pub mod api;
 pub mod blobstore;
 pub mod compatibility;
@@ -73,10 +74,10 @@ tag_suite!(api, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 tag_suite!(http, group1);
-
 tag_suite!(rdbms, group1);
 
 tag_suite!(guest_languages1, group2);
+tag_suite!(agent, group2);
 
 tag_suite!(transactions, group3);
 tag_suite!(wasi, group3);

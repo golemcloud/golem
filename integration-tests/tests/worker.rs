@@ -27,12 +27,13 @@ use crate::Tracing;
 use axum::extract::Query;
 use axum::routing::get;
 use axum::Router;
-use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId,
-    FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator, TargetWorkerId,
-    Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    ExportedResourceInstanceDescription, FilterComparator, IdempotencyKey, ScanCursor,
+    StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_wasm_ast::analysis::analysed_type;
@@ -300,25 +301,21 @@ async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tra
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| {
-            (
-                *k,
-                WorkerResourceDescription {
-                    created_at: ts,
-                    ..v.clone()
-                },
-            )
-        })
+        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
         .collect::<Vec<_>>();
-    resources1.sort_by_key(|(k, _v)| *k);
+    resources1.sort_by_key(|(k, _v)| k.clone());
     check!(
         resources1
             == vec![(
-                WorkerResourceId(0),
-                WorkerResourceDescription {
-                    created_at: ts,
-                    indexed_resource_key: None
-                }
+                "resource(0)".to_string(),
+                WorkerResourceDescription::ExportedResourceInstance(
+                    ExportedResourceInstanceDescription {
+                        created_at: ts,
+                        resource_owner: "rpc:counters-exports/api".to_string(),
+                        resource_name: "counter".to_string(),
+                        resource_params: None
+                    }
+                )
             ),]
     );
 
@@ -326,15 +323,7 @@ async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tra
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| {
-            (
-                *k,
-                WorkerResourceDescription {
-                    created_at: ts,
-                    ..v.clone()
-                },
-            )
-        })
+        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
         .collect::<Vec<_>>();
     check!(resources2 == vec![]);
 }
@@ -457,25 +446,21 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| {
-            (
-                *k,
-                WorkerResourceDescription {
-                    created_at: ts,
-                    ..v.clone()
-                },
-            )
-        })
+        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
         .collect::<Vec<_>>();
-    resources1.sort_by_key(|(k, _v)| *k);
+    resources1.sort_by_key(|(k, _v)| k.clone());
     check!(
         resources1
             == vec![(
-                WorkerResourceId(0),
-                WorkerResourceDescription {
-                    created_at: ts,
-                    indexed_resource_key: None
-                }
+                "resource(0)".to_string(),
+                WorkerResourceDescription::ExportedResourceInstance(
+                    ExportedResourceInstanceDescription {
+                        created_at: ts,
+                        resource_owner: "rpc:counters-exports/api".to_string(),
+                        resource_name: "counter".to_string(),
+                        resource_params: None
+                    }
+                )
             ),]
     );
 
@@ -483,15 +468,7 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| {
-            (
-                *k,
-                WorkerResourceDescription {
-                    created_at: ts,
-                    ..v.clone()
-                },
-            )
-        })
+        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
         .collect::<Vec<_>>();
     check!(resources2 == vec![]);
 }

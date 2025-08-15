@@ -10,7 +10,7 @@ path = "wit-generated"
 "rpc:ephemeral-exports" = { path = "wit-generated/deps/rpc_ephemeral-exports" }
 
 [dependencies]
-golem-rust = { git = "https://github.com/golemcloud/golem-rust", branch = "golem-rpc-0.2.2" }
+golem-rust = { git = "https://github.com/golemcloud/golem-rust", branch = "type-owner" }
 once_cell = "1.17.1"
 rand = "0.8.5"
 

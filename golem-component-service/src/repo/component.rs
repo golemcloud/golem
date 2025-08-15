@@ -127,8 +127,8 @@ impl ComponentRecord {
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?,
-            root_package_name: value.metadata.root_package_name,
-            root_package_version: value.metadata.root_package_version,
+            root_package_name: value.metadata.root_package_name().clone(),
+            root_package_version: value.metadata.root_package_version().clone(),
             env: Json(value.env),
             transformed_env: Json(value.transformed_env),
         })

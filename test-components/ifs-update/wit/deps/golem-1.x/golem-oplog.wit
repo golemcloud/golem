@@ -5,7 +5,7 @@ interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use golem:rpc/types@0.2.2.{wit-value};
 
-    use host.{account-id, component-version, oplog-index, persistence-level, retry-policy, uuid, worker-id};
+    use host.{account-id, component-version, oplog-index, persistence-level, project-id, retry-policy, uuid, worker-id};
     use context.{attribute, attribute-value, span-id, trace-id};
 
     variant wrapped-function-type {
@@ -41,7 +41,8 @@ interface oplog {
         component-version: component-version,
         args: list<string>,
         env: list<tuple<string, string>>,
-        account-id: account-id,
+        created-by: account-id,
+        project-id: project-id,
         parent: option<worker-id>,
         component-size: u64,
         initial-total-linear-memory-size: u64,
@@ -89,7 +90,7 @@ interface oplog {
 
     record exported-function-completed-parameters {
         timestamp: datetime,
-        response: wit-value,
+        response: option<wit-value>,
         consumed-fuel: s64
     }
 

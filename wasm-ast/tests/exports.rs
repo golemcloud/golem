@@ -41,7 +41,8 @@ fn exports_shopping_cart_component() {
                         field("price", f32()),
                         field("quantity", u32()),
                     ])
-                    .named("product-item"),
+                    .named("product-item")
+                    .owned("golem:it/api"),
                 }],
                 result: None,
             },
@@ -75,10 +76,13 @@ fn exports_shopping_cart_component() {
                         case("error", str()),
                         case(
                             "success",
-                            record(vec![field("order-id", str())]).named("order-confirmation"),
+                            record(vec![field("order-id", str())])
+                                .named("order-confirmation")
+                                .owned("golem:it/api"),
                         ),
                     ])
-                    .named("checkout-result"),
+                    .named("checkout-result")
+                    .owned("golem:it/api"),
                 }),
             },
             AnalysedFunction {
@@ -92,7 +96,8 @@ fn exports_shopping_cart_component() {
                             field("price", f32()),
                             field("quantity", u32()),
                         ])
-                        .named("product-item"),
+                        .named("product-item")
+                        .owned("golem:it/api"),
                     ),
                 }),
             },
@@ -178,15 +183,18 @@ fn exports_file_service_component() {
                             field(
                                 "last-modified",
                                 record(vec![field("seconds", u64()), field("nanoseconds", u32())])
-                                    .named("datetime"),
+                                    .named("datetime")
+                                    .owned("wasi:clocks@0.2.0/wall-clock"),
                             ),
                             field(
                                 "last-accessed",
                                 record(vec![field("seconds", u64()), field("nanoseconds", u32())])
-                                    .named("datetime"),
+                                    .named("datetime")
+                                    .owned("wasi:clocks@0.2.0/wall-clock"),
                             ),
                         ])
-                        .named("file-info"),
+                        .named("file-info")
+                        .owned("golem:it/api"),
                         str(),
                     ),
                 }),
@@ -203,15 +211,18 @@ fn exports_file_service_component() {
                             field(
                                 "last-modified",
                                 record(vec![field("seconds", u64()), field("nanoseconds", u32())])
-                                    .named("datetime"),
+                                    .named("datetime")
+                                    .owned("wasi:clocks@0.2.0/wall-clock"),
                             ),
                             field(
                                 "last-accessed",
                                 record(vec![field("seconds", u64()), field("nanoseconds", u32())])
-                                    .named("datetime"),
+                                    .named("datetime")
+                                    .owned("wasi:clocks@0.2.0/wall-clock"),
                             ),
                         ])
-                        .named("file-info"),
+                        .named("file-info")
+                        .owned("golem:it/api"),
                         str(),
                     ),
                 }),
@@ -303,7 +314,8 @@ fn exports_file_service_component() {
                 result: Some(AnalysedFunctionResult {
                     typ: result(
                         record(vec![field("lower", u64()), field("upper", u64())])
-                            .named("metadata-hash-value"),
+                            .named("metadata-hash-value")
+                            .owned("wasi:filesystem@0.2.0/types"),
                         str(),
                     ),
                 }),
@@ -339,7 +351,9 @@ fn exports_auction_registry_composed_component() {
                     },
                 ],
                 result: Some(AnalysedFunctionResult {
-                    typ: record(vec![field("bidder-id", str())]).named("bidder-id"),
+                    typ: record(vec![field("bidder-id", str())])
+                        .named("bidder-id")
+                        .owned("auction:auction/api"),
                 }),
             },
             AnalysedFunction {
@@ -363,7 +377,9 @@ fn exports_auction_registry_composed_component() {
                     },
                 ],
                 result: Some(AnalysedFunctionResult {
-                    typ: record(vec![field("auction-id", str())]).named("auction-id"),
+                    typ: record(vec![field("auction-id", str())])
+                        .named("auction-id")
+                        .owned("auction:auction/api"),
                 }),
             },
             AnalysedFunction {
@@ -374,14 +390,17 @@ fn exports_auction_registry_composed_component() {
                         record(vec![
                             field(
                                 "auction-id",
-                                record(vec![field("auction-id", str())]).named("auction-id"),
+                                record(vec![field("auction-id", str())])
+                                    .named("auction-id")
+                                    .owned("auction:auction/api"),
                             ),
                             field("name", str()),
                             field("description", str()),
                             field("limit-price", f32()),
                             field("expiration", u64()),
                         ])
-                        .named("auction"),
+                        .named("auction")
+                        .owned("auction:auction/api"),
                     ),
                 }),
             },
@@ -409,7 +428,9 @@ fn exports_shopping_cart_resource_component() {
                     typ: str(),
                 }],
                 result: Some(AnalysedFunctionResult {
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned)
+                        .named("cart")
+                        .owned("golem:it/api"),
                 }),
             },
             AnalysedFunction {
@@ -417,7 +438,9 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "item".to_string(),
@@ -427,7 +450,8 @@ fn exports_shopping_cart_resource_component() {
                             field("price", f32()),
                             field("quantity", u32()),
                         ])
-                        .named("product-item"),
+                        .named("product-item")
+                        .owned("golem:it/api"),
                     },
                 ],
                 result: None,
@@ -437,7 +461,9 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
@@ -451,7 +477,9 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
@@ -468,24 +496,31 @@ fn exports_shopping_cart_resource_component() {
                 name: "[method]cart.checkout".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                        .named("cart")
+                        .owned("golem:it/api"),
                 }],
                 result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
                         case("error", str()),
                         case(
                             "success",
-                            record(vec![field("order-id", str())]).named("order-confirmation"),
+                            record(vec![field("order-id", str())])
+                                .named("order-confirmation")
+                                .owned("golem:it/api"),
                         ),
                     ])
-                    .named("checkout-result"),
+                    .named("checkout-result")
+                    .owned("golem:it/api"),
                 }),
             },
             AnalysedFunction {
                 name: "[method]cart.get-cart-contents".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                        .named("cart")
+                        .owned("golem:it/api"),
                 }],
                 result: Some(AnalysedFunctionResult {
                     typ: list(
@@ -495,7 +530,8 @@ fn exports_shopping_cart_resource_component() {
                             field("price", f32()),
                             field("quantity", u32()),
                         ])
-                        .named("product-item"),
+                        .named("product-item")
+                        .owned("golem:it/api"),
                     ),
                 }),
             },
@@ -504,11 +540,15 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "other-cart".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it/api"),
                     },
                 ],
                 result: None,
@@ -537,7 +577,9 @@ fn exports_shopping_cart_resource_versioned_component() {
                     typ: str(),
                 }],
                 result: Some(AnalysedFunctionResult {
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned)
+                        .named("cart")
+                        .owned("golem:it@1.2.3/api"),
                 }),
             },
             AnalysedFunction {
@@ -545,7 +587,9 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it@1.2.3/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "item".to_string(),
@@ -555,7 +599,8 @@ fn exports_shopping_cart_resource_versioned_component() {
                             field("price", f32()),
                             field("quantity", u32()),
                         ])
-                        .named("product-item"),
+                        .named("product-item")
+                        .owned("golem:it@1.2.3/api"),
                     },
                 ],
                 result: None,
@@ -565,7 +610,9 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it@1.2.3/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
@@ -579,7 +626,9 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it@1.2.3/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
@@ -596,24 +645,31 @@ fn exports_shopping_cart_resource_versioned_component() {
                 name: "[method]cart.checkout".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                        .named("cart")
+                        .owned("golem:it@1.2.3/api"),
                 }],
                 result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
                         case("error", str()),
                         case(
                             "success",
-                            record(vec![field("order-id", str())]).named("order-confirmation"),
+                            record(vec![field("order-id", str())])
+                                .named("order-confirmation")
+                                .owned("golem:it@1.2.3/api"),
                         ),
                     ])
-                    .named("checkout-result"),
+                    .named("checkout-result")
+                    .owned("golem:it@1.2.3/api"),
                 }),
             },
             AnalysedFunction {
                 name: "[method]cart.get-cart-contents".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                        .named("cart")
+                        .owned("golem:it@1.2.3/api"),
                 }],
                 result: Some(AnalysedFunctionResult {
                     typ: list(
@@ -623,7 +679,8 @@ fn exports_shopping_cart_resource_versioned_component() {
                             field("price", f32()),
                             field("quantity", u32()),
                         ])
-                        .named("product-item"),
+                        .named("product-item")
+                        .owned("golem:it@1.2.3/api"),
                     ),
                 }),
             },
@@ -632,11 +689,15 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it@1.2.3/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "other-cart".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it@1.2.3/api"),
                     },
                 ],
                 result: None,
@@ -689,10 +750,14 @@ fn exports_caller_composed_component() {
             name: "bug-wasm-rpc-i32".to_string(),
             parameters: vec![AnalysedFunctionParameter {
                 name: "in".to_string(),
-                typ: variant(vec![unit_case("leaf")]).named("timeline-node"),
+                typ: variant(vec![unit_case("leaf")])
+                    .named("timeline-node")
+                    .owned("root"),
             }],
             result: Some(AnalysedFunctionResult {
-                typ: variant(vec![unit_case("leaf")]).named("timeline-node"),
+                typ: variant(vec![unit_case("leaf")])
+                    .named("timeline-node")
+                    .owned("root"),
             }),
         }),
     ];
@@ -743,10 +808,14 @@ fn exports_caller_component() {
             name: "bug-wasm-rpc-i32".to_string(),
             parameters: vec![AnalysedFunctionParameter {
                 name: "in".to_string(),
-                typ: variant(vec![unit_case("leaf")]).named("timeline-node"),
+                typ: variant(vec![unit_case("leaf")])
+                    .named("timeline-node")
+                    .owned("rpc:counters/api"),
             }],
             result: Some(AnalysedFunctionResult {
-                typ: variant(vec![unit_case("leaf")]).named("timeline-node"),
+                typ: variant(vec![unit_case("leaf")])
+                    .named("timeline-node")
+                    .owned("rpc:counters/api"),
             }),
         }),
         AnalysedExport::Function(AnalysedFunction {

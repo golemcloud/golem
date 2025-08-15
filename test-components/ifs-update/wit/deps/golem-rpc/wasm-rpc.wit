@@ -1,4 +1,4 @@
-package golem:rpc@0.2.1;
+package golem:rpc@0.2.2;
 
 interface types {
   use wasi:clocks/wall-clock@0.2.3.{datetime};
@@ -59,7 +59,7 @@ interface types {
   }
 
   record wit-type {
-    nodes: list<wit-type-node>,
+    nodes: list<named-wit-type-node>,
   }
 
   type resource-id = u64;
@@ -67,6 +67,12 @@ interface types {
   enum resource-mode {
     owned,
     borrowed
+  }
+
+  record named-wit-type-node {
+    name: option<string>,
+    owner: option<string>,
+    %type: wit-type-node
   }
 
   variant wit-type-node {

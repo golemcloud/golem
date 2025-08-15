@@ -290,7 +290,7 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
 
     let patched_component_metadata = admin.get_latest_component_metadata(&component_id).await;
 
-    let exports = patched_component_metadata.exports;
+    let exports = patched_component_metadata.exports();
 
     assert_eq!(exports.len(), 1);
     assert!(matches!(
@@ -411,7 +411,7 @@ async fn component_transformer_env_var(deps: &EnvBasedTestDependencies, _tracing
         .unwrap();
 
     let response_map = {
-        assert!(response.len() == 1);
+        assert_eq!(response.len(), 1);
 
         let_assert!(Value::Result(Ok(Some(response))) = &response[0]);
         let_assert!(Value::List(response) = response.as_ref());

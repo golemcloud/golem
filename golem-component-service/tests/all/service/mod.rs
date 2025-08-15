@@ -1070,7 +1070,7 @@ async fn test_library_plugin_creation(
         .unwrap()
         .expect("plugin not found");
 
-    let exports = final_component.metadata.exports;
+    let exports = final_component.metadata.exports();
 
     assert_eq!(exports.len(), 1);
     assert!(matches!(
@@ -1158,7 +1158,7 @@ async fn test_app_plugin_creation(
         .unwrap()
         .expect("plugin not found");
 
-    let exports = final_component.metadata.exports;
+    let exports = final_component.metadata.exports();
 
     assert_eq!(exports.len(), 1);
     assert!(matches!(

@@ -2930,6 +2930,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         cases:
           type: array
           items:
@@ -2948,6 +2950,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         names:
           type: array
           items:
@@ -2960,6 +2964,8 @@ components:
       - mode
       properties:
         name:
+          type: string
+        owner:
           type: string
         resource_id:
           type: integer
@@ -2974,6 +2980,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
     TypeOption:
@@ -2983,6 +2991,8 @@ components:
       - inner
       properties:
         name:
+          type: string
+        owner:
           type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
@@ -2994,6 +3004,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         fields:
           type: array
           items:
@@ -3003,6 +3015,8 @@ components:
       title: TypeResult
       properties:
         name:
+          type: string
+        owner:
           type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
@@ -3031,6 +3045,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         items:
           type: array
           items:
@@ -3054,6 +3070,8 @@ components:
       - cases
       properties:
         name:
+          type: string
+        owner:
           type: string
         cases:
           type: array
