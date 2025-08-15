@@ -199,21 +199,21 @@ jobs:
           auto-start: false
 
       - uses: cargo-bins/cargo-binstall@main
-        if: ${{ matrix.group.name == "template-integration-tests" ||}}
+        if: ${{ matrix.group.name == "template-integration-tests" }}
       - name: Install cargo-component
-        if: ${{ matrix.group.name == "template-integration-tests" ||
+        if: ${{ matrix.group.name == "template-integration-tests" }}
         run: cargo install cargo-component@0.21.1
       - name: Install wasm-tools
-        if: ${{ matrix.group.name == "template-integration-tests" ||
+        if: ${{ matrix.group.name == "template-integration-tests" }}
         run: cargo binstall --force --locked wasm-tools@1.227.1
       - name: Install wit-bindgen
-        if: ${{ matrix.group.name == "template-integration-tests" ||
+        if: ${{ matrix.group.name == "template-integration-tests" }}
         run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
       - name: Install uv
-        if: ${{ matrix.group.name == "template-integration-tests" ||
+        if: ${{ matrix.group.name == "template-integration-tests" }}
         run: pip install uv==0.6.17
       - name: Install WASI SDK
-        if: ${{ matrix.group.name == "template-integration-tests" ||
+        if: ${{ matrix.group.name == "template-integration-tests" }}
         run: |
           WASI_VERSION=25
           WASI_SDK_PATH=/opt/wasi-sdk
@@ -222,17 +222,17 @@ jobs:
           sudo mv wasi-sdk-${WASI_VERSION}.0-x86_64-linux ${WASI_SDK_PATH}
           echo "WASI_SDK_PATH=${WASI_SDK_PATH}" >> $GITHUB_ENV
       - uses: mlugg/setup-zig@v2
-        if: ${{ matrix.group.name == "template-integration-tests" ||
+        if: ${{ matrix.group.name == "template-integration-tests" }}
       - uses: actions/setup-go@v5.3.0
-        if: ${{ matrix.group.name == "template-integration-tests" ||
+        if: ${{ matrix.group.name == "template-integration-tests" }}
       - uses: acifani/setup-tinygo@v2.0.0
-        if: ${{ matrix.group.name == "template-integration-tests" ||
+        if: ${{ matrix.group.name == "template-integration-tests" }}
         with:
           tinygo-version: "0.37.0"
       - uses: sbt/setup-sbt@v1.1.7
-        if: ${{ matrix.group.name == "template-integration-tests" ||
+        if: ${{ matrix.group.name == "template-integration-tests" }}
       - name: Install moonbit
-        if: ${{ matrix.group.name == "template-integration-tests" ||
+        if: ${{ matrix.group.name == "template-integration-tests" }}
         run: |
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> $GITHUB_PATH
