@@ -22,6 +22,7 @@ use crate::services::account::AccountError;
 use crate::services::plan::PlanError;
 use crate::services::application::ApplicationError;
 use crate::services::environment::EnvironmentError;
+use crate::services::token::{TokenError, TokenService};
 
 #[derive(ApiResponse, Debug, Clone)]
 pub enum ApiError {
@@ -172,13 +173,29 @@ impl From<ComponentError> for ApiError {
             ComponentError::UnknownComponentId(_)
             | ComponentError::UnknownVersionedComponentId(_)
             | ComponentError::PluginNotFound { .. }
-            | ComponentError::UnknownEnvironmentComponentName { .. } => {
+            | ComponentError::UnknownEnvironmentComponentName { .. } =>
                 Self::NotFound(Json(ErrorBody {
                     error: value.to_safe_string(),
-                }))
-            }
+                })),
 
             ComponentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+        }
+    }
+}
+
+impl From<TokenError> for ApiError {
+    fn from(value: TokenError) -> Self {
+        match value {
+            TokenError::TokenNotFound(_) => Self::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+
+            TokenError::TokenSecretAlreadyExists => Self::InternalError(Json(ErrorBody {
+                error: "Internal error".to_string(),
+            })),
+            TokenError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error: value.to_safe_string(),
             })),
         }

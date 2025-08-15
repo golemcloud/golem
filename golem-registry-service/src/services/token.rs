@@ -83,7 +83,7 @@ impl TokenService {
     pub async fn get_by_secret(
         &self,
         _token_id: &TokenId
-    ) -> anyhow::Result<TokenWithSecret> {
+    ) -> Result<TokenWithSecret, TokenError> {
         // TODO: missing in repo
         todo!()
     }
@@ -92,7 +92,7 @@ impl TokenService {
         &self,
         account_id: AccountId,
         expires_at: DateTime<Utc>
-    ) -> anyhow::Result<TokenWithSecret> {
+    ) -> Result<TokenWithSecret, TokenError> {
         let secret = TokenSecret::new_v4();
         self.create_known_secret(account_id, secret, expires_at).await
     }
@@ -102,7 +102,7 @@ impl TokenService {
         account_id: AccountId,
         secret: TokenSecret,
         expires_at: DateTime<Utc>
-    ) -> anyhow::Result<TokenWithSecret> {
+    ) -> Result<TokenWithSecret, TokenError> {
         let created_at = Utc::now();
         let token_id = TokenId::new_v4();
 

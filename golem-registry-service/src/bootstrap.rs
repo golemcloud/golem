@@ -51,6 +51,7 @@ pub struct Services {
     pub application_service: Arc<ApplicationService>,
     pub component_service: Arc<ComponentService>,
     pub environment_service: Arc<EnvironmentService>,
+    pub token_service: Arc<TokenService>
 }
 
 struct Repos {
@@ -99,7 +100,13 @@ impl Services {
             account_usage_service,
         ));
 
-        Ok(Self { component_service, account_service, application_service, environment_service })
+        Ok(Self {
+            account_service,
+            application_service,
+            component_service,
+            environment_service,
+            token_service
+         })
     }
 }
 

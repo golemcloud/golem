@@ -24,7 +24,7 @@ use super::plan::{PlanError, PlanService};
 use crate::repo::model::audit::AuditFields;
 use anyhow::anyhow;
 use crate::config::AccountsConfig;
-use super::token::TokenService;
+use super::token::{TokenError, TokenService};
 use golem_common::model::auth::TokenSecret;
 use chrono::{DateTime, Utc};
 
@@ -54,6 +54,12 @@ impl From<RepoError> for AccountError {
 impl From<PlanError> for AccountError {
     fn from(value: PlanError) -> Self {
         Self::InternalError(anyhow::Error::new(value).context("from PlanError"))
+    }
+}
+
+impl From<TokenError> for AccountError {
+    fn from(value: TokenError) -> Self {
+        Self::InternalError(anyhow::Error::new(value).context("from TokenError"))
     }
 }
 

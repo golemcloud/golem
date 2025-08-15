@@ -100,7 +100,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.application_service.clone()
                 ),
                 AccountGrantsApi {},
-                AccountTokensApi {},
+                AccountTokensApi::new(services.token_service.clone()),
                 AccountsApi::new(
                     services.account_service.clone()
                 ),

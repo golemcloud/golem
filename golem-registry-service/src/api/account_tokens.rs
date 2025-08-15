@@ -23,8 +23,12 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::Instrument;
+use crate::services::token::TokenService;
+use std::sync::Arc;
 
-pub struct AccountTokensApi {}
+pub struct AccountTokensApi {
+    token_service: Arc<TokenService>
+}
 
 #[OpenApi(
     prefix_path = "/v1/accounts",
@@ -33,6 +37,12 @@ pub struct AccountTokensApi {}
     tag = ApiTags::Token
 )]
 impl AccountTokensApi {
+    pub fn new(
+        token_service: Arc<TokenService>
+    ) -> Self {
+        Self { token_service }
+    }
+
     /// Get all tokens
     ///
     /// Gets all created tokens of an account.
@@ -100,10 +110,11 @@ impl AccountTokensApi {
 
     async fn create_token_internal(
         &self,
-        _account_id: AccountId,
-        _request: CreateTokenRequest,
+        account_id: AccountId,
+        request: CreateTokenRequest,
         _auth: AuthCtx,
     ) -> ApiResult<Json<TokenWithSecret>> {
-        todo!()
+        let result = self.token_service.create(account_id, request.expires_at).await?;
+        Ok(Json(result))
     }
 }
