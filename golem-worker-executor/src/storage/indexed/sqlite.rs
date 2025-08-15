@@ -127,7 +127,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         let keys = self
             .pool
             .with_ro(svc_name, api_name)
-            .fetch_all_as::<(String,), _>(query)
+            .fetch_all::<(String,), _>(query)
             .await
             .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
             .map_err(|err| err.to_safe_string())?;
@@ -229,7 +229,7 @@ impl IndexedStorage for SqliteIndexedStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_all_as::<DBIdValue, _>(query)
+            .fetch_all::<DBIdValue, _>(query)
             .await
             .map(|vec| vec.into_iter().map(|row| row.into_pair()).collect())
             .map_err(|err| err.to_safe_string())

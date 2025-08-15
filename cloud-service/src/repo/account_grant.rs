@@ -61,7 +61,7 @@ impl AccountGrantRepo for DbAccountGrantRepo<golem_service_base::db::postgres::P
         let result = self
             .db_pool
             .with_ro("account_grants", "get")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await?;
 
         result

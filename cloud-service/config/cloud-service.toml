@@ -36,7 +36,6 @@ type = "Sqlite"
 
 [db.config]
 database = "golem_service.db"
-foreign_keys = false
 max_connections = 10
 
 [login]

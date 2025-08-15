@@ -135,7 +135,7 @@ impl OAuth2TokenRepo for DbOAuth2TokenRepo<golem_service_base::db::postgres::Pos
 
         self.db_pool
             .with_ro("oauth2_token", "get_by_token_id")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 

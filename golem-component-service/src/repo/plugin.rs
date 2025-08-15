@@ -352,7 +352,7 @@ impl PluginRepo for DbPluginRepo<golem_service_base::db::postgres::PostgresPool>
 
         self.db_pool
             .with_ro("plugin", "get_all")
-            .fetch_all_as(query.build_query_as::<PluginRecord>())
+            .fetch_all(query.build_query_as::<PluginRecord>())
             .await
     }
 
@@ -402,7 +402,7 @@ impl PluginRepo for DbPluginRepo<golem_service_base::db::postgres::PostgresPool>
 
         self.db_pool
             .with_ro("plugin", "get_for_scope")
-            .fetch_all_as(query.build_query_as::<PluginRecord>())
+            .fetch_all(query.build_query_as::<PluginRecord>())
             .await
     }
 
@@ -446,7 +446,7 @@ impl PluginRepo for DbPluginRepo<golem_service_base::db::postgres::PostgresPool>
 
         self.db_pool
             .with_ro("plugin", "get_all_with_name")
-            .fetch_all_as(query.build_query_as::<PluginRecord>())
+            .fetch_all(query.build_query_as::<PluginRecord>())
             .await
     }
 

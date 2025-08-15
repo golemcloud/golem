@@ -425,7 +425,7 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with_ro("project_policy", "get_by_name")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 
@@ -450,7 +450,7 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
 
             self.db_pool
                 .with_ro("project_policy", "get_all")
-                .fetch_all_as(query)
+                .fetch_all(query)
                 .await
         }
     }

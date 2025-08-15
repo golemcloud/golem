@@ -14,21 +14,14 @@
 
 use golem_common::SafeDisplay;
 use sqlx::error::ErrorKind;
+use std::fmt::Display;
 
 pub mod plugin_installation;
 
-#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+#[derive(Debug, thiserror::Error)]
 pub enum RepoError {
-    #[error("Internal repository error: {0}")]
     Internal(String),
-    #[error("Unique violation repository error: {0}")]
     UniqueViolation(String),
-}
-
-impl RepoError {
-    pub fn is_unique_violation(&self) -> bool {
-        matches!(self, RepoError::UniqueViolation(_))
-    }
 }
 
 impl From<sqlx::Error> for RepoError {
@@ -45,6 +38,15 @@ impl From<sqlx::Error> for RepoError {
     }
 }
 
+impl Display for RepoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RepoError::UniqueViolation(error) => write!(f, "{error}"),
+            RepoError::Internal(error) => write!(f, "{error}"),
+        }
+    }
+}
+
 impl SafeDisplay for RepoError {
     fn to_safe_string(&self) -> String {
         match self {
@@ -55,7 +57,3 @@ impl SafeDisplay for RepoError {
         }
     }
 }
-
-pub type Result<T> = std::result::Result<T, RepoError>;
-
-pub type BusinessResult<T, E> = std::result::Result<std::result::Result<T, E>, RepoError>;

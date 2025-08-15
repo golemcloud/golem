@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::AccountId;
-use golem_service_base::db::{LabelledPoolTransaction, Pool};
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
 
 #[async_trait]
@@ -88,7 +88,10 @@ impl AccountConnectionsRepo
 
         let result = transaction.fetch_optional_as(query).await?;
 
-        transaction.commit().await?;
+        self.db_pool
+            .with_rw("account_connections", "update")
+            .commit(transaction)
+            .await?;
 
         Ok(result.map(|r| r.counter).unwrap_or_default())
     }

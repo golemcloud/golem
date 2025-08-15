@@ -38,8 +38,6 @@ newtype_uuid!(ProjectGrantId);
 newtype_uuid!(ProjectPolicyId);
 newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
 
-pub type Revision = u64;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Encode, Decode)]
 #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
