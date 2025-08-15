@@ -343,6 +343,11 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                     message: format!("Key: {key:?}"),
                 })
             }
+            PublicOplogEntry::BeginRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
+            PublicOplogEntry::PreCommitRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
+            PublicOplogEntry::PreRollbackRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
+            PublicOplogEntry::CommittedRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
+            PublicOplogEntry::RolledBackRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
         }
     }
 }
@@ -367,6 +372,7 @@ impl From<PublicDurableFunctionType> for oplog::WrappedFunctionType {
             PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
                 index: idx,
             }) => Self::WriteRemoteBatched(idx.map(|idx| idx.into())),
+            PublicDurableFunctionType::WriteRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
         }
     }
 }

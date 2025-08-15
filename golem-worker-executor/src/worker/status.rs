@@ -254,6 +254,21 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::CreateAgentInstance { .. } => {}
             OplogEntry::DropAgentInstance { .. } => {}
+            OplogEntry::BeginRemoteTransaction { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::PreCommitRemoteTransaction { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::PreRollbackRemoteTransaction { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::CommittedRemoteTransaction { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::RolledBackRemoteTransaction { .. } => {
+                result = WorkerStatus::Running;
+            }
         }
     }
     result
