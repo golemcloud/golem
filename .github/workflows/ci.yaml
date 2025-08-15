@@ -513,7 +513,7 @@ jobs:
       - unit-tests-and-checks
       - wasm-rpc-stub
       - worker-tests
-      - api-and-integration-tests
+      - it
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
       CARGO_BUILD_JOBS: 10
