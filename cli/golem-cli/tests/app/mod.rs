@@ -862,10 +862,10 @@ impl TestContext {
         let working_dir = test_dir.path().to_path_buf();
 
         let ctx = Self {
-            golem_path: PathBuf::from("../target/debug/golem")
+            golem_path: PathBuf::from("../../target/debug/golem")
                 .canonicalize()
                 .unwrap(),
-            golem_cli_path: PathBuf::from("../target/debug/golem-cli")
+            golem_cli_path: PathBuf::from("../../target/debug/golem-cli")
                 .canonicalize()
                 .unwrap(),
             _test_dir: test_dir,

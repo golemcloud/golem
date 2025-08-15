@@ -156,11 +156,21 @@ description = "Builds all executables in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
 
+[tasks.build-bins-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+dependencies = ["build-bins"]
+
 [tasks.build-worker-service]
 dependencies = ["wit"]
 description = "Builds the worker-service"
 command = "cargo"
 args = ["build", "-p", "golem-worker-service"]
+
+[tasks.build-worker-service-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+dependencies = ["build-worker-service"]
 
 [tasks.build-component-service]
 dependencies = ["wit"]
@@ -168,10 +178,20 @@ description = "Builds the component-service"
 command = "cargo"
 args = ["build", "-p", "golem-component-service"]
 
+[tasks.build-component-service-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+dependencies = ["build-component-service"]
+
 [tasks.build-cloud-service]
 description = "Builds cloud service"
 command = "cargo"
 args = ["build", "-p", "cloud-service"]
+
+[tasks.build-cloud-service-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+dependencies = ["build-cloud-service"]
 
 [tasks.build-release]
 description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
@@ -536,7 +556,7 @@ description = "Generates openapi spec from the code and saves it to the openapi 
 
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
-dependencies = ["build-worker-service"]
+dependencies = ["build-worker-service-non-ci"]
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
@@ -545,7 +565,7 @@ mkdir -pv ../data
 
 [tasks.generate-component-service-openapi]
 description = "Generates openapi spec for component service"
-dependencies = ["build-component-service"]
+dependencies = ["build-component-service-non-ci"]
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
@@ -554,7 +574,7 @@ mkdir -pv ../data
 
 [tasks.generate-cloud-service-openapi]
 description = "Generates openapi spec for cloud service"
-dependencies = ["build-cloud-service"]
+dependencies = ["build-cloud-service-non-ci"]
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
@@ -857,7 +877,7 @@ script = { file = "./local-run/start.sh" }
 
 [tasks.generate-configs]
 description = "Generates default and exmaple config files"
-dependencies = ["build-bins"]
+dependencies = ["build-bins-non-ci"]
 
 script = '''
 export RUST_BACKTRACE=1
