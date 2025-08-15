@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use chrono::{DateTime, NaiveDateTime, TimeDelta, Utc};
-use sqlx::Database;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
+use sqlx::Database;
 use std::fmt::Display;
 use std::ops::{Deref, Sub};
 

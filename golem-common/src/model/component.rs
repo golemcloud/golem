@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::component_metadata::ComponentMetadata;
-use super::{ComponentType, InitialComponentFile, PluginInstallationId, ProjectId};
+use super::ProjectId;
 use crate::base_model::{ComponentId, ComponentVersion};
 use crate::model::AccountId;
 use bincode::{Decode, Encode};
 use core::fmt;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
@@ -70,47 +68,6 @@ impl Display for VersionedComponentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}#{}", self.component_id, self.version)
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct PluginInstallation {
-    pub id: PluginInstallationId,
-    pub name: String,
-    pub version: String,
-    /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
-    pub registered: bool,
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
-}
-
-// TODO: Add validations (non-empty, no "/", no " ", ...)
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-pub struct ComponentName(pub String);
-
-impl Display for ComponentName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct Component {
-    pub versioned_component_id: VersionedComponentId,
-    pub component_name: ComponentName,
-    pub component_size: u64,
-    pub metadata: ComponentMetadata,
-    pub project_id: ProjectId,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub component_type: ComponentType,
-    pub files: Vec<InitialComponentFile>,
-    pub installed_plugins: Vec<PluginInstallation>,
-    pub env: HashMap<String, String>,
 }
 
 #[cfg(feature = "protobuf")]

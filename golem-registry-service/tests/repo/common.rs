@@ -182,13 +182,12 @@ pub async fn test_environment_create(deps: &Deps) {
     let app = deps.create_application().await;
     let env_name = "local";
 
-    assert!(
-        deps.environment_repo
-            .get_by_name(&app.application_id, env_name)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(deps
+        .environment_repo
+        .get_by_name(&app.application_id, env_name)
+        .await
+        .unwrap()
+        .is_none());
 
     let revision_0 = EnvironmentRevisionRecord {
         environment_id: Uuid::new_v4(),

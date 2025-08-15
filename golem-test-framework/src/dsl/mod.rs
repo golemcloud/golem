@@ -67,7 +67,6 @@ use golem_wasm_rpc::{Value, ValueAndType};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::time::{Duration, Instant};
 use tempfile::Builder;
 use tokio::select;
@@ -266,7 +265,7 @@ pub trait TestDsl {
                 source.into(),
                 InitialComponentFile {
                     key: self.add_initial_component_file(Path::new(source)).await,
-                    path: ComponentFilePath::from_str(target).unwrap(),
+                    path: (*target).try_into().unwrap(),
                     permissions: *permissions,
                 },
             ))

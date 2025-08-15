@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
+use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_service_base::db::postgres::PostgresPool;
@@ -21,7 +21,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo;
 use indoc::indoc;
-use tracing::{Instrument, Span, info_span};
+use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 
 #[async_trait]

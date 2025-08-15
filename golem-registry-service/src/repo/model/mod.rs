@@ -27,8 +27,8 @@ pub mod plan;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::datetime::SqlDateTime;
 use chrono::NaiveDateTime;
-use sqlx::Database;
 use sqlx::query::{Query, QueryAs};
+use sqlx::Database;
 use uuid::Uuid;
 
 // TODO: typed revision_id and entity UUIDs

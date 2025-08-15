@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::BindFields;
 use crate::repo::model::http_api_definition::{
     HttpApiDefinitionRecord, HttpApiDefinitionRevisionRecord,
 };
+use crate::repo::model::BindFields;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use futures::FutureExt;
 use futures::future::BoxFuture;
+use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -27,7 +27,7 @@ use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
 use sqlx::Database;
-use tracing::{Instrument, Span, info_span};
+use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 
 #[async_trait]

@@ -21,7 +21,7 @@ use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
-use tracing::{Instrument, Span, info_span};
+use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 
 #[async_trait]

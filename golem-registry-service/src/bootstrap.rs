@@ -14,9 +14,9 @@
 
 use crate::config::RegistryServiceConfig;
 use golem_common::config::DbConfig;
-use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::db::Pool;
 
 #[derive(Clone)]
 pub struct Services {}
