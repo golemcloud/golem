@@ -930,8 +930,7 @@ impl OplogEntry {
             | OplogEntry::SetSpanAttribute { timestamp, .. }
             | OplogEntry::ChangePersistenceLevel { timestamp, .. }
             | OplogEntry::CreateAgentInstance { timestamp, .. }
-            | OplogEntry::DropAgentInstance { timestamp, .. } => *timestamp,
-            | OplogEntry::ChangePersistenceLevel { timestamp, .. }
+            | OplogEntry::DropAgentInstance { timestamp, .. }
             | OplogEntry::BeginRemoteTransaction { timestamp, .. }
             | OplogEntry::PreCommitRemoteTransaction { timestamp, .. }
             | OplogEntry::PreRollbackRemoteTransaction { timestamp, .. }

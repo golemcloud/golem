@@ -92,7 +92,7 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
-    ExportedResourceInstanceKey, PluginInstallationId, ProjectId, WorkerResourceKey, TransactionId
+    ExportedResourceInstanceKey, PluginInstallationId, ProjectId, TransactionId, WorkerResourceKey,
 };
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,

@@ -611,6 +611,43 @@ pub struct ChangePersistenceLevelParameters {
     pub persistence_level: PersistenceLevel,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAgentInstanceParameters {
+    pub timestamp: Timestamp,
+    pub key: AgentInstanceKey,
+    pub parameters: DataValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DropAgentInstanceParameters {
+    pub timestamp: Timestamp,
+    pub key: AgentInstanceKey,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteTransactionParameters {
+    pub timestamp: Timestamp,
+    pub begin_index: OplogIndex,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct BeginRemoteTransactionParameters {
+    pub timestamp: Timestamp,
+    pub transaction_id: TransactionId,
+}
+
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
 ///
 /// Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
@@ -699,6 +736,20 @@ pub enum PublicOplogEntry {
     SetSpanAttribute(SetSpanAttributeParameters),
     /// Change the current persistence level
     ChangePersistenceLevel(ChangePersistenceLevelParameters),
+    /// Created a new agent instance
+    CreateAgentInstance(CreateAgentInstanceParameters),
+    /// Dropped an agent instance
+    DropAgentInstance(DropAgentInstanceParameters),
+    /// Begins a transaction operation
+    BeginRemoteTransaction(BeginRemoteTransactionParameters),
+    /// Pre-Commit of the transaction, indicating that the transaction will be committed
+    PreCommitRemoteTransaction(RemoteTransactionParameters),
+    /// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
+    PreRollbackRemoteTransaction(RemoteTransactionParameters),
+    /// Committed transaction operation, indicating that the transaction was committed
+    CommittedRemoteTransaction(RemoteTransactionParameters),
+    /// Rolled back transaction operation, indicating that the transaction was rolled back
+    RolledBackRemoteTransaction(RemoteTransactionParameters),
 }
 
 impl PublicOplogEntry {
@@ -1001,6 +1052,36 @@ impl PublicOplogEntry {
                 Self::string_match("changepersistencelevel", &[], query_path, query)
                     || Self::string_match("change-persistence-level", &[], query_path, query)
                     || Self::string_match("persistence-level", &[], query_path, query)
+            }
+            PublicOplogEntry::CreateAgentInstance(_params) => {
+                Self::string_match("createagentinstance", &[], query_path, query)
+                    || Self::string_match("create-agent-instance", &[], query_path, query)
+                // TODO: match in key and parameters
+            }
+            PublicOplogEntry::DropAgentInstance(_params) => {
+                Self::string_match("dropagentinstance", &[], query_path, query)
+                    || Self::string_match("drop-agent-instance", &[], query_path, query)
+                // TODO: match in key and parameters
+            }
+            PublicOplogEntry::BeginRemoteTransaction(_params) => {
+                Self::string_match("beginremotetransaction", &[], query_path, query)
+                    || Self::string_match("begin-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::PreCommitRemoteTransaction(_params) => {
+                Self::string_match("precommitremotetransaction", &[], query_path, query)
+                    || Self::string_match("pre-commit-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::PreRollbackRemoteTransaction(_params) => {
+                Self::string_match("prerollbackremotetransaction", &[], query_path, query)
+                    || Self::string_match("pre-rollback-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::CommittedRemoteTransaction(_params) => {
+                Self::string_match("committedremotetransaction", &[], query_path, query)
+                    || Self::string_match("committed-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::RolledBackRemoteTransaction(_params) => {
+                Self::string_match("rolledbackremotetransaction", &[], query_path, query)
+                    || Self::string_match("rolled-back-remote-transaction", &[], query_path, query)
             }
         }
     }
