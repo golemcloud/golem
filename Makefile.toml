@@ -37,6 +37,7 @@ AWS_EC2_METADATA_DISABLED = "true"
 CARGO_INCREMENTAL = "false"
 # CARGO_LOG="cargo::core::compiler::fingerprint=trace"
 JUNIT_OPTS = "--format junit --logfile target/report.xml"
+CI = "true"
 
 [tasks.default]
 description = "This is the task that gets executed by 'cargo make' when no task is specified"
@@ -442,6 +443,7 @@ cargo test --package integration-tests --test sharding -- --report-time $JUNIT_O
 '''
 
 [tasks.cli-integration-tests]
+dependencies = ["build"]
 description = "Run CLI integration tests"
 script_runner = "@duckscript"
 script = '''
