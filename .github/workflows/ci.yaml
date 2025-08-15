@@ -96,7 +96,6 @@ jobs:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     strategy:
-      fail-fast: true
       matrix:
         group:
           - name: untagged
@@ -152,7 +151,6 @@ jobs:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
     strategy:
-      fail-fast: true
       matrix:
         group:
           - name: integration-tests-group1
