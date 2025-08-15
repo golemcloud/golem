@@ -27,8 +27,8 @@ use crate::config::GolemClientProtocol;
 use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::stream::SplitStream;
-use futures_util::{SinkExt, StreamExt};
+use futures::stream::SplitStream;
+use futures::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::common::{
     AccountId, Empty, FilterComparator, PluginInstallationId, StringFilterComparator,
 };

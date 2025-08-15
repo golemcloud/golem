@@ -21,7 +21,7 @@ use crate::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::service::auth::AuthService;
 use crate::service::gateway::api_definition::ApiDefinitionService;
-use futures_util::future::try_join_all;
+use futures::future::try_join_all;
 use golem_common::json_yaml::JsonOrYaml;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;

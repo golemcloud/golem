@@ -54,7 +54,6 @@ figment = { workspace = true }
 fred = { workspace = true }
 fs-set-times = "0.20.3"
 futures = { workspace = true }
-futures-util = { workspace = true }
 gethostname = "1.0.0"
 hex = { workspace = true }
 http = { workspace = true }

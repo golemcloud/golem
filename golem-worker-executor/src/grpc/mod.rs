@@ -31,8 +31,8 @@ use crate::services::{
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
-use futures_util::Stream;
-use futures_util::StreamExt;
+use futures::Stream;
+use futures::StreamExt;
 use gethostname::gethostname;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};

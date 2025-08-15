@@ -14,7 +14,7 @@
 
 use crate::config::{CompileWorkerConfig, StaticComponentServiceConfig};
 use crate::model::*;
-use futures_util::TryStreamExt;
+use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::download_component_response;
 use golem_api_grpc::proto::golem::component::v1::ComponentError;

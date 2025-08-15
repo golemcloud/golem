@@ -29,7 +29,6 @@ axum-jrpc = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
-futures-util = { workspace = true }
 gethostname = { workspace = true }
 humansize = { workspace = true }
 log = { workspace = true }

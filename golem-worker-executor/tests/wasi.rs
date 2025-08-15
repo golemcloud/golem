@@ -19,7 +19,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{BoxError, Router};
 use bytes::Bytes;
-use futures_util::stream;
+use futures::stream;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,

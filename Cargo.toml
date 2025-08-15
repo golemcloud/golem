@@ -132,10 +132,8 @@ fred = { version = "=9.4.0", features = [
     "serde-json",
     "partial-tracing",
 ] } # pinned to 9.x to avoid conflicting cookie-factory dependencies
-futures = "0.3"
+futures = "0.3.31"
 futures-concurrency = "7.6.3"
-futures-core = "0.3.31"
-futures-util = "0.3.31"
 gethostname = "0.5.0"
 headers = "0.4.0"
 heck = "0.5.0"
