@@ -70,6 +70,7 @@ run_task = [
         "wit-host",
         "wit-wasm-rpc",
         "wit-golem-common",
+        "wit-golem-cli",
         "wit-done",
     ] },
 ]
@@ -97,6 +98,19 @@ cp wit/deps/clocks golem-common/wit/deps
 cp wit/deps/golem-1.x golem-common/wit/deps
 cp wit/deps/golem-rpc golem-common/wit/deps
 cp wit/deps/golem-agent golem-common/wit/deps
+"""
+
+[tasks.wit-golem-cli]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r cli/golem-cli/wit/deps
+mkdir cli/golem-cli/wit/deps
+cp wit/deps/clocks cli/golem-cli/wit/deps
+cp wit/deps/io cli/golem-cli/wit/deps
+cp wit/deps/golem-1.x cli/golem-cli/wit/deps
+cp wit/deps/golem-rpc cli/golem-cli/wit/deps
+cp wit/deps/golem-agent cli/golem-cli/wit/deps
 """
 
 [tasks.wit-host]
