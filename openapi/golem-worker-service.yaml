@@ -3861,6 +3861,18 @@ components:
           type: string
         subdomain:
           type: string
+    BeginRemoteTransactionParameters:
+      type: object
+      title: BeginRemoteTransactionParameters
+      required:
+      - timestamp
+      - transactionId
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        transactionId:
+          type: string
     BinaryReference:
       type: object
       oneOf:
@@ -3916,18 +3928,6 @@ components:
       - mimeType
       properties:
         mimeType:
-          type: string
-    BeginRemoteTransactionParameters:
-      type: object
-      title: BeginRemoteTransactionParameters
-      required:
-      - timestamp
-      - transactionId
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        transactionId:
           type: string
     CancelInvocationParameters:
       type: object

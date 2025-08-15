@@ -9502,6 +9502,18 @@ components:
           type: string
       required:
       - host
+    BeginRemoteTransactionParameters:
+      title: BeginRemoteTransactionParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        transactionId:
+          type: string
+      required:
+      - timestamp
+      - transactionId
     BinaryReference:
       discriminator:
         propertyName: type
@@ -9550,18 +9562,6 @@ components:
       required:
       - data
       - binaryType
-    BeginRemoteTransactionParameters:
-      title: BeginRemoteTransactionParameters
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        transactionId:
-          type: string
-      required:
-      - timestamp
-      - transactionId
     CancelInvocationParameters:
       title: CancelInvocationParameters
       type: object
