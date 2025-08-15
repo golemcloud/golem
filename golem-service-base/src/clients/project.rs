@@ -98,7 +98,7 @@ impl ProjectService for ProjectServiceDefault {
                                 GetProjectRequest {
                                     project_id: Some(id.clone().into()),
                                 },
-                                &token.value,
+                                &token.0,
                             );
 
                             Box::pin(client.get_project(request))
@@ -132,7 +132,7 @@ impl ProjectService for ProjectServiceDefault {
                     let response = client
                         .call("get-default-project", move |client| {
                             let request =
-                                authorised_request(GetDefaultProjectRequest {}, &token.value);
+                                authorised_request(GetDefaultProjectRequest {}, &token.0);
                             Box::pin(client.get_default_project(request))
                         })
                         .await?

@@ -21,7 +21,7 @@ use uuid::Uuid;
 pub struct TokenRecord {
     pub token_id: Uuid,
     pub secret: Uuid,
-    pub account_id: String,
+    pub account_id: Uuid,
     pub created_at: SqlDateTime,
     pub expires_at: SqlDateTime,
 }

@@ -20,12 +20,9 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, FromRepr};
-use crate::declare_transparent_newtypes;
+use crate::{newtype_uuid};
 
-declare_transparent_newtypes! {
-    #[derive(Hash, Eq)]
-    pub struct TokenSecret(String);
-}
+newtype_uuid!(TokenSecret, golem_api_grpc::proto::golem::token::TokenSecret);
 
 #[derive(
     Debug,
@@ -454,26 +451,6 @@ pub struct ProjectAuthorisedActions {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use super::AccountAction;
-
-    use super::TokenSecret;
-
-    impl TryFrom<golem_api_grpc::proto::golem::token::TokenSecret> for TokenSecret {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::token::TokenSecret,
-        ) -> Result<Self, Self::Error> {
-            Ok(Self(value.value.ok_or("Missing field: value")?))
-        }
-    }
-
-    impl From<TokenSecret> for golem_api_grpc::proto::golem::token::TokenSecret {
-        fn from(value: TokenSecret) -> Self {
-            Self {
-                value: Some(value.0),
-            }
-        }
-    }
 
     impl TryFrom<golem_api_grpc::proto::golem::auth::AccountAction> for AccountAction {
         type Error = String;

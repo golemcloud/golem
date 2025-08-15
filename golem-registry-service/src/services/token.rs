@@ -79,7 +79,7 @@ impl TokenService {
         };
 
 
-        self.token_repo.create(token)
+        let response = self.token_repo.create(token)
     }
 
 }
