@@ -17,7 +17,7 @@ members = [
     # "golem-shard-manager",
     # "golem-worker-executor",
     # "golem-worker-service",
-    # "integration-tests",
+    "integration-tests",
     "wasm-ast",
     "wasm-rpc",
     "wasm-rpc-derive",

@@ -12,20 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod component;
+
 use super::Tracing;
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use test_r::{inherit_test_dep, test};
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::config::EnvBasedTestDependencies;
+use test_r::inherit_test_dep;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
-
-#[test]
-#[tracing::instrument]
-async fn create_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
-    let user = deps.user().await?;
-
-    Err(anyhow::anyhow!("foo"))?;
-
-    todo!()
-}

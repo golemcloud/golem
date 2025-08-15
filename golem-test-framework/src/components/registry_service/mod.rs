@@ -87,7 +87,7 @@ pub trait RegistryService: Send + Sync {
     async fn base_http_client(&self) -> reqwest::Client;
 
     async fn client(&self, token: &TokenSecret) -> RegistryServiceClientLive {
-        let url = format!("http://{}:{}", self.http_port(), self.http_port());
+        let url = format!("http://{}:{}", self.http_host(), self.http_port());
         RegistryServiceClientLive {
             context: Context {
                 client: self.base_http_client().await,

@@ -52,24 +52,24 @@ name = "integration"
 path = "tests/lib.rs"
 harness = false
 
-[[test]]
-name = "sharding"
-path = "tests/sharding.rs"
-harness = false
+# [[test]]
+# name = "sharding"
+# path = "tests/sharding.rs"
+# harness = false
 
-[[test]]
-name = "api"
-path = "tests/api/lib.rs"
-harness = false
+# [[test]]
+# name = "api"
+# path = "tests/api/lib.rs"
+# harness = false
 
-[[bin]]
-name = "rib-repl"
-path = "src/rib_repl/main.rs"
-harness = false
-test = false
+# [[bin]]
+# name = "rib-repl"
+# path = "src/rib_repl/main.rs"
+# harness = false
+# test = false
 
-[[bin]]
-name = "benchmarks"
-path = "src/benchmarks/all.rs"
-harness = false
-test = false
+# [[bin]]
+# name = "benchmarks"
+# path = "src/benchmarks/all.rs"
+# harness = false
+# test = false
