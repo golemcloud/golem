@@ -550,10 +550,10 @@ impl IntoValue for WorkerMetadata {
             self.worker_id.into_value(),
             self.args.into_value(),
             self.env.into_value(),
+            self.wasi_config_vars.into_value(),
             self.last_known_status.status.into_value(),
             self.last_known_status.component_version.into_value(),
             0u64.into_value(), // retry count could be computed from the worker status record here but we don't support it yet
-            self.wasi_config_vars.into_value(),
         ])
     }
 
@@ -562,10 +562,10 @@ impl IntoValue for WorkerMetadata {
             field("worker-id", WorkerId::get_type()),
             field("args", list(str())),
             field("env", list(tuple(vec![str(), str()]))),
+            field("wasi-config-vars", HashMap::<String, String>::get_type()),
             field("status", WorkerStatus::get_type()),
             field("component-version", u64()),
             field("retry-count", u64()),
-            field("wasi_config_vars", HashMap::<String, String>::get_type()),
         ])
     }
 }
