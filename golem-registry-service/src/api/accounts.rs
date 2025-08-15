@@ -32,7 +32,11 @@ pub struct AccountsApi {
     account_service: Arc<AccountService>
 }
 
-#[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Account)]
+#[OpenApi(
+    prefix_path = "/v1/accounts",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Account
+)]
 impl AccountsApi {
     pub fn new(
         account_service: Arc<AccountService>
@@ -69,6 +73,36 @@ impl AccountsApi {
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<Account>>> {
         todo!()
+    }
+
+    /// Create account
+    ///
+    /// Create a new account. The response is the created account data.
+    #[oai(path = "/", method = "post", operation_id = "create_account")]
+    async fn create_account(
+        &self,
+        data: Json<NewAccountData>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Account>> {
+        let record = recorded_http_api_request!("create_account", account_name = data.name.clone());
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .create_account_internal(data.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn create_account_internal(
+        &self,
+        data: NewAccountData,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Account>> {
+        let result = self.account_service.create(data).await?;
+        Ok(Json(result))
     }
 
     /// Get account

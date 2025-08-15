@@ -32,7 +32,12 @@ pub struct AccountApplicationsApi {
     application_service: Arc<ApplicationService>
 }
 
-#[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Account, tag = ApiTags::Application)]
+#[OpenApi(
+    prefix_path = "/v1/accounts",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Account,
+    tag = ApiTags::Application
+)]
 impl AccountApplicationsApi {
     pub fn new(
         application_service: Arc<ApplicationService>

@@ -39,7 +39,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 use golem_api_grpc::proto::golem::component::{
     Component, PluginInstallation, VersionedComponentId,
 };
-use golem_client::api::ComponentClient as ComponentServiceHttpClient;
+use golem_client::api::{ComponentClient as ComponentServiceHttpClient, RegistryServiceClientLive};
 use golem_client::api::ComponentClientLive as ComponentServiceHttpClientLive;
 use golem_client::api::PluginClient as PluginServiceHttpClient;
 use golem_client::api::PluginClientLive as PluginServiceHttpClientLive;
@@ -80,9 +80,9 @@ pub trait RegistryService: Send + Sync {
 
     async fn kill(&mut self);
 
-    async fn component_http_client(&self, token: &Uuid) -> ComponentServiceHttpClientLive {
+    async fn http_client(&self, token: &Uuid) -> RegistryServiceClientLive {
         let url = format!("http://{}:{}", self.http_port(), self.http_port());
-        ComponentServiceHttpClientLive {
+        RegistryServiceClientLive {
             context: Context {
                 client: self.base_http_client().await,
                 base_url: Url::parse(&url).expect("Failed to parse url"),

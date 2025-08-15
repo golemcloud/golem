@@ -37,7 +37,12 @@ pub struct EnvironmentComponentsApi {
     component_service: Arc<ComponentService>,
 }
 
-#[OpenApi(prefix_path = "/v1/envs", tag = ApiTags::Environment,  tag = ApiTags::Component)]
+#[OpenApi(
+    prefix_path = "/v1/envs",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Environment,
+    tag = ApiTags::Component
+)]
 impl EnvironmentComponentsApi {
     pub fn new(component_service: Arc<ComponentService>) -> Self {
         Self { component_service }

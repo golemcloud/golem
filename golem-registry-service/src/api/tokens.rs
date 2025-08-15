@@ -27,7 +27,11 @@ use tracing::Instrument;
 
 pub struct TokensApi {}
 
-#[OpenApi(prefix_path = "/v1/tokens", tag = ApiTags::Token)]
+#[OpenApi(
+    prefix_path = "/v1/tokens",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Token
+)]
 impl TokensApi {
     /// Get token by id
     #[oai(path = "/:token_id", method = "get", operation_id = "get_token")]

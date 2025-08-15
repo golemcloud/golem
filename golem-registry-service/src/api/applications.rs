@@ -40,24 +40,24 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use tracing::Instrument;
 use std::sync::Arc;
-use crate::services::application::ApplicationService;
 use crate::services::environment::EnvironmentService;
 use golem_common::model::account::AccountId;
 use uuid::Uuid;
 
 pub struct ApplicationsApi {
-    application_service: Arc<ApplicationService>,
     environment_service: Arc<EnvironmentService>
 }
 
-#[OpenApi(prefix_path = "/v1/apps", tag = ApiTags::Application)]
+#[OpenApi(
+    prefix_path = "/v1/apps",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Application
+)]
 impl ApplicationsApi {
     pub fn new(
-        application_service: Arc<ApplicationService>,
         environment_service: Arc<EnvironmentService>
     ) -> Self {
         Self {
-            application_service,
             environment_service
         }
     }

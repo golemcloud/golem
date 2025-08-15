@@ -76,7 +76,7 @@ impl AccountService {
 
     pub async fn create_initial_accounts(&self) -> Result<(), AccountError> {
         for (name, account) in &self.config.accounts {
-            let account_id = AccountId(account.id.clone());
+            let account_id = AccountId(account.id);
             let existing_account = self.get_optional(&account_id).await?;
 
             match existing_account {
@@ -98,7 +98,6 @@ impl AccountService {
         };
         Ok(())
     }
-
 
     pub async fn create(&self, account: NewAccountData) -> Result<Account, AccountError> {
         let id = AccountId::new_v4();
@@ -204,7 +203,7 @@ impl AccountService {
         match self
             .account_repo
             .create(AccountRecord {
-                account_id: id.0.clone(),
+                account_id: id.0,
                 name: account.name,
                 email: account.email,
                 plan_id: plan_id.0,

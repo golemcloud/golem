@@ -21,7 +21,6 @@ use clap::ValueEnum;
 pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
-use golem_client::model::AccountData;
 use golem_common::model::{ProjectId};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;

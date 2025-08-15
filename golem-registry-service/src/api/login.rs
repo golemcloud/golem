@@ -26,7 +26,11 @@ use tracing::Instrument;
 
 pub struct LoginApi {}
 
-#[OpenApi(prefix_path = "/v1/login", tag = ApiTags::Login)]
+#[OpenApi(
+    prefix_path = "/v1/login",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Login
+)]
 impl LoginApi {
     /// Get information about a token
     ///

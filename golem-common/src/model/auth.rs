@@ -20,29 +20,11 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, FromRepr};
-use uuid::Uuid;
+use crate::declare_transparent_newtypes;
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
-)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-pub struct TokenSecret {
-    pub value: Uuid,
-}
-
-impl TokenSecret {
-    pub fn new(value: Uuid) -> Self {
-        Self { value }
-    }
-}
-
-impl std::str::FromStr for TokenSecret {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let uuid = Uuid::parse_str(s).map_err(|err| format!("Invalid token: {err}"))?;
-        Ok(Self { value: uuid })
-    }
+declare_transparent_newtypes! {
+    #[derive(Hash, Eq)]
+    pub struct TokenSecret(String);
 }
 
 #[derive(
@@ -108,19 +90,6 @@ pub struct AuthCtx {
 impl AuthCtx {
     pub fn new(token_secret: TokenSecret) -> Self {
         Self { token_secret }
-    }
-}
-
-impl IntoIterator for AuthCtx {
-    type Item = (String, String);
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        vec![(
-            "authorization".to_string(),
-            format!("Bearer {}", self.token_secret.value),
-        )]
-        .into_iter()
     }
 }
 
@@ -494,16 +463,14 @@ mod protobuf {
         fn try_from(
             value: golem_api_grpc::proto::golem::token::TokenSecret,
         ) -> Result<Self, Self::Error> {
-            Ok(Self {
-                value: value.value.ok_or("Missing field: value")?.into(),
-            })
+            Ok(Self(value.value.ok_or("Missing field: value")?))
         }
     }
 
     impl From<TokenSecret> for golem_api_grpc::proto::golem::token::TokenSecret {
         fn from(value: TokenSecret) -> Self {
             Self {
-                value: Some(value.value.into()),
+                value: Some(value.0),
             }
         }
     }

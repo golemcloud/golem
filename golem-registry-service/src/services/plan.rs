@@ -35,7 +35,7 @@ pub enum PlanError {
 impl SafeDisplay for PlanError {
     fn to_safe_string(&self) -> String {
         match self {
-            PlanError::InternalError(_) => "Internal error".to_string(),
+            Self::InternalError(_) => "Internal error".to_string(),
         }
     }
 }
@@ -66,7 +66,7 @@ impl PlanService {
 
     pub async fn create_initial_plans(&self) -> Result<(), PlanError> {
         for (name, plan) in &self.config.plans {
-            let plan_id = PlanId(plan.plan_id.clone());
+            let plan_id = PlanId(plan.plan_id);
             let existing_plan = self.get(&plan_id).await?;
 
             let needs_update = match existing_plan {

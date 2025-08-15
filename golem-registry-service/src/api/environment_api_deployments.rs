@@ -28,7 +28,12 @@ use tracing::Instrument;
 
 pub struct EnvironmentApiDeploymentsApi {}
 
-#[OpenApi(prefix_path = "/v1/envs", tag = ApiTags::Environment, tag = ApiTags::ApiDeployment)]
+#[OpenApi(
+    prefix_path = "/v1/envs",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Environment,
+    tag = ApiTags::ApiDeployment
+)]
 impl EnvironmentApiDeploymentsApi {
     /// Create a new api deployment
     #[oai(

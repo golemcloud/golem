@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use crate::declare_structs;
-use crate::model::application::ApplicationName;
-
 declare_structs! {
     pub struct UpdateApplicationRequest {
         // pub previous_revision: ApplicationRevision,

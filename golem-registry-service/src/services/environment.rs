@@ -12,22 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::account::{AccountRecord, AccountRepo};
-use golem_common::model::PlanId;
+use crate::repo::account::AccountRepo;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing::{error, info};
-use golem_common::model::account::{Account, AccountId, NewAccountData};
-use super::plan::{PlanError, PlanService};
-use crate::repo::model::audit::AuditFields;
+use tracing::error;
+use golem_common::model::account::AccountId;
 use anyhow::anyhow;
-use crate::config::AccountsConfig;
 use crate::repo::application::ApplicationRepo;
-use golem_common::model::application::{Application, ApplicationId, NewApplicationData};
-use crate::repo::model::application::{ApplicationRecord, ApplicationRevisionRecord};
-use crate::repo::environment::{EnvironmentRecord, EnvironmentRepo, EnvironmentRevisionRecord};
+use golem_common::model::application::ApplicationId;
+use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use golem_common::model::environment::{Environment, EnvironmentId, NewEnvironmentData};
 
 #[derive(Debug, thiserror::Error)]

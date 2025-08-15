@@ -37,7 +37,11 @@ pub struct ComponentsApi {
     component_service: Arc<ComponentService>,
 }
 
-#[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
+#[OpenApi(
+    prefix_path = "/v1/components",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Component
+)]
 impl ComponentsApi {
     pub fn new(component_service: Arc<ComponentService>) -> Self {
         Self { component_service }

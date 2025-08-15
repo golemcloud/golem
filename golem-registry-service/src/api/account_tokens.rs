@@ -27,7 +27,12 @@ use tracing::Instrument;
 
 pub struct AccountTokensApi {}
 
-#[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Account, tag = ApiTags::Token)]
+#[OpenApi(
+    prefix_path = "/v1/accounts",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Account,
+    tag = ApiTags::Token
+)]
 impl AccountTokensApi {
     /// Get all tokens
     ///

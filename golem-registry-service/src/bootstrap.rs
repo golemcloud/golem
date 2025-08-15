@@ -46,9 +46,9 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 #[derive(Clone)]
 pub struct Services {
     pub account_service: Arc<AccountService>,
-    pub component_service: Arc<ComponentService>,
     pub application_service: Arc<ApplicationService>,
-    pub environment_service: Arc<EnvironmentService>
+    pub component_service: Arc<ComponentService>,
+    pub environment_service: Arc<EnvironmentService>,
 }
 
 struct Repos {
@@ -76,8 +76,10 @@ impl Services {
         let account_usage_service = Arc::new(AccountUsageService::new(repos.account_usage_repo));
 
         let plan_service = Arc::new(PlanService::new(repos.plan_repo, config.plans.clone()));
+        plan_service.create_initial_plans().await?;
 
         let account_service = Arc::new(AccountService::new(repos.account_repo.clone(), plan_service.clone(), config.accounts.clone()));
+        account_service.create_initial_accounts().await?;
 
         let application_service = Arc::new(ApplicationService::new(repos.application_repo.clone()));
 
@@ -92,7 +94,7 @@ impl Services {
             account_usage_service,
         ));
 
-        Ok(Services { component_service, account_service, application_service, environment_service })
+        Ok(Self { component_service, account_service, application_service, environment_service })
     }
 }
 
@@ -101,7 +103,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
 
     match db_config {
         DbConfig::Postgres(postgres_config) => {
-            db::postgres::migrate(&postgres_config, migrations.postgres_migrations())
+            db::postgres::migrate(postgres_config, migrations.postgres_migrations())
                 .await
                 .context("Postgres DB migration")?;
 
@@ -125,7 +127,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
-            db::sqlite::migrate(&sqlite_config, migrations.postgres_migrations())
+            db::sqlite::migrate(sqlite_config, migrations.postgres_migrations())
                 .await
                 .context("Postgres DB migration")?;
 

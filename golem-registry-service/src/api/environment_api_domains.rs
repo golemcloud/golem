@@ -28,7 +28,12 @@ use tracing::Instrument;
 
 pub struct EnvironmentApiDomainsApi {}
 
-#[OpenApi(prefix_path = "/v1/envs", tag = ApiTags::Environment, tag = ApiTags::ApiDomain)]
+#[OpenApi(
+    prefix_path = "/v1/envs",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Environment,
+    tag = ApiTags::ApiDomain
+)]
 impl EnvironmentApiDomainsApi {
     /// Get all API domains
     #[oai(
