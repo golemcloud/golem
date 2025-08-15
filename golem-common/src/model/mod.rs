@@ -17,6 +17,7 @@ pub mod auth;
 pub mod base64;
 pub mod component;
 pub mod component_constraint;
+#[cfg(feature = "tokio")]
 pub mod component_metadata;
 pub mod error;
 pub mod exports;

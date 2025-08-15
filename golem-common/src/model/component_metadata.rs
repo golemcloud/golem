@@ -33,8 +33,6 @@ use golem_wasm_ast::{
     IgnoreAllButMetadata,
 };
 use heck::ToKebabCase;
-use poem_openapi::registry::{MetaSchemaRef, Registry};
-use poem_openapi::types::ParseResult;
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
@@ -226,11 +224,11 @@ impl poem_openapi::types::Type for ComponentMetadata {
         <ComponentMetadataInnerData as poem_openapi::types::Type>::name()
     }
 
-    fn schema_ref() -> MetaSchemaRef {
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
         <ComponentMetadataInnerData as poem_openapi::types::Type>::schema_ref()
     }
 
-    fn register(registry: &mut Registry) {
+    fn register(registry: &mut poem_openapi::registry::Registry) {
         <ComponentMetadataInnerData as poem_openapi::types::Type>::register(registry);
     }
 
@@ -250,7 +248,7 @@ impl poem_openapi::types::IsObjectType for ComponentMetadata {}
 
 #[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromJSON for ComponentMetadata {
-    fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
+    fn parse_from_json(value: Option<Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
             ComponentMetadataInnerData::parse_from_json(value).map_err(|err| err.propagate())?;
         Ok(Self {
@@ -269,7 +267,7 @@ impl poem_openapi::types::ToJSON for ComponentMetadata {
 
 #[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromXML for ComponentMetadata {
-    fn parse_from_xml(value: Option<Value>) -> ParseResult<Self> {
+    fn parse_from_xml(value: Option<Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
             ComponentMetadataInnerData::parse_from_xml(value).map_err(|err| err.propagate())?;
         Ok(Self {
@@ -288,7 +286,7 @@ impl poem_openapi::types::ToXML for ComponentMetadata {
 
 #[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
-    fn parse_from_yaml(value: Option<Value>) -> ParseResult<Self> {
+    fn parse_from_yaml(value: Option<Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
             ComponentMetadataInnerData::parse_from_yaml(value).map_err(|err| err.propagate())?;
         Ok(Self {
