@@ -1,0 +1,4 @@
+{
+  "description": "Oplog processor plugin implemented in Rust",
+  "appComponentGroup": "default"
+}

@@ -1,0 +1,4 @@
+See the documentation about installing tooling: https://learn.golem.cloud/docs/experimental-languages/zig-langauge-guide/setup
+
+Compile the Zig code:
+  zig build

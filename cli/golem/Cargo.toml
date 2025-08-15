@@ -1,0 +1,62 @@
+[package]
+name = "golem"
+version = "0.0.0"
+edition = "2021"
+license-file = "../LICENSE"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem-cli"
+readme = "README.md"
+description = "Single Golem executable for testing"
+
+[lib]
+harness = false
+
+[[bin]]
+name = "golem"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+# Repo deps
+golem-cli = { path = "../golem-cli", features = [
+    "server-commands",
+], version = "=0.0.0" }
+
+# Golem - git deps
+golem-common = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
+golem-service-base = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
+cloud-service = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
+golem-component-compilation-service = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
+golem-component-service = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
+golem-shard-manager = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
+golem-worker-executor = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
+golem-worker-service = { git = "https://github.com/golemcloud/golem", tag="v1.3.0-dev.25" }
+
+# External deps
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true }
+clap-verbosity-flag = { workspace = true }
+darling = { workspace = true }
+dirs = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+futures = { workspace = true }
+include_dir = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-prometheus = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+poem = { workspace = true }
+prometheus = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+serde = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

@@ -1,0 +1,20 @@
+[package]
+name = "caller-no-dep"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+opt-level = 's'
+
+[dependencies]
+wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
+
+[package.metadata.component.target]
+path = "wit"
+
+[package.metadata.component.target.dependencies]
