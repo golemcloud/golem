@@ -183,14 +183,16 @@ async fn all_wit_types() {
         field("price", f32()),
         field("quantity", u32()),
     ])
-    .named("product-item");
+    .named("product-item")
+    .owned("test:main-exports/iface1");
     let order = record(vec![
         field("order-id", str()),
         field("items", list(product_item.clone())),
         field("total", f32()),
         field("timestamp", u64()),
     ])
-    .named("order");
+    .named("order")
+    .owned("test:main-exports/iface1");
 
     assert_has_stub(
         exported_interface,
@@ -207,13 +209,16 @@ async fn all_wit_types() {
         None,
     );
 
-    let permissions = flags(&["read", "write", "exec", "close"]).named("permissions");
+    let permissions = flags(&["read", "write", "exec", "close"])
+        .named("permissions")
+        .owned("test:main-exports/iface1");
     let metadata = record(vec![
         field("name", str()),
         field("origin", str()),
         field("perms", permissions.clone()),
     ])
-    .named("metadata");
+    .named("metadata")
+    .owned("test:main-exports/iface1");
 
     assert_has_stub(
         exported_interface,
@@ -272,7 +277,8 @@ async fn all_wit_types() {
         field("y", s32()),
         field("metadata", metadata.clone()),
     ])
-    .named("point");
+    .named("point")
+    .owned("test:main-exports/iface1");
     assert_has_stub(
         exported_interface,
         "iface1",
@@ -295,13 +301,16 @@ async fn all_wit_types() {
         Some(result_err(str())),
     );
 
-    let order_confirmation = record(vec![field("order-id", str())]).named("order-confirmation");
+    let order_confirmation = record(vec![field("order-id", str())])
+        .named("order-confirmation")
+        .owned("test:main-exports/iface1");
     let checkout_result = variant(vec![
         case("error", str()),
         case("success", order_confirmation.clone()),
         unit_case("unknown"),
     ])
-    .named("checkout-result");
+    .named("checkout-result")
+    .owned("test:main-exports/iface1");
 
     assert_has_stub(
         exported_interface,
@@ -318,7 +327,9 @@ async fn all_wit_types() {
         Some(checkout_result.clone()),
     );
 
-    let color = r#enum(&["red", "green", "blue"]).named("color");
+    let color = r#enum(&["red", "green", "blue"])
+        .named("color")
+        .owned("test:main-exports/iface1");
     assert_has_stub(
         exported_interface,
         "iface1",
@@ -555,12 +566,15 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
                         "uuid",
                         record(vec![field("high-bits", u64()), field("low-bits", u64()),])
                             .named("uuid")
+                            .owned("golem:rpc@0.2.2/types")
                     )])
                     .named("component-id")
+                    .owned("golem:rpc@0.2.2/types")
                 ),
                 field("worker-name", str()),
             ])
             .named("worker-id")
+            .owned("golem:rpc@0.2.2/types")
         }]
     );
 }
@@ -622,12 +636,15 @@ fn assert_has_resource(
                             "uuid",
                             record(vec![field("high-bits", u64()), field("low-bits", u64()),])
                                 .named("uuid")
+                                .owned("golem:rpc@0.2.2/types")
                         ),])
                         .named("component-id")
+                        .owned("golem:rpc@0.2.2/types")
                     ),
                     field("worker-name", str()),
                 ])
                 .named("worker-id")
+                .owned("golem:rpc@0.2.2/types")
             }],
             constructor_parameters.to_vec()
         ]
@@ -702,7 +719,9 @@ fn assert_has_stub(
             mode: AnalysedResourceMode::Borrowed,
             name: None,
             owner: None,
-        })],
+        })
+        .named("iface1")
+        .owned("test:main-client/api-client")],
         parameters,
     ]
     .concat();
@@ -710,7 +729,11 @@ fn assert_has_stub(
     let scheduled_function_parameters = [
         parameters_with_self.clone(),
         // schedule_for parameter
-        vec![record(vec![field("seconds", u64()), field("nanoseconds", u32())]).named("datetime")],
+        vec![
+            record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+                .named("datetime")
+                .owned("wasi:clocks@0.2.3/wall-clock"),
+        ],
     ]
     .concat();
 
@@ -727,8 +750,8 @@ fn assert_has_stub(
             AnalysedType::Handle(TypeHandle {
                 mode: AnalysedResourceMode::Owned,
                 resource_id,
-                name: None,
-                owner: None,
+                name: Some(_),
+                owner: Some(_),
             }) => *resource_id,
             _ => panic!("unexpected async result return type"),
         };
@@ -759,13 +782,15 @@ fn assert_valid_polling_resource(
         .iter()
         .filter(|r| r.is_method() && !r.parameters.is_empty())
         .filter(|r| {
-            r.parameters[0].typ
-                == AnalysedType::Handle(TypeHandle {
-                    resource_id,
+            matches!(
+                &r.parameters[0].typ,
+                &AnalysedType::Handle(TypeHandle {
+                    resource_id: id,
                     mode: AnalysedResourceMode::Borrowed,
-                    name: None,
-                    owner: None,
-                })
+                    name: Some(_),
+                    owner: Some(_),
+                }) if id == resource_id
+            )
         })
         .collect::<Vec<_>>();
 
