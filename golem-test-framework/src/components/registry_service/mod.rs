@@ -66,6 +66,8 @@ use tracing::{debug, info, Level};
 use url::Url;
 use uuid::Uuid;
 use golem_common::model::component::InitialComponentFile;
+use golem_common::model::auth::TokenSecret;
+use golem_common::model::account::AccountId;
 
 #[async_trait]
 pub trait RegistryService: Send + Sync {
@@ -76,17 +78,21 @@ pub trait RegistryService: Send + Sync {
     fn grpc_host(&self) -> String;
     fn gprc_port(&self) -> u16;
 
-    async fn base_http_client(&self) -> reqwest::Client;
+    fn admin_account_id(&self) -> AccountId;
+    fn admin_account_email(&self) -> String;
+    fn admin_account_token(&self) -> TokenSecret;
 
     async fn kill(&mut self);
 
-    async fn http_client(&self, token: &Uuid) -> RegistryServiceClientLive {
+    async fn base_http_client(&self) -> reqwest::Client;
+
+    async fn client(&self, token: &TokenSecret) -> RegistryServiceClientLive {
         let url = format!("http://{}:{}", self.http_port(), self.http_port());
         RegistryServiceClientLive {
             context: Context {
                 client: self.base_http_client().await,
                 base_url: Url::parse(&url).expect("Failed to parse url"),
-                security_token: Security::Bearer(token.to_string()),
+                security_token: Security::Bearer(token.0.to_string()),
             },
         }
     }

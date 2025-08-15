@@ -56,7 +56,12 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "CreateLibraryPluginRequestMetadata",
                 "golem_common::api::component::CreateLibraryPluginRequestMetadata",
             ),
+
             ("PluginScope", "golem_common::model::plugin::PluginScope"),
+            ("Account", "golem_common::model::account::Account"),
+            ("NewAccountData", "golem_common::model::account::NewAccountData"),
+            ("TokenWithSecret", "golem_common::model::auth::TokenWithSecret"),
+
             // ("AgentType", "golem_common::model::agent::AgentType"),
             // ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
             // ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),

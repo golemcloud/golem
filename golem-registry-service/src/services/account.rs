@@ -88,7 +88,11 @@ impl AccountService {
             match existing_account {
                 None => {
                     info!("Creating initial account {} with id {}", name, account.id);
-                    self.create_with_id(account_id.clone(), NewAccountData { name: account.name.clone(), email: account.email.clone() }).await?;
+                    self.create_internal(
+                        account_id.clone(),
+                        NewAccountData { name: account.name.clone(), email: account.email.clone() },
+                        PlanId(account.plan_id.clone())
+                    ).await?;
                     // TODO: Deal with failure here
                     self.token_service.create_known_secret(account_id, TokenSecret(account.token), DateTime::<Utc>::MAX_UTC).await?;
                 }
@@ -103,7 +107,9 @@ impl AccountService {
 
     pub async fn create(&self, account: NewAccountData) -> Result<Account, AccountError> {
         let id = AccountId::new_v4();
-        self.create_with_id(id, account).await
+        let plan_id = self.get_default_plan_id().await?;
+        info!("Creating account: {}", id);
+        self.create_internal(id, account, plan_id).await
     }
 
     pub async fn get(&self, account_id: &AccountId) -> Result<Account, AccountError> {
@@ -199,10 +205,13 @@ impl AccountService {
     //     }
     // }
 
-    async fn create_with_id(&self, id: AccountId, account: NewAccountData) -> Result<Account, AccountError> {
-        let plan_id = self.get_default_plan_id().await?;
-        info!("Creating account: {}", id);
-        match self
+    async fn create_internal(
+        &self,
+        id: AccountId,
+        account: NewAccountData,
+        plan_id: PlanId,
+    ) -> Result<Account, AccountError> {
+        let record = self
             .account_repo
             .create(AccountRecord {
                 account_id: id.0,
@@ -212,10 +221,9 @@ impl AccountService {
                 audit: AuditFields::new(id.0),
             })
             .await?
-        {
-            Some(account_record) => Ok(account_record.into()),
-            None => Err(anyhow!("Duplicated account on fresh id: {id}").into()),
-        }
+            .ok_or(anyhow!("Duplicated account on fresh id: {id}"))?;
+
+        Ok(record.into())
     }
 
     pub async fn get_optional(&self, account_id: &AccountId) -> Result<Option<Account>, AccountError> {

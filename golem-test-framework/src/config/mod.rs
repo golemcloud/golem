@@ -28,8 +28,13 @@ use golem_service_base::storage::blob::BlobStorage;
 use std::path::Path;
 use std::sync::Arc;
 use uuid::{uuid, Uuid};
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountId, NewAccountData};
 use crate::components::registry_service::RegistryService;
+use golem_common::model::auth::TokenSecret;
+use golem_client::api::RegistryServiceClient;
+use golem_client::model::CreateTokenRequest;
+use chrono::{DateTime, Utc};
+use std::u32::MAX;
 
 pub mod cli;
 mod env;
@@ -60,19 +65,78 @@ pub trait TestDependencies: Send + Sync {
 
     fn registry_service(&self) -> Arc<dyn RegistryService>;
 
-    // TODO: this need to be cached, especially when using in benchmarks
     async fn admin(&self) -> TestDependenciesDsl<&Self> {
-        let account_id = AccountId(uuid!("e34d64d7-6bb3-4bf7-9411-cfff92ca1a5f"));
-        let account_email = "foo@golem.cloud".to_string();
-        let token = uuid!("5ad5b0a1-20ea-4cb3-912f-5b63c79ea01b");
-
+        let registry_service = self.registry_service();
         TestDependenciesDsl {
+            account_id: registry_service.admin_account_id(),
+            account_email: registry_service.admin_account_email(),
+            token: registry_service.admin_account_token(),
             deps: self,
-            account_id,
-            account_email,
-            token
         }
     }
+
+    // async fn into_admin(self) -> TestDependenciesDsl<Self>
+    // where
+    //     Self: Sized,
+    // {
+    //     let registry_service = self.registry_service();
+    //     TestDependenciesDsl {
+    //         account_id: registry_service.admin_account_id(),
+    //         account_email: registry_service.admin_account_email(),
+    //         token: registry_service.admin_account_token(),
+    //         deps: self,
+    //     }
+    // }
+
+    async fn user(&self) -> anyhow::Result<TestDependenciesDsl<&Self>> {
+        let registry_service = self.registry_service();
+
+        let client = registry_service.client(&registry_service.admin_account_token()).await;
+
+        let name = Uuid::new_v4().to_string();
+        let account_data = NewAccountData {
+            email: format!("{name}@golem.cloud"),
+            name,
+        };
+
+        let account = client.create_account(&account_data).await?;
+
+        let token = client.create_token(&account.id.0, &CreateTokenRequest { expires_at: DateTime::<Utc>::MAX_UTC }).await?;
+
+        Ok(TestDependenciesDsl {
+            account_id: account.id,
+            account_email: account.email,
+            token: token.secret,
+            deps: self,
+        })
+    }
+
+    // async fn into_user(self) -> anyhow::Result<TestDependenciesDsl<Self>>
+    // where
+    //     Self: Sized,
+    // {
+    //     let registry_service = self.registry_service();
+
+    //     let client = registry_service.client(&registry_service.admin_account_token()).await;
+
+    //     let name = Uuid::new_v4().to_string();
+    //     let account_data = NewAccountData {
+    //         email: format!("{name}@golem.cloud"),
+    //         name,
+    //     };
+
+    //     let account = client.create_account(&account_data).await?;
+
+    //     let token = client.create_token(&account.id.0, &CreateTokenRequest { expires_at: DateTime::<Utc>::MAX_UTC }).await?;
+
+    //     Ok(TestDependenciesDsl {
+    //         account_id: account.id,
+    //         account_email: account.email,
+    //         token: token.secret,
+    //         deps: self,
+    //     })
+    // }
+
 
     // async fn into_admin(self) -> TestDependenciesDsl<Self>
     // where
@@ -219,7 +283,7 @@ pub struct TestDependenciesDsl<Deps> {
     pub deps: Deps,
     pub account_id: AccountId,
     pub account_email: String,
-    pub token: Uuid,
+    pub token: TokenSecret,
 }
 
 #[derive(Debug, Clone)]
