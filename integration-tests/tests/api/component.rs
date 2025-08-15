@@ -16,7 +16,7 @@ use super::Tracing;
 use assert2::assert;
 use golem_client::api::RegistryServiceClient;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslUnsafe};
+use golem_test_framework::dsl::TestDsl;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(Tracing);

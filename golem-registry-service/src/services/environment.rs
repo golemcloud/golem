@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::account::AccountRepo;
-use crate::repo::application::ApplicationRepo;
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use anyhow::anyhow;
 use golem_common::model::account::AccountId;

@@ -27,14 +27,8 @@
 // use crate::components::component_service::provided::ProvidedComponentService;
 // use crate::components::component_service::spawned::SpawnedComponentService;
 // use crate::components::component_service::ComponentService;
-use crate::components::k8s::{aws_nlb_service_annotations, K8sNamespace, K8sRoutingType};
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
-use crate::components::rdb::k8s_postgres::K8sPostgresRdb;
-use crate::components::rdb::provided_postgres::ProvidedPostgresRdb;
 use crate::components::rdb::{PostgresInfo, Rdb};
-use crate::components::redis::docker::DockerRedis;
-use crate::components::redis::k8s::K8sRedis;
-use crate::components::redis::provided::ProvidedRedis;
 use crate::components::redis::spawned::SpawnedRedis;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
@@ -72,7 +66,6 @@ use itertools::Itertools;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 use tempfile::TempDir;
 use tracing::Level;
 use uuid::Uuid;
@@ -361,35 +354,37 @@ impl CliTestDependencies {
     }
 
     async fn make_docker(
-        params: CliParams,
-        cluster_size: usize,
-        redis_prefix: &str,
-        compilation_service_disabled: bool,
+        _params: CliParams,
+        _cluster_size: usize,
+        _redis_prefix: &str,
+        _compilation_service_disabled: bool,
     ) -> anyhow::Result<Self> {
-        let params_clone = params.clone();
-        let unique_network_id = Uuid::new_v4().to_string();
+        todo!()
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
+        // let params_clone = params.clone();
+        // let unique_network_id = Uuid::new_v4().to_string();
 
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        // let blob_storage = Arc::new(
+        //     FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+        //         .await
+        //         .unwrap(),
+        // );
 
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+        // let initial_component_files_service =
+        //     Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
-        let rdb: Arc<dyn Rdb> = Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
+        // let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-        let redis: Arc<dyn Redis> =
-            Arc::new(DockerRedis::new(&unique_network_id, redis_prefix.to_string()).await);
+        // let rdb: Arc<dyn Rdb> = Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
 
-        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
-            redis.clone(),
-            Level::DEBUG,
-            Level::ERROR,
-        ));
+        // let redis: Arc<dyn Redis> =
+        //     Arc::new(DockerRedis::new(&unique_network_id, redis_prefix.to_string()).await);
+
+        // let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
+        //     redis.clone(),
+        //     Level::DEBUG,
+        //     Level::ERROR,
+        // ));
 
         // let cloud_service: Arc<dyn CloudService> = Arc::new(
         //     DockerCloudService::new(
@@ -468,47 +463,45 @@ impl CliTestDependencies {
         //     .await,
         // );
 
-        let registry_service: Arc<dyn RegistryService> = todo!();
-
-        Ok(Self {
-            rdb,
-            redis,
-            redis_monitor,
-            blob_storage,
-            initial_component_files_service,
-            plugin_wasm_files_service,
-            registry_service,
-            test_component_directory: params.component_directory.clone().into(),
-            temp_directory: Arc::new(TempDir::new().unwrap()),
-        })
+        // Ok(Self {
+        //     rdb,
+        //     redis,
+        //     redis_monitor,
+        //     blob_storage,
+        //     initial_component_files_service,
+        //     plugin_wasm_files_service,
+        //     registry_service,
+        //     test_component_directory: params.component_directory.clone().into(),
+        //     temp_directory: Arc::new(TempDir::new().unwrap()),
+        // })
     }
 
     #[allow(clippy::too_many_arguments)]
     async fn make_spawned(
         params: CliParams,
-        cluster_size: usize,
-        workspace_root: &str,
-        build_target: &str,
+        _cluster_size: usize,
+        _workspace_root: &str,
+        _build_target: &str,
         redis_port: u16,
         redis_prefix: &str,
-        shard_manager_http_port: u16,
-        shard_manager_grpc_port: u16,
-        component_service_http_port: u16,
-        component_service_grpc_port: u16,
-        component_compilation_service_http_port: u16,
-        component_compilation_service_grpc_port: u16,
-        compilation_service_disabled: bool,
-        worker_service_http_port: u16,
-        worker_service_grpc_port: u16,
-        worker_service_custom_request_port: u16,
-        worker_executor_base_http_port: u16,
-        worker_executor_base_grpc_port: u16,
-        cloud_service_http_port: u16,
-        cloud_service_grpc_port: u16,
+        _shard_manager_http_port: u16,
+        _shard_manager_grpc_port: u16,
+        _component_service_http_port: u16,
+        _component_service_grpc_port: u16,
+        _component_compilation_service_http_port: u16,
+        _component_compilation_service_grpc_port: u16,
+        _compilation_service_disabled: bool,
+        _worker_service_http_port: u16,
+        _worker_service_grpc_port: u16,
+        _worker_service_custom_request_port: u16,
+        _worker_executor_base_http_port: u16,
+        _worker_executor_base_grpc_port: u16,
+        _cloud_service_http_port: u16,
+        _cloud_service_grpc_port: u16,
         mute_child: bool,
     ) -> anyhow::Result<Self> {
-        let workspace_root = Path::new(workspace_root).canonicalize().unwrap();
-        let build_root = workspace_root.join(build_target);
+        // let workspace_root = Path::new(workspace_root).canonicalize().unwrap();
+        // let build_root = workspace_root.join(build_target);
 
         let out_level = if mute_child {
             Level::TRACE
@@ -676,45 +669,47 @@ impl CliTestDependencies {
     }
 
     async fn make_minikube(
-        params: CliParams,
-        cluster_size: usize,
-        namespace: &str,
-        redis_prefix: &str,
-        compilation_service_disabled: bool,
+        _params: CliParams,
+        _cluster_size: usize,
+        _namespace: &str,
+        _redis_prefix: &str,
+        _compilation_service_disabled: bool,
     ) -> anyhow::Result<Self> {
-        let routing_type = K8sRoutingType::Minikube;
-        let namespace = K8sNamespace(namespace.to_string());
-        let timeout = Duration::from_secs(90);
+        todo!()
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        // let routing_type = K8sRoutingType::Minikube;
+        // let namespace = K8sNamespace(namespace.to_string());
+        // let timeout = Duration::from_secs(90);
 
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+        // let blob_storage = Arc::new(
+        //     FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+        //         .await
+        //         .unwrap(),
+        // );
+        // let initial_component_files_service =
+        //     Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
-        let rdb: Arc<dyn Rdb> =
-            Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
+        // let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-        let redis: Arc<dyn Redis> = Arc::new(
-            K8sRedis::new(
-                &namespace,
-                &routing_type,
-                redis_prefix.to_string(),
-                timeout,
-                None,
-            )
-            .await,
-        );
+        // let rdb: Arc<dyn Rdb> =
+        //     Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
 
-        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
-            redis.clone(),
-            Level::DEBUG,
-            Level::ERROR,
-        ));
+        // let redis: Arc<dyn Redis> = Arc::new(
+        //     K8sRedis::new(
+        //         &namespace,
+        //         &routing_type,
+        //         redis_prefix.to_string(),
+        //         timeout,
+        //         None,
+        //     )
+        //     .await,
+        // );
+
+        // let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
+        //     redis.clone(),
+        //     Level::DEBUG,
+        //     Level::ERROR,
+        // ));
 
         // let cloud_service: Arc<dyn CloudService> = Arc::new(
         //     K8sCloudService::new(
@@ -808,69 +803,71 @@ impl CliTestDependencies {
         //     .await,
         // );
 
-        let registry_service: Arc<dyn RegistryService> = todo!();
+        // let registry_service: Arc<dyn RegistryService> = todo!();
 
-        Ok(Self {
-            rdb,
-            redis,
-            redis_monitor,
-            registry_service,
-            blob_storage,
-            initial_component_files_service,
-            plugin_wasm_files_service,
-            test_component_directory: Path::new(&params.component_directory).to_path_buf(),
-            temp_directory: Arc::new(TempDir::new().unwrap()),
-        })
+        // Ok(Self {
+        //     rdb,
+        //     redis,
+        //     redis_monitor,
+        //     registry_service,
+        //     blob_storage,
+        //     initial_component_files_service,
+        //     plugin_wasm_files_service,
+        //     test_component_directory: Path::new(&params.component_directory).to_path_buf(),
+        //     temp_directory: Arc::new(TempDir::new().unwrap()),
+        // })
     }
 
     async fn make_aws(
-        params: CliParams,
-        cluster_size: usize,
-        namespace: &str,
-        redis_prefix: &str,
-        compilation_service_disabled: bool,
+        _params: CliParams,
+        _cluster_size: usize,
+        _namespace: &str,
+        _redis_prefix: &str,
+        _compilation_service_disabled: bool,
     ) -> anyhow::Result<Self> {
-        let routing_type = K8sRoutingType::Service;
-        let namespace = K8sNamespace(namespace.to_string());
-        let service_annotations = Some(aws_nlb_service_annotations());
-        let timeout = Duration::from_secs(900);
+        todo!();
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        // let routing_type = K8sRoutingType::Service;
+        // let namespace = K8sNamespace(namespace.to_string());
+        // let service_annotations = Some(aws_nlb_service_annotations());
+        // let timeout = Duration::from_secs(900);
 
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+        // let blob_storage = Arc::new(
+        //     FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+        //         .await
+        //         .unwrap(),
+        // );
+        // let initial_component_files_service =
+        //     Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
-        let rdb: Arc<dyn Rdb> = Arc::new(
-            K8sPostgresRdb::new(
-                &namespace,
-                &routing_type,
-                timeout,
-                service_annotations.clone(),
-            )
-            .await,
-        );
+        // let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-        let redis: Arc<dyn Redis> = Arc::new(
-            K8sRedis::new(
-                &namespace,
-                &routing_type,
-                redis_prefix.to_string(),
-                timeout,
-                service_annotations.clone(),
-            )
-            .await,
-        );
+        // let rdb: Arc<dyn Rdb> = Arc::new(
+        //     K8sPostgresRdb::new(
+        //         &namespace,
+        //         &routing_type,
+        //         timeout,
+        //         service_annotations.clone(),
+        //     )
+        //     .await,
+        // );
 
-        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
-            redis.clone(),
-            Level::DEBUG,
-            Level::ERROR,
-        ));
+        // let redis: Arc<dyn Redis> = Arc::new(
+        //     K8sRedis::new(
+        //         &namespace,
+        //         &routing_type,
+        //         redis_prefix.to_string(),
+        //         timeout,
+        //         service_annotations.clone(),
+        //     )
+        //     .await,
+        // );
+
+        // let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
+        //     redis.clone(),
+        //     Level::DEBUG,
+        //     Level::ERROR,
+        // ));
 
         // let cloud_service: Arc<dyn CloudService> = Arc::new(
         //     K8sCloudService::new(
@@ -967,73 +964,73 @@ impl CliTestDependencies {
         //     .await,
         // );
 
-        let registry_service: Arc<dyn RegistryService> = todo!();
-
-        Ok(Self {
-            rdb,
-            redis,
-            redis_monitor,
-            registry_service,
-            test_component_directory: Path::new(&params.component_directory).to_path_buf(),
-            blob_storage,
-            plugin_wasm_files_service,
-            initial_component_files_service,
-            temp_directory: Arc::new(TempDir::new().unwrap()),
-        })
+        // Ok(Self {
+        //     rdb,
+        //     redis,
+        //     redis_monitor,
+        //     registry_service,
+        //     test_component_directory: Path::new(&params.component_directory).to_path_buf(),
+        //     blob_storage,
+        //     plugin_wasm_files_service,
+        //     initial_component_files_service,
+        //     temp_directory: Arc::new(TempDir::new().unwrap()),
+        // })
     }
 
     pub async fn new(params: CliParams, cluster_size: usize) -> anyhow::Result<Self> {
         match &params.mode {
             TestMode::Provided {
-                postgres,
-                redis_host,
-                redis_port,
-                redis_prefix,
-                shard_manager_host,
-                shard_manager_http_port,
-                shard_manager_grpc_port,
-                component_service_host,
-                component_service_http_port,
-                component_service_grpc_port,
-                component_compilation_service_host,
-                component_compilation_service_http_port,
-                component_compilation_service_grpc_port,
-                worker_service_host,
-                worker_service_http_port,
-                worker_service_grpc_port,
-                worker_service_custom_request_port,
-                worker_executor_host,
-                worker_executor_http_port,
-                worker_executor_grpc_port,
-                cloud_service_host,
-                cloud_service_http_port,
-                cloud_service_grpc_port,
-                blob_storage_path,
+                ..
+                // postgres,
+                // redis_host,
+                // redis_port,
+                // redis_prefix,
+                // shard_manager_host,
+                // shard_manager_http_port,
+                // shard_manager_grpc_port,
+                // component_service_host,
+                // component_service_http_port,
+                // component_service_grpc_port,
+                // component_compilation_service_host,
+                // component_compilation_service_http_port,
+                // component_compilation_service_grpc_port,
+                // worker_service_host,
+                // worker_service_http_port,
+                // worker_service_grpc_port,
+                // worker_service_custom_request_port,
+                // worker_executor_host,
+                // worker_executor_http_port,
+                // worker_executor_grpc_port,
+                // cloud_service_host,
+                // cloud_service_http_port,
+                // cloud_service_grpc_port,
+                // blob_storage_path,
             } => {
-                let blob_storage = Arc::new(
-                    FileSystemBlobStorage::new(&PathBuf::from(blob_storage_path))
-                        .await
-                        .unwrap(),
-                );
-                let initial_component_files_service =
-                    Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+                todo!()
+                // let blob_storage = Arc::new(
+                //     FileSystemBlobStorage::new(&PathBuf::from(blob_storage_path))
+                //         .await
+                //         .unwrap(),
+                // );
+                // let initial_component_files_service =
+                //     Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
-                let plugin_wasm_files_service =
-                    Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
+                // let plugin_wasm_files_service =
+                //     Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-                let rdb: Arc<dyn Rdb> = Arc::new(ProvidedPostgresRdb::new(postgres.clone()));
+                // let rdb: Arc<dyn Rdb> = Arc::new(ProvidedPostgresRdb::new(postgres.clone()));
 
-                let redis: Arc<dyn Redis> = Arc::new(ProvidedRedis::new(
-                    redis_host.clone(),
-                    *redis_port,
-                    redis_prefix.clone(),
-                ));
+                // let redis: Arc<dyn Redis> = Arc::new(ProvidedRedis::new(
+                //     redis_host.clone(),
+                //     *redis_port,
+                //     redis_prefix.clone(),
+                // ));
 
-                let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
-                    redis.clone(),
-                    Level::DEBUG,
-                    Level::ERROR,
-                ));
+                // let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
+                //     redis.clone(),
+                //     Level::DEBUG,
+                //     Level::ERROR,
+                // ));
 
                 // let cloud_service: Arc<dyn CloudService> = Arc::new(
                 //     ProvidedCloudService::new(
@@ -1089,19 +1086,17 @@ impl CliTestDependencies {
                 //         true,
                 //     ));
 
-                let registry_service: Arc<dyn RegistryService> = todo!();
-
-                Ok(Self {
-                    rdb,
-                    redis,
-                    redis_monitor,
-                    registry_service,
-                    test_component_directory: Path::new(&params.component_directory).to_path_buf(),
-                    blob_storage,
-                    plugin_wasm_files_service,
-                    initial_component_files_service,
-                    temp_directory: Arc::new(TempDir::new().unwrap()),
-                })
+                // Ok(Self {
+                //     rdb,
+                //     redis,
+                //     redis_monitor,
+                //     registry_service,
+                //     test_component_directory: Path::new(&params.component_directory).to_path_buf(),
+                //     blob_storage,
+                //     plugin_wasm_files_service,
+                //     initial_component_files_service,
+                //     temp_directory: Arc::new(TempDir::new().unwrap()),
+                // })
             }
             TestMode::Docker {
                 redis_prefix,

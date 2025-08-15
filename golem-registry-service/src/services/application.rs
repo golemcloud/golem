@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::account::AccountRepo;
 use crate::repo::application::ApplicationRepo;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{Application, ApplicationId, NewApplicationData};

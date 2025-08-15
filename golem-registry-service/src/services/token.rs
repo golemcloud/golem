@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::repo::model::token::TokenRecord;
-use crate::repo::plan::PlanRepo;
 use crate::repo::token::TokenRepo;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
