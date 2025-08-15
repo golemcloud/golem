@@ -30,7 +30,7 @@ pub struct ErrorBody {
 
     #[oai(skip)]
     #[serde(skip)]
-    pub cause: Option<Arc<anyhow::Error>>
+    pub cause: Option<Arc<anyhow::Error>>,
 }
 
 #[cfg(feature = "protobuf")]
@@ -40,7 +40,10 @@ mod protobuf {
 
     impl From<golem_api_grpc::proto::golem::common::ErrorBody> for ErrorBody {
         fn from(value: golem_api_grpc::proto::golem::common::ErrorBody) -> Self {
-            Self { error: value.error, cause: None }
+            Self {
+                error: value.error,
+                cause: None,
+            }
         }
     }
 

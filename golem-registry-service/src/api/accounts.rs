@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::services::account::AccountService;
 use golem_common::api::Page;
 use golem_common::model::Empty;
-use golem_common::model::account::{Account, NewAccountData, AccountId, Plan};
+use golem_common::model::account::{Account, AccountId, NewAccountData, Plan};
 use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -24,12 +25,11 @@ use param::Query;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
-use tracing::Instrument;
-use crate::services::account::AccountService;
 use std::sync::Arc;
+use tracing::Instrument;
 
 pub struct AccountsApi {
-    account_service: Arc<AccountService>
+    account_service: Arc<AccountService>,
 }
 
 #[OpenApi(
@@ -38,12 +38,8 @@ pub struct AccountsApi {
     tag = ApiTags::Account
 )]
 impl AccountsApi {
-    pub fn new(
-        account_service: Arc<AccountService>
-    ) -> Self {
-        Self {
-            account_service
-        }
+    pub fn new(account_service: Arc<AccountService>) -> Self {
+        Self { account_service }
     }
 
     /// Find accounts

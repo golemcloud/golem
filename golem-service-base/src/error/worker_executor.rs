@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use tonic::Status;
 use std::sync::Arc;
+use tonic::Status;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum WorkerExecutorError {

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::{error_forwarders, SafeDisplay};
 use golem_common::model::account::AccountId;
+use golem_common::{SafeDisplay, error_forwarders};
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]

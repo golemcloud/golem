@@ -16,8 +16,10 @@ pub mod error;
 mod utils;
 
 pub use self::error::ComponentError;
+use super::application::ApplicationService;
 use super::component_compilation::ComponentCompilationService;
 use super::component_object_store::ComponentObjectStore;
+use super::environment::EnvironmentService;
 use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;
@@ -45,8 +47,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tracing::{debug, info};
-use super::environment::EnvironmentService;
-use super::application::ApplicationService;
 
 pub struct ComponentService {
     component_repo: Arc<dyn ComponentRepo>,
@@ -56,7 +56,7 @@ pub struct ComponentService {
     _plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     account_usage_service: Arc<AccountUsageService>,
     environment_service: Arc<EnvironmentService>,
-    application_service: Arc<ApplicationService>
+    application_service: Arc<ApplicationService>,
 }
 
 impl ComponentService {
@@ -68,7 +68,7 @@ impl ComponentService {
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
         account_usage_service: Arc<AccountUsageService>,
         environment_service: Arc<EnvironmentService>,
-        application_service: Arc<ApplicationService>
+        application_service: Arc<ApplicationService>,
     ) -> Self {
         Self {
             component_repo,
@@ -78,7 +78,7 @@ impl ComponentService {
             _plugin_wasm_files_service: plugin_wasm_files_service,
             account_usage_service,
             environment_service,
-            application_service
+            application_service,
         }
     }
 
@@ -106,8 +106,11 @@ impl ComponentService {
                 )))
             })?;
 
-        let environment = self.environment_service.get(&environment_id).await?;
-        let application = self.application_service.get(&environment.application_id).await?;
+        let environment = self.environment_service.get(environment_id).await?;
+        let application = self
+            .application_service
+            .get(&environment.application_id)
+            .await?;
 
         let mut account_usage = self
             .account_usage_service
@@ -214,7 +217,10 @@ impl ComponentService {
 
         let (wasm, wasm_object_store_key, wasm_hash) = if let Some(new_data) = data {
             let environment = self.environment_service.get(&environment_id).await?;
-            let application = self.application_service.get(&environment.application_id).await?;
+            let application = self
+                .application_service
+                .get(&environment.application_id)
+                .await?;
 
             let actual_account_usage = self
                 .account_usage_service

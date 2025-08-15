@@ -27,8 +27,10 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::services::environment::EnvironmentService;
 use golem_common::api::Page;
 use golem_common::api::application::UpdateApplicationRequest;
+use golem_common::model::account::AccountId;
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::environment::*;
@@ -38,14 +40,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
-use tracing::Instrument;
 use std::sync::Arc;
-use crate::services::environment::EnvironmentService;
-use golem_common::model::account::AccountId;
+use tracing::Instrument;
 use uuid::Uuid;
 
 pub struct ApplicationsApi {
-    environment_service: Arc<EnvironmentService>
+    environment_service: Arc<EnvironmentService>,
 }
 
 #[OpenApi(
@@ -54,11 +54,9 @@ pub struct ApplicationsApi {
     tag = ApiTags::Application
 )]
 impl ApplicationsApi {
-    pub fn new(
-        environment_service: Arc<EnvironmentService>
-    ) -> Self {
+    pub fn new(environment_service: Arc<EnvironmentService>) -> Self {
         Self {
-            environment_service
+            environment_service,
         }
     }
 
@@ -203,7 +201,10 @@ impl ApplicationsApi {
     ) -> ApiResult<Json<Environment>> {
         // TODO
         let actor = AccountId(Uuid::nil());
-        let result = self.environment_service.create(application_id, data, actor).await?;
+        let result = self
+            .environment_service
+            .create(application_id, data, actor)
+            .await?;
 
         Ok(Json(result))
     }

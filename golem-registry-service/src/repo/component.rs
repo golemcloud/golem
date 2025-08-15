@@ -791,7 +791,8 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         environment_id: &Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<ComponentExtRevisionRecord>> {
-        let revisions = self.with_ro("list_by_deployment")
+        let revisions = self
+            .with_ro("list_by_deployment")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT c.environment_id, c.name,
@@ -807,8 +808,8 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     WHERE dcr.environment_id = $1 AND dcr.deployment_revision_id = $2
                     ORDER BY c.name
                 "#})
-                    .bind(environment_id)
-                    .bind(deployment_revision_id),
+                .bind(environment_id)
+                .bind(deployment_revision_id),
             )
             .await?;
 

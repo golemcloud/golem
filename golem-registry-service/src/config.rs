@@ -132,7 +132,7 @@ impl Default for AccountsConfig {
                 email: "initial@user".to_string(),
                 token: uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1"),
                 role: Role::Admin,
-                plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")
+                plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"),
             },
         );
         accounts.insert(
@@ -143,7 +143,7 @@ impl Default for AccountsConfig {
                 email: "marketing@user".to_string(),
                 token: uuid!("39c8e462-1a4c-464c-91d5-5265e1e1b0e5"),
                 role: Role::MarketingAdmin,
-                plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")
+                plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"),
             },
         );
         AccountsConfig { accounts }
@@ -184,7 +184,7 @@ impl Default for PlansConfig {
                 storage_limit: 500000000,
                 monthly_gas_limit: 1000000000000,
                 monthly_upload_limit: 1000000000,
-            }
+            },
         );
 
         PlansConfig { plans }

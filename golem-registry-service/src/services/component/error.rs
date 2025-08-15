@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::services::account_usage::error::AccountUsageError;
-use golem_common::{error_forwarders, SafeDisplay};
+use crate::services::application::ApplicationError;
+use crate::services::environment::EnvironmentError;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
     ComponentFilePath, ComponentName, ComponentRevision, InitialComponentFileKey,
@@ -22,9 +23,8 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentId, PluginInstallationId};
+use golem_common::{SafeDisplay, error_forwarders};
 use golem_service_base::repo::RepoError;
-use crate::services::environment::EnvironmentError;
-use crate::services::application::ApplicationError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -122,7 +122,12 @@ impl SafeDisplay for ComponentError {
     }
 }
 
-error_forwarders!(ComponentError, RepoError, EnvironmentError, ApplicationError);
+error_forwarders!(
+    ComponentError,
+    RepoError,
+    EnvironmentError,
+    ApplicationError
+);
 
 impl From<AccountUsageError> for ComponentError {
     fn from(value: AccountUsageError) -> Self {

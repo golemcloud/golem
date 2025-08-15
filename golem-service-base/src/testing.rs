@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::component::Component;
 use golem_common::model::account::AccountId;
 use golem_common::model::base64::Base64;
+use golem_common::model::component::Component;
 use golem_common::model::component::{ComponentName, ComponentRevision, VersionedComponentId};
 use golem_common::model::component::{ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::{
@@ -47,7 +47,7 @@ pub struct LocalFileSystemComponentMetadata {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 
-    pub wasm_hash: golem_common::model::diff::Hash
+    pub wasm_hash: golem_common::model::diff::Hash,
 }
 
 impl From<LocalFileSystemComponentMetadata> for Component {
@@ -75,7 +75,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             files: value.files,
             installed_plugins: vec![],
             env: value.env,
-            wasm_hash: value.wasm_hash
+            wasm_hash: value.wasm_hash,
         }
     }
 }

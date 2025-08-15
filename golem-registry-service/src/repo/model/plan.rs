@@ -14,13 +14,13 @@
 
 use crate::repo::model::account_usage::UsageType;
 use crate::repo::model::new_repo_uuid;
+use golem_common::model::PlanId;
+use golem_common::model::account::Plan;
 use golem_service_base::repo::{RepoError, RepoResult};
 use sqlx::FromRow;
 use std::collections::BTreeMap;
 use strum::IntoEnumIterator;
 use uuid::Uuid;
-use golem_common::model::account::{Plan};
-use golem_common::model::PlanId;
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct PlanRecord {
@@ -80,9 +80,15 @@ impl TryFrom<PlanRecord> for Plan {
             env_limit: value.limit(UsageType::TotalEnvCount)?.unwrap_or(40),
             component_limit: value.limit(UsageType::TotalComponentCount)?.unwrap_or(100),
             worker_limit: value.limit(UsageType::TotalWorkerCount)?.unwrap_or(10000),
-            storage_limit: value.limit(UsageType::TotalComponentStorageBytes)?.unwrap_or(500000000),
-            monthly_gas_limit: value.limit(UsageType::MonthlyGasLimit)?.unwrap_or(1000000000000),
-            monthly_upload_limit: value.limit(UsageType::MonthlyComponentUploadLimitBytes)?.unwrap_or(1000000000),
+            storage_limit: value
+                .limit(UsageType::TotalComponentStorageBytes)?
+                .unwrap_or(500000000),
+            monthly_gas_limit: value
+                .limit(UsageType::MonthlyGasLimit)?
+                .unwrap_or(1000000000000),
+            monthly_upload_limit: value
+                .limit(UsageType::MonthlyComponentUploadLimitBytes)?
+                .unwrap_or(1000000000),
             plan_id: PlanId(value.plan_id),
         })
     }

@@ -12,40 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::{Path, PathBuf};
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum BlobStorageInfo {
-    LocalFileSytem {
-        root: PathBuf
-    }
+    LocalFileSytem { root: PathBuf },
 }
 
 impl BlobStorageInfo {
-    pub fn config(
-        &self
-    ) -> BlobStorageConfig {
+    pub fn config(&self) -> BlobStorageConfig {
         match self {
             BlobStorageInfo::LocalFileSytem { root } => {
                 BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
-                    root: root.clone()
+                    root: root.clone(),
                 })
             }
         }
     }
 
-    pub fn env(
-        &self,
-    ) -> HashMap<String, String> {
+    pub fn env(&self) -> HashMap<String, String> {
         match self {
             BlobStorageInfo::LocalFileSytem { root } => [
-                ("GOLEM__BLOB_STORAGE__TYPE".to_string(), "LocalFileSystem".to_string()),
+                (
+                    "GOLEM__BLOB_STORAGE__TYPE".to_string(),
+                    "LocalFileSystem".to_string(),
+                ),
                 (
                     "GOLEM__BLOB_STORAGE__CONFIG__ROOT".to_string(),
                     root.to_string_lossy().to_string(),
-                )
+                ),
             ]
             .into(),
         }

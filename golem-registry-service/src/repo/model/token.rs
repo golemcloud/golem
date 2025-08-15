@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::repo::model::datetime::SqlDateTime;
+use golem_common::model::account::AccountId;
+use golem_common::model::auth::{Token, TokenId, TokenSecret, TokenWithSecret};
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
-use golem_common::model::auth::{Token, TokenId, TokenSecret, TokenWithSecret};
-use golem_common::model::account::AccountId;
 
 #[derive(FromRow, Clone, PartialEq)]
 pub struct TokenRecord {

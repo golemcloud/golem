@@ -56,6 +56,9 @@ use crate::components::service::Service;
 // use crate::components::worker_service::provided::ProvidedWorkerService;
 // use crate::components::worker_service::spawned::SpawnedWorkerService;
 // use crate::components::worker_service::WorkerService;
+use crate::components::blob_storage::BlobStorageInfo;
+use crate::components::registry_service::spawned::SpawnedRegistyService;
+use crate::components::registry_service::RegistryService;
 use crate::config::{GolemClientProtocol, TestDependencies, TestService};
 use crate::dsl::benchmark::{BenchmarkConfig, RunConfig};
 use async_trait::async_trait;
@@ -73,9 +76,6 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tracing::Level;
 use uuid::Uuid;
-use crate::components::registry_service::{self, RegistryService};
-use crate::components::blob_storage::BlobStorageInfo;
-use crate::components::registry_service::spawned::SpawnedRegistyService;
 
 /// Test dependencies created from command line arguments
 ///
@@ -524,7 +524,9 @@ impl CliTestDependencies {
                 .unwrap(),
         );
 
-        let blob_storage_info = BlobStorageInfo::LocalFileSytem { root: PathBuf::from(blob_storage_root) };
+        let blob_storage_info = BlobStorageInfo::LocalFileSytem {
+            root: PathBuf::from(blob_storage_root),
+        };
 
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
@@ -550,7 +552,6 @@ impl CliTestDependencies {
             Level::DEBUG,
             Level::ERROR,
         ));
-
 
         // let cloud_service: Arc<dyn CloudService> = Arc::new(
         //     SpawnedCloudService::new(
@@ -658,13 +659,8 @@ impl CliTestDependencies {
         //     .await,
         // );
 
-        let registry_service =  Arc::new(
-            SpawnedRegistyService::new(
-                &db_info,
-                &blob_storage_info
-            )
-            .await?
-        );
+        let registry_service =
+            Arc::new(SpawnedRegistyService::new(&db_info, &blob_storage_info).await?);
 
         Ok(Self {
             rdb,
@@ -719,7 +715,6 @@ impl CliTestDependencies {
             Level::DEBUG,
             Level::ERROR,
         ));
-
 
         // let cloud_service: Arc<dyn CloudService> = Arc::new(
         //     K8sCloudService::new(

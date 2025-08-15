@@ -14,17 +14,20 @@
 
 use crate::model::account::AccountId;
 use crate::model::ProjectId;
+use crate::{declare_structs, newtype_uuid};
+use chrono::Utc;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, FromRepr};
-use crate::{declare_structs, newtype_uuid};
-use chrono::Utc;
 
 newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
-newtype_uuid!(TokenSecret, golem_api_grpc::proto::golem::token::TokenSecret);
+newtype_uuid!(
+    TokenSecret,
+    golem_api_grpc::proto::golem::token::TokenSecret
+);
 
 declare_structs! {
     pub struct Token {

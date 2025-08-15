@@ -16,76 +16,33 @@ pub mod benchmark;
 pub mod debug_render;
 
 use crate::config::{TestDependencies, TestDependenciesDsl};
-use crate::dsl::debug_render::debug_render_oplog_entry;
-use crate::model::{IFSEntry, PluginDefinitionCreation};
+use crate::model::IFSEntry;
 use anyhow::{anyhow, Context};
+use applying::Apply;
 use async_trait::async_trait;
-use bytes::Bytes;
-use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
-use golem_api_grpc::proto::golem::worker::update_record::Update;
-use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
-use golem_api_grpc::proto::golem::worker::v1::{
-    cancel_invocation_response, fork_worker_response, get_file_system_node_response,
-    get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
-    interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
-    invoke_and_await_typed_response, invoke_response, launch_new_worker_response,
-    resume_worker_response, revert_worker_response, search_oplog_response, update_worker_response,
-    worker_execution_error, CancelInvocationRequest, ConnectWorkerRequest, DeleteWorkerRequest,
-    ForkWorkerRequest, ForkWorkerResponse, GetFileContentsRequest, GetFileSystemNodeRequest,
-    GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitJsonRequest, LaunchNewWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest,
-    SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
-    WorkerExecutionError,
-};
-use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog, UpdateMode};
-use golem_common::model::component_metadata::{
-    ComponentMetadata, DynamicLinkedInstance, RawComponentMetadata,
-};
-use golem_common::model::oplog::{
-    OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
-};
-use golem_common::model::plugin::PluginWasmFileKey;
-use golem_common::model::public_oplog::PublicOplogEntry;
-use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{
-    PluginInstallationId, ProjectId,
-    WorkerStatus,
-};
-use golem_common::model::component::{
-    Component, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision, ComponentType, InitialComponentFile, InitialComponentFileKey
-};
-use golem_common::model::{
-    ComponentFileSystemNode, ComponentId, FailedUpdateRecord,
-    IdempotencyKey, ScanCursor,
-    SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerResourceDescription, WorkerStatusRecord,
-};
-use golem_common::widen_infallible;
-use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
-use golem_service_base::replayable_stream::ReplayableStream;
-use golem_wasm_rpc::{Value, ValueAndType};
-use std::borrow::Borrow;
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use std::time::{Duration, Instant};
-use tempfile::{Builder, TempDir};
-use tokio::select;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::oneshot::Sender;
-use tracing::{debug, info, Instrument};
-use uuid::Uuid;
-use wasm_metadata::AddMetadata;
-use golem_common::model::account::{AccountId, NewAccountData};
-use golem_client::api::RegistryServiceClient;
-use golem_common::model::application::{ApplicationId, ApplicationName, NewApplicationData};
-use golem_common::model::environment::{EnvironmentId, EnvironmentName, NewEnvironmentData};
-use golem_common::api::component::CreateComponentRequestMetadata;
-use tokio::fs::File;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use applying::Apply;
+use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
+use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
+use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog};
+use golem_client::api::RegistryServiceClient;
+use golem_common::api::component::CreateComponentRequestMetadata;
+use golem_common::model::application::{ApplicationId, ApplicationName, NewApplicationData};
+use golem_common::model::component::{
+    Component, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentName,
+    ComponentType,
+};
+use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
+use golem_common::model::environment::{EnvironmentId, EnvironmentName, NewEnvironmentData};
+use std::borrow::Borrow;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use tempfile::{Builder, TempDir};
+use tokio::fs::File;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tracing::info;
+use uuid::Uuid;
+use wasm_metadata::AddMetadata;
 
 pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     dsl: &'a DSL,
@@ -112,7 +69,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
             unverified: false,
             files: vec![],
             dynamic_linking: BTreeMap::new(),
-            env: BTreeMap::new()
+            env: BTreeMap::new(),
         }
     }
 
@@ -165,13 +122,18 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
     }
 
     /// Adds an initial file to the component
-    pub fn add_file(mut self, target: &str, source: &str, permissions: ComponentFilePermissions) -> anyhow::Result<Self> {
+    pub fn add_file(
+        mut self,
+        target: &str,
+        source: &str,
+        permissions: ComponentFilePermissions,
+    ) -> anyhow::Result<Self> {
         let source_path = PathBuf::from(source);
         let target_path = ComponentFilePath::from_abs_str(target).map_err(|e| anyhow!(e))?;
-        let ifs_entry  = IFSEntry {
+        let ifs_entry = IFSEntry {
             source_path,
             target_path,
-            permissions
+            permissions,
         };
 
         self.files.push(ifs_entry);
@@ -182,7 +144,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
         self.add_file(target, source, ComponentFilePermissions::ReadOnly)
     }
 
-    pub fn add_rw_file(mut self, target: &str, source: &str) -> anyhow::Result<Self> {
+    pub fn add_rw_file(self, target: &str, source: &str) -> anyhow::Result<Self> {
         self.add_file(target, source, ComponentFilePermissions::ReadWrite)
     }
 
@@ -191,16 +153,15 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
         mut self,
         dynamic_linking: &[(&str, DynamicLinkedInstance)],
     ) -> Self {
-        self.dynamic_linking = dynamic_linking.into_iter().map(|(k, v) | (k.to_string(), v.clone())).collect();
+        self.dynamic_linking = dynamic_linking
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
         self
     }
 
     /// Adds a dynamic linked instance to the component
-    pub fn add_dynamic_linking(
-        mut self,
-        name: &str,
-        instance: DynamicLinkedInstance,
-    ) -> Self {
+    pub fn add_dynamic_linking(mut self, name: &str, instance: DynamicLinkedInstance) -> Self {
         self.dynamic_linking.insert(name.to_string(), instance);
         self
     }
@@ -232,7 +193,11 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
 
 #[async_trait]
 pub trait TestDsl {
-    fn component(&self, environment_id: &EnvironmentId,  name: &str) -> StoreComponentBuilder<'_, Self>;
+    fn component(
+        &self,
+        environment_id: &EnvironmentId,
+        name: &str,
+    ) -> StoreComponentBuilder<'_, Self>;
 
     async fn app_and_env(&self) -> anyhow::Result<(ApplicationId, EnvironmentId)>;
 
@@ -517,7 +482,11 @@ pub trait TestDsl {
 
 #[async_trait]
 impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
-    fn component(&self, environment_id: &EnvironmentId,  name: &str) -> StoreComponentBuilder<'_, Self> {
+    fn component(
+        &self,
+        environment_id: &EnvironmentId,
+        name: &str,
+    ) -> StoreComponentBuilder<'_, Self> {
         StoreComponentBuilder::new(self, environment_id.clone(), name.to_string())
     }
 
@@ -526,16 +495,21 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         let app_name = ApplicationName(Uuid::new_v4().to_string());
         let env_name = EnvironmentName(Uuid::new_v4().to_string());
 
-        let application = client.create_application(&self.account_id.0, &NewApplicationData {
-            name: app_name
-        }).await?;
+        let application = client
+            .create_application(&self.account_id.0, &NewApplicationData { name: app_name })
+            .await?;
 
-        let environment = client.create_application_environment(&application.id.0, &NewEnvironmentData {
-            name: env_name,
-            compatibility_check: false,
-            version_check: false,
-            security_overrides: false
-        }).await?;
+        let environment = client
+            .create_application_environment(
+                &application.id.0,
+                &NewEnvironmentData {
+                    name: env_name,
+                    compatibility_check: false,
+                    version_check: false,
+                    security_overrides: false,
+                },
+            )
+            .await?;
 
         Ok((application.id, environment.id))
     }
@@ -583,33 +557,41 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         };
 
         let (_tmp_dir, maybe_ifs_archive) = if !files.is_empty() {
-            let (tmp_dir, ifs_archive) = build_ifs_archive(&component_directy, &files).await?;
+            let (tmp_dir, ifs_archive) = build_ifs_archive(component_directy, &files).await?;
             (Some(tmp_dir), Some(File::open(ifs_archive).await?))
         } else {
             (None, None)
         };
 
-
         let file_options = files
             .into_iter()
-            .map(|f| (f.target_path, ComponentFileOptions { permissions: f.permissions }))
+            .map(|f| {
+                (
+                    f.target_path,
+                    ComponentFileOptions {
+                        permissions: f.permissions,
+                    },
+                )
+            })
             .apply(BTreeMap::from_iter);
 
         let client = self.deps.registry_service().client(&self.token).await;
 
-        let component = client.create_component(
-            &environment_id.0,
-            &CreateComponentRequestMetadata {
-                component_name,
-                component_type: Some(component_type),
-                file_options: Some(file_options),
-                dynamic_linking: Some(dynamic_linking),
-                env: Some(env),
-                agent_types: None,
-            },
-            File::open(source_path).await?,
-            maybe_ifs_archive
-        ).await?;
+        let component = client
+            .create_component(
+                &environment_id.0,
+                &CreateComponentRequestMetadata {
+                    component_name,
+                    component_type: Some(component_type),
+                    file_options: Some(file_options),
+                    dynamic_linking: Some(dynamic_linking),
+                    env: Some(env),
+                    agent_types: None,
+                },
+                File::open(source_path).await?,
+                maybe_ifs_archive,
+            )
+            .await?;
 
         Ok(component)
     }
@@ -2921,10 +2903,15 @@ async fn build_ifs_archive(
     for ifs_file in ifs_files {
         zip_writer
             .write_entry_whole(
-                ZipEntryBuilder::new(ifs_file.target_path.to_string().into(), Compression::Deflate),
+                ZipEntryBuilder::new(
+                    ifs_file.target_path.to_string().into(),
+                    Compression::Deflate,
+                ),
                 &(tokio::fs::read(&component_directory.join(&ifs_file.source_path))
                     .await
-                    .with_context(|| format!("source file path: {}", ifs_file.source_path.display()))?),
+                    .with_context(|| {
+                        format!("source file path: {}", ifs_file.source_path.display())
+                    })?),
             )
             .await?;
     }

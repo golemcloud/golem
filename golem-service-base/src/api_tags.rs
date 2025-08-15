@@ -18,7 +18,6 @@ use poem_openapi::Tags;
 pub enum ApiTags {
     RegistryService,
 
-
     /// The account API allows users to query and manipulate their own account data.
     Account,
     AccountSummary,

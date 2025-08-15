@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::plan::{PlanRepo};
+use crate::config::PlansConfig;
+use crate::repo::model::account_usage::UsageType;
+use crate::repo::model::plan::PlanRecord;
+use crate::repo::plan::PlanRepo;
+use anyhow::anyhow;
 use golem_common::model::PlanId;
-use golem_common::{error_forwarders, SafeDisplay};
+use golem_common::model::account::Plan;
+use golem_common::{SafeDisplay, error_forwarders};
 use golem_service_base::repo::RepoError;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{debug, info};
-use crate::config::PlansConfig;
-use golem_common::model::account::Plan;
-use crate::repo::model::plan::PlanRecord;
-use std::collections::BTreeMap;
-use crate::repo::model::account_usage::UsageType;
-use anyhow::anyhow;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlanError {
@@ -48,16 +48,13 @@ pub struct PlanService {
 }
 
 impl PlanService {
-    pub fn new(
-        plan_repo: Arc<dyn PlanRepo>,
-        config: PlansConfig,
-    ) -> Self {
-        assert!(config.plans.contains_key("default"), "No default plan in precreated plans");
+    pub fn new(plan_repo: Arc<dyn PlanRepo>, config: PlansConfig) -> Self {
+        assert!(
+            config.plans.contains_key("default"),
+            "No default plan in precreated plans"
+        );
 
-        Self {
-            plan_repo,
-            config
-        }
+        Self { plan_repo, config }
     }
 
     pub async fn create_initial_plans(&self) -> Result<(), PlanError> {
@@ -71,14 +68,13 @@ impl PlanService {
                     true
                 }
                 Some(existing_plan) => {
-                    let needs_update =
-                        existing_plan.app_limit != plan.app_limit ||
-                        existing_plan.env_limit != plan.env_limit ||
-                        existing_plan.component_limit != plan.component_limit ||
-                        existing_plan.storage_limit != plan.storage_limit ||
-                        existing_plan.worker_limit != plan.worker_limit ||
-                        existing_plan.monthly_gas_limit != plan.monthly_gas_limit ||
-                        existing_plan.monthly_upload_limit != plan.app_limit;
+                    let needs_update = existing_plan.app_limit != plan.app_limit
+                        || existing_plan.env_limit != plan.env_limit
+                        || existing_plan.component_limit != plan.component_limit
+                        || existing_plan.storage_limit != plan.storage_limit
+                        || existing_plan.worker_limit != plan.worker_limit
+                        || existing_plan.monthly_gas_limit != plan.monthly_gas_limit
+                        || existing_plan.monthly_upload_limit != plan.app_limit;
 
                     if needs_update {
                         info!("Updating initial plan {}", plan.plan_id);
@@ -96,16 +92,22 @@ impl PlanService {
                         (UsageType::TotalAppCount, Some(plan.app_limit)),
                         (UsageType::TotalEnvCount, Some(plan.env_limit)),
                         (UsageType::TotalComponentCount, Some(plan.component_limit)),
-                        (UsageType::TotalComponentStorageBytes, Some(plan.storage_limit)),
+                        (
+                            UsageType::TotalComponentStorageBytes,
+                            Some(plan.storage_limit),
+                        ),
                         (UsageType::TotalWorkerCount, Some(plan.worker_limit)),
                         (UsageType::MonthlyGasLimit, Some(plan.monthly_gas_limit)),
-                        (UsageType::MonthlyComponentUploadLimitBytes, Some(plan.monthly_upload_limit))
-                    ])
+                        (
+                            UsageType::MonthlyComponentUploadLimitBytes,
+                            Some(plan.monthly_upload_limit),
+                        ),
+                    ]),
                 };
 
                 self.plan_repo.create_or_update(record).await?;
             }
-        };
+        }
 
         Ok(())
     }

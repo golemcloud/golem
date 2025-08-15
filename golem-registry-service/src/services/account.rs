@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::plan::{PlanError, PlanService};
+use super::token::{TokenError, TokenService};
+use crate::config::AccountsConfig;
 use crate::repo::account::{AccountRecord, AccountRepo};
+use crate::repo::model::audit::AuditFields;
+use anyhow::anyhow;
+use chrono::{DateTime, Utc};
 use golem_common::model::PlanId;
-use golem_common::{error_forwarders, SafeDisplay};
+use golem_common::model::account::{Account, AccountId, NewAccountData};
+use golem_common::model::auth::TokenSecret;
+use golem_common::{SafeDisplay, error_forwarders};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{error, info};
-use golem_common::model::account::{Account, AccountId, NewAccountData};
-use super::plan::{PlanError, PlanService};
-use crate::repo::model::audit::AuditFields;
-use anyhow::anyhow;
-use crate::config::AccountsConfig;
-use super::token::{TokenError, TokenService};
-use golem_common::model::auth::TokenSecret;
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AccountError {
@@ -65,7 +65,7 @@ impl AccountService {
             account_repo,
             plan_service,
             token_service,
-            config
+            config,
         }
     }
 
@@ -79,18 +79,28 @@ impl AccountService {
                     info!("Creating initial account {} with id {}", name, account.id);
                     self.create_internal(
                         account_id.clone(),
-                        NewAccountData { name: account.name.clone(), email: account.email.clone() },
-                        PlanId(account.plan_id.clone())
-                    ).await?;
+                        NewAccountData {
+                            name: account.name.clone(),
+                            email: account.email.clone(),
+                        },
+                        PlanId(account.plan_id),
+                    )
+                    .await?;
                     // TODO: Deal with failure here
-                    self.token_service.create_known_secret(account_id, TokenSecret(account.token), DateTime::<Utc>::MAX_UTC).await?;
+                    self.token_service
+                        .create_known_secret(
+                            account_id,
+                            TokenSecret(account.token),
+                            DateTime::<Utc>::MAX_UTC,
+                        )
+                        .await?;
                 }
                 Some(_existing_account) => {
                     // TODO: We need to update the account here
                     // TODO: We need to rotate the secret here
                 }
             }
-        };
+        }
         Ok(())
     }
 
@@ -102,7 +112,9 @@ impl AccountService {
     }
 
     pub async fn get(&self, account_id: &AccountId) -> Result<Account, AccountError> {
-        self.get_optional(account_id).await?.ok_or(AccountError::AccountNotFound(account_id.clone()))
+        self.get_optional(account_id)
+            .await?
+            .ok_or(AccountError::AccountNotFound(account_id.clone()))
     }
 
     // pub async fn update(
@@ -215,7 +227,10 @@ impl AccountService {
         Ok(record.into())
     }
 
-    pub async fn get_optional(&self, account_id: &AccountId) -> Result<Option<Account>, AccountError> {
+    pub async fn get_optional(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Option<Account>, AccountError> {
         info!("Get account: {}", account_id);
 
         let result = self

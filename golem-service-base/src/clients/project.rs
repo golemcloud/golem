@@ -131,8 +131,7 @@ impl ProjectService for ProjectServiceDefault {
                 Box::pin(async move {
                     let response = client
                         .call("get-default-project", move |client| {
-                            let request =
-                                authorised_request(GetDefaultProjectRequest {}, &token.0);
+                            let request = authorised_request(GetDefaultProjectRequest {}, &token.0);
                             Box::pin(client.get_default_project(request))
                         })
                         .await?

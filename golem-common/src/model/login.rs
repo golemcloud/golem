@@ -12,10 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::account::AccountId;
+use crate::declare_structs;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
-use crate::{declare_structs, newtype_uuid};
 
 declare_structs! {
     pub struct OAuth2Data {

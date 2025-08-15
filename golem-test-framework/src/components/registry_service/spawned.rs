@@ -12,29 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ComponentServiceGrpcClient, RegistryService};
-use super::PluginServiceGrpcClient;
-use crate::components::rdb::{DbInfo, Rdb};
-use crate::components::{new_reqwest_client, wait_for_startup_http, ChildProcessLogger};
-use crate::config::GolemClientProtocol;
-use async_trait::async_trait;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::sync::OnceCell;
-use tonic::transport::Channel;
-use tracing::info;
-use tracing::Level;
-use tokio::task::JoinSet;
-use golem_registry_service::config::{AccountsConfig, PlansConfig, PrecreatedAccount, PrecreatedPlan, RegistryServiceConfig};
-use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
+use super::RegistryService;
 use crate::components::blob_storage::BlobStorageInfo;
+use crate::components::rdb::DbInfo;
+use crate::components::{new_reqwest_client, wait_for_startup_http};
+use async_trait::async_trait;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{Role, TokenSecret};
-use std::collections::HashMap;
 use golem_common::model::PlanId;
+use golem_registry_service::config::{
+    AccountsConfig, PlansConfig, PrecreatedAccount, PrecreatedPlan, RegistryServiceConfig,
+};
+use std::collections::HashMap;
+use std::time::Duration;
+use tokio::sync::OnceCell;
+use tokio::task::JoinSet;
+use tracing::info;
 use uuid::uuid;
 
 const ADMIN_ACCOUNT_NAME: &str = "Admin";
@@ -62,18 +55,28 @@ impl SpawnedRegistyService {
         let admin_account_id = AccountId::new_v4();
         let admin_account_token = TokenSecret::new_v4();
 
-        let config= make_config(db_info, blob_storage_info, admin_plan_id, admin_account_id.clone(), admin_account_token.clone());
+        let config = make_config(
+            db_info,
+            blob_storage_info,
+            admin_plan_id,
+            admin_account_id.clone(),
+            admin_account_token.clone(),
+        );
 
         let prometheus_registry = prometheus::Registry::new();
 
-        let service = golem_registry_service::RegistryService::new(
-            config,
-            prometheus_registry
-        ).await?;
+        let service =
+            golem_registry_service::RegistryService::new(config, prometheus_registry).await?;
 
         let run_details = service.start(&mut join_set).await?;
 
-        wait_for_startup_http("localhost", run_details.http_port, "registry-service", Duration::from_secs(10)).await;
+        wait_for_startup_http(
+            "localhost",
+            run_details.http_port,
+            "registry-service",
+            Duration::from_secs(10),
+        )
+        .await;
 
         Ok(Self {
             run_details,
@@ -81,7 +84,7 @@ impl SpawnedRegistyService {
             base_http_client: OnceCell::new(),
             admin_account_id,
             admin_account_email: ADMIN_ACCOUNT_EMAIL.to_string(),
-            admin_account_token
+            admin_account_token,
         })
     }
 }
@@ -130,7 +133,6 @@ impl RegistryService for SpawnedRegistyService {
             .await
             .clone()
     }
-
 }
 
 fn make_config(
@@ -150,7 +152,7 @@ fn make_config(
                 (
                     "unlimited".to_string(),
                     PrecreatedPlan {
-                        plan_id: admin_plan_id.0.clone(),
+                        plan_id: admin_plan_id.0,
                         app_limit: i64::MAX,
                         env_limit: i64::MAX,
                         component_limit: i64::MAX,
@@ -158,7 +160,7 @@ fn make_config(
                         storage_limit: i64::MAX,
                         monthly_gas_limit: i64::MAX,
                         monthly_upload_limit: i64::MAX,
-                    }
+                    },
                 ),
                 (
                     "default".to_string(),
@@ -171,24 +173,22 @@ fn make_config(
                         storage_limit: 500000000,
                         monthly_gas_limit: 1000000000000,
                         monthly_upload_limit: 1000000000,
-                    }
-                )
-            ])
+                    },
+                ),
+            ]),
         },
         accounts: AccountsConfig {
-            accounts: HashMap::from_iter([
-                (
-                    "admin".to_string(),
-                    PrecreatedAccount {
-                        id: admin_account_id.0,
-                        name: ADMIN_ACCOUNT_NAME.to_string(),
-                        email: ADMIN_ACCOUNT_EMAIL.to_string(),
-                        token: admin_token.0,
-                        plan_id: admin_plan_id.0,
-                        role: Role::Admin
-                    }
-                )
-            ])
+            accounts: HashMap::from_iter([(
+                "admin".to_string(),
+                PrecreatedAccount {
+                    id: admin_account_id.0,
+                    name: ADMIN_ACCOUNT_NAME.to_string(),
+                    email: ADMIN_ACCOUNT_EMAIL.to_string(),
+                    token: admin_token.0,
+                    plan_id: admin_plan_id.0,
+                    role: Role::Admin,
+                },
+            )]),
         },
         ..Default::default()
     }

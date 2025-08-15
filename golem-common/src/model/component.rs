@@ -16,17 +16,17 @@ use super::environment::EnvironmentId;
 use super::PluginInstallationId;
 use crate::base_model::ComponentId;
 use crate::model::account::AccountId;
+use crate::model::component_metadata::ComponentMetadata;
 use crate::{declare_structs, declare_transparent_newtypes};
 use bincode::{Decode, Encode};
 use core::fmt;
 use golem_wasm_rpc_derive::IntoValue;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 use typed_path::Utf8UnixPathBuf;
-use crate::model::component_metadata::ComponentMetadata;
-use std::collections::BTreeMap;
 
 declare_transparent_newtypes! {
     // TODO: Add validations (non-empty, no "/", no " ", ...)

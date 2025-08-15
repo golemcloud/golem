@@ -23,12 +23,12 @@ use golem_common::api::component::{
     CreateLibraryPluginRequestMetadata, UpdateComponentRequestComponentMetadata,
 };
 use golem_common::model::Empty;
+use golem_common::model::auth::TokenWithSecret;
 use golem_service_base::poem::TempFileUpload;
 use poem_openapi::payload::Json;
 use poem_openapi::types::Binary;
 use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::{ApiResponse, Multipart};
-use golem_common::model::auth::TokenWithSecret;
 
 #[derive(Debug, Clone, ApiResponse)]
 pub enum WebFlowPollResponse {

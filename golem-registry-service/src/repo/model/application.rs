@@ -13,10 +13,12 @@
 // limitations under the License.
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
+use golem_common::model::account::AccountId;
+use golem_common::model::application::{
+    Application, ApplicationId, ApplicationName, NewApplicationData,
+};
 use sqlx::FromRow;
 use uuid::Uuid;
-use golem_common::model::application::{Application, ApplicationId, ApplicationName, NewApplicationData};
-use golem_common::model::account::AccountId;
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ApplicationRecord {
@@ -32,13 +34,13 @@ impl ApplicationRecord {
         account_id: AccountId,
         application_id: ApplicationId,
         model: NewApplicationData,
-        actor: AccountId
+        actor: AccountId,
     ) -> Self {
         ApplicationRecord {
             account_id: account_id.0,
             application_id: application_id.0,
             name: model.name.0,
-            audit: AuditFields::new(actor.0)
+            audit: AuditFields::new(actor.0),
         }
     }
 }
@@ -48,7 +50,7 @@ impl From<ApplicationRecord> for Application {
         Self {
             id: ApplicationId(value.application_id),
             account_id: AccountId(value.account_id),
-            name: ApplicationName(value.name)
+            name: ApplicationName(value.name),
         }
     }
 }

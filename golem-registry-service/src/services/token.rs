@@ -12,24 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::plan::{PlanRepo};
-use golem_common::model::{PlanId};
-use golem_common::{error_forwarders, SafeDisplay};
+use crate::repo::model::token::TokenRecord;
+use crate::repo::plan::PlanRepo;
+use crate::repo::token::TokenRepo;
+use chrono::{DateTime, Utc};
+use golem_common::model::account::AccountId;
+use golem_common::model::auth::TokenId;
+use golem_common::model::auth::{TokenSecret, TokenWithSecret};
+use golem_common::{SafeDisplay, error_forwarders};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing::{debug, info};
-use crate::config::PlansConfig;
-use golem_common::model::account::{AccountId, Plan};
-use crate::repo::model::plan::PlanRecord;
-use std::collections::BTreeMap;
-use crate::repo::model::account_usage::UsageType;
-use anyhow::anyhow;
-use crate::repo::token::TokenRepo;
-use golem_common::model::auth::{TokenSecret, TokenWithSecret};
-use chrono::{DateTime, Utc};
-use crate::repo::model::token::TokenRecord;
-use golem_common::model::auth::{Token, TokenId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {
@@ -58,17 +51,13 @@ pub struct TokenService {
 }
 
 impl TokenService {
-    pub fn new(
-        token_repo: Arc<dyn TokenRepo>,
-    ) -> Self {
-        Self  { token_repo }
+    pub fn new(token_repo: Arc<dyn TokenRepo>) -> Self {
+        Self { token_repo }
     }
 
-    pub async fn get(
-        &self,
-        token_id: &TokenId
-    ) -> anyhow::Result<TokenWithSecret> {
-        let record = self.token_repo
+    pub async fn get(&self, token_id: &TokenId) -> anyhow::Result<TokenWithSecret> {
+        let record = self
+            .token_repo
             .get_by_id(&token_id.0)
             .await?
             .ok_or(TokenError::TokenNotFound(token_id.clone()))?;
@@ -76,10 +65,7 @@ impl TokenService {
         Ok(record.into())
     }
 
-    pub async fn get_by_secret(
-        &self,
-        _token_id: &TokenId
-    ) -> Result<TokenWithSecret, TokenError> {
+    pub async fn get_by_secret(&self, _token_id: &TokenId) -> Result<TokenWithSecret, TokenError> {
         // TODO: missing in repo
         todo!()
     }
@@ -87,17 +73,18 @@ impl TokenService {
     pub async fn create(
         &self,
         account_id: AccountId,
-        expires_at: DateTime<Utc>
+        expires_at: DateTime<Utc>,
     ) -> Result<TokenWithSecret, TokenError> {
         let secret = TokenSecret::new_v4();
-        self.create_known_secret(account_id, secret, expires_at).await
+        self.create_known_secret(account_id, secret, expires_at)
+            .await
     }
 
     pub async fn create_known_secret(
         &self,
         account_id: AccountId,
         secret: TokenSecret,
-        expires_at: DateTime<Utc>
+        expires_at: DateTime<Utc>,
     ) -> Result<TokenWithSecret, TokenError> {
         let created_at = Utc::now();
         let token_id = TokenId::new_v4();
@@ -107,15 +94,15 @@ impl TokenService {
             secret: secret.0,
             account_id: account_id.0,
             created_at: created_at.into(),
-            expires_at: expires_at.into()
+            expires_at: expires_at.into(),
         };
 
-        let record = self.token_repo
+        let record = self
+            .token_repo
             .create(record)
             .await?
             .ok_or(TokenError::TokenSecretAlreadyExists)?;
 
         Ok(record.into())
     }
-
 }

@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use super::Tracing;
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use test_r::{inherit_test_dep, test};
-use golem_test_framework::dsl::{TestDsl, TestDslUnsafe};
-use golem_client::api::RegistryServiceClient;
 use assert2::assert;
+use golem_client::api::RegistryServiceClient;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::{TestDsl, TestDslUnsafe};
+use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -31,7 +31,9 @@ async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Re
 
     let component = user.component(&env, "shopping-cart").store().await?;
 
-    let component_from_get = client.get_component(&component.versioned_component_id.component_id.0).await?;
+    let component_from_get = client
+        .get_component(&component.versioned_component_id.component_id.0)
+        .await?;
 
     assert!(component_from_get == component);
 

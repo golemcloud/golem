@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
+use golem_common::model::PlanId;
+use golem_common::model::account::{Account, AccountId};
 use sqlx::FromRow;
 use uuid::Uuid;
-use golem_common::model::account::{Account, AccountId};
-use golem_common::model::PlanId;
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountRecord {
@@ -34,7 +34,7 @@ impl From<AccountRecord> for Account {
             id: AccountId(value.account_id),
             name: value.name,
             email: value.email,
-            plan_id: PlanId(value.plan_id)
+            plan_id: PlanId(value.plan_id),
         }
     }
 }

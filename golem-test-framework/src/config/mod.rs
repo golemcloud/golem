@@ -15,26 +15,24 @@
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::RedisMonitor;
+use crate::components::registry_service::RegistryService;
 use crate::components::service::Service;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use clap::ValueEnum;
 pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
-use golem_common::model::{ProjectId};
+use golem_client::api::RegistryServiceClient;
+use golem_client::model::CreateTokenRequest;
+use golem_common::model::account::{AccountId, NewAccountData};
+use golem_common::model::auth::TokenSecret;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use std::path::Path;
 use std::sync::Arc;
-use uuid::{uuid, Uuid};
-use golem_common::model::account::{AccountId, NewAccountData};
-use crate::components::registry_service::RegistryService;
-use golem_common::model::auth::TokenSecret;
-use golem_client::api::RegistryServiceClient;
-use golem_client::model::CreateTokenRequest;
-use chrono::{DateTime, Utc};
-use std::u32::MAX;
+use uuid::Uuid;
 
 pub mod cli;
 mod env;
@@ -91,7 +89,9 @@ pub trait TestDependencies: Send + Sync {
     async fn user(&self) -> anyhow::Result<TestDependenciesDsl<&Self>> {
         let registry_service = self.registry_service();
 
-        let client = registry_service.client(&registry_service.admin_account_token()).await;
+        let client = registry_service
+            .client(&registry_service.admin_account_token())
+            .await;
 
         let name = Uuid::new_v4().to_string();
         let account_data = NewAccountData {
@@ -101,7 +101,14 @@ pub trait TestDependencies: Send + Sync {
 
         let account = client.create_account(&account_data).await?;
 
-        let token = client.create_token(&account.id.0, &CreateTokenRequest { expires_at: DateTime::<Utc>::MAX_UTC }).await?;
+        let token = client
+            .create_token(
+                &account.id.0,
+                &CreateTokenRequest {
+                    expires_at: DateTime::<Utc>::MAX_UTC,
+                },
+            )
+            .await?;
 
         Ok(TestDependenciesDsl {
             account_id: account.id,
@@ -136,7 +143,6 @@ pub trait TestDependencies: Send + Sync {
     //         deps: self,
     //     })
     // }
-
 
     // async fn into_admin(self) -> TestDependenciesDsl<Self>
     // where

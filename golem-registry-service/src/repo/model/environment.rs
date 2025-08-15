@@ -14,13 +14,15 @@
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
-use golem_common::model::diff;
-use golem_common::model::diff::Hashable;
-use sqlx::FromRow;
-use uuid::Uuid;
-use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName, NewEnvironmentData};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
+use golem_common::model::diff;
+use golem_common::model::diff::Hashable;
+use golem_common::model::environment::{
+    Environment, EnvironmentId, EnvironmentName, NewEnvironmentData,
+};
+use sqlx::FromRow;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct EnvironmentRecord {
@@ -48,7 +50,7 @@ impl EnvironmentRevisionRecord {
     pub fn from_new_model(
         environment_id: EnvironmentId,
         data: NewEnvironmentData,
-        actor: AccountId
+        actor: AccountId,
     ) -> Self {
         Self {
             environment_id: environment_id.0,
@@ -57,7 +59,7 @@ impl EnvironmentRevisionRecord {
             audit: DeletableRevisionAuditFields::new(actor.0),
             compatibility_check: data.compatibility_check,
             version_check: data.version_check,
-            security_overrides: data.security_overrides
+            security_overrides: data.security_overrides,
         }
     }
 
@@ -123,7 +125,7 @@ impl From<EnvironmentExtRevisionRecord> for Environment {
             name: EnvironmentName(value.name),
             compatibility_check: value.revision.compatibility_check,
             version_check: value.revision.version_check,
-            security_overrides: value.revision.security_overrides
+            security_overrides: value.revision.security_overrides,
         }
     }
 }

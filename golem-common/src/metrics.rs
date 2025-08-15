@@ -236,9 +236,9 @@ pub mod caching {
 pub mod api {
     use lazy_static::lazy_static;
     use prometheus::{register_gauge, register_histogram_vec, Gauge, HistogramVec};
-    use std::fmt::{Debug, Display};
-    use tracing::{error, info, Span};
+    use std::fmt::Debug;
     use std::sync::Arc;
+    use tracing::{error, info, Span};
 
     lazy_static! {
         static ref API_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
@@ -342,34 +342,33 @@ pub mod api {
 
         fn handle_failure<E: ApiErrorDetails + Debug>(mut self, error: &mut E) {
             if let Some(start) = self.start_time.take() {
-                    let elapsed = start.elapsed();
+                let elapsed = start.elapsed();
 
-                    if error.is_expected() {
-                        info!(
-                            elapsed_ms = elapsed.as_millis(),
-                            error = format!("{:?}", error),
-                            "API request failed",
-                        );
-                    } else {
-                        let error_display = if let Some(cause) = error.take_cause() {
-                            format!("{cause:#}")
-                        } else {
-                            format!("{error:?}")
-                        };
-                        error!(
-                            elapsed_ms = elapsed.as_millis(),
-                            error = error_display,
-                            "API request failed",
-                        );
-
-                    }
-
-                    record_api_failure(
-                        self.api_name,
-                        self.api_type,
-                        error.trace_error_kind(),
-                        elapsed,
+                if error.is_expected() {
+                    info!(
+                        elapsed_ms = elapsed.as_millis(),
+                        error = format!("{:?}", error),
+                        "API request failed",
                     );
+                } else {
+                    let error_display = if let Some(cause) = error.take_cause() {
+                        format!("{cause:#}")
+                    } else {
+                        format!("{error:?}")
+                    };
+                    error!(
+                        elapsed_ms = elapsed.as_millis(),
+                        error = error_display,
+                        "API request failed",
+                    );
+                }
+
+                record_api_failure(
+                    self.api_name,
+                    self.api_type,
+                    error.trace_error_kind(),
+                    elapsed,
+                );
             }
         }
 
@@ -379,7 +378,7 @@ pub mod api {
         ) -> Result<T, E> {
             match &mut result {
                 Ok(_) => self.handle_success(),
-                Err(error) => self.handle_failure(error)
+                Err(error) => self.handle_failure(error),
             }
             result
         }

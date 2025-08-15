@@ -13,35 +13,35 @@
 // limitations under the License.
 
 use crate::config::RegistryServiceConfig;
+use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
+use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
+use crate::repo::environment::{DbEnvironmentRepo, EnvironmentRepo};
+use crate::repo::plan::{DbPlanRepo, PlanRepo};
+use crate::repo::token::{DbTokenRepo, TokenRepo};
+use crate::services::account::AccountService;
 use crate::services::account_usage::AccountUsageService;
+use crate::services::application::ApplicationService;
 use crate::services::component::ComponentService;
 use crate::services::component_compilation::ComponentCompilationServiceDisabled;
 use crate::services::component_object_store::ComponentObjectStore;
-use anyhow::{anyhow, Context};
+use crate::services::environment::EnvironmentService;
+use crate::services::plan::PlanService;
+use crate::services::token::TokenService;
+use anyhow::{Context, anyhow};
 use golem_common::config::DbConfig;
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
-use std::sync::Arc;
 use include_dir::include_dir;
-use golem_service_base::db;
-use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
-use crate::services::application::ApplicationService;
-use crate::services::environment::EnvironmentService;
-use crate::services::account::AccountService;
-use crate::repo::account::{AccountRepo, DbAccountRepo};
-use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
-use crate::repo::environment::{DbEnvironmentRepo, EnvironmentRepo};
-use crate::services::plan::PlanService;
-use crate::repo::plan::{DbPlanRepo, PlanRepo};
-use crate::services::token::TokenService;
-use crate::repo::token::{DbTokenRepo, TokenRepo};
+use std::sync::Arc;
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
@@ -51,7 +51,7 @@ pub struct Services {
     pub application_service: Arc<ApplicationService>,
     pub component_service: Arc<ComponentService>,
     pub environment_service: Arc<EnvironmentService>,
-    pub token_service: Arc<TokenService>
+    pub token_service: Arc<TokenService>,
 }
 
 struct Repos {
@@ -61,7 +61,7 @@ struct Repos {
     component_repo: Arc<dyn ComponentRepo>,
     environment_repo: Arc<dyn EnvironmentRepo>,
     plan_repo: Arc<dyn PlanRepo>,
-    token_repo: Arc<dyn TokenRepo>
+    token_repo: Arc<dyn TokenRepo>,
 }
 
 impl Services {
@@ -84,7 +84,12 @@ impl Services {
 
         let token_service = Arc::new(TokenService::new(repos.token_repo));
 
-        let account_service = Arc::new(AccountService::new(repos.account_repo.clone(),  plan_service.clone(), token_service.clone(), config.accounts.clone()));
+        let account_service = Arc::new(AccountService::new(
+            repos.account_repo.clone(),
+            plan_service.clone(),
+            token_service.clone(),
+            config.accounts.clone(),
+        ));
         account_service.create_initial_accounts().await?;
 
         let application_service = Arc::new(ApplicationService::new(repos.application_repo.clone()));
@@ -99,7 +104,7 @@ impl Services {
             plugin_wasm_files,
             account_usage_service,
             environment_service.clone(),
-            application_service.clone()
+            application_service.clone(),
         ));
 
         Ok(Self {
@@ -107,8 +112,8 @@ impl Services {
             application_service,
             component_service,
             environment_service,
-            token_service
-         })
+            token_service,
+        })
     }
 }
 
@@ -131,7 +136,6 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
             let token_repo = Arc::new(DbTokenRepo::logged(db_pool));
 
-
             Ok(Repos {
                 account_repo,
                 account_usage_repo,
@@ -139,7 +143,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 component_repo,
                 environment_repo,
                 plan_repo,
-                token_repo
+                token_repo,
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
@@ -157,7 +161,6 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
             let token_repo = Arc::new(DbTokenRepo::logged(db_pool));
 
-
             Ok(Repos {
                 account_repo,
                 account_usage_repo,
@@ -165,7 +168,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 component_repo,
                 environment_repo,
                 plan_repo,
-                token_repo
+                token_repo,
             })
         }
     }

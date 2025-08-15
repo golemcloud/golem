@@ -15,12 +15,18 @@
 use crate::model::component::{Component, FinalizedComponentRevision};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision, InitialComponentFile, InitialComponentFileKey, VersionedComponentId};
+use golem_common::model::component::{
+    ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision,
+    InitialComponentFile, InitialComponentFileKey, VersionedComponentId,
+};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
 };
 use golem_common::model::diff::{self, Hashable};
+use golem_common::model::environment::EnvironmentId;
+use golem_service_base::repo::RepoError;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::Json;
@@ -29,9 +35,6 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Deref;
 use uuid::Uuid;
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::ComponentId;
-use golem_service_base::repo::RepoError;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum ComponentRevisionRepoError {
@@ -456,21 +459,33 @@ impl TryFrom<ComponentExtRevisionRecord> for Component {
             environment_id: EnvironmentId(value.environment_id),
             versioned_component_id: VersionedComponentId {
                 component_id: ComponentId(value.revision.component_id),
-                version: ComponentRevision(value.revision.revision_id as u64)
+                version: ComponentRevision(value.revision.revision_id as u64),
             },
             component_name: ComponentName(value.name),
             component_size: value.revision.size as u64,
             metadata: value.revision.metadata.into(),
             created_at: value.revision.audit.created_at.into(),
-            component_type: value.revision.component_type.try_into().map_err(|e| RepoError::Internal(format!("Failed converting component type: {e}")))?,
-            files: value.revision.files.into_iter().map(|f| f.try_into()).collect::<Result<_, _>>()?,
+            component_type: value.revision.component_type.try_into().map_err(|e| {
+                RepoError::Internal(format!("Failed converting component type: {e}"))
+            })?,
+            files: value
+                .revision
+                .files
+                .into_iter()
+                .map(|f| f.try_into())
+                .collect::<Result<_, _>>()?,
             installed_plugins: vec![], // TODO
             env: value.revision.env.0,
             object_store_key: value.revision.object_store_key,
             wasm_hash: blake3::Hash::from(value.revision.binary_hash).into(),
-            original_files: value.revision.original_files.into_iter().map(|f| f.try_into()).collect::<Result<_, _>>()?,
+            original_files: value
+                .revision
+                .original_files
+                .into_iter()
+                .map(|f| f.try_into())
+                .collect::<Result<_, _>>()?,
             original_env: value.revision.original_env.0,
-            transformed_object_store_key: value.revision.transformed_object_store_key
+            transformed_object_store_key: value.revision.transformed_object_store_key,
         })
     }
 }
@@ -520,8 +535,12 @@ impl TryFrom<ComponentFileRecord> for InitialComponentFile {
     fn try_from(value: ComponentFileRecord) -> Result<Self, Self::Error> {
         Ok(Self {
             key: InitialComponentFileKey(value.file_key),
-            path: ComponentFilePath::from_abs_str(&value.file_path).map_err(|e| RepoError::Internal(format!("Failed converting component file record to model: {e}")))?,
-            permissions: value.file_permissions.into()
+            path: ComponentFilePath::from_abs_str(&value.file_path).map_err(|e| {
+                RepoError::Internal(format!(
+                    "Failed converting component file record to model: {e}"
+                ))
+            })?,
+            permissions: value.file_permissions.into(),
         })
     }
 }

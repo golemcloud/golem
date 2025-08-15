@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::api::ApiResult;
+use crate::services::token::TokenService;
 use golem_common::api::CreateTokenRequest;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{AuthCtx, Token, TokenWithSecret};
@@ -22,12 +23,11 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
-use tracing::Instrument;
-use crate::services::token::TokenService;
 use std::sync::Arc;
+use tracing::Instrument;
 
 pub struct AccountTokensApi {
-    token_service: Arc<TokenService>
+    token_service: Arc<TokenService>,
 }
 
 #[OpenApi(
@@ -37,9 +37,7 @@ pub struct AccountTokensApi {
     tag = ApiTags::Token
 )]
 impl AccountTokensApi {
-    pub fn new(
-        token_service: Arc<TokenService>
-    ) -> Self {
+    pub fn new(token_service: Arc<TokenService>) -> Self {
         Self { token_service }
     }
 
@@ -114,7 +112,10 @@ impl AccountTokensApi {
         request: CreateTokenRequest,
         _auth: AuthCtx,
     ) -> ApiResult<Json<TokenWithSecret>> {
-        let result = self.token_service.create(account_id, request.expires_at).await?;
+        let result = self
+            .token_service
+            .create(account_id, request.expires_at)
+            .await?;
         Ok(Json(result))
     }
 }

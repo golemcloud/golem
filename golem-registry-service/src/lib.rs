@@ -20,17 +20,17 @@ pub mod model;
 pub mod repo;
 pub mod services;
 
-use poem::endpoint::{BoxEndpoint, PrometheusExporter};
-use self::config::RegistryServiceConfig;
 use self::bootstrap::Services;
-use tracing::{info, Instrument};
-use tokio::task::JoinSet;
+use self::config::RegistryServiceConfig;
+use poem::endpoint::{BoxEndpoint, PrometheusExporter};
+use poem::listener::Acceptor;
+use poem::listener::Listener;
+use poem::middleware::CookieJarManager;
+use poem::middleware::Cors;
 use poem::{EndpointExt, Route};
 use poem_openapi::OpenApiService;
-use poem::middleware::CookieJarManager;
-use poem::listener::Listener;
-use poem::middleware::Cors;
-use poem::listener::Acceptor;
+use tokio::task::JoinSet;
+use tracing::{Instrument, info};
 
 #[cfg(test)]
 test_r::enable!();
@@ -111,8 +111,8 @@ impl RegistryService {
     //     .await
     //     .map_err(|err| anyhow!(err).context("gRPC server failed"))?
 
-     //    info!("Started registry-service grpc server on port {port}");
-     //    Ok(port)
+    //    info!("Started registry-service grpc server on port {port}");
+    //    Ok(port)
     // }
 
     async fn start_http_server(

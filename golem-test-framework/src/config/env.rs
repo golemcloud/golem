@@ -39,6 +39,9 @@ use crate::components::redis_monitor::RedisMonitor;
 // use crate::components::worker_service::docker::DockerWorkerService;
 // use crate::components::worker_service::spawned::SpawnedWorkerService;
 // use crate::components::worker_service::WorkerService;
+use crate::components::blob_storage::BlobStorageInfo;
+use crate::components::registry_service::spawned::SpawnedRegistyService;
+use crate::components::registry_service::RegistryService;
 use crate::components::{self};
 use crate::config::{DbType, GolemClientProtocol, TestDependencies};
 use async_trait::async_trait;
@@ -52,9 +55,6 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::Level;
 use uuid::Uuid;
-use crate::components::registry_service::RegistryService;
-use crate::components::blob_storage::BlobStorageInfo;
-use crate::components::registry_service::spawned::SpawnedRegistyService;
 
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
@@ -182,8 +182,7 @@ pub struct EnvBasedTestDependencies {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     temp_directory: Arc<TempDir>,
-    registry_service: Arc<dyn RegistryService>
-    // cloud_service: Arc<dyn CloudService>,
+    registry_service: Arc<dyn RegistryService>, // cloud_service: Arc<dyn CloudService>,
 }
 
 impl Debug for EnvBasedTestDependencies {
@@ -238,17 +237,13 @@ impl EnvBasedTestDependencies {
     async fn make_registry_service(
         config: &EnvBasedTestDependenciesConfig,
         db_info: &DbInfo,
-        blob_storage_info: &BlobStorageInfo
+        blob_storage_info: &BlobStorageInfo,
     ) -> anyhow::Result<Arc<dyn RegistryService>> {
         if config.golem_docker_services {
             todo!()
         } else {
             Ok(Arc::new(
-                SpawnedRegistyService::new(
-                    &db_info,
-                    &blob_storage_info
-                )
-                .await?,
+                SpawnedRegistyService::new(db_info, blob_storage_info).await?,
             ))
         }
     }
@@ -492,7 +487,9 @@ impl EnvBasedTestDependencies {
                 .unwrap(),
         );
 
-        let blob_storage_info = BlobStorageInfo::LocalFileSytem { root: PathBuf::from(blob_storage_root) };
+        let blob_storage_info = BlobStorageInfo::LocalFileSytem {
+            root: PathBuf::from(blob_storage_root),
+        };
 
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
@@ -547,11 +544,8 @@ impl EnvBasedTestDependencies {
         // )
         // .await;
 
-        let registry_service = Self::make_registry_service(
-            &config,
-            &rdb.info(),
-            &blob_storage_info
-        ).await?;
+        let registry_service =
+            Self::make_registry_service(&config, &rdb.info(), &blob_storage_info).await?;
 
         Ok(Self {
             config,
@@ -562,9 +556,7 @@ impl EnvBasedTestDependencies {
             initial_component_files_service,
             plugin_wasm_files_service,
             registry_service,
-            temp_directory: Arc::new(
-                TempDir::new().expect("Failed to create temporary directory"),
-            ),
+            temp_directory: Arc::new(TempDir::new().expect("Failed to create temporary directory")),
         })
     }
 }
@@ -630,7 +622,6 @@ impl TestDependencies for EnvBasedTestDependencies {
     fn registry_service(&self) -> Arc<dyn RegistryService> {
         self.registry_service.clone()
     }
-
 }
 
 fn opt_env_var(name: &str) -> Option<String> {

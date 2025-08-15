@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::services::application::ApplicationService;
 use golem_common::api::Page;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{Application, NewApplicationData};
@@ -23,13 +24,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
-use tracing::Instrument;
-use crate::services::application::ApplicationService;
 use std::sync::Arc;
+use tracing::Instrument;
 use uuid::Uuid;
 
 pub struct AccountApplicationsApi {
-    application_service: Arc<ApplicationService>
+    application_service: Arc<ApplicationService>,
 }
 
 #[OpenApi(
@@ -39,11 +39,9 @@ pub struct AccountApplicationsApi {
     tag = ApiTags::Application
 )]
 impl AccountApplicationsApi {
-    pub fn new(
-        application_service: Arc<ApplicationService>
-    ) -> Self {
+    pub fn new(application_service: Arc<ApplicationService>) -> Self {
         Self {
-            application_service
+            application_service,
         }
     }
 
@@ -153,7 +151,10 @@ impl AccountApplicationsApi {
     ) -> ApiResult<Json<Application>> {
         // TODO
         let actor = AccountId(Uuid::nil());
-        let result = self.application_service.create(account_id, data, actor).await?;
+        let result = self
+            .application_service
+            .create(account_id, data, actor)
+            .await?;
 
         Ok(Json(result))
     }
