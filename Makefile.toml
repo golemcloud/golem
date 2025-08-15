@@ -132,6 +132,7 @@ rm -rf wit/deps.done
 rm -rf wit/deps
 rm -rf wasm-rpc/wit/deps
 rm -rf golem-common/wit/deps
+rm -rf cli/golem-cli/wit/deps
 """
 
 [tasks.diff-wit]
@@ -372,6 +373,8 @@ dependencies = [
     "integration-tests-group3",
     "integration-tests-group4",
     "integration-tests-group5",
+    "cli-integration-tests",
+    "template-integration-tests"
 ]
 
 [tasks.integration-tests-group1]
@@ -416,6 +419,23 @@ dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
+'''
+
+[tasks.cli-integration-tests]
+description = "Run CLI integration tests"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo test --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag:app --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.template-integration-tests]
+dependencies = ["build"]
+description = "Run template integration tests"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo test --package golem-templates --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.sharding-tests-debug]
@@ -583,7 +603,8 @@ dependencies = [
     "publish-golem-client",
     "publish-golem-service-base",
     "publish-golem-test-framework",
-    "publish-golem-rib-repl"
+    "publish-golem-rib-repl",
+    "publish-golem-cli"
 ]
 
 [tasks.set-version]
@@ -718,6 +739,33 @@ args = [
 description = "Publishes golem-rib package to crates.io"
 command = "cargo"
 args = ["publish", "-p", "golem-rib-repl", "--allow-dirty", "--no-verify"]
+
+[tasks.publish-golem-templates]
+description = "Publishes golem-templates package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-templates",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+[tasks.publish-golem-cli]
+description = "Publishes golem-cli package to crates.io"
+dependencies = [
+    "publish-golem-templates",
+]
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-cli",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
 
 ## ** PACKAGE RELEASE **
 
@@ -872,4 +920,94 @@ docker compose --project-directory log-tools/elastic stop
 description = "Stops and removes the elastic environment, including all data"
 script = '''
 docker compose --project-directory log-tools/elastic down --volumes
+'''
+
+## ** INSTALL - DEBUG **
+[tasks.install-debug]
+description = "Install bins in debug mode"
+dependencies = ["install-golem-cli-debug", "install-golem-debug"]
+
+[tasks.install-golem-cli-debug]
+description = "Install golem-cli (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --debug --path cli/golem-cli --bin golem-cli --target-dir target --locked --offline
+'''
+
+[tasks.install-golem-debug]
+description = "Install golem (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --debug --path cli/golem --bin golem --target-dir target --locked --offline
+'''
+
+## ** INSTALL - RELEASE **
+
+[tasks.install-release]
+description = "Install bins in debug mode"
+dependencies = ["install-golem-cli-release", "install-golem-release"]
+
+[tasks.install-golem-cli-release]
+description = "Install golem-cli (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --path cli/golem-cli --bin golem-cli --target-dir target --locked --offline
+'''
+
+[tasks.install-golem-release]
+description = "Install golem (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --path cli/golem --bin golem --target-dir target --locked --offline
+'''
+
+## ** DESKTOP APP **
+[tasks.desktop]
+description = "Builds the desktop application"
+dependencies = ["npm-install"]
+command = "npm"
+args = ["run", "tauri", "build"]
+cwd = ".cli//desktop-app"
+
+[tasks.dev-desktop]
+description = "Run the desktop application"
+dependencies = ["npm-install"]
+command = "npm"
+args = ["run", "tauri", "dev"]
+cwd = "./cli/desktop-app"
+
+[tasks.npm-install]
+description = "Install npm dependencies"
+command = "npm"
+args = ["install"]
+cwd = "./cli/desktop-app"
+
+## ** APP MANIFEST SCHEMA **
+[tasks.publish-app-manifest-json-schema]
+description = "Publish application manifest schemas to S3 (https://schema.golem.cloud)"
+command = "aws"
+args = [
+    "s3",
+    "sync",
+    "cli/schema.golem.cloud",
+    "s3://schema.golem.cloud",
+]
+
+[tasks.serve-app-manifest-json-schema]
+description = "Serve the schema.golem.cloud directory locally to help testing the schemas in editors"
+install_crate = "miniserve"
+command = "miniserve"
+args = ["--interfaces", "127.0.0.1", "--port", "41357", "schema.golem.cloud"]
+
+## Agent template management
+[tasks.rebuild-ts-agent-template]
+description = "Rebuilds the TypeScript agent template WASM"
+script_runner = "@duckscript"
+script = '''
+cd cli/template-golem-agent-ts
+exec --fail-on-error npm update
+exec --fail-on-error npm install
+exec --fail-on-error npm run generate
+exec --fail-on-error npm run build
+cp dist/wrapper/target/wasm32-wasip1/release/golem_agent.wasm ../golem-templates/templates/ts/ts-app-common/wasm/golem_agent.wasm
 '''
