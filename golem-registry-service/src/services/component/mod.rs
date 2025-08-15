@@ -44,7 +44,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
-use tracing::info;
+use tracing::{debug, info};
+use super::environment::EnvironmentService;
+use super::application::ApplicationService;
 
 pub struct ComponentService {
     component_repo: Arc<dyn ComponentRepo>,
@@ -53,6 +55,8 @@ pub struct ComponentService {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     _plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     account_usage_service: Arc<AccountUsageService>,
+    environment_service: Arc<EnvironmentService>,
+    application_service: Arc<ApplicationService>
 }
 
 impl ComponentService {
@@ -63,6 +67,8 @@ impl ComponentService {
         initial_component_files_service: Arc<InitialComponentFilesService>,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
         account_usage_service: Arc<AccountUsageService>,
+        environment_service: Arc<EnvironmentService>,
+        application_service: Arc<ApplicationService>
     ) -> Self {
         Self {
             component_repo,
@@ -71,6 +77,8 @@ impl ComponentService {
             initial_component_files_service,
             _plugin_wasm_files_service: plugin_wasm_files_service,
             account_usage_service,
+            environment_service,
+            application_service
         }
     }
 
@@ -98,9 +106,12 @@ impl ComponentService {
                 )))
             })?;
 
+        let environment = self.environment_service.get(&environment_id).await?;
+        let application = self.application_service.get(&environment.application_id).await?;
+
         let mut account_usage = self
             .account_usage_service
-            .add_component(actor, wasm.len() as i64)
+            .add_component(&application.account_id, wasm.len() as i64)
             .await?;
 
         let initial_component_files: Vec<InitialComponentFile> = self
@@ -138,7 +149,7 @@ impl ComponentService {
             .await;
 
         let stored_component: Component = match result? {
-            Ok(record) => record.into(),
+            Ok(record) => record.try_into()?,
             Err(ComponentRevisionRepoError::ConcurrentModification) => todo!(),
             Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),
         };
@@ -175,7 +186,7 @@ impl ComponentService {
             .get_staged_by_id(&component_id.0)
             .await?
             .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?
-            .into();
+            .try_into()?;
 
         let environment_id = component.environment_id.clone();
         let component_id = component.versioned_component_id.component_id.clone();
@@ -202,9 +213,12 @@ impl ComponentService {
         // }
 
         let (wasm, wasm_object_store_key, wasm_hash) = if let Some(new_data) = data {
+            let environment = self.environment_service.get(&environment_id).await?;
+            let application = self.application_service.get(&environment.application_id).await?;
+
             let actual_account_usage = self
                 .account_usage_service
-                .add_component(actor, new_data.len() as i64)
+                .add_component(&application.account_id, new_data.len() as i64)
                 .await?;
 
             let _ = account_usage.insert(actual_account_usage);
@@ -254,7 +268,7 @@ impl ComponentService {
             .await;
 
         let stored_component: Component = match result? {
-            Ok(record) => record.into(),
+            Ok(record) => record.try_into()?,
             Err(ComponentRevisionRepoError::ConcurrentModification) => {
                 Err(ComponentError::ConcurrentUpdate {
                     component_id: component_id.clone(),
@@ -291,7 +305,7 @@ impl ComponentService {
             .await?;
 
         match record {
-            Some(record) => Ok(record.into()),
+            Some(record) => Ok(record.try_into()?),
             None => Err(ComponentError::UnknownComponentId(component_id.clone())),
         }
     }
@@ -309,7 +323,7 @@ impl ComponentService {
             .await?;
 
         match record {
-            Some(record) => Ok(record.into()),
+            Some(record) => Ok(record.try_into()?),
             None => Err(ComponentError::UnknownComponentId(component_id.clone())),
         }
     }
@@ -325,8 +339,8 @@ impl ComponentService {
             .list_staged(&environment_id.0)
             .await?
             .into_iter()
-            .map(Component::from)
-            .collect();
+            .map(Component::try_from)
+            .collect::<Result<_, _>>()?;
 
         Ok(result)
     }
@@ -348,7 +362,7 @@ impl ComponentService {
             .await?;
 
         match record {
-            Some(record) => Ok(record.into()),
+            Some(record) => Ok(record.try_into()?),
             None => Err(ComponentError::UnknownEnvironmentComponentName {
                 environment_id,
                 component_name,
@@ -372,8 +386,8 @@ impl ComponentService {
             .list_by_deployment(&environment_id.0, deployment_revision_id.0 as i64)
             .await?
             .into_iter()
-            .map(Component::from)
-            .collect();
+            .map(Component::try_from)
+            .collect::<Result<_, _>>()?;
 
         Ok(result)
     }
@@ -401,7 +415,7 @@ impl ComponentService {
             .await?;
 
         match record {
-            Some(record) => Ok(record.into()),
+            Some(record) => Ok(record.try_into()?),
             None => Err(ComponentError::UnknownEnvironmentComponentName {
                 environment_id,
                 component_name,
@@ -1057,7 +1071,7 @@ impl ComponentService {
             })?;
         }
 
-        info!(
+        debug!(
             environment_id = %environment_id,
             exports = ?finalized_revision.metadata.exports,
             dynamic_linking = ?finalized_revision.metadata.dynamic_linking,

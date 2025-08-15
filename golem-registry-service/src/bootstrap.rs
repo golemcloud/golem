@@ -98,6 +98,8 @@ impl Services {
             initial_component_files,
             plugin_wasm_files,
             account_usage_service,
+            environment_service.clone(),
+            application_service.clone()
         ));
 
         Ok(Self {

@@ -150,6 +150,10 @@ impl ComponentFilePath {
         &self.0
     }
 
+    pub fn to_abs_string(&self) -> String {
+        self.0.to_string()
+    }
+
     pub fn to_rel_string(&self) -> String {
         self.0.strip_prefix("/").unwrap().to_string()
     }
