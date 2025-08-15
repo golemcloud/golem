@@ -160,7 +160,7 @@ args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
 [tasks.build-bins-non-ci]
 private = true
 condition = { env_not_set = ["CI"] }
-dependencies = ["build-bins"]
+run_task = [{ name = ["build-bins"] }]
 
 [tasks.build-worker-service]
 dependencies = ["wit"]
@@ -171,7 +171,7 @@ args = ["build", "-p", "golem-worker-service"]
 [tasks.build-worker-service-non-ci]
 private = true
 condition = { env_not_set = ["CI"] }
-dependencies = ["build-worker-service"]
+run_task = [{ name = ["build-worker-service"] }]
 
 [tasks.build-component-service]
 dependencies = ["wit"]
@@ -182,7 +182,7 @@ args = ["build", "-p", "golem-component-service"]
 [tasks.build-component-service-non-ci]
 private = true
 condition = { env_not_set = ["CI"] }
-dependencies = ["build-component-service"]
+run_task = [{ name = ["build-component-service"] }]
 
 [tasks.build-cloud-service]
 description = "Builds cloud service"
@@ -192,7 +192,7 @@ args = ["build", "-p", "cloud-service"]
 [tasks.build-cloud-service-non-ci]
 private = true
 condition = { env_not_set = ["CI"] }
-dependencies = ["build-cloud-service"]
+run_task = [{ name = ["build-cloud-service"] }]
 
 [tasks.build-release]
 description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
