@@ -12,7 +12,6 @@ autotests = false
 
 [dependencies]
 anyhow = { workspace = true }
-assert2 = { workspace = true }
 clap = { workspace = true }
 colored = { workspace = true }
 fancy-regex = { workspace = true }
@@ -36,6 +35,9 @@ indoc = { workspace = true }
 cargo_metadata = { workspace = true }
 dir-diff = { workspace = true }
 fs_extra = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
 
 [lib]
 path = "src/lib.rs"

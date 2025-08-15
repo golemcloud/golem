@@ -26,6 +26,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+use golem_rdbms as _;
+use golem_wit as _;
+
 pub mod model;
 
 #[cfg(test)]
