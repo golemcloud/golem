@@ -190,7 +190,7 @@ where
     S: AsRef<OsStr>,
 {
     let cwd = std::env::current_dir()?;
-    let cli_path = cwd.join("../target/debug/golem-cli");
+    let cli_path = cwd.join("../../target/debug/golem-cli");
     let status = std::process::Command::new(cli_path)
         .args(args)
         .current_dir(dir)
