@@ -1,0 +1,76 @@
+// Example of many ways to export functions, including top-level, multiple interfaces, use and import statements, etc
+
+package test:exports;
+
+interface iface1 {
+  func2: func();
+}
+
+// TODO:
+/*
+interface iface2  {
+  use iface3.{color};
+  func3: func() -> color;
+}
+*/
+
+interface iface3 {
+    enum color {
+        red,
+        green,
+        blue
+    }
+}
+
+interface iface6 {
+    use test:sub/iface5.{rec1};
+
+    func6: func() -> rec1;
+}
+
+interface iface8 {
+    use test:sub/iface7.{rec1};
+
+    func8: func() -> rec1;
+}
+
+interface iface9 {
+    use iface8.{rec1};
+
+    func9: func() -> rec1;
+}
+
+interface iface11 {
+    use test:sub2/iface10.{rec1};
+
+    // intentionally using the same func name
+    // TODO
+    // func9: func() -> rec1;
+}
+
+world api {
+    // TODO: include
+
+    export func1: func();
+    export iface1;
+    import iface1;
+    // TODO:
+    // export iface2;
+
+    export inline-iface: interface {
+        func4: func();
+    }
+
+    export test:sub/iface4;
+
+    export iface6;
+    export iface8;
+    export iface9;
+    export test:sub2/iface10;
+    export iface11;
+    export test:sub/iface12;
+    export test:sub/iface13;
+
+    use test:sub2/iface10.{rec1};
+    export func2: func() -> rec1;
+}

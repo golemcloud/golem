@@ -173,8 +173,8 @@ impl TryFrom<&Expr> for wasm_encoder::ConstExpr {
             match &value.instrs[0] {
                 Instr::I32Const(value) => Ok(wasm_encoder::ConstExpr::i32_const(*value)),
                 Instr::I64Const(value) => Ok(wasm_encoder::ConstExpr::i64_const(*value)),
-                Instr::F32Const(value) => Ok(wasm_encoder::ConstExpr::f32_const(*value)),
-                Instr::F64Const(value) => Ok(wasm_encoder::ConstExpr::f64_const(*value)),
+                Instr::F32Const(value) => Ok(wasm_encoder::ConstExpr::f32_const((*value).into())),
+                Instr::F64Const(value) => Ok(wasm_encoder::ConstExpr::f64_const((*value).into())),
                 Instr::V128Const(value) => Ok(wasm_encoder::ConstExpr::v128_const(*value)),
                 Instr::GlobalGet(global_idx) => {
                     Ok(wasm_encoder::ConstExpr::global_get(*global_idx))
@@ -498,8 +498,8 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) -> Result<(
     match instr {
         Instr::I32Const(value) => target.emit(wasm_encoder::Instruction::I32Const(*value)),
         Instr::I64Const(value) => target.emit(wasm_encoder::Instruction::I64Const(*value)),
-        Instr::F32Const(value) => target.emit(wasm_encoder::Instruction::F32Const(*value)),
-        Instr::F64Const(value) => target.emit(wasm_encoder::Instruction::F64Const(*value)),
+        Instr::F32Const(value) => target.emit(wasm_encoder::Instruction::F32Const((*value).into())),
+        Instr::F64Const(value) => target.emit(wasm_encoder::Instruction::F64Const((*value).into())),
         Instr::IEqz(IntWidth::I32) => target.emit(wasm_encoder::Instruction::I32Eqz),
         Instr::IEqz(IntWidth::I64) => target.emit(wasm_encoder::Instruction::I64Eqz),
         Instr::IEq(IntWidth::I32) => target.emit(wasm_encoder::Instruction::I32Eq),

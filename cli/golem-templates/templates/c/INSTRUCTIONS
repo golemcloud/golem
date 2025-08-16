@@ -1,0 +1,12 @@
+See the documentation about installing tooling: https://learn.golem.cloud/docs/ccpp-language-guide/setup
+
+Generate bindings from WIT:
+  wit-bindgen c --autodrop-borrows yes --out-dir component_name ./wit
+Compile the C code with WASI SDK (set WASI_SDK_PATH where wasi-sdk-25.0 is installed):
+  $WASI_SDK_PATH/bin/clang --sysroot $WASI_SDK_PATH/share/wasi-sysroot main.c component_name/component_name.c component_name/component_name_component_type.o -o component_name.module.wasm
+Convert the result into a Component:
+  wasm-tools component new component_name.module.wasm -o component_name.wasm --adapt adapters/tier1/wasi_snapshot_preview1.wasm
+
+A Makefile is provided to automate the process:
+  export WASI_SDK_PATH=...
+  make build

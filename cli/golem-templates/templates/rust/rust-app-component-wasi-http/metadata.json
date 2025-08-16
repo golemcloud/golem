@@ -1,0 +1,4 @@
+{
+  "description": "A Rust worker implementing wasi:http/incoming-handler. For use with the http-handler api gateway binding type",
+  "appComponentGroup": "default"
+}

@@ -14,12 +14,9 @@ path = "src/lib.rs"
 harness = false
 
 [dependencies]
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["typeinfo"] }
-golem-rib = { path = "../golem-rib", version = "=0.0.0" }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
-    "analysis",
-    "bincode",
-] }
+golem-wasm-rpc = { workspace = true, features = ["typeinfo"] }
+golem-rib = { workspace = true, default-features = true }
+golem-wasm-ast = { workspace = true, features = ["analysis", "bincode"] }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

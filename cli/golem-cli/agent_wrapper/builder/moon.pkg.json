@@ -1,0 +1,1 @@
+{ "import": [{ "path" : "golem/agent-wrapper/interface/golem/rpc/types", "alias" : "types" }] }

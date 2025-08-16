@@ -1,0 +1,12 @@
+package pack:name;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+
+interface component-name-api {
+  add: func(value: u64);
+  get: func() -> u64;
+}
+
+world component-name {
+  export component-name-api;
+}

@@ -440,6 +440,9 @@ impl TryFrom<wasmparser::ComponentDefinedType<'_>> for ComponentDefinedType {
             wasmparser::ComponentDefinedType::Stream(tpe) => Ok(ComponentDefinedType::Stream {
                 inner: tpe.map(|tpe| tpe.try_into()).transpose()?,
             }),
+            wasmparser::ComponentDefinedType::FixedSizeList(_, _) => {
+                Err("Fixed-size lists are not supported".to_string())
+            }
         }
     }
 }
@@ -583,6 +586,10 @@ impl TryFrom<wasmparser::CanonicalOption> for CanonicalOption {
             wasmparser::CanonicalOption::Callback(func_idx) => {
                 Ok(CanonicalOption::Callback(func_idx))
             }
+            wasmparser::CanonicalOption::CoreType(_) => {
+                Err("GC proposal is not supported".to_string())
+            }
+            wasmparser::CanonicalOption::Gc => Err("GC proposal is not supported".to_string()),
         }
     }
 }
@@ -623,7 +630,7 @@ impl TryFrom<wasmparser::CanonicalFunction> for Canon {
             wasmparser::CanonicalFunction::ResourceRep { resource } => {
                 Ok(Canon::ResourceRep { type_idx: resource })
             }
-            CanonicalFunction::ThreadSpawn { .. } => {
+            CanonicalFunction::ThreadSpawnRef { .. } => {
                 Err("Threads proposal is not supported".to_string())
             }
             CanonicalFunction::ResourceDropAsync { .. } => {
@@ -659,10 +666,10 @@ impl TryFrom<wasmparser::CanonicalFunction> for Canon {
             CanonicalFunction::StreamCancelWrite { .. } => {
                 Err("WASI P3 future and stream support is not supported yet".to_string())
             }
-            CanonicalFunction::StreamCloseReadable { .. } => {
+            CanonicalFunction::StreamDropReadable { .. } => {
                 Err("WASI P3 future and stream support is not supported yet".to_string())
             }
-            CanonicalFunction::StreamCloseWritable { .. } => {
+            CanonicalFunction::StreamDropWritable { .. } => {
                 Err("WASI P3 future and stream support is not supported yet".to_string())
             }
             CanonicalFunction::FutureNew { .. } => {
@@ -680,10 +687,10 @@ impl TryFrom<wasmparser::CanonicalFunction> for Canon {
             CanonicalFunction::FutureCancelWrite { .. } => {
                 Err("WASI P3 future and stream support is not supported yet".to_string())
             }
-            CanonicalFunction::FutureCloseReadable { .. } => {
+            CanonicalFunction::FutureDropReadable { .. } => {
                 Err("WASI P3 future and stream support is not supported yet".to_string())
             }
-            CanonicalFunction::FutureCloseWritable { .. } => {
+            CanonicalFunction::FutureDropWritable { .. } => {
                 Err("WASI P3 future and stream support is not supported yet".to_string())
             }
             CanonicalFunction::ErrorContextNew { .. } => {
@@ -708,6 +715,21 @@ impl TryFrom<wasmparser::CanonicalFunction> for Canon {
                 Err("WASI P3 future and stream support is not supported yet".to_string())
             }
             CanonicalFunction::WaitableJoin => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::ThreadSpawnIndirect { .. } => {
+                Err("Threads proposal is not supported".to_string())
+            }
+            CanonicalFunction::TaskCancel => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::ContextGet(_) => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::ContextSet(_) => {
+                Err("WASI P3 future and stream support is not supported yet".to_string())
+            }
+            CanonicalFunction::SubtaskCancel { .. } => {
                 Err("WASI P3 future and stream support is not supported yet".to_string())
             }
         }

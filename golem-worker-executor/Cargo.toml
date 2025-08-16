@@ -24,37 +24,37 @@ test = false
 [features]
 
 [dependencies]
-golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
-golem-common = { path = "../golem-common", version = "=0.0.0" }
-golem-rib = { path = "../golem-rib", version = "=0.0.0" }
-golem-service-base = { path = "../golem-service-base", version = "=0.0.0", features = [ "worker-executor" ] }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host", "extra-bindings"] }
-golem-wasm-rpc-derive = { path = "../wasm-rpc-derive", version = "=0.0.0" }
+golem-api-grpc = { workspace = true }
+golem-common = { workspace = true, default-features = true }
+golem-rib = { workspace = true, default-features = true }
+golem-service-base = { workspace = true, features = ["worker-executor"] }
+golem-wasm-ast = { workspace = true, default-features = true }
+golem-wasm-rpc = { workspace = true, features = ["host", "extra-bindings"] }
+golem-wasm-rpc-derive = { workspace = true }
 
 anyhow = { workspace = true }
-applying = "1.0.1"
-async-lock = "3.4.0"
-async-mutex = "1.4.0"
-async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio"] }
+applying = { workspace = true }
+async-lock = { workspace = true }
+async-mutex = { workspace = true }
+async-dropper-simple = { workspace = true, features = ["no-default-bound", "tokio"] }
 async-recursion = { workspace = true }
-async-scoped = { version = "0.9.0", features = ["use-tokio"] }
+async-scoped = { workspace = true, features = ["use-tokio"] }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 bytes = { workspace = true }
 cap-std = { workspace = true }
-cap-time-ext = "3.4.2"                              # keep in sync with wasmtime
+cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
 drop-stream = { workspace = true }
-evicting_cache_map = "0.4.0"
+evicting_cache_map = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }
-fs-set-times = "0.20.3"
+fs-set-times = { workspace = true }
 futures = { workspace = true }
-gethostname = "1.0.0"
+gethostname = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
@@ -64,20 +64,20 @@ humantime-serde = { workspace = true }
 hyper = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
-log = "0.4.26"
-mac_address = { version = "1.1.8", features = ["serde"] }
-md5 = "0.7.0"
-metrohash = "1.0.7"
+log = { workspace = true }
+mac_address = { workspace = true, features = ["serde"] }
+md5 = { workspace = true }
+metrohash = { workspace = true }
 nonempty-collections = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
-ringbuf = "0.4.7"
+ringbuf = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 sqlx-core = { workspace = true }
-sysinfo = "0.33.1"
+sysinfo = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
@@ -86,20 +86,20 @@ tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tracing = { workspace = true }
-try_match = "0.4.2"
+try_match = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
-zstd = "0.13"
+zstd = { workspace = true }
 
 [dev-dependencies]
-golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
+golem-test-framework = { workspace = true }
 
 assert2 = { workspace = true }
 axum = { workspace = true }
-goldenfile = "1.8.0"
+goldenfile = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }

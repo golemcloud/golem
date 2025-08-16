@@ -1,0 +1,14 @@
+[package]
+name = "component_name"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []
+
+[dependencies]
+once_cell = "1.21.1"
+rand = "0.9.0"
+wit-bindgen-rt = { workspace = true }

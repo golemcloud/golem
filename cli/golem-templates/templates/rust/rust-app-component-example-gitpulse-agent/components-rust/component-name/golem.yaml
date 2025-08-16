@@ -1,0 +1,62 @@
+# golem-app-manifest-header
+
+components:
+  componentname:
+    template: rust
+    env:
+      # create under https://platform.openai.com/settings/<project>/api-keys
+      OPENAI_API_KEY: ""
+
+dependencies:
+  componentname:
+    - type: wasm
+      url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.2/golem_llm_openai-dev.wasm
+
+httpApi:
+  definitions:
+    component-name:
+      version: '0'
+      routes:
+      - method: POST
+        path: /v1/sessions/{session-id}
+        binding:
+          type: default
+          __cn__: "componentname"
+          response: |
+            let session-id: string = request.path.session-id;
+            let worker = instance("session-${session-id}");
+            worker.initialize({
+              github-username: request.body.github-username,
+              github-auth-token: request.body.github-auth-token
+            });
+            {status: 200}
+      - method: Get
+        path: /v1/sessions/{session-id}/notifications
+        binding:
+          type: default
+          __cn__: "componentname"
+          response: |
+            let session-id: string = request.path.session-id;
+            let worker = instance("session-${session-id}");
+            let result = worker.get-whats-new();
+            {status: 200, body: result}
+      - method: Post
+        path: /v1/sessions/{session-id}/seen-notifications
+        binding:
+          type: default
+          __cn__: "componentname"
+          response: |
+            let session-id: string = request.path.session-id;
+            let notification-id: string = request.body.notification-id;
+            let worker = instance("session-${session-id}");
+            worker.mark-notification-seen(notification-id);
+            {status: 200}
+
+  # Uncomment if you want to deploy your api
+  # deployments:
+  #   local:
+  #   - host: localhost:9006
+  #     definitions:
+  #     - component-name
+
+  # golem-app-manifest-component-hints

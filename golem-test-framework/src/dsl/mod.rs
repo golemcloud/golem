@@ -74,7 +74,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
 use tracing::{debug, info, Instrument};
 use uuid::Uuid;
-use wasm_metadata::AddMetadata;
+use wasm_metadata::{AddMetadata, AddMetadataField};
 
 pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     dsl: &'a DSL,
@@ -626,52 +626,6 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             })
     }
 
-    async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {
-        let source_path = self.deps.borrow().component_directory().join(path);
-        let data = tokio::fs::read(&source_path)
-            .await
-            .expect("Failed to read file");
-        let bytes = Bytes::from(data);
-
-        let stream = bytes
-            .map_item(|i| i.map_err(widen_infallible))
-            .map_error(widen_infallible);
-
-        let project_id = self
-            .deps
-            .cloud_service()
-            .get_default_project(&self.token)
-            .await
-            .expect("Failed to get default project");
-        self.deps
-            .initial_component_files_service()
-            .put_if_not_exists(&project_id, stream)
-            .await
-            .expect("Failed to add initial component file")
-    }
-
-    async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey> {
-        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
-        let data = tokio::fs::read(&source_path)
-            .await
-            .map_err(|e| anyhow!("Failed to read file: {e}"))?;
-
-        let bytes = Bytes::from(data);
-
-        let stream = bytes
-            .map_item(|i| i.map_err(widen_infallible))
-            .map_error(widen_infallible);
-
-        let key = self
-            .deps
-            .plugin_wasm_files_service()
-            .put_if_not_exists(&self.account_id, stream)
-            .await
-            .map_err(|e| anyhow!("Failed to store plugin wasm: {e}"))?;
-
-        Ok(key)
-    }
-
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
         let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         let component_env = HashMap::new();
@@ -734,6 +688,52 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             )
             .await
             .unwrap()
+    }
+
+    async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {
+        let source_path = self.deps.borrow().component_directory().join(path);
+        let data = tokio::fs::read(&source_path)
+            .await
+            .expect("Failed to read file");
+        let bytes = Bytes::from(data);
+
+        let stream = bytes
+            .map_item(|i| i.map_err(widen_infallible))
+            .map_error(widen_infallible);
+
+        let project_id = self
+            .deps
+            .cloud_service()
+            .get_default_project(&self.token)
+            .await
+            .expect("Failed to get default project");
+        self.deps
+            .initial_component_files_service()
+            .put_if_not_exists(&project_id, stream)
+            .await
+            .expect("Failed to add initial component file")
+    }
+
+    async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey> {
+        let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
+        let data = tokio::fs::read(&source_path)
+            .await
+            .map_err(|e| anyhow!("Failed to read file: {e}"))?;
+
+        let bytes = Bytes::from(data);
+
+        let stream = bytes
+            .map_item(|i| i.map_err(widen_infallible))
+            .map_error(widen_infallible);
+
+        let key = self
+            .deps
+            .plugin_wasm_files_service()
+            .put_if_not_exists(&self.account_id, stream)
+            .await
+            .map_err(|e| anyhow!("Failed to store plugin wasm: {e}"))?;
+
+        Ok(key)
     }
 
     async fn start_worker(
@@ -842,6 +842,48 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                 Err(anyhow!("Failed to get worker metadata: {error:?}"))
             }
         }
+    }
+
+    async fn wait_for_status(
+        &self,
+        worker_id: &WorkerId,
+        status: WorkerStatus,
+        timeout: Duration,
+    ) -> crate::Result<WorkerMetadata> {
+        TestDsl::wait_for_statuses(self, worker_id, &[status], timeout).await
+    }
+
+    async fn wait_for_statuses(
+        &self,
+        worker_id: &WorkerId,
+        statuses: &[WorkerStatus],
+        timeout: Duration,
+    ) -> crate::Result<WorkerMetadata> {
+        let start = Instant::now();
+        let mut last_known = None;
+        while start.elapsed() < timeout {
+            let (metadata, _) = TestDsl::get_worker_metadata(self, worker_id)
+                .await?
+                .ok_or(anyhow!("Worker not found"))?;
+            if statuses
+                .iter()
+                .any(|s| s == &metadata.last_known_status.status)
+            {
+                return Ok(metadata);
+            }
+
+            last_known = Some(metadata.last_known_status.status.clone());
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        Err(anyhow!(
+            "Timeout waiting for worker status {} (last known: {last_known:?})",
+            statuses
+                .iter()
+                .map(|s| format!("{s:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
     }
 
     async fn get_workers_metadata(
@@ -1661,48 +1703,6 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .await
     }
 
-    async fn wait_for_status(
-        &self,
-        worker_id: &WorkerId,
-        status: WorkerStatus,
-        timeout: Duration,
-    ) -> crate::Result<WorkerMetadata> {
-        TestDsl::wait_for_statuses(self, worker_id, &[status], timeout).await
-    }
-
-    async fn wait_for_statuses(
-        &self,
-        worker_id: &WorkerId,
-        statuses: &[WorkerStatus],
-        timeout: Duration,
-    ) -> crate::Result<WorkerMetadata> {
-        let start = Instant::now();
-        let mut last_known = None;
-        while start.elapsed() < timeout {
-            let (metadata, _) = TestDsl::get_worker_metadata(self, worker_id)
-                .await?
-                .ok_or(anyhow!("Worker not found"))?;
-            if statuses
-                .iter()
-                .any(|s| s == &metadata.last_known_status.status)
-            {
-                return Ok(metadata);
-            }
-
-            last_known = Some(metadata.last_known_status.status.clone());
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-
-        Err(anyhow!(
-            "Timeout waiting for worker status {} (last known: {last_known:?})",
-            statuses
-                .iter()
-                .map(|s| format!("{s:?}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))
-    }
-
     async fn fork_worker(
         &self,
         source_worker_id: &WorkerId,
@@ -2093,7 +2093,7 @@ pub fn to_worker_metadata(
                                 .timestamp
                                 .as_ref()
                                 .expect("no timestamp on update record"))
-                            .into(),
+                                .into(),
                             oplog_index: OplogIndex::from_u64(0),
                             description: UpdateDescription::Automatic {
                                 target_version: u.target_version,
@@ -2111,7 +2111,7 @@ pub fn to_worker_metadata(
                                 .timestamp
                                 .as_ref()
                                 .expect("no timestamp on update record"))
-                            .into(),
+                                .into(),
                             target_version: u.target_version,
                             details: failed_update.details.clone(),
                         }),
@@ -2127,7 +2127,7 @@ pub fn to_worker_metadata(
                                 .timestamp
                                 .as_ref()
                                 .expect("no timestamp on update record"))
-                            .into(),
+                                .into(),
                             target_version: u.target_version,
                         }),
                         _ => None,
@@ -2154,7 +2154,7 @@ pub fn to_worker_metadata(
                                             Some(desc.resource_params.clone())
                                         } else {
                                             None
-                                        }
+                                        },
                                     })
                                 )
                             }
@@ -2162,7 +2162,7 @@ pub fn to_worker_metadata(
                                 (
                                     WorkerResourceKey::AgentInstanceKey(AgentInstanceKey {
                                         agent_type: desc.agent_type.clone(),
-                                        agent_id: desc.agent_id.clone()
+                                        agent_id: desc.agent_id.clone(),
                                     }),
                                     WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
                                         created_at: desc.created_at.expect("Missing created_at").into(),
@@ -2885,12 +2885,12 @@ fn rename_component_if_needed(temp_dir: &Path, path: &Path, name: &str) -> anyho
         Ok(path.to_path_buf())
     } else {
         let new_path = Builder::new().disable_cleanup(true).tempfile_in(temp_dir)?;
-        let add_metadata = AddMetadata {
-            name: Some(name.to_string()),
-            version: metadata
-                .root_package_version
-                .map(|v| wasm_metadata::Version::new(v.to_string())),
-            ..Default::default()
+        let mut add_metadata = AddMetadata::default();
+        add_metadata.name = AddMetadataField::Set(name.to_string());
+        add_metadata.version = if let Some(v) = &metadata.root_package_version {
+            AddMetadataField::Set(wasm_metadata::Version::new(v.to_string()))
+        } else {
+            AddMetadataField::Clear
         };
 
         info!(

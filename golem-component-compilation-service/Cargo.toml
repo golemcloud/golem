@@ -16,10 +16,10 @@ path = "src/server.rs"
 test = false
 
 [dependencies]
-golem-api-grpc = { version = "=0.0.0", path = "../golem-api-grpc" }
-golem-common = { version = "=0.0.0", path = "../golem-common" }
-golem-service-base = { version = "=0.0.0", path = "../golem-service-base" }
-golem-worker-executor = { version = "=0.0.0", path = "../golem-worker-executor" }
+golem-api-grpc = { workspace = true }
+golem-common = { workspace = true, default-features = true }
+golem-service-base = { workspace = true }
+golem-worker-executor = { workspace = true }
 
 async-trait = { workspace = true }
 futures = { workspace = true }

@@ -17,9 +17,9 @@ path = "tests/it_tests.rs"
 harness = false
 
 [dependencies]
-golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
-golem-common = { path = "../golem-common", version = "=0.0.0" }
-golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
+golem-api-grpc = { workspace = true }
+golem-common = { workspace = true, default-features = true }
+golem-service-base = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

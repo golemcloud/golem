@@ -1,0 +1,4 @@
+{
+  "description": "Example: a stateful Golem worker representing a shopping cart, implemented in Rust",
+  "appComponentGroup": "default"
+}

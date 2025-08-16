@@ -1,0 +1,10 @@
+// Example of exported resources with constructors, methods and static methods
+
+package test:main;
+
+world api {
+  resource resource1 {
+   constructor(name: string);
+   func1: func() -> resource1;
+ }
+}

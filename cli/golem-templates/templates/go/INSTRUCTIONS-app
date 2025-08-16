@@ -1,0 +1,6 @@
+See the documentation about installing tooling: https://learn.golem.cloud/docs/go-language-guide/setup
+
+Generate wit and bindings, build and link component:
+  golem-cli app build
+
+The `out/linked-components/component_name.wasm` file is ready to be uploaded to Golem Cloud!

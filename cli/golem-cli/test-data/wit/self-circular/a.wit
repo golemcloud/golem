@@ -1,0 +1,15 @@
+// Example of a component that calls itself
+
+package test:a;
+
+interface api-a {
+  record typ-a {
+    field1: bool
+  }
+
+  func-a: func() -> typ-a;
+}
+
+world a {
+  export api-a;
+}

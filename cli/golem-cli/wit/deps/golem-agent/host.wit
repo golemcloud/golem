@@ -1,0 +1,8 @@
+package golem:agent;
+
+interface host {
+    use common.{data-value};
+
+    register-agent: func(agent-type: string, agent-id: string, constructor-parameters: data-value);
+    unregister-agent: func(agent-type: string, agent-id: string, constructor-parameters: data-value);
+}

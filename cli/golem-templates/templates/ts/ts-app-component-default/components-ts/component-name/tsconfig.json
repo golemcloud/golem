@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../common-ts/tsconfig.component.json",
+  "include": [
+    "src/**/*.ts",
+    ".agent/**/*",
+    ".metadata/**/*"
+  ]
+}

@@ -11,32 +11,29 @@ license-file = "../LICENSE"
 
 [dependencies]
 bincode = { workspace = true, optional = true }
-bincode_derive = { workspace = true, optional = true }
 itertools = { workspace = true }
-leb128 = { version = "0.2.5", optional = true }
-mappable-rc = "0.1.1"
+leb128 = { workspace = true, optional = true }
+mappable-rc = { workspace = true }
 poem-openapi = { workspace = true, optional = true }
-poem-openapi-derive = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
-time = { workspace = true, optional = true }
-wasmparser = { version = "0.227.1", optional = true }
-wasm-encoder = { version = "0.227.1", optional = true }
-wasm-metadata = { version = "0.227.1", optional = true }
+wasmparser = { workspace = true, optional = true }
+wasm-encoder = { workspace = true, optional = true }
+wasm-metadata = { workspace = true, optional = true }
 wasm-wave = { workspace = true, optional = true }
 wit-component = { workspace = true, optional = true }
 wit-parser = { workspace = true, optional = true }
 
 [dev-dependencies]
-colored-diff = "0.2.3"
-pretty_assertions = "1.4.1"
+colored-diff = { workspace = true }
+pretty_assertions = { workspace = true }
 test-r = { workspace = true }
-wasmprinter = "0.219.1"
+wasmprinter = { workspace = true }
 
 [build-dependencies]
-prost-build = { version = "0.13.5", optional = true }
+prost-build = { workspace = true, optional = true }
 
 [features]
 default = [
@@ -75,13 +72,13 @@ analysis = ["component", "metadata"]
 wave = ["dep:wasm-wave"]
 
 # Bincode serialization for analysis output
-bincode = ["dep:bincode", "dep:bincode_derive"]
+bincode = ["dep:bincode"]
 
 # Serde JSON serialization for analysis output
 json = ["dep:serde", "dep:serde_json"]
 
 # poem-openapi instances for analysis output
-poem_openapi = ["json", "dep:poem-openapi", "dep:poem-openapi-derive", "dep:time"]
+poem_openapi = ["json", "dep:poem-openapi"]
 
 # Protobuf representation of analysed types
 protobuf = ["dep:prost", "dep:prost-build"]

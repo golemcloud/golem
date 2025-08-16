@@ -1,0 +1,17 @@
+[package]
+name = "component_name"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+golem-rust = "1.7.2"
+serde_json = "1.0.139"
+# Hello
+wit-bindgen-rt = "0.40.0"
+
+# This is the comment for lib
+[lib]
+path = "src/lib.rs"
+# Another comment
+crate-type = ["cdylib"] # Hello again
+required-features = []

@@ -100,9 +100,7 @@ pub trait OplogService: Debug + Send + Sync {
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         assert!(
             start_idx <= last_idx,
-            "Invalid range passed to OplogService::read_range: start_idx = {}, last_idx = {}",
-            start_idx,
-            last_idx
+            "Invalid range passed to OplogService::read_range: start_idx = {start_idx}, last_idx = {last_idx}"
         );
 
         self.read(

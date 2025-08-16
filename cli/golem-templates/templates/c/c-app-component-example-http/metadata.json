@@ -1,0 +1,4 @@
+{
+  "description": "Example: a stateful C++ with an example of using WASI HTTP to send a request and process the response",
+  "appComponentGroup": "default"
+}

@@ -1,0 +1,74 @@
+package pack:name;
+
+interface component-name-api {
+
+  enum status {
+    backlog,
+    in-progress,
+    done,
+  }
+
+  enum priority {
+    low,
+    medium,
+    high,
+  }
+
+  enum query-sort {
+    priority,
+    deadline,
+  }
+
+  record new-item {
+    title: string,
+    priority: priority,
+    deadline: option<string>,
+  }
+
+  record update-item {
+    title: option<string>,
+    priority: option<priority>,
+    status: option<status>,
+    deadline: option<string>,
+  }
+
+  record item {
+    id: string,
+    title: string,
+    priority: priority,
+    status: status,
+    created-timestamp: s64,
+    updated-timestamp: s64,
+    deadline: option<s64>,
+  }
+
+  record query {
+    keyword: option<string>,
+    priority: option<priority>,
+    status: option<status>,
+    deadline: option<string>,
+    sort: option<query-sort>,
+    limit: option<u32>,
+  }
+
+  add: func(item: new-item) -> result<item, string>;
+
+  update: func(id: string, change: update-item) -> result<item, string>;
+
+  search: func(query: query) -> result<list<item>, string>;
+
+  count: func() -> u32;
+
+  delete: func(id: string) -> result<_, string>;
+
+  delete-done-items: func();
+
+  delete-all: func();
+
+  get: func(id: string) -> result<item, string>;
+
+}
+
+world component-name {
+  export component-name-api;
+}

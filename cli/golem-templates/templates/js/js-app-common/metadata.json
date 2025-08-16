@@ -1,0 +1,11 @@
+{
+  "description": "Composable App Common template for JavaScript",
+  "appCommonGroup": "default",
+  "appCommonSkipIfExists": "common-js/golem.yaml",
+  "requiresGolemHostWIT": true,
+  "requiresWASI": true,
+  "witDepsPaths": [
+    "wit/deps"
+  ],
+  "transform": false
+}

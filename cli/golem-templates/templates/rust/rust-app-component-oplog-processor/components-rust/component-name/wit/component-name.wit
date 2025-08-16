@@ -1,0 +1,7 @@
+package pack:name;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+
+world component-name {
+  export golem:api/oplog-processor@1.1.7;
+}

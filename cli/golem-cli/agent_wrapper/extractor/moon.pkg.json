@@ -1,0 +1,8 @@
+{ 
+    "import": 
+    [
+        { "path" : "golem/agent-wrapper/interface/golem/rpc/types", "alias" : "types" },
+        { "path" : "golem/agent-wrapper/interface/golem/agent/common", "alias" : "common" },
+        { "path" : "golem/agent-wrapper/builder", "alias": "builder" }
+    ]
+ }

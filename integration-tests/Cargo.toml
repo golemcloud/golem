@@ -12,15 +12,15 @@ license-file = "../LICENSE"
 autotests = false
 
 [dependencies]
-golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
-golem-client = { path = "../golem-client", version = "=0.0.0" }
-golem-common = { path = "../golem-common", version = "=0.0.0" }
-golem-rib = { path = "../golem-rib", version = "=0.0.0" }
-golem-rib-repl = { path = "../golem-rib-repl", version = "=0.0.0" }
-golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
-golem-wasm-rpc-derive= { path = "../wasm-rpc-derive", version = "=0.0.0" }
+golem-api-grpc = { workspace = true }
+golem-client = { workspace = true }
+golem-common = { workspace = true, default-features = true }
+golem-rib = { workspace = true, default-features = true }
+golem-rib-repl = { workspace = true }
+golem-test-framework = { workspace = true }
+golem-wasm-ast = { workspace = true, default-features = true }
+golem-wasm-rpc = { workspace = true, features = ["host"] }
+golem-wasm-rpc-derive= { workspace = true }
 
 anyhow = { workspace = true }
 assert2 = { workspace = true }

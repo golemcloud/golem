@@ -1,0 +1,12 @@
+// Test WIT covering three components, A, B and C, referencing each other as A->B->C->A.
+
+package test:c;
+
+// NOTE: this interface does not introduce or use any types, so it won't be part of the stub
+interface api-c {
+  func-c: func();
+}
+
+world c {
+  export api-c;
+}

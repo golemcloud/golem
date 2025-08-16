@@ -1,0 +1,15 @@
+[package]
+name = "component_name"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []
+
+[dependencies]
+# To use common shared libs, use the following:
+# common-lib = { path = "../../common-rust/common-lib" }
+
+wit-bindgen-rt = { workspace = true }

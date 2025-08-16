@@ -1,0 +1,7 @@
+package golem:agent-ts;
+
+world golem-agent  {
+  import golem:api/host@1.1.7;
+  import golem:rpc/types@0.2.2;
+  export golem:agent/guest;
+}

@@ -1,0 +1,57 @@
+[package]
+name = "golem"
+version = "0.0.0"
+edition = "2021"
+license-file = "../../LICENSE"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem"
+readme = "README.md"
+description = "Single Golem executable for testing"
+
+[lib]
+harness = false
+
+[[bin]]
+name = "golem"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+golem-cli = { workspace = true, features = ["server-commands"] }
+golem-common = { workspace = true, default-features = true }
+golem-service-base = { workspace = true }
+cloud-service = { workspace = true }
+golem-component-compilation-service = { workspace = true }
+golem-component-service = { workspace = true }
+golem-shard-manager = { workspace = true }
+golem-worker-executor = { workspace = true }
+golem-worker-service = { workspace = true }
+
+# External deps
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true }
+clap-verbosity-flag = { workspace = true }
+darling = { workspace = true }
+dirs = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+futures = { workspace = true }
+include_dir = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-prometheus = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+poem = { workspace = true }
+prometheus = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+serde = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

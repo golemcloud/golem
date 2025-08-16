@@ -1,0 +1,87 @@
+package pack:name;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+
+interface component-name-api {
+  type github-auth-token = string;
+
+  record initialize-args {
+    /// the github handle of the user that will read notifications
+    github-username: string,
+    /// create under https://github.com/settings/tokens and give at least notifications scope
+    github-auth-token: github-auth-token,
+  }
+  enum subject-type {
+    issue,
+    pull-request,
+    check-suite
+  }
+  enum category {
+    action-needed,
+    fyi,
+    releases,
+    ci-cd,
+  }
+  record enhanced-notification {
+    id: notification-id,
+    reason: string,
+    subject: subject,
+    repository: repository,
+    updated-at: string,
+    url: string,
+    category: category,
+    priority: priority,
+    summary: string,
+    action-items: list<string>,
+    key-points: list<string>,
+  }
+  type notification-id = string;
+  enum priority {
+    urgent,
+    high,
+    normal,
+    low,
+  }
+  record repository {
+    owner: string,
+    name: string
+  }
+  record subject {
+    %type: subject-type,
+    title: string,
+    url: option<string>
+  }
+  record whats-new-result {
+    action-needed: list<enhanced-notification>,
+    fyi: list<enhanced-notification>,
+    releases: list<enhanced-notification>,
+    ci-cd: list<enhanced-notification>,
+    last-checked: string,
+  }
+
+  /// initialized a worker, making it ready to serve requests
+  initialize: func(args: initialize-args);
+
+  /// Core function that fetches and processes new notifications
+  /// Fetches notifications, applies AI enhancements, and filters out seen ones
+  get-whats-new: func() -> whats-new-result;
+
+  /// Mark all items in a result as seen
+  mark-all-seen: func();
+
+  /// Mark a specific notification as seen
+  mark-notification-seen: func(id: notification-id);
+
+  /// Get the last time notifications were checked
+  get-last-checked: func() -> option<string>;
+
+  /// Check if a notification has been seen before
+  has-seen-notification: func(id: notification-id) -> bool;
+}
+
+world component-name {
+  import wasi:http/outgoing-handler@0.2.3;
+  import golem:llm/llm@1.0.0;
+
+  export component-name-api;
+}

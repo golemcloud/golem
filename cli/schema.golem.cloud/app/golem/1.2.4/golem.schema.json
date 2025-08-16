@@ -1,0 +1,551 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://schema.golem.cloud/app/golem/1.2.4/golem.schema.json",
+  "title": "Golem Application Manifest",
+  "description": "Golem Application Manifest.",
+  "type": "object",
+  "properties": {
+    "includes": {
+      "type": "array",
+      "description": "Include paths or globs for searching for application manifest documents. Only allowed in root application manifest documents.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tempDir": {
+      "type": "string",
+      "description": "Temporary directory used for generating and building WIT and WASM artifacts. Default location is golem-temp."
+    },
+    "witDeps": {
+      "type": "array",
+      "description": "List of source directories for common wit dependency packages",
+      "items": {
+        "type": "string"
+      }
+    },
+    "templates": {
+      "type": "object",
+      "description": "Component definition templates",
+      "additionalProperties": {
+        "$ref": "#/definitions/componentTemplate"
+      }
+    },
+    "components": {
+      "type": "object",
+      "description": "Components by component names",
+      "additionalProperties": {
+        "$ref": "#/definitions/component"
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/componentDependency"
+        }
+      }
+    },
+    "clean": {
+      "type": "array",
+      "description": "User defined extra paths used in the clean command.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "customCommands": {
+      "type": "object",
+      "description": "User defined custom commands.",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/externalCommand"
+        }
+      }
+    },
+    "httpApi": {
+      "type": "object",
+      "description": "HTTP API definitions and deployments",
+      "properties": {
+        "definitions": {
+          "type": "object",
+          "description": "HTTP API definitions by name",
+          "additionalProperties": {
+            "$ref": "#/definitions/httpApiDefinition"
+          }
+        },
+        "deployments": {
+          "type": "object",
+          "description": "HTTP API deployments by profile",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/httpApiDeployment"
+            }
+          }
+        }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "description": "Custom or customized profiles for the application",
+      "additionalProperties": {
+        "properties": {
+          "default": {
+            "type": "boolean",
+            "description": "Use as default profile, only one can be selected"
+          },
+          "cloud": {
+            "type": "boolean",
+            "description": "Marks the profile as Cloud Profile customization, implicitly ture if project is set for the profile"
+          },
+          "project": {
+            "type": "string",
+            "description": "Default project to be used with the profile, implicitly sets 'cloud'"
+          },
+          "url": {
+            "type": "string",
+            "description": "Custom URL for golem services, only allowed for OSS profiles"
+          },
+          "workerUrl": {
+            "type": "string",
+            "description": "Custom URL for golem worker service, only allowed for OSS profiles"
+          },
+          "format": {
+            "enum": [
+              "text",
+              "json",
+              "yaml"
+            ],
+            "description": "Default output format"
+          },
+          "buildProfile": {
+            "type": "string",
+            "description": "Default build profile"
+          },
+          "autoConfirm": {
+            "type": "boolean",
+            "description": "Enables auto-confirm (yes) flag by default"
+          },
+          "redeployWorkers": {
+            "type": "boolean",
+            "description": "Enables redeploy-workers flag by default"
+          },
+          "redeployHttpApi": {
+            "type": "boolean",
+            "description": "Enables redeploy-http-api flag by default"
+          },
+          "redeployAll": {
+            "type": "boolean",
+            "description": "Enables redeploy-all flag by default"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "componentTemplate": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/componentProperties"
+        },
+        {
+          "$ref": "#/definitions/componentProfiles"
+        }
+      ]
+    },
+    "component": {
+      "description": "Component definition",
+      "allOf": [
+        {
+          "type": "object",
+          "properties": {
+            "template": {
+              "type": "string",
+              "description": "Component template to be used for defining this component."
+            }
+          }
+        },
+        {
+          "$ref": "#/definitions/componentProperties"
+        },
+        {
+          "$ref": "#/definitions/componentProfiles"
+        }
+      ]
+    },
+    "componentProperties": {
+      "type": "object",
+      "properties": {
+        "sourceWit": {
+          "type": "string",
+          "description": "Source WIT directory for the user defined component WIT source(s)."
+        },
+        "generatedWit": {
+          "type": "string",
+          "description": "Generated WIT directory created by the golem tooling, which handles exported interface extraction and includes resolved package and stub dependencies."
+        },
+        "componentWasm": {
+          "type": "string",
+          "description": "File path for the built WASM component."
+        },
+        "linkedWasm": {
+          "type": "string",
+          "description": "File path for the linked WASM component which is ready to be uploaded to Golem."
+        },
+        "build": {
+          "type": "array",
+          "description": "Commands used for creating component WASM.",
+          "items": {
+            "$ref": "#/definitions/externalCommand"
+          }
+        },
+        "customCommands": {
+          "type": "object",
+          "description": "User defined custom commands.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/externalCommand"
+            }
+          }
+        },
+        "clean": {
+          "type": "array",
+          "description": "User defined extra paths used in the clean command.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "componentType": {
+          "enum": [
+            "durable",
+            "ephemeral",
+            "library"
+          ],
+          "description": "Optional component type, defaults to durable."
+        },
+        "files": {
+          "type": "array",
+          "description": "Initial component files system",
+          "items": {
+            "$ref": "#/definitions/initialComponentFile"
+          }
+        },
+        "plugins": {
+          "type": "array",
+          "description": "Installed plugins for the component",
+          "items": {
+            "$ref": "#/definitions/pluginInstallation"
+          }
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables for the component.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "componentProfiles": {
+      "type": "object",
+      "description": "Component definition profiles",
+      "properties": {
+        "profiles": {
+          "type": "object",
+          "description": "Component definition profiles",
+          "additionalProperties": {
+            "$ref": "#/definitions/componentProperties"
+          }
+        },
+        "defaultProfile": {
+          "type": "string",
+          "description": "Default profile"
+        }
+      }
+    },
+    "externalCommand": {
+      "type": "object",
+      "description": "External command with optional inputs and outputs with up-to-date checks",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "External command to execute"
+        },
+        "dir": {
+          "type": "string",
+          "description": "Working directory for the command, defaults to the directory of golem.yaml in which the component is defined."
+        },
+        "rmdirs": {
+          "type": "array",
+          "description": "List of directories that should be deleted before running the command, runs before mkdirs.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mkdirs": {
+          "type": "array",
+          "description": "List of directories that should be created before running the command, runs after rmdirs",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "type": "array",
+          "description": "Inputs (paths and globs) for the external command",
+          "items": {
+            "type": "string"
+          }
+        },
+        "targets": {
+          "type": "array",
+          "description": "Output (paths and globs) for the external command",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "if": {
+        "required": [
+          "sources"
+        ]
+      },
+      "then": {
+        "required": [
+          "targets"
+        ]
+      }
+    },
+    "componentDependency": {
+      "type": "object",
+      "description": "Component dependencies",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "wasm-rpc",
+                "wasm",
+                "wasm-rpc-static"
+              ],
+              "description": "Type of the dependency"
+            },
+            "target": {
+              "type": "string",
+              "description": "Target component name."
+            }
+          },
+          "required": [
+            "type",
+            "target"
+          ]
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "wasm"
+              ],
+              "description": "Type of the dependency"
+            },
+            "path": {
+              "type": "string",
+              "description": "Target component WASM path."
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ]
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "wasm"
+              ],
+              "description": "Type of the dependency"
+            },
+            "url": {
+              "type": "string",
+              "description": "Target component remote URL."
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        }
+      ]
+    },
+    "initialComponentFile": {
+      "type": "object",
+      "description": "File entry for the initial component file system.",
+      "properties": {
+        "sourcePath": {
+          "type": "string",
+          "description": "Source path for the component file: either a local file or an URL."
+        },
+        "targetPath": {
+          "type": "string",
+          "description": "Target path for the component file, must be an absolute path"
+        },
+        "permissions": {
+          "enum": [
+            "read-only",
+            "read-write"
+          ],
+          "description": "Permission for the component file"
+        }
+      },
+      "required": [
+        "sourcePath",
+        "targetPath"
+      ]
+    },
+    "pluginInstallation": {
+      "type": "object",
+      "description": "Represents an installed plugin",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the plugin"
+        },
+        "version": {
+          "type": "string",
+          "description": "Version of the plugin"
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Key-value pairs for configuring the plugin installation",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "httpApiDefinition": {
+      "type": "object",
+      "description": "HTTP API Definition",
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "Version for the HTTP API definition"
+        },
+        "project": {
+          "type": "string",
+          "description": "Optional owner project of the HTTP API definition"
+        },
+        "routes": {
+          "type": "array",
+          "description": "Routes of the HTTP API definition",
+          "items": {
+            "$ref": "#/definitions/httpApiDefinitionRoute"
+          }
+        }
+      },
+      "required": [
+        "version"
+      ]
+    },
+    "httpApiDefinitionRoute": {
+      "type": "object",
+      "description": "HTTP API Definition Route",
+      "properties": {
+        "method": {
+          "description": "HTTP method for the route",
+          "enum": [
+            "GET",
+            "CONNECT",
+            "POST",
+            "DELETE",
+            "PUT",
+            "PATCH",
+            "OPTIONS",
+            "TRACE",
+            "HEAD"
+          ]
+        },
+        "path": {
+          "description": "HTTP path pattern for the route",
+          "type": "string"
+        },
+        "security": {
+          "description": "Optional ID of the required HTTP API security",
+          "type": "string"
+        },
+        "binding": {
+          "description": "HTTP API Route Binding",
+          "properties": {
+            "type": {
+              "description": "Binding type, default to simple worker binding",
+              "enum": [
+                "default",
+                "cors-preflight",
+                "file-server",
+                "http-handler"
+              ]
+            },
+            "componentName": {
+              "type": "string",
+              "description": "Component to be used in the binding"
+            },
+            "componentVersion": {
+              "type": "string",
+              "description": "Component version to be used in the binding, defaults to latest version"
+            },
+            "idempotencyKey": {
+              "type": "string",
+              "description": "Rib script for calculating the idempotency key"
+            },
+            "invocationContext": {
+              "type": "string",
+              "description": "Rib script for calculating the invocation context"
+            },
+            "response": {
+              "type": "string",
+              "description": "Rib script for creating the response"
+            }
+          }
+        }
+      },
+      "required": [
+        "method",
+        "path",
+        "binding"
+      ]
+    },
+    "httpApiDeployment": {
+      "type": "object",
+      "description": "HTTP API Deployment",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "Host for the HTTP API deployment"
+        },
+        "subdomain": {
+          "type": "string",
+          "description": "Optional subdomain"
+        },
+        "definition": {
+          "type": "array",
+          "description": "HTTP API definitions to be used in the deployment. Accepted formats: <name> or <name>@<version>",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "host"
+      ]
+    }
+  }
+}

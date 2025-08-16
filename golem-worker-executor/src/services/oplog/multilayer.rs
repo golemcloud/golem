@@ -363,7 +363,7 @@ impl OplogService for MultiLayerOplogService {
                 }
             };
 
-            result.extend(partial_result.into_iter());
+            result.extend(partial_result);
 
             if !full_match {
                 for layer in &self.lower {

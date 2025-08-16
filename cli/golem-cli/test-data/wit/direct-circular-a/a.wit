@@ -1,0 +1,15 @@
+// Test WIT covering two components, A and B, referencing each other.
+
+package test:a;
+
+interface api-a {
+    record typ-a {
+      field1: bool
+    }
+
+    func-a: func() -> typ-a;
+}
+
+world a {
+    export api-a;
+}
