@@ -199,9 +199,9 @@ jobs:
           auto-start: false
 
       - uses: cargo-bins/cargo-binstall@main
-        if: matrix.group.name == 'template-integration-tests'
+        if: matrix.group.name == 'template-integration-tests' || matrix.group.name == 'cli-integration-tests'
       - name: Install cargo-component
-        if: matrix.group.name == 'template-integration-tests'
+        if: matrix.group.name == 'template-integration-tests' || matrix.group.name == 'cli-integration-tests'
         run: cargo install cargo-component@0.21.1
       - name: Install wasm-tools
         if: matrix.group.name == 'template-integration-tests'

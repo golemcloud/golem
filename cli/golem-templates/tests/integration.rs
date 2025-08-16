@@ -24,7 +24,7 @@ mod app {
 
     #[test]
     fn app_with_all_lang() {
-        let status = Command::new("../target/debug/golem-templates-test-cli")
+        let status = Command::new("../../target/debug/golem-templates-test-cli")
             .args(["app"])
             .status();
         let_assert!(Ok(status) = status);
