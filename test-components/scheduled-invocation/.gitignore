@@ -18,3 +18,4 @@ dump.rdb
 templates/**/*.wasm
 bindings.rs
 wit-generated
+wit/deps
