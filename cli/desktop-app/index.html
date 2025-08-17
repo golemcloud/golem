@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link href="/logo.svg" rel="icon" type="image/svg+xml" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>Golem GUI</title>
+    <style>
+      #splashscreen {
+        --splashscreen-bg: white;
+        --splashscreen-filter: none;
+
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        position: fixed;
+        inset: 0;
+        background: var(--splashscreen-bg);
+      }
+
+      #splashscreen img {
+        display: block;
+        filter: var(--splashscreen-filter);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        #splashscreen {
+          --splashscreen-bg: black;
+          --splashscreen-filter: invert(100%);
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root">
+      <div id="splashscreen">
+        <img width="64" height="64" src="/logo-dark.svg" />
+      </div>
+    </div>
+    <script src="/src/main.tsx" type="module"></script>
+  </body>
+</html>

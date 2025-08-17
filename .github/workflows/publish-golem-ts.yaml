@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    tags:
+      - "golem-ts-v*.*.*"
+    branches:
+      - main
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: blacksmith
+    if: "startsWith(github.ref, 'refs/tags/golem-ts-v')"
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: |
+          npm install
+
+      - name: Generate types
+        run: |
+          npm run generate-types
+
+      - name: Build the package
+        run: |
+          npm run build
+
+      - name: Publish to npm
+        run: |
+          npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

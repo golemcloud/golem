@@ -1,0 +1,5 @@
+package golem:cli;
+
+world golem-cli {
+    import golem:agent/guest;
+}

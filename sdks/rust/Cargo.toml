@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "golem-rust-macro",
+    "golem-rust",
+]
+
+[profile.release]
+debug = false
+lto = true
+opt-level = 's'
+

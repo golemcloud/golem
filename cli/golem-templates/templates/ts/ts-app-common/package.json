@@ -1,0 +1,25 @@
+{
+  "name": "app",
+  "workspaces": [
+    "common-js/*/*",
+    "components-js/*/*",
+    "common-ts/*/*",
+    "components-ts/*/*"
+  ],
+  "dependencies": {
+    "@golemcloud/golem-ts": "1.5.0",
+    "@golemcloud/golem-ts-sdk": "0.0.1-dev.14",
+    "rttist": "^1.0.0-rc.4"
+  },
+  "devDependencies": {
+    "@rollup/plugin-alias": "^5.1.1",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^16.0.0",
+    "@rollup/plugin-typescript": "^12.1.2",
+    "@types/node": "^22.10.5",
+    "rollup": "^4.29.1",
+    "tslib": "^2.8.1",
+    "typescript": "^5.8.3",
+    "@rttist/typegen": "^0.2.0"
+  }
+}

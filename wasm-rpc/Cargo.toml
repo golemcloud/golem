@@ -16,20 +16,17 @@ path = "src/lib.rs"
 harness = false
 
 [dependencies]
-wit-bindgen-rt = { version = "=0.40.0", features = ["bitflags"] }
+wit-bindgen-rt = { workspace = true, features = ["bitflags"], optional = true }
 
-arbitrary = { version = "1.4.1", features = ["derive"], optional = true }
+arbitrary = { workspace = true, features = ["derive"], optional = true }
 async-recursion = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 bigdecimal = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
-bincode_derive = { workspace = true, optional = true }
 bit-vec = { workspace = true, optional = true }
 chrono = { workspace = true }
-git-version = "0.3.9"
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", optional = true }
+golem-wasm-ast = { workspace = true, default-features = true, optional = true }
 poem-openapi = { workspace = true, optional = true }
-poem-openapi-derive = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
@@ -41,12 +38,12 @@ wasm-wave = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
-proptest-arbitrary-interop = "0.1.0"
+proptest-arbitrary-interop = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
-prost-build = { version = "0.13.5", optional = true }
-cargo_metadata = "0.19.2"
+prost-build = { workspace = true, optional = true }
+cargo_metadata = { workspace = true }
 
 [features]
 default = ["host", "extra-bindings"]
@@ -63,7 +60,7 @@ host = [
     "typeinfo",
 ]
 arbitrary = ["dep:arbitrary"]
-bincode = ["dep:bincode", "dep:bincode_derive", "golem-wasm-ast/bincode"]
+bincode = ["dep:bincode", "golem-wasm-ast/bincode"]
 extra-bindings = ["dep:bigdecimal", "dep:bit-vec", "dep:url"]
 json = [
     "dep:serde",
@@ -74,14 +71,13 @@ json = [
 ]
 poem_openapi = [
     "dep:poem-openapi",
-    "dep:poem-openapi-derive",
     "json",
     "typeinfo",
     "golem-wasm-ast/poem_openapi",
 ]
 protobuf = ["dep:bincode", "dep:serde", "dep:prost", "dep:prost-build", "golem-wasm-ast/protobuf"]
 serde = ["dep:serde"]
-stub = []
+stub = ["dep:wit-bindgen-rt"]
 text = ["typeinfo", "dep:wasm-wave", "golem-wasm-ast/wave"]
 typeinfo = ["dep:golem-wasm-ast", "golem-wasm-ast/analysis"]
 wasmtime = [
