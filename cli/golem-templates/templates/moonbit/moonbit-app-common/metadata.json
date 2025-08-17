@@ -1,0 +1,11 @@
+{
+  "description": "Composable App Common template for MoonBit",
+  "appCommonGroup": "default",
+  "appCommonSkipIfExists": "common-moonbit/golem.yaml",
+  "requiresGolemHostWIT": true,
+  "requiresWASI": true,
+  "witDepsPaths": [
+    "wit/deps"
+  ],
+  "transform": false
+}

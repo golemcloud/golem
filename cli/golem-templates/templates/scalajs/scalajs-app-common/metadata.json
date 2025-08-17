@@ -1,0 +1,11 @@
+{
+  "description": "Composable App Common template for Scala.js",
+  "appCommonGroup": "default",
+  "appCommonSkipIfExists": "common-scalajs/golem.yaml",
+  "requiresGolemHostWIT": true,
+  "requiresWASI": true,
+  "witDepsPaths": [
+    "wit/deps"
+  ],
+  "transform": false
+}

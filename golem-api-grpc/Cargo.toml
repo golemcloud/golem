@@ -13,12 +13,10 @@ license-file = "../LICENSE"
 harness = false
 
 [dependencies]
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = ["protobuf"] }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host-bindings", "protobuf"] }
+golem-wasm-ast = { workspace = true, features = ["protobuf"] }
+golem-wasm-rpc = { workspace = true, features = ["host-bindings", "protobuf"] }
 
-async-trait = { workspace = true }
 bincode = { workspace = true }
-bytes = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 tonic = { workspace = true }
@@ -28,5 +26,5 @@ uuid = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
-cargo_metadata = "0.19.2"
-tonic-build = "0.12.3"
+cargo_metadata = { workspace = true }
+tonic-build = { workspace = true }

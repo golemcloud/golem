@@ -1,0 +1,7 @@
+# golem-app-manifest-header
+
+includes:
+- common-*/golem.yaml
+- components-*/*/golem.yaml
+witDeps:
+- wit/deps

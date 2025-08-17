@@ -1,0 +1,6 @@
+See the documentation about installing tooling: https://learn.golem.cloud/docs/python-language-guide/setup
+
+Generate bindings from WIT:
+  componentize-py -d ./wit -w component-name bindings bindings
+Package the Python code into a WASM component:
+  componentize-py -d ./wit -w component-name componentize main -o component_name.wasm

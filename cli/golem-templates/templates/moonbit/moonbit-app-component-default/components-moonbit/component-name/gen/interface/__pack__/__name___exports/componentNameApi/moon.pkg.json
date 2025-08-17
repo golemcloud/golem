@@ -1,0 +1,5 @@
+{
+  "import": [
+    { "path" : "pack/name/src", "alias" : "src" }
+  ]
+}

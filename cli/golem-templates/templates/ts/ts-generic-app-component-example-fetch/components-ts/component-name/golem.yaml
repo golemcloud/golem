@@ -1,0 +1,7 @@
+# golem-app-manifest-header
+
+components:
+  componentname:
+    template: ts
+
+# golem-app-manifest-component-hints
