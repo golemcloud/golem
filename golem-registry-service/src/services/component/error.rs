@@ -146,7 +146,7 @@ impl From<AccountUsageError> for ComponentError {
             AccountUsageError::InternalError(inner) => {
                 Self::InternalError(inner.context("AccountUsageError"))
             }
-            _ => Self::InternalError(anyhow::Error::new(value).context("AccountUsageError")),
+            _ => Self::InternalError(anyhow::Error::from(value).context("AccountUsageError")),
         }
     }
 }
