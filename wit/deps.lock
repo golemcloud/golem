@@ -5,10 +5,10 @@ sha512 = "b37e4979adfe4f35c44786a1b79db9455ab56a02f28dfc6ae1cfb8d658bd92793d87e6
 deps = ["blobstore", "cli", "clocks", "config", "filesystem", "golem-1.x", "golem-agent", "golem-durability", "golem-rpc", "http", "io", "keyvalue", "logging", "random", "sockets"]
 
 [all]
-url = "https://github.com/golemcloud/golem-wit/archive/v1.3.0-dev.6.tar.gz"
+url = "https://github.com/golemcloud/golem-wit/archive/v1.3.0-dev.7.tar.gz"
 sha256 = "6ac4f1553003474229bb40a885b48d1eaa4bea2f9d679a115da9afede30b5ad4"
 sha512 = "ced8c18a35dc04123386465d98d2aeba54c486e4e22a30e7efac0548974e176528fcba36c64942d67fa35d9135806ff0fcde259eb4af051c4a29fcb397e9af1c"
-deps = ["blobstore", "cli", "clocks", "config", "filesystem", "golem-1.x", "golem-durability", "golem-rpc", "http", "io", "keyvalue", "logging", "random", "sockets"]
+deps = ["blobstore", "cli", "clocks", "config", "filesystem", "golem-1.x", "golem-durability", "golem-rdbms", "golem-rpc", "http", "io", "keyvalue", "logging", "random", "sockets"]
 
 [blobstore]
 sha256 = "f7857c92a8d540ebfe10c9ac3b8cfe160d2303ca638d59aec3c18406e084d367"
@@ -42,6 +42,10 @@ sha512 = "27151b72ee8b0c68316198d89306de39f831d9ea7786e9d47676eee533de33a2116e6d
 sha256 = "c5f8b9b4bda5a8d5d1d008978abed617c18da7d9c24167bf20a81a379d10d688"
 sha512 = "40e09d412fd6faee904ce6f8abdcf3f83a604eca3628bf5605b7667540874ea53f9e29392059dac327ca96a0f1298372cb0626abcf66a1df4f4180731c13646a"
 
+[golem-rdbms]
+sha256 = "708eab2beaf1a6a5621be4767aceb9e4f2766eaff1f0e3aa048376b28356517d"
+sha512 = "4b2375c120b453d6f1e8ac1e00c35d752fa1159bedf48183c2a804b823800011b99e16dba6a7c95c3e14a9e11586b37415d333ec56d05cba3e954e27a971f88f"
+
 [golem-rpc]
 sha256 = "5ba11ce01c333b3e9ef877431c8d447c9617711cf40cb2f41c1261ea7b883f14"
 sha512 = "fafc17bdc2bdc4eb84510272e4ddec587ad0d835d764124b20cd67cb8d91551d4b603e63cb8d04721b43843de56249c0420e4cdfd788367fd746c3196c1d46c6"
@@ -65,11 +69,6 @@ sha512 = "ceb68410bb46176051b0eee54e1a60831ca2fe820892c5f5f739e76efd4fe6ee6dc5e3
 [random]
 sha256 = "dd0c91e7125172eb8fd4568e15ad9fc7305643015e6ece4396c3cc5e8c2bf79a"
 sha512 = "d1ca2e7b0616a94a3b39d1b9450bb3fb595b01fd94a8626ad75433038dde40988ecb41ab93a374d569ab72163af3b30038d7bfc3499b9c07193181f4f1d9292a"
-
-[rdbms]
-url = "https://github.com/golemcloud/wasi-rdbms/archive/golem-rdbms.tar.gz"
-sha256 = "708eab2beaf1a6a5621be4767aceb9e4f2766eaff1f0e3aa048376b28356517d"
-sha512 = "4b2375c120b453d6f1e8ac1e00c35d752fa1159bedf48183c2a804b823800011b99e16dba6a7c95c3e14a9e11586b37415d333ec56d05cba3e954e27a971f88f"
 
 [sockets]
 sha256 = "2bc0f65a8046207ee3330ad7d63f6fafeafd4cc0ea4084f081bd5e4f7b177e74"
