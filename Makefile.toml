@@ -165,7 +165,6 @@ private = true
 script_runner = "@duckscript"
 script = """
 rm -rf wit/deps.done
-rm -rf wit/deps
 rm -rf wasm-rpc/wit/deps
 rm -rf golem-common/wit/deps
 rm -rf cli/golem-cli/wit/deps
