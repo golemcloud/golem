@@ -19,7 +19,7 @@ use crate::repo::plan::PlanRepo;
 use anyhow::anyhow;
 use golem_common::model::PlanId;
 use golem_common::model::account::Plan;
-use golem_common::{SafeDisplay, error_forwarders};
+use golem_common::{SafeDisplay, error_forwarders, into_internal_error};
 use golem_service_base::repo::RepoError;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -39,6 +39,8 @@ impl SafeDisplay for PlanError {
         }
     }
 }
+
+into_internal_error!(PlanError);
 
 error_forwarders!(PlanError, RepoError);
 

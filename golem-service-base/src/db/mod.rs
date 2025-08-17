@@ -16,7 +16,7 @@ use crate::repo::{BusinessResult, RepoError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::{future, TryFutureExt};
+use futures::{TryFutureExt, future};
 use sqlx::query::{Query, QueryAs};
 use sqlx::{Database, Error, FromRow, IntoArguments, Row};
 use std::fmt::{Debug, Display};

@@ -105,3 +105,7 @@ pub fn safe(value: String) -> impl SafeDisplay {
 pub fn widen_infallible<T>(_inf: Infallible) -> T {
     panic!("impossible")
 }
+
+pub trait IntoInternalError {
+    fn into_internal(self) -> anyhow::Error;
+}

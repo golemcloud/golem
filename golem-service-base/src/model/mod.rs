@@ -25,8 +25,8 @@ use golem_common::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, ScanCursor, Timestamp, WorkerFilter,
     WorkerId,
 };
-use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
+use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc_derive::IntoValue;
 use poem_openapi::{Enum, Object, Union};
 use serde::{Deserialize, Serialize};

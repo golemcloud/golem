@@ -237,7 +237,6 @@ pub mod api {
     use lazy_static::lazy_static;
     use prometheus::{register_gauge, register_histogram_vec, Gauge, HistogramVec};
     use std::fmt::Debug;
-    use std::sync::Arc;
     use tracing::{error, info, Span};
 
     lazy_static! {
@@ -316,7 +315,7 @@ pub mod api {
 
         fn is_expected(&self) -> bool;
 
-        fn take_cause(&mut self) -> Option<Arc<anyhow::Error>>;
+        fn take_cause(&mut self) -> Option<anyhow::Error>;
     }
 
     impl RecordedApiRequest {
@@ -345,20 +344,18 @@ pub mod api {
                 let elapsed = start.elapsed();
 
                 if error.is_expected() {
+                    // expected error, no need to display cause.
+                    // TODO: make this nicer
+                    error.take_cause();
                     info!(
                         elapsed_ms = elapsed.as_millis(),
                         error = format!("{:?}", error),
                         "API request failed",
                     );
                 } else {
-                    let error_display = if let Some(cause) = error.take_cause() {
-                        format!("{cause:#}")
-                    } else {
-                        format!("{error:?}")
-                    };
                     error!(
                         elapsed_ms = elapsed.as_millis(),
-                        error = error_display,
+                        error = format!("{:?}", error),
                         "API request failed",
                     );
                 }
@@ -372,7 +369,7 @@ pub mod api {
             }
         }
 
-        pub fn result<T, E: Clone + ApiErrorDetails + Debug>(
+        pub fn result<T, E: ApiErrorDetails + Debug>(
             self,
             mut result: Result<T, E>,
         ) -> Result<T, E> {

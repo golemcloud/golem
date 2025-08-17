@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::Component;
@@ -21,7 +22,6 @@ use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::ComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};

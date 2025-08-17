@@ -12,25 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::authorised_request;
 use super::RemoteServiceConfig;
+use super::authorised_request;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use golem_api_grpc::proto::golem::project::v1::project_error::Error;
 use golem_api_grpc::proto::golem::project::v1::{
-    get_default_project_response, get_project_response, GetDefaultProjectRequest, GetProjectRequest,
+    GetDefaultProjectRequest, GetProjectRequest, get_default_project_response, get_project_response,
 };
+use golem_common::SafeDisplay;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::auth::TokenSecret;
-use golem_common::model::project::ProjectView;
 use golem_common::model::ProjectId;
 use golem_common::model::RetryConfig;
+use golem_common::model::auth::TokenSecret;
+use golem_common::model::project::ProjectView;
 use golem_common::retries::with_retries;
-use golem_common::SafeDisplay;
 use std::fmt::Display;
+use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tonic::Status;
 
 #[async_trait]
 pub trait ProjectService: Send + Sync {

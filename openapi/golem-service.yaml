@@ -7094,7 +7094,6 @@ components:
           additionalProperties:
             type: string
         wasmHash:
-          description: Hash of the wasm before any transformations
           type: string
           format: hash
       required:

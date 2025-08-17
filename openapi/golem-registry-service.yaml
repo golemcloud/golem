@@ -7040,7 +7040,6 @@ components:
         wasmHash:
           type: string
           format: hash
-          description: Hash of the wasm before any transformations
     ComponentFileOptions:
       type: object
       title: ComponentFileOptions

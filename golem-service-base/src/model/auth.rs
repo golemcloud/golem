@@ -17,8 +17,8 @@ use golem_common::model::auth::TokenSecret;
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
 use poem::Request;
-use poem_openapi::auth::{ApiKey, Bearer};
 use poem_openapi::SecurityScheme;
+use poem_openapi::auth::{ApiKey, Bearer};
 use std::str::FromStr;
 
 pub const COOKIE_KEY: &str = "GOLEM_SESSION";
@@ -68,12 +68,12 @@ impl GolemSecurityScheme {
                 .map_err(|_| "Invalid Bearer token");
         };
 
-        if let Some(cookie_header) = header_map.typed_get::<HCookie>() {
-            if let Some(session_id) = cookie_header.get(COOKIE_KEY) {
-                return TokenSecret::from_str(session_id)
-                    .map(|token| GolemSecurityScheme::Cookie(GolemCookie(token)))
-                    .map_err(|_| "Invalid session ID");
-            }
+        if let Some(cookie_header) = header_map.typed_get::<HCookie>()
+            && let Some(session_id) = cookie_header.get(COOKIE_KEY)
+        {
+            return TokenSecret::from_str(session_id)
+                .map(|token| GolemSecurityScheme::Cookie(GolemCookie(token)))
+                .map_err(|_| "Invalid session ID");
         }
 
         Err("Authentication failed")
@@ -105,7 +105,7 @@ pub struct WrappedGolemSecuritySchema(pub GolemSecurityScheme);
 impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
     async fn from_request(req: &'a Request, body: &mut poem::RequestBody) -> poem::Result<Self> {
         use poem::web::cookie::CookieJar;
-        use poem::web::headers::{authorization::Bearer as BearerWeb, Authorization, HeaderMapExt};
+        use poem::web::headers::{Authorization, HeaderMapExt, authorization::Bearer as BearerWeb};
 
         fn extract_bearer_token(req: &Request) -> Option<GolemSecurityScheme> {
             req.headers()
@@ -140,15 +140,15 @@ impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
 #[cfg(test)]
 mod test {
     use super::AUTH_ERROR_MESSAGE;
-    use super::{GolemSecurityScheme, WrappedGolemSecuritySchema, COOKIE_KEY};
+    use super::{COOKIE_KEY, GolemSecurityScheme, WrappedGolemSecuritySchema};
     use http::StatusCode;
     use poem::{
+        EndpointExt, Request,
         middleware::CookieJarManager,
         test::{TestClient, TestResponse},
         web::cookie::Cookie as PoemCookie,
-        EndpointExt, Request,
     };
-    use poem_openapi::{payload::PlainText, OpenApi, OpenApiService};
+    use poem_openapi::{OpenApi, OpenApiService, payload::PlainText};
     use test_r::test;
 
     struct TestApi;

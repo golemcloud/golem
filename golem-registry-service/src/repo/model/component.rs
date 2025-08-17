@@ -15,6 +15,7 @@
 use crate::model::component::{Component, FinalizedComponentRevision};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use anyhow::anyhow;
 use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
@@ -455,9 +456,11 @@ impl TryFrom<ComponentExtRevisionRecord> for Component {
             component_size: value.revision.size as u64,
             metadata: value.revision.metadata.into(),
             created_at: value.revision.audit.created_at.into(),
-            component_type: value.revision.component_type.try_into().map_err(|e| {
-                RepoError::Internal(format!("Failed converting component type: {e}"))
-            })?,
+            component_type: value
+                .revision
+                .component_type
+                .try_into()
+                .map_err(|e| anyhow!("Failed converting component type: {e}"))?,
             files: value
                 .revision
                 .files
@@ -525,11 +528,8 @@ impl TryFrom<ComponentFileRecord> for InitialComponentFile {
     fn try_from(value: ComponentFileRecord) -> Result<Self, Self::Error> {
         Ok(Self {
             key: InitialComponentFileKey(value.file_key),
-            path: ComponentFilePath::from_abs_str(&value.file_path).map_err(|e| {
-                RepoError::Internal(format!(
-                    "Failed converting component file record to model: {e}"
-                ))
-            })?,
+            path: ComponentFilePath::from_abs_str(&value.file_path)
+                .map_err(|e| anyhow!("Failed converting component file record to model: {e}"))?,
             permissions: value.file_permissions.into(),
         })
     }

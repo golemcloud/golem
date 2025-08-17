@@ -15,6 +15,7 @@
 use crate::repo::model::application::{ApplicationRecord, ApplicationRevisionRecord};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::{BindFields, new_repo_uuid};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -22,7 +23,7 @@ use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
+use golem_service_base::repo::{RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::Database;
 use tracing::{Instrument, Span, info_span};
@@ -282,9 +283,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
         match self.get_by_name(owner_account_id, name).await? {
             Some(app) => Ok(app),
-            None => Err(RepoError::Internal(
-                "illegal state: missing application".to_string(),
-            )),
+            None => Err(anyhow!("illegal state: missing application"))?,
         }
     }
 

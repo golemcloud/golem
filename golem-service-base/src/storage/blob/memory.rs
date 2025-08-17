@@ -218,10 +218,10 @@ impl BlobStorage for InMemoryBlobStorage {
             .expect("Path must have a file name")
             .to_string_lossy()
             .to_string();
-        if let Some(namespace_data) = self.data.get(&namespace) {
-            if let Some(directory) = namespace_data.get(&dir) {
-                directory.remove(&key);
-            }
+        if let Some(namespace_data) = self.data.get(&namespace)
+            && let Some(directory) = namespace_data.get(&dir)
+        {
+            directory.remove(&key);
         }
 
         Ok(())

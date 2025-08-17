@@ -13,16 +13,19 @@
 // limitations under the License.
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 pub struct ErrorsBody {
     pub errors: Vec<String>,
+
+    #[oai(skip)]
+    #[serde(skip)]
+    pub cause: Option<anyhow::Error>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 pub struct ErrorBody {
@@ -30,7 +33,7 @@ pub struct ErrorBody {
 
     #[oai(skip)]
     #[serde(skip)]
-    pub cause: Option<Arc<anyhow::Error>>,
+    pub cause: Option<anyhow::Error>,
 }
 
 #[cfg(feature = "protobuf")]
@@ -51,6 +54,7 @@ mod protobuf {
         fn from(value: golem_api_grpc::proto::golem::common::ErrorsBody) -> Self {
             Self {
                 errors: value.errors,
+                cause: None,
             }
         }
     }

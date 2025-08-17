@@ -189,15 +189,29 @@ macro_rules! newtype_uuid {
     };
 }
 
+// Can be removed and inlined into error_forwarders once https://github.com/rust-lang/rust/issues/86935 is stable.
+#[macro_export]
+macro_rules! into_internal_error {
+    ($target:ty) => {
+        impl $crate::IntoInternalError for $target {
+            fn into_internal(self) -> ::anyhow::Error {
+                match self {
+                    Self::InternalError(inner) => inner,
+                    _ => anyhow::Error::from(self),
+                }
+            }
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! error_forwarders {
     ($target:ty, $( $sub:ty ),* $(,)?) => {
         $(
             impl From<$sub> for $target {
                 fn from(value: $sub) -> Self {
-                    Self::InternalError(
-                        anyhow::Error::new(value).context(concat!("from ", stringify!($sub)))
-                    )
+                    let converted = <$sub as $crate::IntoInternalError>::into_internal(value);
+                    Self::InternalError(converted.context(stringify!($sub)))
                 }
             }
         )*

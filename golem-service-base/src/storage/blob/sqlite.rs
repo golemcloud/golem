@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::db::sqlite::SqlitePool;
 use crate::db::DBValue;
+use crate::db::sqlite::SqlitePool;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::repo::RepoError;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
-use futures::stream::BoxStream;
 use futures::TryStreamExt;
+use futures::stream::BoxStream;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 

@@ -14,6 +14,7 @@
 
 use crate::repo::model::account_usage::UsageType;
 use crate::repo::model::new_repo_uuid;
+use anyhow::anyhow;
 use golem_common::model::PlanId;
 use golem_common::model::account::Plan;
 use golem_service_base::repo::{RepoError, RepoResult};
@@ -43,9 +44,9 @@ impl PlanRecord {
     pub fn limit(&self, usage_type: UsageType) -> RepoResult<Option<i64>> {
         match self.limits.get(&usage_type) {
             Some(limit) => Ok(*limit),
-            None => Err(RepoError::Internal(format!(
-                "illegal state error: missing limit for {usage_type:?}",
-            ))),
+            None => Err(anyhow!(
+                "illegal state error: missing limit for {usage_type:?}"
+            ))?,
         }
     }
 
