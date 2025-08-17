@@ -89,3 +89,9 @@ pub struct OAuth2Data {
 pub struct OAuth2WebflowStateMetadata {
     pub redirect: Option<url::Url>,
 }
+
+#[derive(Debug, Clone)]
+pub struct OAuth2WebflowState {
+    pub metadata: OAuth2WebflowStateMetadata,
+    pub token: TokenWithSecret
+}

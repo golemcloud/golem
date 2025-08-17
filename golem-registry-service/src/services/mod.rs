@@ -24,3 +24,5 @@ pub mod plan;
 pub mod token;
 pub mod oauth2;
 pub mod oauth2_github_client;
+pub mod login;
+pub mod oauth2_provider_client;

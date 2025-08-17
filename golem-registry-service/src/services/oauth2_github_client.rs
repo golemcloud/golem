@@ -19,6 +19,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::time::Duration;
 use url::Url;
 use anyhow::{anyhow, Context};
+use crate::model::login::ExternalLogin;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2GithubClientError {
@@ -66,6 +67,11 @@ pub trait OAuth2GithubClient: Send + Sync {
         code: &str,
         state: &str,
     ) -> Result<String, OAuth2GithubClientError>;
+
+    async fn external_user_id(
+        &self,
+        access_token: &str,
+    ) -> Result<ExternalLogin, OAuth2GithubClientError>;
 }
 
 #[derive(Debug)]
@@ -201,6 +207,35 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
         } else {
             Err(anyhow!("Failed to to exchange code, status: {}", res.status()))?
         }
+    }
+
+    async fn external_user_id(
+        &self,
+        access_token: &str,
+    ) -> Result<ExternalLogin, OAuth2GithubClientError> {
+        let details = github_user_details(access_token).await?;
+
+        let emails = github_user_email(access_token).await?;
+
+        let verified_emails = emails
+            .iter()
+            .filter(|email| email.verified)
+            .map(|email| email.email.clone())
+            .collect::<Vec<_>>();
+
+        let email = emails
+            .iter()
+            .find(|email| email.primary && email.verified)
+            .or(emails.iter().find(|email| email.verified))
+            .or(emails.first())
+            .map(|email| email.email.clone());
+
+        Ok(ExternalLogin {
+            external_id: details.login,
+            name: details.name,
+            email,
+            verified_emails,
+        })
     }
 }
 
@@ -418,6 +453,79 @@ impl serde::ser::Serialize for ErrorResponseKind {
         S: serde::ser::Serializer,
     {
         serializer.serialize_str(self.as_ref())
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GithubUserDetails {
+    login: String,
+    name: Option<String>,
+    email: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GithubUserEmail {
+    email: String,
+    primary: bool,
+    verified: bool,
+}
+
+fn add_headers(request: reqwest::RequestBuilder, access_token: &str) -> reqwest::RequestBuilder {
+    request
+        .header("Accept", "application/json")
+        .header("Authorization", format!("token {access_token}"))
+        // see https://docs.github.com/en/rest/overview/resources-in-the-rest-api?apiVersion=2022-11-28#user-agent-required
+        .header("User-Agent", "Golem Cloud")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+}
+
+
+async fn github_user_details(
+    access_token: &str,
+) -> Result<GithubUserDetails, OAuth2GithubClientError> {
+    let client = reqwest::Client::new();
+
+    let response = add_headers(client.get("https://api.github.com/user"), access_token)
+        .send()
+        .await?;
+
+    let details = response_json::<GithubUserDetails>(response, "Github User Details").await?;
+
+    Ok(details)
+}
+
+async fn github_user_email(
+    access_token: &str,
+) -> Result<Vec<GithubUserEmail>, OAuth2GithubClientError> {
+    let client = reqwest::Client::new();
+
+    let response = add_headers(
+        client.get("https://api.github.com/user/emails"),
+        access_token,
+    )
+    .send()
+    .await?;
+
+    let emails = response_json::<Vec<GithubUserEmail>>(response, "Github User Emails").await?;
+
+    Ok(emails)
+}
+
+async fn response_json<T>(
+    response: reqwest::Response,
+    prefix: &str,
+) -> Result<T, OAuth2GithubClientError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let status = response.status();
+    if status.is_client_error() || status.is_server_error() {
+        let body = response.text().await?;
+        Err(anyhow!("Request failed {prefix}: {status}, Body: {body}").into())
+    } else {
+        let full = response.bytes().await?;
+        let json = serde_json::from_slice(&full).map_err(anyhow::Error::from)?;
+        Ok(json)
     }
 }
 

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use sqlx::types::Json;
 use uuid::Uuid;
-use crate::model::login::OAuth2WebflowStateMetadata;
+use crate::model::login::{OAuth2WebflowState, OAuth2WebflowStateMetadata};
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct OAuth2WebFlowStateRecord {
@@ -29,4 +29,13 @@ pub struct OAuth2WebFlowStateRecord {
 
     #[sqlx(skip)]
     pub token: Option<TokenRecord>,
+}
+
+impl From<OAuth2WebFlowStateRecord> for OAuth2WebflowState  {
+    fn from(value: OAuth2WebFlowStateRecord) -> Self {
+        Self {
+            metadata: value.metadata.0,
+            token: value.token.map(|t| t.into())
+        }
+    }
 }

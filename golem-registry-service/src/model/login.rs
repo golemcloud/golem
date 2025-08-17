@@ -15,7 +15,7 @@
 use std::fmt::Display;
 use std::str::FromStr;
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::TokenId;
+use golem_common::model::auth::{TokenId, TokenWithSecret};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
@@ -88,4 +88,10 @@ pub struct OAuth2Data {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OAuth2WebflowStateMetadata {
     pub redirect: Option<url::Url>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OAuth2WebflowState {
+    pub metadata: OAuth2WebflowStateMetadata,
+    pub token: Option<TokenWithSecret>
 }
