@@ -67,22 +67,9 @@ pub struct OAuth2Session {
 }
 
 #[derive(Debug, Clone)]
-pub struct EncodedOAuth2Session {
-    pub value: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct OAuth2AccessToken {
     pub provider: OAuth2Provider,
     pub access_token: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct OAuth2Data {
-    pub url: String,
-    pub user_code: String,
-    pub expires: chrono::DateTime<Utc>,
-    pub encoded_session: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

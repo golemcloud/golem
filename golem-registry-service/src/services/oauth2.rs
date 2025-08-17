@@ -14,7 +14,7 @@
 
 use super::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientError};
 use crate::model::login::{
-    EncodedOAuth2Session, OAuth2AccessToken, OAuth2Data, OAuth2Provider, OAuth2Session,
+    EncodedOAuth2Session, ExternalLogin, OAuth2AccessToken, OAuth2Provider, OAuth2Session, OAuth2Token
 };
 use golem_common::{error_forwarders, into_internal_error, SafeDisplay};
 use std::sync::Arc;
@@ -23,6 +23,16 @@ use serde_with::serde_as;
 use serde::{Deserialize, Serialize};
 use crate::config::EdDsaConfig;
 use anyhow::anyhow;
+use golem_common::model::login::OAuth2Data;
+use crate::repo::oauth2_token::OAuth2TokenRepo;
+use crate::repo::oauth2_webflow_state::OAuth2WebflowStateRepo;
+use golem_service_base::repo::RepoError;
+use golem_common::model::account::{AccountId, NewAccountData};
+use super::account::{AccountError, AccountService};
+use golem_common::model::auth::{TokenSecret, TokenWithSecret};
+use chrono::Utc;
+use super::token::{TokenError, TokenService};
+use crate::repo::model::oauth2_token::OAuth2TokenRecord;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2Error {
@@ -43,10 +53,14 @@ impl SafeDisplay for OAuth2Error {
 
 into_internal_error!(OAuth2Error);
 
-error_forwarders!(OAuth2Error, OAuth2GithubClientError);
+error_forwarders!(OAuth2Error, OAuth2GithubClientError, RepoError, AccountError, TokenError);
 
 pub struct OAuth2Service {
     client: Arc<dyn OAuth2GithubClient>,
+    account_service: Arc<AccountService>,
+    token_service: Arc<TokenService>,
+    oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
+    oauth2_web_flow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
 }
@@ -54,6 +68,10 @@ pub struct OAuth2Service {
 impl OAuth2Service {
     pub fn new(
         client: Arc<dyn OAuth2GithubClient>,
+        account_service: Arc<AccountService>,
+        token_service: Arc<TokenService>,
+        oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
+        oauth2_web_flow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
         config: &EdDsaConfig,
     ) -> Result<Self, OAuth2Error> {
         let private_key = format_key(config.private_key.as_str(), "PRIVATE");
@@ -65,12 +83,16 @@ impl OAuth2Service {
 
         Ok(Self {
             client,
+            account_service,
+            token_service,
             encoding_key,
-            decoding_key
+            decoding_key,
+            oauth2_token_repo,
+            oauth2_web_flow_state_repo,
         })
     }
 
-    pub async fn start_workflow(&self) -> Result<OAuth2Data, OAuth2Error> {
+    pub async fn start_device_workflow(&self) -> Result<OAuth2Data, OAuth2Error> {
         let data = self.client.initiate_device_workflow().await?;
         let now = chrono::Utc::now();
         let session = OAuth2Session {
@@ -87,19 +109,42 @@ impl OAuth2Service {
         })
     }
 
-    pub async fn finish_workflow(
+    pub async fn finish_device_workflow(
         &self,
         encoded_session: &EncodedOAuth2Session,
-    ) -> Result<OAuth2AccessToken, OAuth2Error> {
+    ) -> Result<TokenWithSecret, OAuth2Error> {
+        let provider = OAuth2Provider::Github;
+
         let session = self.decode_session(encoded_session)?;
         let access_token = self
             .client
-            .get_access_token(&session.device_code, session.interval, session.expires_at)
+            .get_device_workflow_access_token(&session.device_code, session.interval, session.expires_at)
             .await?;
-        Ok(OAuth2AccessToken {
-            provider: OAuth2Provider::Github,
-            access_token,
-        })
+
+        let external_login = self.client.external_user_id(&access_token).await?;
+
+        let existing_data = self
+            .oauth2_token_repo
+            .get_by_external_provider(&provider.to_string(), &external_login.external_id)
+            .await?
+            .map(TryInto::<OAuth2Token>::try_into)
+            .transpose()?;
+
+        let account_id = match existing_data.clone() {
+            Some(token) => token.account_id,
+            None => self.make_account(&external_login).await?,
+        };
+
+        let token = match existing_data.and_then(|token| token.token_id) {
+            Some(token_id) => self.token_service.get(&token_id).await?,
+            None => {
+                // This will also link the external id to the account id, ensure that no additional
+                // accounts are created in the future.
+                self.make_token(provider, external_login, account_id).await?
+            }
+        };
+
+        Ok(token)
     }
 
     pub async fn get_authorize_url(
@@ -147,6 +192,57 @@ impl OAuth2Service {
                 .map_err(OAuth2Error::InvalidSession)?;
 
         Ok(session.claims)
+    }
+
+    async fn make_account(
+        &self,
+        external_login: &ExternalLogin,
+    ) -> Result<AccountId, OAuth2Error> {
+        let email = external_login
+            .email
+            .clone()
+            .ok_or(anyhow!("No user email from OAuth2 Provider for login {}", external_login.external_id))?;
+
+        let name = external_login
+            .name
+            .clone()
+            .unwrap_or(external_login.external_id.clone());
+
+        let account = self
+            .account_service
+            .create(NewAccountData { name, email })
+            .await?;
+
+        Ok(account.id)
+    }
+
+    async fn make_token(
+        &self,
+        provider: OAuth2Provider,
+        external_login: ExternalLogin,
+        account_id: AccountId,
+    ) -> Result<TokenWithSecret, OAuth2Error> {
+        let expiration = Utc::now()
+            // Ten years.
+            .checked_add_months(chrono::Months::new(10 * 12))
+            .ok_or(anyhow!("Failed to calculate token expiry"))?;
+
+        let token_with_secret = self.token_service.create(account_id.clone(), expiration).await?;
+
+        {
+            let oauth2_token = OAuth2Token {
+                provider: provider,
+                external_id: external_login.external_id,
+                account_id: account_id.clone(),
+                token_id: Some(token_with_secret.id.clone()),
+            };
+
+            let record: OAuth2TokenRecord = oauth2_token.into();
+
+            self.oauth2_token_repo.create_or_update(record).await?;
+        }
+
+        Ok(token_with_secret)
     }
 }
 

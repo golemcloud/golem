@@ -23,6 +23,7 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
+use crate::services::oauth2::OAuth2Error;
 
 #[derive(ApiResponse, Debug)]
 pub enum ApiError {
@@ -212,6 +213,19 @@ impl From<TokenError> for ApiError {
             TokenError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("TokenError")),
+            })),
+        }
+    }
+}
+
+impl From<OAuth2Error> for ApiError {
+    fn from(value: OAuth2Error) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            OAuth2Error::InvalidSession(_) => Self::BadRequest(Json(ErrorsBody { errors: vec![error], cause: None })),
+            OAuth2Error::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("OAuth2Error")),
             })),
         }
     }

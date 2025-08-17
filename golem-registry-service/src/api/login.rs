@@ -24,8 +24,15 @@ use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::Instrument;
+use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
+use std::sync::Arc;
+use super::error::ApiError;
+use golem_common::model::error::ErrorBody;
+use crate::model::login::EncodedOAuth2Session;
 
-pub struct LoginApi {}
+pub struct LoginApi {
+    pub login_system: LoginSystem
+}
 
 #[OpenApi(
     prefix_path = "/v1/login",
@@ -33,6 +40,10 @@ pub struct LoginApi {}
     tag = ApiTags::Login
 )]
 impl LoginApi {
+    pub fn new(login_system: LoginSystem) -> Self {
+        Self { login_system }
+    }
+
     /// Get information about a token
     ///
     /// Gets information about a token that is selected by the secret key passed in the Authorization header.
@@ -96,19 +107,27 @@ impl LoginApi {
         method = "post",
         operation_id = "start_login_oauth2"
     )]
-    async fn start_login_oauth2(&self) -> ApiResult<Json<OAuth2Data>> {
-        let record = recorded_http_api_request!("start_login_oauth2",);
+    async fn start_oauth2_device_flow(&self) -> ApiResult<Json<OAuth2Data>> {
+        let record = recorded_http_api_request!("start_oauth2_device_flow",);
 
         let response = self
-            .start_login_oauth2_internal()
+            .start_oauth2_device_flow_internal()
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn start_login_oauth2_internal(&self) -> ApiResult<Json<OAuth2Data>> {
-        todo!()
+    async fn start_oauth2_device_flow_internal(&self) -> ApiResult<Json<OAuth2Data>> {
+        let login_system = self.get_enabled_login_system()?;
+
+        let result = login_system
+            .oauth2_service
+            .start_device_workflow()
+            .await
+            .map(Json)?;
+
+        Ok(result)
     }
 
     /// Finish GitHub OAuth2 interactive flow
@@ -120,24 +139,31 @@ impl LoginApi {
         method = "post",
         operation_id = "complete_login_oauth2"
     )]
-    async fn complete_login_oauth2(
+    async fn complete_oauth2_device_flow(
         &self,
         result: Json<String>,
     ) -> ApiResult<Json<TokenWithSecret>> {
-        let record = recorded_http_api_request!("complete_login_oauth2",);
+        let record = recorded_http_api_request!("complete_oauth2_device_flow",);
         let response = self
-            .complete_login_oauth2_internal(result.0)
+            .complete_oauth2_device_flow_internal(result.0)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn complete_login_oauth2_internal(
+    async fn complete_oauth2_device_flow_internal(
         &self,
-        _result: String,
+        result: String,
     ) -> ApiResult<Json<TokenWithSecret>> {
-        todo!()
+        let login_system = self.get_enabled_login_system()?;
+
+        let token = login_system
+            .oauth2_service
+            .finish_device_workflow(&EncodedOAuth2Session { value: result })
+            .await?;
+
+        Ok(Json(result))
     }
 
     /// Initiate OAuth2 Web Flow
@@ -232,5 +258,15 @@ impl LoginApi {
         _state: String,
     ) -> ApiResult<WebFlowPollResponse> {
         todo!()
+    }
+
+    fn get_enabled_login_system(&self) -> ApiResult<&LoginSystemEnabled> {
+        match &self.login_system {
+            LoginSystem::Enabled(inner) => Ok(inner),
+            LoginSystem::Disabled => Err(ApiError::Conflict(Json(ErrorBody {
+                error: "Logins are disabled by configuration".to_string(),
+                cause: None
+            }))),
+        }
     }
 }

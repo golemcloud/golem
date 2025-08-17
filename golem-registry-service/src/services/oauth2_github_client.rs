@@ -53,7 +53,7 @@ impl From<reqwest::Error> for OAuth2GithubClientError {
 pub trait OAuth2GithubClient: Send + Sync {
     async fn initiate_device_workflow(&self) -> Result<DeviceWorkflowData, OAuth2GithubClientError>;
 
-    async fn get_access_token(
+    async fn get_device_workflow_access_token(
         &self,
         device_code: &str,
         interval: Duration,
@@ -121,7 +121,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
         }
     }
 
-    async fn get_access_token(
+    async fn get_device_workflow_access_token(
         &self,
         device_code: &str,
         interval: Duration,
@@ -560,7 +560,7 @@ mod tests {
         println!("Device: {device:?}");
 
         let access_token = client
-            .get_access_token(
+            .get_device_workflow_access_token(
                 &device.device_code,
                 device.interval,
                 Utc::now() + device.expires_in,

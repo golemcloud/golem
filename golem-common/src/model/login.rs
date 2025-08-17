@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::declare_structs;
+use crate::{declare_structs, declare_transparent_newtypes};
 use chrono::Utc;
 
+declare_transparent_newtypes! {
+    pub struct EncodedOAuth2Session(pub String);
+}
 declare_structs! {
     pub struct OAuth2Data {
         pub url: String,
