@@ -28,7 +28,12 @@ use tracing::Instrument;
 
 pub struct EnvironmentCertificatesApi {}
 
-#[OpenApi(prefix_path = "/v1/envs", tag = ApiTags::Environment, tag = ApiTags::ApiCertificate)]
+#[OpenApi(
+    prefix_path = "/v1/envs",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Environment,
+    tag = ApiTags::ApiCertificate
+)]
 impl EnvironmentCertificatesApi {
     /// Get all certificates in this environment
     #[oai(

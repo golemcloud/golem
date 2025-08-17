@@ -27,7 +27,11 @@ use tracing::Instrument;
 
 pub struct PluginRegistrationApi {}
 
-#[OpenApi(prefix_path = "/v1", tag = ApiTags::Plugin)]
+#[OpenApi(
+    prefix_path = "/v1",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Plugin
+)]
 impl PluginRegistrationApi {
     /// Lists all the registered plugins (including all versions of each).
     #[oai(path = "/plugins", method = "get", operation_id = "list_plugins")]

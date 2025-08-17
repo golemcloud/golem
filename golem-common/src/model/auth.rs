@@ -14,34 +14,35 @@
 
 use crate::model::account::AccountId;
 use crate::model::ProjectId;
+use crate::{declare_structs, newtype_uuid};
+use chrono::Utc;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, FromRepr};
-use uuid::Uuid;
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
-)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-pub struct TokenSecret {
-    pub value: Uuid,
-}
+newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
+newtype_uuid!(
+    TokenSecret,
+    golem_api_grpc::proto::golem::token::TokenSecret
+);
 
-impl TokenSecret {
-    pub fn new(value: Uuid) -> Self {
-        Self { value }
+declare_structs! {
+    pub struct Token {
+        pub id: TokenId,
+        pub account_id: AccountId,
+        pub created_at: chrono::DateTime<Utc>,
+        pub expires_at: chrono::DateTime<Utc>,
     }
-}
 
-impl std::str::FromStr for TokenSecret {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let uuid = Uuid::parse_str(s).map_err(|err| format!("Invalid token: {err}"))?;
-        Ok(Self { value: uuid })
+    pub struct TokenWithSecret {
+        pub id: TokenId,
+        pub secret: TokenSecret,
+        pub account_id: AccountId,
+        pub created_at: chrono::DateTime<Utc>,
+        pub expires_at: chrono::DateTime<Utc>,
     }
 }
 
@@ -108,19 +109,6 @@ pub struct AuthCtx {
 impl AuthCtx {
     pub fn new(token_secret: TokenSecret) -> Self {
         Self { token_secret }
-    }
-}
-
-impl IntoIterator for AuthCtx {
-    type Item = (String, String);
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        vec![(
-            "authorization".to_string(),
-            format!("Bearer {}", self.token_secret.value),
-        )]
-        .into_iter()
     }
 }
 
@@ -485,28 +473,6 @@ pub struct ProjectAuthorisedActions {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use super::AccountAction;
-
-    use super::TokenSecret;
-
-    impl TryFrom<golem_api_grpc::proto::golem::token::TokenSecret> for TokenSecret {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::token::TokenSecret,
-        ) -> Result<Self, Self::Error> {
-            Ok(Self {
-                value: value.value.ok_or("Missing field: value")?.into(),
-            })
-        }
-    }
-
-    impl From<TokenSecret> for golem_api_grpc::proto::golem::token::TokenSecret {
-        fn from(value: TokenSecret) -> Self {
-            Self {
-                value: Some(value.value.into()),
-            }
-        }
-    }
 
     impl TryFrom<golem_api_grpc::proto::golem::auth::AccountAction> for AccountAction {
         type Error = String;

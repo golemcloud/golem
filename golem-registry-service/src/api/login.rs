@@ -15,7 +15,8 @@
 use super::ApiResult;
 use super::model::{WebFlowCallbackResponse, WebFlowPollResponse};
 use golem_common::api::WebFlowAuthorizeUrlResponse;
-use golem_common::model::login::{OAuth2Data, Token, TokenWithSecret};
+use golem_common::model::auth::{Token, TokenWithSecret};
+use golem_common::model::login::OAuth2Data;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -26,7 +27,11 @@ use tracing::Instrument;
 
 pub struct LoginApi {}
 
-#[OpenApi(prefix_path = "/v1/login", tag = ApiTags::Login)]
+#[OpenApi(
+    prefix_path = "/v1/login",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Login
+)]
 impl LoginApi {
     /// Get information about a token
     ///

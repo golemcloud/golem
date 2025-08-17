@@ -68,7 +68,7 @@ impl AuthService {
             "get-account",
             None,
             &self.retry_config,
-            &(self.auth_service_client.clone(), ctx.token_secret.value),
+            &(self.auth_service_client.clone(), ctx.token_secret.0),
             |(client, token)| {
                 Box::pin(async move {
                     let response = client
@@ -110,7 +110,7 @@ impl AuthService {
                 self.auth_service_client.clone(),
                 account_id.clone(),
                 action.clone(),
-                ctx.token_secret.value,
+                ctx.token_secret.0,
             ),
             |(client, account_id, action, token)| {
                 Box::pin(async move {

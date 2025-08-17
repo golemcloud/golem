@@ -30,7 +30,11 @@ use tracing::Instrument;
 
 pub struct ApiDefinitionsApi {}
 
-#[OpenApi(prefix_path = "/v1/api-definitions", tag = ApiTags::ApiDefinition)]
+#[OpenApi(
+    prefix_path = "/v1/api-definitions",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::ApiDefinition
+)]
 impl ApiDefinitionsApi {
     /// Get api-definition by id
     #[oai(

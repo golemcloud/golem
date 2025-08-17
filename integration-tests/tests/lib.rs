@@ -18,13 +18,9 @@ use golem_test_framework::config::{
 };
 use test_r::test_dep;
 
+mod api;
+
 test_r::enable!();
-
-mod fork;
-
-mod rib;
-mod rib_repl;
-mod worker;
 
 #[derive(Debug)]
 pub struct Tracing;
@@ -44,7 +40,8 @@ pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
         worker_executor_cluster_size: 3,
         ..EnvBasedTestDependenciesConfig::new()
     })
-    .await;
+    .await
+    .expect("Failed constructing test dependencies");
 
     deps.redis_monitor().assert_valid();
 

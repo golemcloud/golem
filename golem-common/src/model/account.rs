@@ -25,22 +25,19 @@ declare_structs! {
         pub plan_id: PlanId,
     }
 
-    pub struct AccountData {
+    pub struct NewAccountData {
         pub name: String,
         pub email: String,
     }
 
     pub struct Plan {
         pub plan_id: PlanId,
-        pub plan_data: PlanData,
-    }
-
-    pub struct PlanData {
-        pub project_limit: i32,
-        pub component_limit: i32,
-        pub worker_limit: i32,
-        pub storage_limit: i32,
+        pub app_limit: i64,
+        pub env_limit: i64,
+        pub component_limit: i64,
+        pub worker_limit: i64,
+        pub storage_limit: i64,
         pub monthly_gas_limit: i64,
-        pub monthly_upload_limit: i32,
+        pub monthly_upload_limit: i64,
     }
 }

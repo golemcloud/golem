@@ -175,7 +175,7 @@ mod test {
             GolemSecurityScheme::Bearer(_) => "bearer",
             GolemSecurityScheme::Cookie(_) => "cookie",
         };
-        let value = auth.secret().value;
+        let value = auth.secret().0;
 
         PlainText(format!("{prefix}: {value}"))
     }

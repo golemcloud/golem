@@ -13,31 +13,55 @@
 // limitations under the License.
 
 use crate::config::RegistryServiceConfig;
+use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
+use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
+use crate::repo::environment::{DbEnvironmentRepo, EnvironmentRepo};
+use crate::repo::plan::{DbPlanRepo, PlanRepo};
+use crate::repo::token::{DbTokenRepo, TokenRepo};
+use crate::services::account::AccountService;
 use crate::services::account_usage::AccountUsageService;
+use crate::services::application::ApplicationService;
 use crate::services::component::ComponentService;
 use crate::services::component_compilation::ComponentCompilationServiceDisabled;
 use crate::services::component_object_store::ComponentObjectStore;
-use anyhow::anyhow;
+use crate::services::environment::EnvironmentService;
+use crate::services::plan::PlanService;
+use crate::services::token::TokenService;
+use anyhow::{Context, anyhow};
 use golem_common::config::DbConfig;
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use include_dir::include_dir;
 use std::sync::Arc;
+
+static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 #[derive(Clone)]
 pub struct Services {
+    pub account_service: Arc<AccountService>,
+    pub application_service: Arc<ApplicationService>,
     pub component_service: Arc<ComponentService>,
+    pub environment_service: Arc<EnvironmentService>,
+    pub token_service: Arc<TokenService>,
 }
 
 struct Repos {
-    component_repo: Arc<dyn ComponentRepo>,
+    account_repo: Arc<dyn AccountRepo>,
     account_usage_repo: Arc<dyn AccountUsageRepo>,
+    application_repo: Arc<dyn ApplicationRepo>,
+    component_repo: Arc<dyn ComponentRepo>,
+    environment_repo: Arc<dyn EnvironmentRepo>,
+    plan_repo: Arc<dyn PlanRepo>,
+    token_repo: Arc<dyn TokenRepo>,
 }
 
 impl Services {
@@ -51,41 +75,100 @@ impl Services {
         let plugin_wasm_files = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
         let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage));
 
-        let component_compilation = Arc::new(ComponentCompilationServiceDisabled);
+        let component_compilation_service = Arc::new(ComponentCompilationServiceDisabled);
 
-        let account_usage = Arc::new(AccountUsageService::new(repos.account_usage_repo));
+        let account_usage_service = Arc::new(AccountUsageService::new(repos.account_usage_repo));
+
+        let plan_service = Arc::new(PlanService::new(repos.plan_repo, config.plans.clone()));
+        plan_service.create_initial_plans().await?;
+
+        let token_service = Arc::new(TokenService::new(repos.token_repo));
+
+        let account_service = Arc::new(AccountService::new(
+            repos.account_repo.clone(),
+            plan_service.clone(),
+            token_service.clone(),
+            config.accounts.clone(),
+        ));
+        account_service.create_initial_accounts().await?;
+
+        let application_service = Arc::new(ApplicationService::new(repos.application_repo.clone()));
+
+        let environment_service = Arc::new(EnvironmentService::new(repos.environment_repo.clone()));
 
         let component_service = Arc::new(ComponentService::new(
             repos.component_repo,
             component_object_store,
-            component_compilation,
+            component_compilation_service,
             initial_component_files,
             plugin_wasm_files,
-            account_usage,
+            account_usage_service,
+            environment_service.clone(),
+            application_service.clone(),
         ));
 
-        Ok(Services { component_service })
+        Ok(Self {
+            account_service,
+            application_service,
+            component_service,
+            environment_service,
+            token_service,
+        })
     }
 }
 
 async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
+    let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
+
     match db_config {
         DbConfig::Postgres(postgres_config) => {
-            let db_pool = PostgresPool::configured(postgres_config).await?;
+            db::postgres::migrate(postgres_config, migrations.postgres_migrations())
+                .await
+                .context("Postgres DB migration")?;
+
+            let db_pool: PostgresPool = PostgresPool::configured(postgres_config).await?;
+
+            let account_repo = Arc::new(DbAccountRepo::logged(db_pool.clone()));
+            let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool.clone()));
+            let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
-            let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool));
+            let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
+            let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
+            let token_repo = Arc::new(DbTokenRepo::logged(db_pool));
+
             Ok(Repos {
-                component_repo,
+                account_repo,
                 account_usage_repo,
+                application_repo,
+                component_repo,
+                environment_repo,
+                plan_repo,
+                token_repo,
             })
         }
-        DbConfig::Sqlite(db_config) => {
-            let db_pool = SqlitePool::configured(db_config).await?;
+        DbConfig::Sqlite(sqlite_config) => {
+            db::sqlite::migrate(sqlite_config, migrations.postgres_migrations())
+                .await
+                .context("Postgres DB migration")?;
+
+            let db_pool = SqlitePool::configured(sqlite_config).await?;
+
+            let account_repo = Arc::new(DbAccountRepo::logged(db_pool.clone()));
+            let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool.clone()));
+            let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
-            let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool));
+            let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
+            let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
+            let token_repo = Arc::new(DbTokenRepo::logged(db_pool));
+
             Ok(Repos {
-                component_repo,
+                account_repo,
                 account_usage_repo,
+                application_repo,
+                component_repo,
+                environment_repo,
+                plan_repo,
+                token_repo,
             })
         }
     }

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
+use golem_common::{SafeDisplay, error_forwarders};
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
@@ -30,12 +30,6 @@ pub enum AccountUsageError {
     InternalError(#[from] anyhow::Error),
 }
 
-impl From<RepoError> for AccountUsageError {
-    fn from(value: RepoError) -> Self {
-        Self::InternalError(anyhow::Error::new(value).context("from RepoError"))
-    }
-}
-
 impl SafeDisplay for AccountUsageError {
     fn to_safe_string(&self) -> String {
         match self {
@@ -45,3 +39,5 @@ impl SafeDisplay for AccountUsageError {
         }
     }
 }
+
+error_forwarders!(AccountUsageError, RepoError);

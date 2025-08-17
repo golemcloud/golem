@@ -27,7 +27,11 @@ use tracing::Instrument;
 
 pub struct CertificatesApi {}
 
-#[OpenApi(prefix_path = "/v1/certificates", tag = ApiTags::ApiCertificate)]
+#[OpenApi(
+    prefix_path = "/v1/certificates",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::ApiCertificate
+)]
 impl CertificatesApi {
     /// Get a certificate by id
     #[oai(
