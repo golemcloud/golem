@@ -23,6 +23,7 @@ pub mod base64;
 pub mod certificate;
 pub mod component;
 pub mod component_constraint;
+#[cfg(feature = "tokio")]
 pub mod component_metadata;
 pub mod deployment;
 pub mod diff;

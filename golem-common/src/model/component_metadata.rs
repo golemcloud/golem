@@ -33,12 +33,8 @@ use golem_wasm_ast::{
     IgnoreAllButMetadata,
 };
 use heck::ToKebabCase;
-use poem_openapi::registry::{MetaSchemaRef, Registry};
-use poem_openapi::types::ParseResult;
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 use serde::{Deserialize, Serialize, Serializer};
-use serde_json::Value;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
@@ -222,15 +218,15 @@ impl poem_openapi::types::Type for ComponentMetadata {
     type RawElementValueType =
         <ComponentMetadataInnerData as poem_openapi::types::Type>::RawElementValueType;
 
-    fn name() -> Cow<'static, str> {
+    fn name() -> std::borrow::Cow<'static, str> {
         <ComponentMetadataInnerData as poem_openapi::types::Type>::name()
     }
 
-    fn schema_ref() -> MetaSchemaRef {
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
         <ComponentMetadataInnerData as poem_openapi::types::Type>::schema_ref()
     }
 
-    fn register(registry: &mut Registry) {
+    fn register(registry: &mut poem_openapi::registry::Registry) {
         <ComponentMetadataInnerData as poem_openapi::types::Type>::register(registry);
     }
 
@@ -250,7 +246,7 @@ impl poem_openapi::types::IsObjectType for ComponentMetadata {}
 
 #[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromJSON for ComponentMetadata {
-    fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
             ComponentMetadataInnerData::parse_from_json(value).map_err(|err| err.propagate())?;
         Ok(Self {
@@ -262,14 +258,14 @@ impl poem_openapi::types::ParseFromJSON for ComponentMetadata {
 
 #[cfg(feature = "poem")]
 impl poem_openapi::types::ToJSON for ComponentMetadata {
-    fn to_json(&self) -> Option<Value> {
+    fn to_json(&self) -> Option<serde_json::Value> {
         self.data.to_json()
     }
 }
 
 #[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromXML for ComponentMetadata {
-    fn parse_from_xml(value: Option<Value>) -> ParseResult<Self> {
+    fn parse_from_xml(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
             ComponentMetadataInnerData::parse_from_xml(value).map_err(|err| err.propagate())?;
         Ok(Self {
@@ -281,14 +277,14 @@ impl poem_openapi::types::ParseFromXML for ComponentMetadata {
 
 #[cfg(feature = "poem")]
 impl poem_openapi::types::ToXML for ComponentMetadata {
-    fn to_xml(&self) -> Option<Value> {
+    fn to_xml(&self) -> Option<serde_json::Value> {
         self.data.to_xml()
     }
 }
 
 #[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
-    fn parse_from_yaml(value: Option<Value>) -> ParseResult<Self> {
+    fn parse_from_yaml(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
             ComponentMetadataInnerData::parse_from_yaml(value).map_err(|err| err.propagate())?;
         Ok(Self {
@@ -300,7 +296,7 @@ impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
 
 #[cfg(feature = "poem")]
 impl poem_openapi::types::ToYAML for ComponentMetadata {
-    fn to_yaml(&self) -> Option<Value> {
+    fn to_yaml(&self) -> Option<serde_json::Value> {
         self.data.to_yaml()
     }
 }
