@@ -25,7 +25,9 @@ use golem_cli::wasm_rpc_stubgen::wit_generate::{
     add_client_as_dependency_to_wit_dir, AddClientAsDepConfig, UpdateCargoToml,
 };
 use golem_cli::wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
-use golem_cli::wasm_rpc_stubgen::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
+use golem_cli::wasm_rpc_stubgen::{
+    GOLEM_RPC_WIT, GOLEM_RPC_WIT_VERSION, WASI_CLOCKS_WIT, WASI_IO_WIT, WASI_WIT_VERSION,
+};
 use itertools::Itertools;
 use semver::Version;
 use std::path::{Path, PathBuf};
@@ -733,9 +735,9 @@ fn assert_has_package_by_name(package_name: &PackageName, wit_source: impl WitSo
 
 fn assert_has_wasm_rpc_wit_deps(wit_dir: &Path) {
     let deps: Vec<(&str, &[(&str, &str)])> = vec![
-        ("wasi:io", WASI_IO),
-        ("wasi:clocks", WASI_CLOCKS),
-        ("wasm-rpc", &[("wasm-rpc.wit", WASM_RPC_WIT)]),
+        ("wasi:io", WASI_IO_WIT),
+        ("wasi:clocks", WASI_CLOCKS_WIT),
+        ("wasm-rpc", &[("wasm-rpc.wit", GOLEM_RPC_WIT)]),
     ];
 
     assert_has_same_wit_package(
