@@ -20,7 +20,7 @@
 
 use golem_common::api::component::{
     CreateAppPluginRequestMetadata, CreateComponentRequestMetadata,
-    CreateLibraryPluginRequestMetadata, UpdateComponentRequestComponentMetadata,
+    CreateLibraryPluginRequestMetadata, UpdateComponentRequestMetadata,
 };
 use golem_common::model::Empty;
 use golem_common::model::auth::TokenWithSecret;
@@ -77,7 +77,7 @@ pub struct CreateComponentRequest {
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 pub struct UpdateComponentRequest {
-    pub metadata: JsonField<UpdateComponentRequestComponentMetadata>,
+    pub metadata: JsonField<UpdateComponentRequestMetadata>,
     pub new_component_wasm: Option<Upload>,
     pub new_files: Option<TempFileUpload>,
 }
