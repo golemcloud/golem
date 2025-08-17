@@ -322,17 +322,7 @@ impl ComponentRevisionRecord {
             audit: DeletableRevisionAuditFields::deletion(created_by),
             component_type: 0,
             size: 0,
-            metadata: ComponentMetadata {
-                exports: vec![],
-                producers: vec![],
-                memories: vec![],
-                binary_wit: Default::default(),
-                root_package_name: None,
-                root_package_version: None,
-                dynamic_linking: Default::default(),
-                agent_types: Default::default(),
-            }
-            .into(),
+            metadata: ComponentMetadata::default().into(),
             env: Default::default(),
             original_env: Default::default(),
             object_store_key: "".to_string(),
@@ -358,7 +348,7 @@ impl ComponentRevisionRecord {
                     .collect(),
                 dynamic_linking_wasm_rpc: self
                     .metadata
-                    .dynamic_linking
+                    .dynamic_linking()
                     .iter()
                     .map(|(name, link)| match link {
                         DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc { targets }) => (
@@ -426,7 +416,7 @@ impl ComponentRevisionRecord {
             revision_id: 0,
             version: value
                 .metadata
-                .root_package_version
+                .root_package_version()
                 .clone()
                 .unwrap_or_default(),
             component_type: value.component_type as i32,

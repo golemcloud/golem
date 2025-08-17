@@ -56,11 +56,11 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_api_grpc::proto::golem::worker::worker_filter::Filter;
 use golem_api_grpc::proto::golem::worker::{
     file_system_node, update_record, Cursor, DirectoryFileSystemNode, FailedUpdate,
-    FileFileSystemNode, FileSystemNode, IdempotencyKey, IndexedResourceMetadata, InvocationContext,
-    InvokeParameters, InvokeResult, InvokeResultTyped, LogEvent, OplogCursor, OplogEntry,
-    OplogEntryWithIndex, PendingUpdate, ResourceMetadata, SuccessfulUpdate, TargetWorkerId,
-    UpdateMode, UpdateRecord, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerMetadata,
-    WorkerNameFilter, WorkerStatusFilter, WorkerVersionFilter, WorkerWasiConfigVarsFilter,
+    FileFileSystemNode, FileSystemNode, IdempotencyKey, InvocationContext, InvokeParameters,
+    InvokeResult, InvokeResultTyped, LogEvent, OplogCursor, OplogEntry, OplogEntryWithIndex,
+    PendingUpdate, SuccessfulUpdate, TargetWorkerId, UpdateMode, UpdateRecord,
+    WorkerCreatedAtFilter, WorkerEnvFilter, WorkerMetadata, WorkerNameFilter, WorkerStatusFilter,
+    WorkerVersionFilter, WorkerWasiConfigVarsFilter,
 };
 use golem_client::api::ApiDefinitionClient as ApiDefinitionServiceHttpClient;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionServiceHttpClientLive;
@@ -1439,6 +1439,44 @@ async fn env_vars(
 fn http_worker_metadata_to_grpc(
     worker_metadata: golem_client::model::WorkerMetadata,
 ) -> WorkerMetadata {
+    let mut owned_resources = Vec::new();
+    for instance in worker_metadata.exported_resource_instances {
+        owned_resources.push(
+            golem_api_grpc::proto::golem::worker::ResourceDescription {
+                description: Some(
+                    golem_api_grpc::proto::golem::worker::resource_description::Description::ExportedResourceInstance(
+                        golem_api_grpc::proto::golem::worker::ExportedResourceInstanceDescription {
+                            resource_id: instance.key.resource_id.0,
+                            resource_name: instance.description.resource_name,
+                            resource_owner: instance.description.resource_owner,
+                            created_at: Some(instance.description.created_at.into()),
+                            is_indexed: instance.description.resource_params.is_some(),
+                            resource_params: instance.description.resource_params.unwrap_or_default(),
+                        },
+                    ),
+                ),
+            },
+        );
+    }
+    for instance in worker_metadata.agent_instances {
+        owned_resources.push(
+            golem_api_grpc::proto::golem::worker::ResourceDescription {
+                description: Some(
+                    golem_api_grpc::proto::golem::worker::resource_description::Description::AgentInstance(
+                        golem_api_grpc::proto::golem::worker::AgentInstanceDescription {
+                            agent_type: instance.key.agent_type,
+                            agent_id: instance.key.agent_id,
+                            created_at: Some(instance.description.created_at.into()),
+                            agent_parameters: Some(instance
+                                .description
+                                .agent_parameters
+                                .into()),
+                        },
+                    ),
+                ),
+            },
+        );
+    }
     WorkerMetadata {
         worker_id: Some(worker_metadata.worker_id.into()),
         created_by: Some(AccountId {
@@ -1493,22 +1531,7 @@ fn http_worker_metadata_to_grpc(
         last_error: worker_metadata.last_error,
         component_size: worker_metadata.component_size,
         total_linear_memory_size: worker_metadata.total_linear_memory_size,
-        owned_resources: worker_metadata
-            .owned_resources
-            .into_iter()
-            .map(|(k, v)| {
-                (
-                    k.parse().unwrap(),
-                    ResourceMetadata {
-                        created_at: Some(SystemTime::from(v.created_at).into()),
-                        indexed: v.indexed.map(|indexed| IndexedResourceMetadata {
-                            resource_name: indexed.resource_name,
-                            resource_params: indexed.resource_params,
-                        }),
-                    },
-                )
-            })
-            .collect(),
+        owned_resources,
         active_plugins: worker_metadata
             .active_plugins
             .into_iter()

@@ -2566,6 +2566,7 @@ mod internal {
                     resource_id: AnalysedResourceId(0),
                     mode: AnalysedResourceMode::Owned,
                     name: None,
+                    owner: None,
                 });
 
                 let value_and_type = ValueAndType::new(handle, handle_type);

@@ -22,7 +22,6 @@ use golem_common::model::component_metadata::{
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_wasm_ast::analysis::AnalysedType;
-use poem_openapi::Object;
 use rib::FunctionName;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
@@ -125,8 +124,7 @@ pub struct FinalizedComponentRevision {
     pub component_size: u64,
 }
 
-#[derive(Debug, Clone, Object)]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct Component {
     pub environment_id: EnvironmentId,
     pub versioned_component_id: VersionedComponentId,
@@ -142,13 +140,9 @@ pub struct Component {
     /// Hash of the wasm before any transformations
     pub wasm_hash: golem_common::model::diff::Hash,
 
-    #[oai(skip)]
     pub original_files: Vec<InitialComponentFile>,
-    #[oai(skip)]
     pub original_env: BTreeMap<String, String>,
-    #[oai(skip)]
     pub object_store_key: String,
-    #[oai(skip)]
     pub transformed_object_store_key: String,
 }
 
@@ -167,8 +161,26 @@ impl Component {
             object_store_key: self.object_store_key,
             installed_plugins: self.installed_plugins,
 
-            agent_types: self.metadata.agent_types,
-            dynamic_linking: self.metadata.dynamic_linking,
+            agent_types: self.metadata.agent_types().to_vec(),
+            dynamic_linking: self.metadata.dynamic_linking().clone(),
+        }
+    }
+}
+
+impl From<Component> for golem_common::model::component::Component {
+    fn from(value: Component) -> Self {
+        Self {
+            environment_id: value.environment_id,
+            versioned_component_id: value.versioned_component_id,
+            component_name: value.component_name,
+            component_size: value.component_size,
+            metadata: value.metadata,
+            created_at: value.created_at,
+            component_type: value.component_type,
+            files: value.files,
+            installed_plugins: value.installed_plugins,
+            env: value.env,
+            wasm_hash: value.wasm_hash,
         }
     }
 }

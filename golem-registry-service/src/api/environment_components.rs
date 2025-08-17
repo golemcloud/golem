@@ -14,11 +14,11 @@
 
 use super::ApiResult;
 use super::model::CreateComponentRequest;
-use crate::model::component::Component;
 use crate::services::component::ComponentService;
 use golem_common::api::Page;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
+use golem_common::model::component::Component;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::ComponentType;
 use golem_common::model::deployment::DeploymentRevisionId;
@@ -91,7 +91,7 @@ impl EnvironmentComponentsApi {
 
         let metadata = payload.metadata.0;
 
-        let response = self
+        let component: Component = self
             .component_service
             .create(
                 &environment_id,
@@ -105,9 +105,10 @@ impl EnvironmentComponentsApi {
                 metadata.agent_types.unwrap_or_default(),
                 &account_id,
             )
-            .await?;
+            .await?
+            .into();
 
-        Ok(Json(response))
+        Ok(Json(component))
     }
 
     /// Get all components in the environment
@@ -141,10 +142,13 @@ impl EnvironmentComponentsApi {
         environment_id: EnvironmentId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<Component>>> {
-        let components = self
+        let components: Vec<Component> = self
             .component_service
             .list_staged_components(&environment_id)
-            .await?;
+            .await?
+            .into_iter()
+            .map(Component::from)
+            .collect();
 
         Ok(Json(Page { values: components }))
     }
@@ -183,10 +187,11 @@ impl EnvironmentComponentsApi {
         component_name: ComponentName,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        let component = self
+        let component: Component = self
             .component_service
             .get_staged_component(environment_id, component_name)
-            .await?;
+            .await?
+            .into();
 
         Ok(Json(component))
     }
@@ -226,10 +231,13 @@ impl EnvironmentComponentsApi {
         deployment_revision_id: DeploymentRevisionId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<Component>>> {
-        let components = self
+        let components: Vec<Component> = self
             .component_service
             .list_deployed_components(&environment_id, deployment_revision_id)
-            .await?;
+            .await?
+            .into_iter()
+            .map(Component::from)
+            .collect();
 
         Ok(Json(Page { values: components }))
     }
@@ -277,10 +285,12 @@ impl EnvironmentComponentsApi {
         component_name: ComponentName,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        let component = self
+        let component: Component = self
             .component_service
             .get_deployed_component(environment_id, deployment_revision_id, component_name)
-            .await?;
+            .await?
+            .into();
+
         Ok(Json(component))
     }
 }

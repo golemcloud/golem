@@ -71,6 +71,7 @@ interface types {
 
   record named-wit-type-node {
     name: option<string>,
+    owner: option<string>,
     %type: wit-type-node
   }
 

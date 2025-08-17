@@ -23,11 +23,11 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
-use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
-    StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerResourceDescription, WorkerStatus,
+    ComponentId, ComponentType, ExportedResourceInstanceDescription, FilterComparator,
+    IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, TargetWorkerId, Timestamp,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
@@ -2721,25 +2721,21 @@ async fn counter_resource_test_1(
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| {
-            (
-                *k,
-                WorkerResourceDescription {
-                    created_at: ts,
-                    ..v.clone()
-                },
-            )
-        })
+        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
         .collect::<Vec<_>>();
-    resources1.sort_by_key(|(k, _v)| *k);
+    resources1.sort_by_key(|(k, _v)| k.clone());
     check!(
         resources1
             == vec![(
-                WorkerResourceId(0),
-                WorkerResourceDescription {
-                    created_at: ts,
-                    indexed_resource_key: None
-                }
+                "resource(0)".to_string(),
+                WorkerResourceDescription::ExportedResourceInstance(
+                    ExportedResourceInstanceDescription {
+                        created_at: ts,
+                        resource_owner: "rpc:counters-exports/api".to_string(),
+                        resource_name: "counter".to_string(),
+                        resource_params: None
+                    }
+                )
             ),]
     );
 
@@ -2747,15 +2743,7 @@ async fn counter_resource_test_1(
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| {
-            (
-                *k,
-                WorkerResourceDescription {
-                    created_at: ts,
-                    ..v.clone()
-                },
-            )
-        })
+        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
         .collect::<Vec<_>>();
     check!(resources2 == vec![]);
 
@@ -2860,56 +2848,42 @@ async fn counter_resource_test_2(
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| {
-            (
-                *k,
-                WorkerResourceDescription {
-                    created_at: ts,
-                    ..v.clone()
-                },
-            )
-        })
+        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
         .collect::<Vec<_>>();
-    resources1.sort_by_key(|(k, _v)| *k);
-    check!(
-        resources1
-            == vec![
-                (
-                    WorkerResourceId(0),
-                    WorkerResourceDescription {
+    resources1.sort_by_key(|(k, _v)| k.clone());
+    assert_eq!(
+        resources1,
+        vec![
+            (
+                "resource(0)".to_string(),
+                WorkerResourceDescription::ExportedResourceInstance(
+                    ExportedResourceInstanceDescription {
                         created_at: ts,
-                        indexed_resource_key: Some(IndexedResourceKey {
-                            resource_name: "counter".to_string(),
-                            resource_params: vec!["\"counter1\"".to_string()]
-                        })
-                    }
-                ),
-                (
-                    WorkerResourceId(1),
-                    WorkerResourceDescription {
-                        created_at: ts,
-                        indexed_resource_key: Some(IndexedResourceKey {
-                            resource_name: "counter".to_string(),
-                            resource_params: vec!["\"counter2\"".to_string()]
-                        })
+                        resource_owner: "rpc:counters-exports/api".to_string(),
+                        resource_name: "counter".to_string(),
+                        resource_params: Some(vec!["\"counter1\"".to_string()])
                     }
                 )
-            ]
+            ),
+            (
+                "resource(1)".to_string(),
+                WorkerResourceDescription::ExportedResourceInstance(
+                    ExportedResourceInstanceDescription {
+                        created_at: ts,
+                        resource_owner: "rpc:counters-exports/api".to_string(),
+                        resource_name: "counter".to_string(),
+                        resource_params: Some(vec!["\"counter2\"".to_string()])
+                    }
+                )
+            )
+        ]
     );
 
     let resources2 = metadata2
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| {
-            (
-                *k,
-                WorkerResourceDescription {
-                    created_at: ts,
-                    ..v.clone()
-                },
-            )
-        })
+        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
         .collect::<Vec<_>>();
 
     check!(resources2 == vec![]);

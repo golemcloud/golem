@@ -5,10 +5,12 @@ package golem.worker;
 import "golem/common/account_id.proto";
 import "golem/common/project_id.proto";
 import "golem/common/plugin_installation_id.proto";
+import "golem/component/agent.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";
 import "golem/worker/wasi_config_vars.proto";
 import "google/protobuf/timestamp.proto";
+import "wasm/rpc/value_and_type.proto";
 
 message WorkerMetadata {
   WorkerId worker_id = 1;
@@ -24,7 +26,7 @@ message WorkerMetadata {
   optional string last_error = 11;
   uint64 component_size = 12;
   uint64 total_linear_memory_size = 13;
-  map<uint64, ResourceMetadata> owned_resources = 14;
+  repeated ResourceDescription owned_resources = 14;
   repeated golem.common.PluginInstallationId active_plugins = 15;
   repeated OplogRegion skipped_regions = 16;
   repeated OplogRegion deleted_regions = 17;
@@ -52,14 +54,33 @@ message FailedUpdate {
 message SuccessfulUpdate {
 }
 
-message ResourceMetadata {
+message ExportedResourceInstanceDescription {
   google.protobuf.Timestamp created_at = 1;
-  optional IndexedResourceMetadata indexed = 2;
+  uint64 resource_id = 2;
+  string resource_owner = 3;
+  string resource_name = 4;
+  bool is_indexed = 5;
+  repeated string resource_params = 6;
+}
+
+message AgentInstanceDescription {
+  google.protobuf.Timestamp created_at = 1;
+  string agent_type = 2;
+  string agent_id = 3;
+  golem.component.DataValue agent_parameters = 4;
+}
+
+message ResourceDescription {
+  oneof description {
+    ExportedResourceInstanceDescription exported_resource_instance = 1;
+    AgentInstanceDescription agent_instance = 2;
+  }
 }
 
 message IndexedResourceMetadata {
   string resource_name = 1;
   repeated string resource_params = 2;
+  string resource_owner = 3;
 }
 
 message OplogRegion {

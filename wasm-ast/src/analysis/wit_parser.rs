@@ -209,10 +209,9 @@ impl GetResourceId for WitAnalysisContext {
         let mut resource_ids = self.resource_ids.borrow_mut();
 
         Some(
-            resource_ids
+            *resource_ids
                 .entry(type_id)
-                .or_insert_with(|| AnalysedResourceId(new_unique_id))
-                .clone(),
+                .or_insert_with(|| AnalysedResourceId(new_unique_id)),
         )
     }
 }
@@ -266,7 +265,8 @@ impl ToAnalysedType for TypeDef {
                     })
                     .collect::<Result<_, _>>()?,
             )
-            .with_optional_name(self.name.clone())),
+            .with_optional_name(self.name.clone())
+            .with_optional_owner(get_owner_name(resolve, &self.owner))),
             TypeDefKind::Resource => {
                 Err("to_analysed_type not implemented for resource type".to_string())
             }
@@ -277,7 +277,10 @@ impl ToAnalysedType for TypeDef {
                         resource_id,
                         mode: AnalysedResourceMode::Owned,
                         name: self.name.clone(),
-                    })),
+                        owner: None,
+                    })
+                    .with_optional_name(get_type_name(resolve, type_id))
+                    .with_optional_owner(get_type_owner(resolve, type_id))),
                     None => Err("to_analysed_type not implemented for handle type".to_string()),
                 },
                 Handle::Borrow(type_id) => match resource_map.get_resource_id(*type_id) {
@@ -285,7 +288,10 @@ impl ToAnalysedType for TypeDef {
                         resource_id,
                         mode: AnalysedResourceMode::Borrowed,
                         name: self.name.clone(),
-                    })),
+                        owner: None,
+                    })
+                    .with_optional_name(get_type_name(resolve, type_id))
+                    .with_optional_owner(get_type_owner(resolve, type_id))),
                     None => Err("to_analysed_type not implemented for handle type".to_string()),
                 },
             },
@@ -296,7 +302,8 @@ impl ToAnalysedType for TypeDef {
                     .map(|flag| flag.name.as_str())
                     .collect::<Vec<_>>(),
             )
-            .with_optional_name(self.name.clone())),
+            .with_optional_name(self.name.clone())
+            .with_optional_owner(get_owner_name(resolve, &self.owner))),
             TypeDefKind::Tuple(tuple) => Ok(analysed_type::tuple(
                 tuple
                     .types
@@ -304,7 +311,8 @@ impl ToAnalysedType for TypeDef {
                     .map(|typ| typ.to_analysed_type(resolve, resource_map))
                     .collect::<Result<_, _>>()?,
             )
-            .with_optional_name(self.name.clone())),
+            .with_optional_name(self.name.clone())
+            .with_optional_owner(get_owner_name(resolve, &self.owner))),
             TypeDefKind::Variant(variant) => Ok(analysed_type::variant(
                 variant
                     .cases
@@ -320,7 +328,8 @@ impl ToAnalysedType for TypeDef {
                     })
                     .collect::<Result<_, _>>()?,
             )
-            .with_optional_name(self.name.clone())),
+            .with_optional_name(self.name.clone())
+            .with_optional_owner(get_owner_name(resolve, &self.owner))),
             TypeDefKind::Enum(enum_) => Ok(analysed_type::r#enum(
                 &enum_
                     .cases
@@ -328,31 +337,42 @@ impl ToAnalysedType for TypeDef {
                     .map(|case| case.name.as_str())
                     .collect::<Vec<_>>(),
             )
-            .with_optional_name(self.name.clone())),
+            .with_optional_name(self.name.clone())
+            .with_optional_owner(get_owner_name(resolve, &self.owner))),
             TypeDefKind::Option(inner) => Ok(analysed_type::option(
                 inner.to_analysed_type(resolve, resource_map)?,
             )
-            .with_optional_name(self.name.clone())),
+            .with_optional_name(self.name.clone())
+            .with_optional_owner(get_owner_name(resolve, &self.owner))),
             TypeDefKind::Result(result) => match (result.ok, result.err) {
                 (Some(ok), Some(err)) => Ok(analysed_type::result(
                     ok.to_analysed_type(resolve, resource_map)?,
                     err.to_analysed_type(resolve, resource_map)?,
                 )
-                .with_optional_name(self.name.clone())),
+                .with_optional_name(self.name.clone())
+                .with_optional_owner(get_owner_name(resolve, &self.owner))),
                 (Some(ok), None) => Ok(analysed_type::result_ok(
                     ok.to_analysed_type(resolve, resource_map)?,
                 )
-                .with_optional_name(self.name.clone())),
+                .with_optional_name(self.name.clone())
+                .with_optional_owner(get_owner_name(resolve, &self.owner))),
                 (None, Some(err)) => Ok(analysed_type::result_err(
                     err.to_analysed_type(resolve, resource_map)?,
                 )
-                .with_optional_name(self.name.clone())),
+                .with_optional_name(self.name.clone())
+                .with_optional_owner(get_owner_name(resolve, &self.owner))),
                 (None, None) => Err("result type with no ok or err case".to_string()),
             },
             TypeDefKind::List(ty) => Ok(analysed_type::list(
                 ty.to_analysed_type(resolve, resource_map)?,
             )
-            .with_optional_name(self.name.clone())),
+            .with_optional_name(self.name.clone())
+            .with_optional_owner(get_owner_name(resolve, &self.owner))),
+            TypeDefKind::FixedSizeList(ty, _) => Ok(analysed_type::list(
+                ty.to_analysed_type(resolve, resource_map)?,
+            )
+            .with_optional_name(self.name.clone())
+            .with_optional_owner(get_owner_name(resolve, &self.owner))),
             TypeDefKind::Future(_) => {
                 Err("to_analysed_type not implemented for future type".to_string())
             }
@@ -392,6 +412,56 @@ impl ToAnalysedType for Type {
                 .to_analysed_type(resolve, resource_map),
             Type::ErrorContext => Err("ErrorContext not supported".to_string()),
         }
+    }
+}
+
+fn follow_aliases(resolve: &Resolve, type_id: &TypeId) -> TypeId {
+    let mut current_id = *type_id;
+    while let Some(type_def) = resolve.types.get(current_id) {
+        if let TypeDefKind::Type(Type::Id(alias_type_id)) = &type_def.kind {
+            current_id = *alias_type_id;
+        } else {
+            break;
+        }
+    }
+    current_id
+}
+
+fn get_type_name(resolve: &Resolve, type_id: &TypeId) -> Option<String> {
+    resolve
+        .types
+        .get(follow_aliases(resolve, type_id))
+        .and_then(|type_def| type_def.name.clone())
+}
+
+fn get_type_owner(resolve: &Resolve, type_id: &TypeId) -> Option<String> {
+    resolve
+        .types
+        .get(follow_aliases(resolve, type_id))
+        .and_then(|type_def| get_owner_name(resolve, &type_def.owner))
+}
+
+fn get_owner_name(resolve: &Resolve, owner: &wit_parser::TypeOwner) -> Option<String> {
+    match owner {
+        wit_parser::TypeOwner::World(world_id) => resolve
+            .worlds
+            .get(*world_id)
+            .map(|world| world.name.clone()),
+        wit_parser::TypeOwner::Interface(iface_id) => resolve
+            .interfaces
+            .get(*iface_id)
+            .and_then(|iface| iface.name.clone().map(|name| (iface.package, name)))
+            .and_then(|(package_id, name)| {
+                if let Some(package_id) = package_id {
+                    resolve
+                        .packages
+                        .get(package_id)
+                        .map(|package| format!("{}/{}", package.name, name))
+                } else {
+                    Some(name)
+                }
+            }),
+        wit_parser::TypeOwner::None => None,
     }
 }
 

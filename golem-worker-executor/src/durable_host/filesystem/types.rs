@@ -84,7 +84,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     async fn get_flags(&mut self, fd: Resource<Descriptor>) -> Result<DescriptorFlags, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "get_flags");
 
-        let read_only = self.is_read_only(&fd)?;
+        let read_only = self.check_if_file_is_readonly(&fd)?;
         let wasi_view = &mut self.as_wasi_view();
         let mut descriptor_flags = HostDescriptor::get_flags(wasi_view, fd).await?;
 

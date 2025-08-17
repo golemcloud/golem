@@ -1198,6 +1198,13 @@ impl From<golem_api_1_x::host::WorkerPropertyFilter> for golem_common::model::Wo
                     filter.value.into(),
                 )
             }
+            golem_api_1_x::host::WorkerPropertyFilter::WasiConfigVars(filter) => {
+                golem_common::model::WorkerFilter::new_wasi_config_vars(
+                    filter.name,
+                    filter.comparator.into(),
+                    filter.value,
+                )
+            }
         }
     }
 }
@@ -1222,6 +1229,7 @@ impl From<golem_common::model::WorkerMetadata> for golem_api_1_x::host::WorkerMe
             worker_id: value.worker_id.into(),
             args: value.args,
             env: value.env,
+            wasi_config_vars: value.wasi_config_vars.into_iter().collect(),
             status: value.last_known_status.status.into(),
             component_version: value.last_known_status.component_version,
             retry_count: 0,

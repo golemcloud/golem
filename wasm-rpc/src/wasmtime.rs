@@ -43,12 +43,21 @@ impl Display for EncodingError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+pub struct ResourceTypeId {
+    /// Name of the WIT resource
+    pub name: String,
+    /// Owner of the resource, either an interface in a WIT package or a name of a world
+    pub owner: String,
+}
+
 #[async_trait]
 pub trait ResourceStore {
     fn self_uri(&self) -> Uri;
-    async fn add(&mut self, resource: ResourceAny) -> u64;
-    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny>;
-    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny>;
+    async fn add(&mut self, resource: ResourceAny, name: ResourceTypeId) -> u64;
+    async fn get(&mut self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)>;
+    async fn borrow(&self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)>;
 }
 
 pub struct DecodeParamResult {
@@ -436,7 +445,7 @@ async fn decode_param_impl(
                     let uri = Uri { value: uri.clone() };
                     if resource_store.self_uri() == uri {
                         match resource_store.get(*resource_id).await {
-                            Some(resource) => Ok(DecodeParamResult {
+                            Some((_, resource)) => Ok(DecodeParamResult {
                                 val: Val::Resource(resource),
                                 resources_to_drop: vec![resource],
                             }),
@@ -446,8 +455,8 @@ async fn decode_param_impl(
                         }
                     } else {
                         Err(EncodingError::ValueMismatch {
-                        details: format!("in {context} cannot resolve handle belonging to a different worker"),
-                    })
+                            details: format!("in {context} cannot resolve handle belonging to a different worker"),
+                        })
                     }
                 }
                 _ => Err(EncodingError::ParamTypeMismatch {
@@ -463,7 +472,9 @@ async fn decode_param_impl(
                 let uri = Uri { value: uri.clone() };
                 if resource_store.self_uri() == uri {
                     match resource_store.borrow(*resource_id).await {
-                        Some(resource) => Ok(DecodeParamResult::simple(Val::Resource(resource))),
+                        Some((_, resource)) => {
+                            Ok(DecodeParamResult::simple(Val::Resource(resource)))
+                        }
                         None => Err(EncodingError::ValueMismatch {
                             details: format!("in {context} resource not found"),
                         }),
@@ -491,6 +502,7 @@ async fn decode_param_impl(
 pub async fn encode_output(
     value: &Val,
     typ: &Type,
+    analysed_typ: &AnalysedType,
     resource_store: &mut (impl ResourceStore + Send),
 ) -> Result<Value, EncodingError> {
     match value {
@@ -510,9 +522,19 @@ pub async fn encode_output(
         Val::List(list) => {
             if let Type::List(list_type) = typ {
                 let mut encoded_values = Vec::new();
+                let inner_analysed_typ = if let AnalysedType::List(inner) = analysed_typ {
+                    Ok(&*inner.inner)
+                } else {
+                    Err(EncodingError::ValueMismatch {
+                        details: "Expected a List type for list value".to_string(),
+                    })
+                }?;
+
                 for value in (*list).iter() {
-                    encoded_values
-                        .push(encode_output(value, &list_type.ty(), resource_store).await?);
+                    encoded_values.push(
+                        encode_output(value, &list_type.ty(), inner_analysed_typ, resource_store)
+                            .await?,
+                    );
                 }
                 Ok(Value::List(encoded_values))
             } else {
@@ -524,8 +546,20 @@ pub async fn encode_output(
         Val::Record(record) => {
             if let Type::Record(record_type) = typ {
                 let mut encoded_values = Vec::new();
-                for ((_name, value), field) in record.iter().zip(record_type.fields()) {
-                    let field = encode_output(value, &field.ty, resource_store).await?;
+                for (idx, ((_name, value), field)) in
+                    record.iter().zip(record_type.fields()).enumerate()
+                {
+                    let field_analysed_type = if let AnalysedType::Record(inner) = analysed_typ {
+                        Ok(&inner.fields[idx].typ)
+                    } else {
+                        Err(EncodingError::ValueMismatch {
+                            details: "Expected a Record type for record value".to_string(),
+                        })
+                    }?;
+
+                    let field =
+                        encode_output(value, &field.ty, field_analysed_type, resource_store)
+                            .await?;
                     encoded_values.push(field);
                 }
                 Ok(Value::Record(encoded_values))
@@ -538,8 +572,16 @@ pub async fn encode_output(
         Val::Tuple(tuple) => {
             if let Type::Tuple(tuple_type) = typ {
                 let mut encoded_values = Vec::new();
-                for (v, t) in tuple.iter().zip(tuple_type.types()) {
-                    let value = encode_output(v, &t, resource_store).await?;
+                for (idx, (v, t)) in tuple.iter().zip(tuple_type.types()).enumerate() {
+                    let item_analysed_type = if let AnalysedType::Tuple(inner) = analysed_typ {
+                        Ok(&inner.items[idx])
+                    } else {
+                        Err(EncodingError::ValueMismatch {
+                            details: "Expected a Tuple type for tuple value".to_string(),
+                        })
+                    }?;
+
+                    let value = encode_output(v, &t, item_analysed_type, resource_store).await?;
                     encoded_values.push(value);
                 }
                 Ok(Value::Tuple(encoded_values))
@@ -551,10 +593,20 @@ pub async fn encode_output(
         }
         Val::Variant(name, value) => {
             if let Type::Variant(variant_type) = typ {
-                let (discriminant, case) = variant_type
+                let (discriminant, case, analysed_case_type) = variant_type
                     .cases()
                     .enumerate()
                     .find(|(_idx, case)| case.name == *name)
+                    .map(|(idx, case)| {
+                        if let AnalysedType::Variant(inner) = analysed_typ {
+                            Ok((idx, case, &inner.cases[idx].typ))
+                        } else {
+                            Err(EncodingError::ValueMismatch {
+                                details: "Expected a Variant type for variant value".to_string(),
+                            })
+                        }
+                    })
+                    .transpose()?
                     .ok_or(EncodingError::ValueMismatch {
                         details: format!("Could not find case for variant {name}"),
                     })?;
@@ -566,6 +618,11 @@ pub async fn encode_output(
                             &case.ty.ok_or(EncodingError::ValueMismatch {
                                 details: "Could not get type information for case".to_string(),
                             })?,
+                            analysed_case_type
+                                .as_ref()
+                                .ok_or(EncodingError::ValueMismatch {
+                                    details: "Could not get type information for case".to_string(),
+                                })?,
                             resource_store,
                         )
                         .await?,
@@ -602,8 +659,21 @@ pub async fn encode_output(
         Val::Option(option) => match option {
             Some(value) => {
                 if let Type::Option(option_type) = typ {
-                    let encoded_output =
-                        encode_output(value, &option_type.ty(), resource_store).await?;
+                    let analysed_inner_type = if let AnalysedType::Option(inner) = analysed_typ {
+                        Ok(&*inner.inner)
+                    } else {
+                        Err(EncodingError::ValueMismatch {
+                            details: "Expected an Option type for option value".to_string(),
+                        })
+                    }?;
+
+                    let encoded_output = encode_output(
+                        value,
+                        &option_type.ty(),
+                        analysed_inner_type,
+                        resource_store,
+                    )
+                    .await?;
                     Ok(Value::Option(Some(Box::new(encoded_output))))
                 } else {
                     Err(EncodingError::ValueMismatch {
@@ -623,7 +693,22 @@ pub async fn encode_output(
                                     details: "Could not get ok type for result".to_string(),
                                 })?;
 
-                                Some(encode_output(v, &t, resource_store).await?)
+                                let analysed_ok_type =
+                                    if let AnalysedType::Result(inner) = analysed_typ {
+                                        Ok(inner.ok.as_ref().ok_or_else(|| {
+                                            EncodingError::ValueMismatch {
+                                                details: "Expected a Result type for result value"
+                                                    .to_string(),
+                                            }
+                                        })?)
+                                    } else {
+                                        Err(EncodingError::ValueMismatch {
+                                            details: "Expected a Result type for result value"
+                                                .to_string(),
+                                        })
+                                    }?;
+
+                                Some(encode_output(v, &t, analysed_ok_type, resource_store).await?)
                             }
                             None => None,
                         };
@@ -635,7 +720,23 @@ pub async fn encode_output(
                                 let t = result_type.err().ok_or(EncodingError::ValueMismatch {
                                     details: "Could not get error type for result".to_string(),
                                 })?;
-                                Some(encode_output(v, &t, resource_store).await?)
+
+                                let analysed_err_type =
+                                    if let AnalysedType::Result(inner) = analysed_typ {
+                                        Ok(inner.err.as_ref().ok_or_else(|| {
+                                            EncodingError::ValueMismatch {
+                                                details: "Expected a Result type for result value"
+                                                    .to_string(),
+                                            }
+                                        })?)
+                                    } else {
+                                        Err(EncodingError::ValueMismatch {
+                                            details: "Expected a Result type for result value"
+                                                .to_string(),
+                                        })
+                                    }?;
+
+                                Some(encode_output(v, &t, analysed_err_type, resource_store).await?)
                             }
                             None => None,
                         };
@@ -666,7 +767,19 @@ pub async fn encode_output(
             }
         }
         Val::Resource(resource) => {
-            let id = resource_store.add(*resource).await;
+            let type_id = analysed_typ
+                .name()
+                .and_then(|name| {
+                    analysed_typ.owner().map(|owner| ResourceTypeId {
+                        name: name.to_string(),
+                        owner: owner.to_string(),
+                    })
+                })
+                .ok_or_else(|| EncodingError::ValueMismatch {
+                    details: "Resource type information is missing for resource value".to_string(),
+                })?;
+
+            let id = resource_store.add(*resource, type_id).await;
             Ok(Value::Handle {
                 uri: resource_store.self_uri().value,
                 resource_id: id,
@@ -736,6 +849,7 @@ pub fn type_to_analysed_type(typ: &Type) -> Result<AnalysedType, String> {
                 ok,
                 err,
                 name: None,
+                owner: None,
             }))
         }
         Type::Flags(wflags) => Ok(flags(&wflags.names().collect::<Vec<_>>())),

@@ -14,7 +14,7 @@ strip = true
 
 [dependencies]
 bytes = "1.6.0"
-golem-rust = { git = "https://github.com/golemcloud/golem-rust", branch = "wit-bindgen", features = ["default", "export_load_snapshot", "export_save_snapshot"] }
+golem-rust = { git = "https://github.com/golemcloud/golem-rust", branch = "type-owner", features = ["default", "export_load_snapshot", "export_save_snapshot"] }
 wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 
 [package.metadata.component.target]

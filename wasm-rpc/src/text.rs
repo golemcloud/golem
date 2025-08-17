@@ -28,7 +28,12 @@ pub fn parse_value_and_type(
 }
 
 pub fn print_value_and_type(value: &ValueAndType) -> Result<String, String> {
-    to_string(value).map_err(|err| err.to_string())
+    println!("[print_value_and_type] value: {value:?}");
+    if value.typ.contains_handle() {
+        Err("Cannot print handle type".to_string())
+    } else {
+        to_string(value).map_err(|err| err.to_string())
+    }
 }
 
 impl WasmValue for ValueAndType {

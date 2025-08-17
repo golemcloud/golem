@@ -258,8 +258,8 @@ impl ComponentService {
             env.unwrap_or(component.env),
             wasm_hash,
             wasm_object_store_key,
-            dynamic_linking.unwrap_or(component.metadata.dynamic_linking),
-            agent_types.unwrap_or(component.metadata.agent_types),
+            dynamic_linking.unwrap_or(component.metadata.dynamic_linking().clone()),
+            agent_types.unwrap_or(component.metadata.agent_types().to_vec()),
         );
 
         let finalized_revision = self
@@ -1068,8 +1068,8 @@ impl ComponentService {
         let finalized_revision = new_revision
             .with_transformed_component(transformed_object_store_key, &transformed_data)?;
 
-        if let Some(known_root_package_name) = &finalized_revision.metadata.root_package_name
-            && &finalized_revision.component_name.0 != known_root_package_name
+        if let Some(known_root_package_name) = &finalized_revision.metadata.root_package_name()
+            && finalized_revision.component_name.0 != *known_root_package_name
         {
             Err(ComponentError::InvalidComponentName {
                 actual: finalized_revision.component_name.0.clone(),
@@ -1079,8 +1079,8 @@ impl ComponentService {
 
         debug!(
             environment_id = %environment_id,
-            exports = ?finalized_revision.metadata.exports,
-            dynamic_linking = ?finalized_revision.metadata.dynamic_linking,
+            exports = ?finalized_revision.metadata.exports(),
+            dynamic_linking = ?finalized_revision.metadata.dynamic_linking(),
             "Finalized component",
         );
 
