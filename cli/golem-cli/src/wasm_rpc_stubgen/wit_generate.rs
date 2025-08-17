@@ -23,7 +23,7 @@ use crate::wasm_rpc_stubgen::stub::{
 };
 use crate::wasm_rpc_stubgen::wit_encode::EncodedWitDir;
 use crate::wasm_rpc_stubgen::wit_resolve::{ResolvedWitDir, WitDepsResolver};
-use crate::wasm_rpc_stubgen::{cargo, naming};
+use crate::wasm_rpc_stubgen::{cargo, naming, GOLEM_RPC_WIT, WASI_CLOCKS_WIT, WASI_IO_WIT};
 use crate::wasm_rpc_stubgen::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
 use anyhow::{anyhow, bail, Context};
 use itertools::Itertools;
@@ -375,44 +375,16 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
     if !contains_golem_rpc {
         write_embedded_source(
             &target_deps.join("golem-rpc"),
-            &[(
-                "wasm-rpc.wit",
-                include_str!("../../wit/deps/golem-rpc/wasm-rpc.wit"),
-            )],
+            &[("wasm-rpc.wit", GOLEM_RPC_WIT)],
         )?;
     }
 
     if !contains_wasi_io {
-        write_embedded_source(
-            &target_deps.join("io"),
-            &[
-                ("error.wit", include_str!("../../wit/deps/io/error.wit")),
-                ("poll.wit", include_str!("../../wit/deps/io/poll.wit")),
-                ("streams.wit", include_str!("../../wit/deps/io/streams.wit")),
-                ("world.wit", include_str!("../../wit/deps/io/world.wit")),
-            ],
-        )?;
+        write_embedded_source(&target_deps.join("io"), WASI_IO_WIT)?;
     }
 
     if !contains_wasi_clocks {
-        write_embedded_source(
-            &target_deps.join("clocks"),
-            &[
-                (
-                    "wall-clock.wit",
-                    include_str!("../../wit/deps/clocks/wall-clock.wit"),
-                ),
-                (
-                    "monotonic-clock.wit",
-                    include_str!("../../wit/deps/clocks/monotonic-clock.wit"),
-                ),
-                (
-                    "timezone.wit",
-                    include_str!("../../wit/deps/clocks/timezone.wit"),
-                ),
-                ("world.wit", include_str!("../../wit/deps/clocks/world.wit")),
-            ],
-        )?;
+        write_embedded_source(&target_deps.join("clocks"), WASI_CLOCKS_WIT)?;
     }
 
     Ok(())

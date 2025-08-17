@@ -26,7 +26,6 @@ use golem_cli::wasm_rpc_stubgen::wit_generate::{
 };
 use golem_cli::wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
 use golem_cli::wasm_rpc_stubgen::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
-use golem_wit::{WASI_CLOCKS, WASI_IO, WASM_RPC_WIT};
 use itertools::Itertools;
 use semver::Version;
 use std::path::{Path, PathBuf};
