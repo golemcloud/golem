@@ -44,6 +44,8 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
       - name: Building all executables
         env:
           QUIET: true
@@ -81,6 +83,8 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
       - name: Unit tests
         run: cargo make --profile ci unit-tests
       - name: Publish Test Report
@@ -136,6 +140,8 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
         timeout-minutes: 40
@@ -237,6 +243,8 @@ jobs:
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> $GITHUB_PATH
 
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true
@@ -277,6 +285,8 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
       - name: Prepare WIT dependencies
         run: cargo make wit
       - name: Build wasm-rpc in stub mode
@@ -330,6 +340,8 @@ jobs:
       - run: cargo install cross
         if: ${{ matrix.platform.cross }}
 
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
       - name: Build executables
         run: cargo make --profile ci build-release
         env:
@@ -541,6 +553,8 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - id: get_version
         uses: battila7/get-version-action@v2
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
       - name: Publish all packages
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -606,6 +620,8 @@ jobs:
         if: ${{ matrix.cfg.cross }}
       - uses: ilammy/setup-nasm@v1
 
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
       - run: cargo build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}
         if: ${{ ! matrix.cfg.cross }}
       - run: cross build -p ${{ matrix.project }} --release --target ${{ matrix.cfg.rust-target }}

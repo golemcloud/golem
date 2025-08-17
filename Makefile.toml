@@ -1043,3 +1043,21 @@ exec --fail-on-error npm run generate
 exec --fail-on-error npm run build
 cp dist/wrapper/target/wasm32-wasip1/release/golem_agent.wasm ../golem-templates/templates/ts/ts-app-common/wasm/golem_agent.wasm
 '''
+
+## Cleanup
+[tasks.clear-v8]
+description = "Removes the v8 crate from the target directories"
+script_runner = "@duckscript"
+script = '''
+handle = glob_array ./target/**/build/v8*
+
+for path in ${handle}
+    rm -r ${path}
+end
+
+handle = glob_array ./target/**/deps/libv8*
+
+for path in ${handle}
+    rm -r ${path}
+end
+'''
