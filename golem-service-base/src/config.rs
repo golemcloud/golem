@@ -205,7 +205,9 @@ impl<T: ConfigLoaderConfig> MergedConfigLoaderOrDumper<T> {
             },
             None => match config_loader.load_or_dump_config() {
                 Some(_) => {
-                    panic!("illegal state while loading, got config for '{name}', while expected dumping");
+                    panic!(
+                        "illegal state while loading, got config for '{name}', while expected dumping"
+                    );
                 }
                 None => None,
             },

@@ -14,11 +14,11 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
-use anyhow::{anyhow, Context, Error};
+use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::BoxStream;
 use futures::TryStreamExt;
+use futures::stream::BoxStream;
 use golem_common::model::Timestamp;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -189,10 +189,10 @@ impl BlobStorage for FileSystemBlobStorage {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        if let Some(parent) = full_path.parent() {
-            if async_fs::metadata(parent).await.is_err() {
-                async_fs::create_dir_all(parent).await?;
-            }
+        if let Some(parent) = full_path.parent()
+            && async_fs::metadata(parent).await.is_err()
+        {
+            async_fs::create_dir_all(parent).await?;
         }
 
         async_fs::write(&full_path, data).await?;
@@ -211,10 +211,10 @@ impl BlobStorage for FileSystemBlobStorage {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        if let Some(parent) = full_path.parent() {
-            if async_fs::metadata(parent).await.is_err() {
-                async_fs::create_dir_all(parent).await?;
-            }
+        if let Some(parent) = full_path.parent()
+            && async_fs::metadata(parent).await.is_err()
+        {
+            async_fs::create_dir_all(parent).await?;
         }
 
         let file = tokio::fs::File::create(&full_path).await?;

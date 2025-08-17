@@ -12,69 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction};
 
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite};
-
-fn instances(exports: &Vec<AnalysedExport>) -> Vec<AnalysedInstance> {
-    let mut instances = vec![];
-    for export in exports {
-        if let AnalysedExport::Instance(instance) = export {
-            instances.push(instance.clone())
-        }
-    }
-    instances
-}
-
-fn functions(exports: &Vec<AnalysedExport>) -> Vec<AnalysedFunction> {
-    let mut functions = vec![];
-    for export in exports {
-        if let AnalysedExport::Function(function) = export {
-            functions.push(function.clone())
-        }
-    }
-    functions
-}
-
-pub fn function_by_name(
-    exports: &Vec<AnalysedExport>,
-    name: &str,
-) -> Result<Option<AnalysedFunction>, String> {
-    let parsed = ParsedFunctionName::parse(name)?;
-
-    match &parsed.site().interface_name() {
-        None => Ok(functions(exports).iter().find(|f| f.name == *name).cloned()),
-        Some(interface_name) => {
-            let exported_function = instances(exports)
-                .iter()
-                .find(|instance| instance.name == *interface_name)
-                .and_then(|instance| {
-                    instance
-                        .functions
-                        .iter()
-                        .find(|f| f.name == parsed.function().function_name())
-                        .cloned()
-                });
-            if exported_function.is_none() {
-                match parsed.method_as_static() {
-                    Some(parsed_static) => Ok(instances(exports)
-                        .iter()
-                        .find(|instance| instance.name == *interface_name)
-                        .and_then(|instance| {
-                            instance
-                                .functions
-                                .iter()
-                                .find(|f| f.name == parsed_static.function().function_name())
-                                .cloned()
-                        })),
-                    None => Ok(None),
-                }
-            } else {
-                Ok(exported_function)
-            }
-        }
-    }
-}
 
 pub fn find_resource_site(
     exports: &[AnalysedExport],

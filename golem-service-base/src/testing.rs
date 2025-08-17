@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::base64::Base64;
+use golem_common::model::agent::AgentType;
 use golem_common::model::component::Component;
 use golem_common::model::component::{ComponentName, ComponentRevision, VersionedComponentId};
 use golem_common::model::component::{ComponentType, InitialComponentFile};
@@ -21,7 +22,6 @@ use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::ComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -40,14 +40,10 @@ pub struct LocalFileSystemComponentMetadata {
     pub files: Vec<InitialComponentFile>,
     pub component_name: String,
     pub wasm_filename: String,
-
-    #[serde(default)]
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-
-    #[serde(default)]
     pub env: BTreeMap<String, String>,
-
     pub wasm_hash: golem_common::model::diff::Hash,
+    pub agent_types: Vec<AgentType>,
 }
 
 impl From<LocalFileSystemComponentMetadata> for Component {
@@ -60,16 +56,14 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             },
             component_name: ComponentName(value.component_name),
             component_size: value.size,
-            metadata: ComponentMetadata {
-                exports: value.exports,
-                producers: vec![],
-                memories: value.memories,
-                binary_wit: Base64(vec![]),
-                root_package_name: None,
-                root_package_version: None,
-                dynamic_linking: value.dynamic_linking,
-                agent_types: vec![],
-            },
+            metadata: ComponentMetadata::from_parts(
+                value.exports,
+                value.memories,
+                value.dynamic_linking,
+                None,
+                None,
+                value.agent_types,
+            ),
             created_at: Default::default(),
             component_type: value.component_type,
             files: value.files,

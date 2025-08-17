@@ -45,7 +45,7 @@ impl SafeDisplay for AccountError {
     }
 }
 
-error_forwarders!(AccountError, RepoError, PlanError, TokenError);
+error_forwarders!(AccountError, RepoError, PlanError, TokenError,);
 
 pub struct AccountService {
     account_repo: Arc<dyn AccountRepo>,

@@ -130,6 +130,7 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
                     field("quantity", u32()),
                 ])
                 .named("product-item")
+                .owned("golem:it/api")
             ),
         )))
     );
@@ -165,6 +166,7 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
                     field("quantity", u32()),
                 ])
                 .named("product-item")
+                .owned("golem:it/api")
             ),
         )))
     );
@@ -249,6 +251,7 @@ async fn test_repl_invoking_resource_methods(
                     field("quantity", u32()),
                 ])
                 .named("product-item")
+                .owned("golem:it/api")
             ),
         )))
     );
@@ -284,6 +287,7 @@ async fn test_repl_invoking_resource_methods(
                     field("quantity", u32()),
                 ])
                 .named("product-item")
+                .owned("golem:it/api")
             ),
         )))
     )
@@ -330,13 +334,13 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         let component_dependency_key = ComponentDependencyKey {
             component_name,
             component_id: component_id.0,
-            root_package_name: metadata.root_package_name,
-            root_package_version: metadata.root_package_version,
+            root_package_name: metadata.root_package_name().clone(),
+            root_package_version: metadata.root_package_version().clone(),
         };
 
         Ok(ComponentDependency::new(
             component_dependency_key,
-            metadata.exports,
+            metadata.exports().to_vec(),
         ))
     }
 }

@@ -36,7 +36,7 @@ use golem_registry_service::repo::model::http_api_deployment::{
     HttpApiDeploymentRevisionRecord, HttpApiDeploymentRevisionRepoError,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::default::Default;
 use strum::IntoEnumIterator;
 // Common test cases -------------------------------------------------------------------------------
@@ -450,16 +450,14 @@ pub async fn test_component_stage(deps: &Deps) {
         audit: DeletableRevisionAuditFields::new(user.account_id),
         component_type: 0,
         size: 10,
-        metadata: ComponentMetadata {
-            exports: vec![],
-            producers: vec![],
-            memories: vec![],
-            binary_wit: Default::default(),
-            root_package_name: Some("test".to_string()),
-            root_package_version: Some("1.0".to_string()),
-            dynamic_linking: Default::default(),
-            agent_types: vec![],
-        }
+        metadata: ComponentMetadata::from_parts(
+            vec![],
+            vec![],
+            HashMap::new(),
+            Some("test".to_string()),
+            Some("1.0".to_string()),
+            vec![],
+        )
         .into(),
         original_env: BTreeMap::from([("X1".to_string(), "value1".to_string())]).into(),
         env: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
@@ -1214,16 +1212,14 @@ pub async fn test_account_usage(deps: &Deps) {
                     audit: DeletableRevisionAuditFields::new(user.account_id),
                     component_type: 0,
                     size: 0,
-                    metadata: ComponentMetadata {
-                        exports: vec![],
-                        producers: vec![],
-                        memories: vec![],
-                        binary_wit: Default::default(),
-                        root_package_name: None,
-                        root_package_version: None,
-                        dynamic_linking: Default::default(),
-                        agent_types: vec![],
-                    }
+                    metadata: ComponentMetadata::from_parts(
+                        vec![],
+                        vec![],
+                        HashMap::new(),
+                        None,
+                        None,
+                        vec![],
+                    )
                     .into(),
                     env: Default::default(),
                     original_env: Default::default(),

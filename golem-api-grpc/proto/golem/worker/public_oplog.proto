@@ -6,6 +6,7 @@ import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
 import "golem/common/plugin_installation_id.proto";
 import "golem/common/project_id.proto";
+import "golem/component/agent.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/worker_id.proto";
@@ -48,6 +49,8 @@ message OplogEntry {
     FinishSpanParameters FinishSpan = 31;
     SetSpanAttributeParameters SetSpanAttribute = 32;
     ChangePersistenceLevelParameters ChangePersistenceLevel = 33;
+    CreateAgentInstanceParameters CreateAgentInstance = 34;
+    DropAgentInstanceParameters DropAgentInstance = 35;
   }
 }
 
@@ -204,11 +207,15 @@ message GrowMemoryParameters {
 message CreateResourceParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 resource_id = 2;
+  string name = 3;
+  string owner = 4;
 }
 
 message DropResourceParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 resource_id = 2;
+  string name = 3;
+  string owner = 4;
 }
 
 message DescribeResourceParameters {
@@ -216,6 +223,7 @@ message DescribeResourceParameters {
   uint64 resource_id = 2;
   string resource_name = 3;
   repeated wasm.rpc.ValueAndType resource_params = 4;
+  string resource_owner = 5;
 }
 
 message TimestampParameter {
@@ -265,7 +273,20 @@ message SetSpanAttributeParameters {
 
 message ChangePersistenceLevelParameters {
   google.protobuf.Timestamp timestamp = 1;
-  PersistenceLevel persistence_level = 3;
+  PersistenceLevel persistence_level = 2;
+}
+
+message CreateAgentInstanceParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string agent_type = 2;
+  string agent_id = 3;
+  golem.component.DataValue agent_parameters = 4;
+}
+
+message DropAgentInstanceParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string agent_type = 2;
+  string agent_id = 3;
 }
 
 enum OplogLogLevel {
@@ -292,7 +313,7 @@ message OplogEntryWithIndex {
 }
 
 enum PersistenceLevel {
-    PERSIST_NOTHING = 0;
-    PERSIST_REMOTE_SIDE_EFFECTS = 1;
-    SMART = 2;
+  PERSIST_NOTHING = 0;
+  PERSIST_REMOTE_SIDE_EFFECTS = 1;
+  SMART = 2;
 }

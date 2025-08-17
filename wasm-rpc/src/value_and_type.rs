@@ -130,7 +130,7 @@ impl IntoValue for u32 {
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::u32()
+        u32()
     }
 }
 
@@ -230,7 +230,7 @@ impl IntoValue for String {
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::str()
+        str()
     }
 }
 
@@ -240,7 +240,7 @@ impl IntoValue for &str {
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::str()
+        str()
     }
 }
 
@@ -326,9 +326,9 @@ impl<T: IntoValue> IntoValue for Bound<T> {
 
     fn get_type() -> AnalysedType {
         variant(vec![
-            analysed_type::case("included", T::get_type()),
-            analysed_type::case("excluded", T::get_type()),
-            analysed_type::unit_case("unbounded"),
+            case("included", T::get_type()),
+            case("excluded", T::get_type()),
+            unit_case("unbounded"),
         ])
     }
 }
@@ -909,10 +909,12 @@ fn build_tree(node: &NamedWitTypeNode, nodes: &[NamedWitTypeNode]) -> AnalysedTy
         WitTypeNode::EnumType(names) => AnalysedType::Enum(TypeEnum {
             cases: names.clone(),
             name: node.name.clone(),
+            owner: node.owner.clone(),
         }),
         WitTypeNode::FlagsType(names) => AnalysedType::Flags(TypeFlags {
             names: names.clone(),
             name: node.name.clone(),
+            owner: node.owner.clone(),
         }),
         WitTypeNode::TupleType(types) => {
             let types = types
@@ -997,9 +999,11 @@ impl WitTypeBuilder {
             let idx = self.nodes.len();
             self.nodes.push(NamedWitTypeNode {
                 name: None,
+                owner: None,
                 type_: WitTypeNode::PrimBoolType,
             }); // placeholder, to be replaced
             let name = typ.name().map(|n| n.to_string());
+            let owner = typ.owner().map(|o| o.to_string());
             let node: WitTypeNode = match typ {
                 AnalysedType::Variant(variant) => {
                     let mut cases = Vec::new();
@@ -1054,12 +1058,16 @@ impl WitTypeBuilder {
                 AnalysedType::Handle(handle) => WitTypeNode::HandleType((
                     handle.resource_id.0,
                     match handle.mode {
-                        AnalysedResourceMode::Owned => crate::ResourceMode::Owned,
-                        AnalysedResourceMode::Borrowed => crate::ResourceMode::Borrowed,
+                        AnalysedResourceMode::Owned => ResourceMode::Owned,
+                        AnalysedResourceMode::Borrowed => ResourceMode::Borrowed,
                     },
                 )),
             };
-            self.nodes[idx] = NamedWitTypeNode { name, type_: node };
+            self.nodes[idx] = NamedWitTypeNode {
+                name,
+                owner,
+                type_: node,
+            };
             idx
         }
     }

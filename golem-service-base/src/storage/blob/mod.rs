@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::replayable_stream::ErasedReplayableStream;
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;

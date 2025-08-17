@@ -50,7 +50,9 @@ impl TryFrom<&Type> for AnalysedType {
                     .as_ref()
                     .ok_or_else(|| "List element type is None".to_string())?;
                 let analysed_type = AnalysedType::try_from(elem_type.as_ref())?;
-                Ok(list(analysed_type).with_optional_name(inner.name.clone()))
+                Ok(list(analysed_type)
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Tuple(inner)) => {
                 let elems = inner
@@ -58,7 +60,9 @@ impl TryFrom<&Type> for AnalysedType {
                     .iter()
                     .map(AnalysedType::try_from)
                     .collect::<Result<Vec<_>, String>>()?;
-                Ok(tuple(elems).with_optional_name(inner.name.clone()))
+                Ok(tuple(elems)
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Record(inner)) => {
                 let fields = inner
@@ -72,7 +76,9 @@ impl TryFrom<&Type> for AnalysedType {
                         Ok(field(&proto_field.name, analysed_type))
                     })
                     .collect::<Result<Vec<_>, String>>()?;
-                Ok(record(fields).with_optional_name(inner.name.clone()))
+                Ok(record(fields)
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Flags(inner)) => Ok(flags(
                 &inner
@@ -81,7 +87,8 @@ impl TryFrom<&Type> for AnalysedType {
                     .map(|s| s.as_str())
                     .collect::<Vec<&str>>(),
             )
-            .with_optional_name(inner.name.clone())),
+            .with_optional_name(inner.name.clone())
+            .with_optional_owner(inner.owner.clone())),
             Some(r#type::Type::Enum(inner)) => Ok(r#enum(
                 &inner
                     .names
@@ -89,14 +96,17 @@ impl TryFrom<&Type> for AnalysedType {
                     .map(|s| s.as_str())
                     .collect::<Vec<&str>>(),
             )
-            .with_optional_name(inner.name.clone())),
+            .with_optional_name(inner.name.clone())
+            .with_optional_owner(inner.owner.clone())),
             Some(r#type::Type::Option(inner)) => {
                 let elem_type = inner
                     .elem
                     .as_ref()
                     .ok_or_else(|| "Option element type is None".to_string())?;
                 let analysed_type = AnalysedType::try_from(elem_type.as_ref())?;
-                Ok(option(analysed_type).with_optional_name(inner.name.clone()))
+                Ok(option(analysed_type)
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Result(inner)) => {
                 let ok_type = inner
@@ -113,8 +123,10 @@ impl TryFrom<&Type> for AnalysedType {
                     ok: ok_type.map(Box::new),
                     err: err_type.map(Box::new),
                     name: inner.name.clone(),
+                    owner: inner.owner.clone(),
                 })
-                .with_optional_name(inner.name.clone()))
+                .with_optional_name(inner.name.clone())
+                .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Variant(inner)) => {
                 let cases = inner
@@ -129,7 +141,9 @@ impl TryFrom<&Type> for AnalysedType {
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?;
-                Ok(variant(cases).with_optional_name(inner.name.clone()))
+                Ok(variant(cases)
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             Some(r#type::Type::Handle(inner)) => {
                 let resource_mode = match inner.mode {
@@ -138,7 +152,8 @@ impl TryFrom<&Type> for AnalysedType {
                     _ => Err("Invalid resource mode".to_string()),
                 }?;
                 Ok(handle(AnalysedResourceId(inner.resource_id), resource_mode)
-                    .with_optional_name(inner.name.clone()))
+                    .with_optional_name(inner.name.clone())
+                    .with_optional_owner(inner.owner.clone()))
             }
             None => Err("Type is None".to_string()),
         }
@@ -187,63 +202,75 @@ impl From<&AnalysedType> for Type {
             AnalysedType::Str(_) => Some(r#type::Type::Primitive(TypePrimitive {
                 primitive: PrimitiveType::Str as i32,
             })),
-            AnalysedType::List(crate::analysis::TypeList { inner, name }) => {
+            AnalysedType::List(crate::analysis::TypeList { inner, name, owner }) => {
                 Some(r#type::Type::List(Box::new(TypeList {
                     elem: Some(Box::new(Type::from(inner.deref()))),
                     name: name.clone(),
+                    owner: owner.clone(),
                 })))
             }
-            AnalysedType::Tuple(crate::analysis::TypeTuple { items, name }) => {
+            AnalysedType::Tuple(crate::analysis::TypeTuple { items, name, owner }) => {
                 Some(r#type::Type::Tuple(TypeTuple {
                     elems: items
                         .iter()
                         .map(|analysed_type| analysed_type.into())
                         .collect(),
                     name: name.clone(),
+                    owner: owner.clone(),
                 }))
             }
-            AnalysedType::Record(crate::analysis::TypeRecord { fields, name }) => {
-                Some(r#type::Type::Record(TypeRecord {
-                    fields: fields
-                        .iter()
-                        .map(|pair| NameTypePair {
-                            name: pair.name.clone(),
-                            typ: Some((&pair.typ).into()),
-                        })
-                        .collect(),
-                    name: name.clone(),
-                }))
-            }
-            AnalysedType::Flags(crate::analysis::TypeFlags { names, name }) => {
+            AnalysedType::Record(crate::analysis::TypeRecord {
+                fields,
+                name,
+                owner,
+            }) => Some(r#type::Type::Record(TypeRecord {
+                fields: fields
+                    .iter()
+                    .map(|pair| NameTypePair {
+                        name: pair.name.clone(),
+                        typ: Some((&pair.typ).into()),
+                    })
+                    .collect(),
+                name: name.clone(),
+                owner: owner.clone(),
+            })),
+            AnalysedType::Flags(crate::analysis::TypeFlags { names, name, owner }) => {
                 Some(r#type::Type::Flags(TypeFlags {
                     names: names.clone(),
                     name: name.clone(),
+                    owner: owner.clone(),
                 }))
             }
-            AnalysedType::Enum(crate::analysis::TypeEnum { cases, name }) => {
+            AnalysedType::Enum(crate::analysis::TypeEnum { cases, name, owner }) => {
                 Some(r#type::Type::Enum(TypeEnum {
                     names: cases.clone(),
                     name: name.clone(),
+                    owner: owner.clone(),
                 }))
             }
-            AnalysedType::Option(crate::analysis::TypeOption { inner, name }) => {
+            AnalysedType::Option(crate::analysis::TypeOption { inner, name, owner }) => {
                 Some(r#type::Type::Option(Box::new(TypeOption {
                     elem: Some(Box::new(Type::from(inner.deref()))),
                     name: name.clone(),
+                    owner: owner.clone(),
                 })))
             }
-            AnalysedType::Result(crate::analysis::TypeResult { ok, err, name }) => {
-                Some(r#type::Type::Result(Box::new(TypeResult {
-                    ok: ok
-                        .clone()
-                        .map(|ok_type| Box::new(Type::from(ok_type.as_ref()))),
-                    err: err
-                        .clone()
-                        .map(|err_type| Box::new(Type::from(err_type.as_ref()))),
-                    name: name.clone(),
-                })))
-            }
-            AnalysedType::Variant(crate::analysis::TypeVariant { cases, name }) => {
+            AnalysedType::Result(crate::analysis::TypeResult {
+                ok,
+                err,
+                name,
+                owner,
+            }) => Some(r#type::Type::Result(Box::new(TypeResult {
+                ok: ok
+                    .clone()
+                    .map(|ok_type| Box::new(Type::from(ok_type.as_ref()))),
+                err: err
+                    .clone()
+                    .map(|err_type| Box::new(Type::from(err_type.as_ref()))),
+                name: name.clone(),
+                owner: owner.clone(),
+            }))),
+            AnalysedType::Variant(crate::analysis::TypeVariant { cases, name, owner }) => {
                 Some(r#type::Type::Variant(TypeVariant {
                     cases: cases
                         .iter()
@@ -253,12 +280,14 @@ impl From<&AnalysedType> for Type {
                         })
                         .collect(),
                     name: name.clone(),
+                    owner: owner.clone(),
                 }))
             }
             AnalysedType::Handle(crate::analysis::TypeHandle {
                 resource_id,
                 mode,
                 name,
+                owner,
             }) => Some(r#type::Type::Handle(TypeHandle {
                 resource_id: resource_id.0,
                 mode: match mode {
@@ -266,6 +295,7 @@ impl From<&AnalysedType> for Type {
                     AnalysedResourceMode::Borrowed => 1,
                 },
                 name: name.clone(),
+                owner: owner.clone(),
             })),
         };
 

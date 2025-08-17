@@ -14,17 +14,16 @@
 
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem;
+use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
-use golem_common::SafeDisplay;
 use golem_wasm_rpc::wasmtime::EncodingError;
 use golem_wasm_rpc_derive::IntoValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
 use tonic::Status;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
@@ -407,7 +406,7 @@ impl ApiErrorDetails for WorkerExecutorError {
         }
     }
 
-    fn take_cause(&mut self) -> Option<Arc<anyhow::Error>> {
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
         todo!()
     }
 }

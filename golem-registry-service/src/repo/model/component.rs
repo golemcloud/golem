@@ -15,6 +15,7 @@
 use crate::model::component::{Component, FinalizedComponentRevision};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use anyhow::anyhow;
 use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
@@ -322,17 +323,7 @@ impl ComponentRevisionRecord {
             audit: DeletableRevisionAuditFields::deletion(created_by),
             component_type: 0,
             size: 0,
-            metadata: ComponentMetadata {
-                exports: vec![],
-                producers: vec![],
-                memories: vec![],
-                binary_wit: Default::default(),
-                root_package_name: None,
-                root_package_version: None,
-                dynamic_linking: Default::default(),
-                agent_types: Default::default(),
-            }
-            .into(),
+            metadata: ComponentMetadata::default().into(),
             env: Default::default(),
             original_env: Default::default(),
             object_store_key: "".to_string(),
@@ -358,7 +349,7 @@ impl ComponentRevisionRecord {
                     .collect(),
                 dynamic_linking_wasm_rpc: self
                     .metadata
-                    .dynamic_linking
+                    .dynamic_linking()
                     .iter()
                     .map(|(name, link)| match link {
                         DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc { targets }) => (
@@ -426,7 +417,7 @@ impl ComponentRevisionRecord {
             revision_id: 0,
             version: value
                 .metadata
-                .root_package_version
+                .root_package_version()
                 .clone()
                 .unwrap_or_default(),
             component_type: value.component_type as i32,
@@ -465,9 +456,11 @@ impl TryFrom<ComponentExtRevisionRecord> for Component {
             component_size: value.revision.size as u64,
             metadata: value.revision.metadata.into(),
             created_at: value.revision.audit.created_at.into(),
-            component_type: value.revision.component_type.try_into().map_err(|e| {
-                RepoError::Internal(format!("Failed converting component type: {e}"))
-            })?,
+            component_type: value
+                .revision
+                .component_type
+                .try_into()
+                .map_err(|e| anyhow!("Failed converting component type: {e}"))?,
             files: value
                 .revision
                 .files
@@ -535,11 +528,8 @@ impl TryFrom<ComponentFileRecord> for InitialComponentFile {
     fn try_from(value: ComponentFileRecord) -> Result<Self, Self::Error> {
         Ok(Self {
             key: InitialComponentFileKey(value.file_key),
-            path: ComponentFilePath::from_abs_str(&value.file_path).map_err(|e| {
-                RepoError::Internal(format!(
-                    "Failed converting component file record to model: {e}"
-                ))
-            })?,
+            path: ComponentFilePath::from_abs_str(&value.file_path)
+                .map_err(|e| anyhow!("Failed converting component file record to model: {e}"))?,
             permissions: value.file_permissions.into(),
         })
     }

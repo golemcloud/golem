@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::authorised_request;
 use super::RemoteServiceConfig;
+use super::authorised_request;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_error::Error;
+use golem_common::SafeDisplay;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plugin::PluginDefinition;
 use golem_common::model::{PluginId, RetryConfig};
 use golem_common::retries::with_retries;
-use golem_common::SafeDisplay;
 use std::fmt::Display;
+use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tonic::Status;
 
 #[async_trait]
 pub trait PluginServiceClient: Send + Sync {

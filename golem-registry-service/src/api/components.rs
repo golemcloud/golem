@@ -14,13 +14,13 @@
 
 use super::ApiResult;
 use super::model::UpdateComponentRequest;
-use crate::model::component::Component;
 use crate::services::component::ComponentService;
 use futures::TryStreamExt;
 use golem_common::api::Page;
 use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
+use golem_common::model::component::Component;
 use golem_common::model::component::ComponentRevision;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -76,7 +76,11 @@ impl ComponentsApi {
         component_id: ComponentId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        let component = self.component_service.get_component(&component_id).await?;
+        let component: Component = self
+            .component_service
+            .get_component(&component_id)
+            .await?
+            .into();
         Ok(Json(component))
     }
 
@@ -148,10 +152,12 @@ impl ComponentsApi {
         revision: ComponentRevision,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        let component = self
+        let component: Component = self
             .component_service
             .get_component_revision(&component_id, revision)
-            .await?;
+            .await?
+            .into();
+
         Ok(Json(component))
     }
 
@@ -246,7 +252,7 @@ impl ComponentsApi {
 
         let metadata = payload.metadata.0;
 
-        let response = self
+        let component: Component = self
             .component_service
             .update(
                 &component_id,
@@ -261,8 +267,9 @@ impl ComponentsApi {
                 metadata.agent_types,
                 &account_id,
             )
-            .await?;
+            .await?
+            .into();
 
-        Ok(Json(response))
+        Ok(Json(component))
     }
 }

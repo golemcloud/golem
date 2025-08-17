@@ -23,9 +23,8 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
-use std::sync::Arc;
 
-#[derive(ApiResponse, Debug, Clone)]
+#[derive(ApiResponse, Debug)]
 pub enum ApiError {
     /// Invalid request, returning with a list of issues detected in the request
     #[oai(status = 400)]
@@ -74,10 +73,15 @@ impl ApiErrorDetails for ApiError {
         }
     }
 
-    fn take_cause(&mut self) -> Option<Arc<anyhow::Error>> {
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
         match self {
-            Self::InternalError(inner) => inner.cause.take(),
-            _ => None,
+            ApiError::BadRequest(inner) => inner.cause.take(),
+            ApiError::NotFound(inner) => inner.cause.take(),
+            ApiError::Unauthorized(inner) => inner.cause.take(),
+            ApiError::InternalError(inner) => inner.cause.take(),
+            ApiError::Forbidden(inner) => inner.cause.take(),
+            ApiError::Conflict(inner) => inner.cause.take(),
+            ApiError::LimitExceeded(inner) => inner.cause.take(),
         }
     }
 }
@@ -86,22 +90,22 @@ impl From<std::io::Error> for ApiError {
     fn from(value: std::io::Error) -> Self {
         Self::InternalError(Json(ErrorBody {
             error: "Internal Error".to_string(),
-            cause: Some(Arc::new(value.into())),
+            cause: Some(value.into()),
         }))
     }
 }
 
 impl From<AccountError> for ApiError {
     fn from(value: AccountError) -> Self {
+        let error = value.to_safe_string();
         match value {
-            AccountError::AccountNotFound(_) => Self::NotFound(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
-            })),
+            AccountError::AccountNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
 
-            AccountError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
+            AccountError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("AccountError")),
             })),
         }
     }
@@ -109,15 +113,14 @@ impl From<AccountError> for ApiError {
 
 impl From<ApplicationError> for ApiError {
     fn from(value: ApplicationError) -> Self {
+        let error: String = value.to_safe_string();
         match value {
-            ApplicationError::ApplicationNotFound(_) => Self::NotFound(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
-            })),
-
-            ApplicationError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
+            ApplicationError::ApplicationNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+            ApplicationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("ApplicationError")),
             })),
         }
     }
@@ -125,15 +128,15 @@ impl From<ApplicationError> for ApiError {
 
 impl From<EnvironmentError> for ApiError {
     fn from(value: EnvironmentError) -> Self {
+        let error: String = value.to_safe_string();
         match value {
-            EnvironmentError::EnvironmentNotFound(_) => Self::NotFound(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
-            })),
+            EnvironmentError::EnvironmentNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
 
-            EnvironmentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
+            EnvironmentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("EnvironmentError")),
             })),
         }
     }
@@ -141,10 +144,11 @@ impl From<EnvironmentError> for ApiError {
 
 impl From<PlanError> for ApiError {
     fn from(value: PlanError) -> Self {
+        let error: String = value.to_safe_string();
         match value {
-            PlanError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
+            PlanError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("PlanError")),
             })),
         }
     }
@@ -152,20 +156,20 @@ impl From<PlanError> for ApiError {
 
 impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
+        let error: String = value.to_safe_string();
         match value {
-            ComponentError::Unauthorized(_) => Self::Unauthorized(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
-            })),
+            ComponentError::Unauthorized(_) => {
+                Self::Unauthorized(Json(ErrorBody { error, cause: None }))
+            }
 
             ComponentError::LimitExceeded { .. } => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![value.to_safe_string()],
+                errors: vec![error],
+                cause: None,
             })),
 
-            ComponentError::AlreadyExists(_) => Self::Conflict(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
-            })),
+            ComponentError::AlreadyExists(_) => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
 
             ComponentError::ComponentProcessingError(_)
             | ComponentError::InitialComponentFileNotFound { .. }
@@ -177,7 +181,8 @@ impl From<ComponentError> for ApiError {
             | ComponentError::MalformedComponentArchive { .. }
             | ComponentError::PluginInstallationNotFound { .. } => {
                 Self::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_safe_string()],
+                    errors: vec![error],
+                    cause: None,
                 }))
             }
 
@@ -185,15 +190,12 @@ impl From<ComponentError> for ApiError {
             | ComponentError::UnknownVersionedComponentId(_)
             | ComponentError::PluginNotFound { .. }
             | ComponentError::UnknownEnvironmentComponentName { .. } => {
-                Self::NotFound(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                    cause: Some(Arc::new(value.into())),
-                }))
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
-            ComponentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
+            ComponentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("ComponentError")),
             })),
         }
     }
@@ -201,18 +203,15 @@ impl From<ComponentError> for ApiError {
 
 impl From<TokenError> for ApiError {
     fn from(value: TokenError) -> Self {
+        let error: String = value.to_safe_string();
         match value {
-            TokenError::TokenNotFound(_) => Self::NotFound(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
-            })),
-            TokenError::TokenSecretAlreadyExists => Self::InternalError(Json(ErrorBody {
-                error: "Internal error".to_string(),
-                cause: Some(Arc::new(value.into())),
-            })),
-            TokenError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error: value.to_safe_string(),
-                cause: Some(Arc::new(value.into())),
+            TokenError::TokenNotFound(_) => Self::NotFound(Json(ErrorBody { error, cause: None })),
+            TokenError::TokenSecretAlreadyExists => {
+                Self::InternalError(Json(ErrorBody { error, cause: None }))
+            }
+            TokenError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("TokenError")),
             })),
         }
     }

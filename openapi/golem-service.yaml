@@ -7094,7 +7094,6 @@ components:
           additionalProperties:
             type: string
         wasmHash:
-          description: Hash of the wasm before any transformations
           type: string
           format: hash
       required:
@@ -8457,6 +8456,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         cases:
           type: array
           items:
@@ -8475,6 +8476,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         names:
           type: array
           items:
@@ -8486,6 +8489,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         resource_id:
           type: integer
@@ -8501,6 +8506,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -8511,6 +8518,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -8520,6 +8529,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         fields:
           type: array
@@ -8532,6 +8543,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
@@ -8558,6 +8571,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         items:
           type: array
           items:
@@ -8581,6 +8596,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         cases:
           type: array

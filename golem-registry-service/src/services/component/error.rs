@@ -23,7 +23,7 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentId, PluginInstallationId};
-use golem_common::{SafeDisplay, error_forwarders};
+use golem_common::{SafeDisplay, error_forwarders, into_internal_error};
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
@@ -122,6 +122,8 @@ impl SafeDisplay for ComponentError {
     }
 }
 
+into_internal_error!(ComponentError);
+
 error_forwarders!(
     ComponentError,
     RepoError,
@@ -141,7 +143,10 @@ impl From<AccountUsageError> for ComponentError {
                 limit_value,
                 current_value,
             },
-            _ => Self::InternalError(anyhow::Error::new(value).context("from AccountUsageError")),
+            AccountUsageError::InternalError(inner) => {
+                Self::InternalError(inner.context("AccountUsageError"))
+            }
+            _ => Self::InternalError(anyhow::Error::new(value).context("AccountUsageError")),
         }
     }
 }

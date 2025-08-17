@@ -12,26 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::authorised_request;
 use super::RemoteServiceConfig;
+use super::authorised_request;
 use crate::model::ResourceLimits;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
 use golem_api_grpc::proto::golem::limit::v1::limits_error::Error;
 use golem_api_grpc::proto::golem::limit::v1::{
-    get_resource_limits_response, update_component_limit_response, update_worker_limit_response,
     GetResourceLimitsRequest, UpdateComponentLimitRequest, UpdateWorkerLimitRequest,
+    get_resource_limits_response, update_component_limit_response, update_worker_limit_response,
 };
+use golem_common::SafeDisplay;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::account::AccountId;
 use golem_common::model::RetryConfig;
+use golem_common::model::account::AccountId;
 use golem_common::model::{ComponentId, WorkerId};
 use golem_common::retries::with_retries;
-use golem_common::SafeDisplay;
 use std::fmt::Display;
+use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tonic::Status;
 use tracing::info;
 use uuid::Uuid;
 
