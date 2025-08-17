@@ -1,0 +1,33 @@
+{
+  "name": "@golemcloud/golem-ts",
+  "version": "1.5.0",
+  "description": "A library that help writing Golem programs by providing higher level wrappers for Golem's runtime APIs, including functions for defining and performing operations transactionally.",
+  "repository": {
+    "url": "git+https://github.com/golemcloud/golem-ts.git",
+    "directory": "lib"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "golem",
+    "typescript",
+    "runtime"
+  ],
+  "main": "out/index.js",
+  "types": "out/index.d.ts",
+  "files": [
+    "out/"
+  ],
+  "scripts": {
+    "update-wit-deps": "wit-deps -d wit/deps -m wit/deps.toml -l wit/deps.lock",
+    "generate-types": "rm -rf types && jco guest-types wit -o types",
+    "build": "tsc",
+    "check": "npx @biomejs/biome check",
+    "fix": "npx @biomejs/biome check --write"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@bytecodealliance/jco": "1.10.2",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.2"
+  }
+}

@@ -14,8 +14,8 @@ opt-level = 's'
 [dependencies]
 wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 
-golem-rust = { git = "https://github.com/golemcloud/golem-rust", branch = "type-owner" }
-golem-rust-macro = { git = "https://github.com/golemcloud/golem-rust", branch = "type-owner" }
+golem-rust = { path = "../../sdks/rust/golem-rust" }
+golem-rust-macro = { path = "../../sdks/rust/golem-rust-macro" }
 log = { version = "0.4.22", features = ["kv"] }
 rand = "0.8.5"
 reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-march-2025", features = [

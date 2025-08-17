@@ -79,6 +79,7 @@ exclude = [
     "test-components/write-stderr",
     "test-components/write-stdout",
     "test-components/rdbms-service",
+    "sdks/golem-rust"
 ]
 
 [workspace.metadata]

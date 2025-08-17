@@ -1,0 +1,43 @@
+package golem:rust;
+
+world golem-rust {
+  import golem:api/host@1.1.7;
+  import golem:api/oplog@1.1.7;
+  import golem:api/context@1.1.7;
+  import golem:durability/durability@1.2.1;
+  import golem:rdbms/mysql@0.0.1;
+  import golem:rdbms/postgres@0.0.1;
+  import golem:rpc/types@0.2.2;
+
+  import wasi:blobstore/blobstore;
+  import wasi:blobstore/container;
+  import wasi:clocks/wall-clock@0.2.3;
+  import wasi:clocks/monotonic-clock@0.2.3;
+  import wasi:filesystem/preopens@0.2.3;
+  import wasi:filesystem/types@0.2.3;
+  import wasi:http/types@0.2.3;
+  import wasi:http/outgoing-handler@0.2.3;
+  import wasi:io/poll@0.2.3;
+  import wasi:io/streams@0.2.3;
+  import wasi:keyvalue/eventual-batch@0.1.0;
+  import wasi:keyvalue/eventual@0.1.0;
+  import wasi:logging/logging;
+  import wasi:sockets/ip-name-lookup@0.2.3;
+  import wasi:sockets/instance-network@0.2.3;
+}
+
+world golem-rust-load-snapshot {
+  include golem-rust;
+
+  export golem:api/load-snapshot@1.1.7;
+}
+
+world golem-rust-save-snapshot {
+    include golem-rust;
+    export golem:api/save-snapshot@1.1.7;
+}
+
+world golem-rust-oplog-processor {
+    include golem-rust;
+    export golem:api/oplog-processor@1.1.7;
+}

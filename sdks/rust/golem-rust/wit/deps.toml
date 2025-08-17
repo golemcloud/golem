@@ -1,0 +1,2 @@
+all = "https://github.com/golemcloud/golem-wit/archive/v1.3.0-dev.6.tar.gz"
+rdbms = "https://github.com/golemcloud/golem-rdbms/archive/main.tar.gz"

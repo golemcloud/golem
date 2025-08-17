@@ -265,6 +265,59 @@ jobs:
       - name: Build wasm-rpc in stub mode
         run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
 
+  build-golem-rust:
+    runs-on: blacksmith
+    steps:
+      - uses: actions/checkout@v4
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v1-golem-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check formatting
+        run: cargo fmt -- --check
+        working-directory: sdks/rust
+      - name: Clippy
+        run: cargo clippy -- -Dwarnings
+        working-directory: sdks/rust
+      - name: Tests
+        run: cargo test --all-features
+        working-directory: sdks/rust
+
+  build-golem-ts:
+    runs-on: blacksmith
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+      - name: Install dependencies
+        working-directory: sdks/ts
+        run: |
+          npm install
+      - name: Generate types
+        working-directory: sdks/ts
+        run: |
+          npm run generate-types
+      - name: Run code quality check
+        working-directory: sdks/ts
+        run: |
+          npm run check
+      - name: Build the package
+        working-directory: sdks/ts
+        run: |
+          npm run build
+
   docker-targets-build:
     env:
       CARGO_BUILD_JOBS: 10
