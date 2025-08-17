@@ -390,8 +390,6 @@ pub struct Template {
     pub description: String,
     pub template_path: PathBuf,
     pub instructions: String,
-    pub adapter_source: Option<PathBuf>,
-    pub adapter_target: Option<PathBuf>,
     pub wit_deps: Vec<PathBuf>,
     pub wit_deps_targets: Option<Vec<PathBuf>>,
     pub exclude: HashSet<String>,
@@ -415,10 +413,6 @@ pub(crate) struct TemplateMetadata {
     pub app_common_skip_if_exists: Option<String>,
     #[serde(rename = "appComponentGroup")]
     pub app_component_group: Option<String>,
-    #[serde(rename = "requiresAdapter")]
-    pub requires_adapter: Option<bool>,
-    #[serde(rename = "adapterTarget")]
-    pub adapter_target: Option<String>,
     #[serde(rename = "requiresGolemHostWIT")]
     pub requires_golem_host_wit: Option<bool>,
     #[serde(rename = "requiresWASI")]

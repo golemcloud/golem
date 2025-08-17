@@ -375,16 +375,44 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
     if !contains_golem_rpc {
         write_embedded_source(
             &target_deps.join("golem-rpc"),
-            &[("wasm-rpc.wit", golem_wit::WASM_RPC_WIT)],
+            &[(
+                "wasm-rpc.wit",
+                include_str!("../../wit/deps/golem-rpc/wasm-rpc.wit"),
+            )],
         )?;
     }
 
     if !contains_wasi_io {
-        write_embedded_source(&target_deps.join("io"), golem_wit::WASI_IO)?;
+        write_embedded_source(
+            &target_deps.join("io"),
+            &[
+                ("error.wit", include_str!("../../wit/deps/io/error.wit")),
+                ("poll.wit", include_str!("../../wit/deps/io/poll.wit")),
+                ("streams.wit", include_str!("../../wit/deps/io/streams.wit")),
+                ("world.wit", include_str!("../../wit/deps/io/world.wit")),
+            ],
+        )?;
     }
 
     if !contains_wasi_clocks {
-        write_embedded_source(&target_deps.join("clocks"), golem_wit::WASI_CLOCKS)?;
+        write_embedded_source(
+            &target_deps.join("clocks"),
+            &[
+                (
+                    "wall-clock.wit",
+                    include_str!("../../wit/deps/clocks/wall-clock.wit"),
+                ),
+                (
+                    "monotonic-clock.wit",
+                    include_str!("../../wit/deps/clocks/monotonic-clock.wit"),
+                ),
+                (
+                    "timezone.wit",
+                    include_str!("../../wit/deps/clocks/timezone.wit"),
+                ),
+                ("world.wit", include_str!("../../wit/deps/clocks/world.wit")),
+            ],
+        )?;
     }
 
     Ok(())
