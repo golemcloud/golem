@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use super::oauth2_provider_client::{OAuth2ProviderClient, OAuth2ProviderClientError};
-use super::oauth2_token_repo::{OAuth2TokenRecord, OAuth2TokenRepo};
-use super::oauth2_web_flow_state_repo::{LinkedTokenState, OAuth2WebFlowStateRepo};
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::model::auth::TokenSecret;

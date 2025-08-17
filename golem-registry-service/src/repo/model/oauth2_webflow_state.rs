@@ -18,16 +18,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use sqlx::types::Json;
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct OAuth2WebFlowStateMetadata {
-    pub redirect: Option<url::Url>,
-}
+use crate::model::login::OAuth2WebflowStateMetadata;
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct OAuth2WebFlowStateRecord {
     pub state_id: Uuid,
-    pub metadata: Json<OAuth2WebFlowStateMetadata>,
+    pub metadata: Json<OAuth2WebflowStateMetadata>,
     pub token_id: Option<Uuid>,
     pub created_at: SqlDateTime,
 

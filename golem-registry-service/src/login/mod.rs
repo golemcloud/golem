@@ -15,9 +15,8 @@
 mod oauth2;
 mod oauth2_github_client;
 mod oauth2_provider_client;
-mod oauth2_session;
 mod oauth2_token_repo;
-mod oauth2_web_flow_state_repo;
+mod oauth2_webflow_state_repo;
 mod service;
 mod model;
 mod error;
@@ -25,7 +24,6 @@ mod error;
 pub use self::oauth2::OAuth2Error;
 use self::oauth2::OAuth2Service;
 pub use self::oauth2_token_repo::{DbOAuth2TokenRepo, OAuth2TokenRepo};
-pub use self::oauth2_web_flow_state_repo::{DbOAuth2FlowState, OAuth2WebFlowStateRepo};
 pub use self::service::LoginService;
 use crate::config::LoginConfig;
 use crate::services::account::AccountService;
@@ -34,8 +32,8 @@ use golem_service_base::db::Pool;
 use std::sync::Arc;
 
 pub struct LoginSystemEnabled {
-    pub login_service: Arc<dyn LoginService>,
-    pub oauth2_service: Arc<dyn OAuth2Service>,
+    pub login_service: Arc<LoginService>,
+    pub oauth2_service: Arc<OAuth2Service>,
 }
 
 pub enum LoginSystem {

@@ -19,7 +19,7 @@ pub mod metrics;
 pub mod model;
 pub mod repo;
 pub mod services;
-pub mod login;
+// pub mod login;
 
 use self::bootstrap::Services;
 use self::config::RegistryServiceConfig;

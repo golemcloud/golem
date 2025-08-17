@@ -14,16 +14,43 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::SafeDisplay;
-use http::StatusCode;
+use golem_common::{into_internal_error, SafeDisplay};
 use std::fmt::{Debug, Display, Formatter};
 use std::time::Duration;
 use url::Url;
+use anyhow::{anyhow, Context};
+
+#[derive(Debug, thiserror::Error)]
+pub enum OAuth2GithubClientError {
+    #[error("Github device code expired, expires at: {expires_at}, current time: {current_time}")]
+    Expired {
+        expires_at: DateTime<Utc>,
+        current_time: DateTime<Utc>,
+    },
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error)
+}
+
+into_internal_error!(OAuth2GithubClientError);
+
+impl SafeDisplay for OAuth2GithubClientError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            Self::InternalError(_) => "Internal Error".to_string(),
+            Self::Expired { .. } => self.to_string()
+        }
+    }
+}
+
+impl From<reqwest::Error> for OAuth2GithubClientError {
+    fn from(value: reqwest::Error) -> Self {
+        Self::InternalError(value.into())
+    }
+}
 
 #[async_trait]
 pub trait OAuth2GithubClient: Send + Sync {
-    async fn initiate_device_workflow(&self)
-        -> Result<DeviceWorkflowData, OAuth2GithubClientError>;
+    async fn initiate_device_workflow(&self) -> Result<DeviceWorkflowData, OAuth2GithubClientError>;
 
     async fn get_access_token(
         &self,
@@ -50,39 +77,6 @@ pub struct DeviceWorkflowData {
     pub interval: Duration,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum OAuth2GithubClientError {
-    #[error("Failed to parse access token: {0}")]
-    FailedToParseAccessToken(reqwest::Error),
-    #[error("Failed to read GitHub response body: {0}")]
-    FailedToReadResponseBody(reqwest::Error),
-    #[error("Failed to parse GitHub response body: {0}")]
-    FailedToParseResponseBody(serde_json::Error),
-    #[error("Failed to retrieve GitHub device code: {0}")]
-    FailedToRetrieveDeviceCode(reqwest::Error),
-    #[error("Failed to retrieve GitHub device code: {0}")]
-    FailedToRetrieveDeviceCodeNonOk(StatusCode),
-    #[error("Failed to retrieve GitHub access token: {0}")]
-    FailedToRetrieveAccessToken(reqwest::Error),
-    #[error("Failed to retrieve GitHub access token: {0}")]
-    ErrorResponseToRetrieveAccessToken(ErrorResponse),
-    #[error("Failed to exchange code for token: {0}")]
-    FailedToExchangeCode(reqwest::Error),
-    #[error("Failed to exchange code for token: {0}")]
-    FailedToExchangeCodeNonOk(StatusCode),
-    #[error("Github device code expired, expires at: {expires_at}, current time: {current_time}")]
-    Expired {
-        expires_at: DateTime<Utc>,
-        current_time: DateTime<Utc>,
-    },
-}
-
-impl SafeDisplay for OAuth2GithubClientError {
-    fn to_safe_string(&self) -> String {
-        self.to_string()
-    }
-}
-
 pub struct OAuth2GithubClientDefault {
     pub config: crate::config::GitHubOAuth2Config,
 }
@@ -102,14 +96,12 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
             ])
             .header("Accept", "application/json")
             .send()
-            .await
-            .map_err(OAuth2GithubClientError::FailedToRetrieveDeviceCode)?;
+            .await?;
 
         if res.status().is_success() {
             let response: DeviceCodeResponse = res
                 .json()
-                .await
-                .map_err(OAuth2GithubClientError::FailedToReadResponseBody)?;
+                .await?;
 
             Ok(DeviceWorkflowData {
                 device_code: response.device_code,
@@ -119,9 +111,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
                 interval: Duration::from_secs(response.interval),
             })
         } else {
-            Err(OAuth2GithubClientError::FailedToRetrieveDeviceCodeNonOk(
-                res.status(),
-            ))
+            Err(anyhow!("Failed to start devicde flow with status: {}", res.status()))?
         }
     }
 
@@ -160,9 +150,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
                             .unwrap_or(Duration::from_secs(5));
                         interval = new_interval;
                     } else {
-                        break Err(OAuth2GithubClientError::ErrorResponseToRetrieveAccessToken(
-                            error,
-                        ));
+                        Err(anyhow!(error)).context("Failed to retrieve access token")?
                     }
                 }
             };
@@ -202,19 +190,16 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
             ])
             .header("Accept", "application/json")
             .send()
-            .await
-            .map_err(OAuth2GithubClientError::FailedToExchangeCode)?;
+            .await?;
 
         if res.status().is_success() {
             let access_token: AccessToken = res
                 .json()
-                .await
-                .map_err(OAuth2GithubClientError::FailedToParseAccessToken)?;
+                .await?;
+
             Ok(access_token.access_token)
         } else {
-            Err(OAuth2GithubClientError::FailedToExchangeCodeNonOk(
-                res.status(),
-            ))
+            Err(anyhow!("Failed to to exchange code, status: {}", res.status()))?
         }
     }
 }
@@ -236,20 +221,17 @@ async fn execute_access_token_request(
         ])
         .header("Accept", "application/json")
         .send()
-        .await
-        .map_err(OAuth2GithubClientError::FailedToRetrieveAccessToken)?;
+        .await?;
 
     let body = response
         .text()
-        .await
-        .map_err(OAuth2GithubClientError::FailedToReadResponseBody)?;
+        .await?;
 
     match serde_json::from_str::<ErrorResponse>(&body) {
         Ok(error_response) => Ok(AccessTokenResponse::ErrorResponse(error_response)),
 
         Err(_) => {
-            let access_token_response = serde_json::from_str::<AccessToken>(&body)
-                .map_err(OAuth2GithubClientError::FailedToParseResponseBody)?;
+            let access_token_response = serde_json::from_str::<AccessToken>(&body).map_err(anyhow::Error::from)?;
             Ok(AccessTokenResponse::AccessToken(access_token_response))
         }
     }

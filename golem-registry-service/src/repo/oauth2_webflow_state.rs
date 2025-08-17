@@ -14,9 +14,7 @@
 
 use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::model::new_repo_uuid;
-use crate::repo::model::oauth2_webflow_state::{
-    OAuth2WebFlowStateMetadata, OAuth2WebFlowStateRecord,
-};
+use crate::repo::model::oauth2_webflow_state;
 use crate::repo::model::token::TokenRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -29,12 +27,15 @@ use sqlx::Database;
 use sqlx::types::Json;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
+use sqlx::prelude::FromRow;
+use crate::model::login::OAuth2WebflowStateMetadata;
+use super::model::oauth2_webflow_state::OAuth2WebFlowStateRecord;
 
 #[async_trait]
 pub trait OAuth2WebflowStateRepo: Send + Sync {
     async fn create(
         &self,
-        metadata: OAuth2WebFlowStateMetadata,
+        metadata: OAuth2WebflowStateMetadata,
     ) -> RepoResult<OAuth2WebFlowStateRecord>;
 
     async fn set_token_id(
@@ -72,7 +73,7 @@ impl<Repo: OAuth2WebflowStateRepo> LoggedOAuth2WebflowStateRepo<Repo> {
 impl<Repo: OAuth2WebflowStateRepo> OAuth2WebflowStateRepo for LoggedOAuth2WebflowStateRepo<Repo> {
     async fn create(
         &self,
-        metadata: OAuth2WebFlowStateMetadata,
+        metadata: OAuth2WebflowStateMetadata,
     ) -> RepoResult<OAuth2WebFlowStateRecord> {
         self.repo.create(metadata).await
     }
@@ -132,7 +133,7 @@ impl<DBP: Pool> DbOAuth2WebflowStateRepo<DBP> {
 impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
     async fn create(
         &self,
-        metadata: OAuth2WebFlowStateMetadata,
+        metadata: OAuth2WebflowStateMetadata,
     ) -> RepoResult<OAuth2WebFlowStateRecord> {
         self.with_rw("create")
             .fetch_one_as(

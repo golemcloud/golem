@@ -85,7 +85,7 @@ pub struct OAuth2Data {
     pub encoded_session: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OAuth2WebflowStateMetadata {
     pub redirect: Option<url::Url>,
 }

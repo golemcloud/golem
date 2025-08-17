@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use super::oauth2_provider_client::{OAuth2ProviderClient, OAuth2ProviderClientError};
-use super::oauth2_token_repo::{OAuth2TokenRecord, OAuth2TokenRepo};
-use super::oauth2_web_flow_state_repo::{LinkedTokenState, OAuth2WebFlowStateRepo};
-use super::model::{ExternalLogin, OAuth2Provider, OAuth2Token};
+use super::model::{ExternalLogin, OAuth2Provider, OAuth2Token, OAuth2WeblowStateMetadata, Oauth2WeblowState};
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
@@ -30,13 +28,16 @@ use crate::services::account::AccountService;
 use crate::services::token::TokenService;
 use golem_common::model::account::{AccountId, NewAccountData};
 use anyhow::anyhow;
+use super::OAuth2TokenRepo;
+use super::oauth2_webflow_state_repo::OAuth2WebflowStateRepo;
+use crate::repo::model::oauth2_token::OAuth2TokenRecord;
 
 pub struct LoginService {
     client: Arc<dyn OAuth2ProviderClient>,
     account_service: Arc<AccountService>,
     token_service: Arc<TokenService>,
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
-    oauth2_web_flow_state_repo: Arc<dyn OAuth2WebFlowStateRepo>,
+    oauth2_web_flow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
 }
 
 impl LoginService {
@@ -45,7 +46,7 @@ impl LoginService {
         account_service: Arc<AccountService>,
         token_service: Arc<TokenService>,
         oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
-        oauth2_web_flow_state_repo: Arc<dyn OAuth2WebFlowStateRepo>,
+        oauth2_web_flow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
     ) -> Self {
         Self {
             client,
@@ -56,15 +57,15 @@ impl LoginService {
         }
     }
 
-
     pub async fn oauth2(
         &self,
         provider: &OAuth2Provider,
         access_token: &str,
     ) -> Result<TokenWithSecret, LoginError> {
         self.oauth2_web_flow_state_repo
-            .delete_expired_states()
+            .delete_expired(Utc::now().into())
             .await?;
+
         let external_login = self.client.external_user_id(provider, access_token).await?;
 
         let existing_data = self
@@ -94,16 +95,11 @@ impl LoginService {
         &self,
         redirect: Option<url::Url>,
     ) -> Result<String, LoginError> {
-        let metadata = TempTokenMetadata { redirect };
-        let metadata_bytes =
-            serde_json::to_vec(&metadata).map_err(|e| LoginError::InternalSerializationError {
-                error: e,
-                context: "Failed to serialize temp token metadata".to_string(),
-            })?;
+        let metadata = OAuth2WeblowStateMetadata { redirect };
 
         let token_state = self
             .oauth2_web_flow_state_repo
-            .generate_temp_token_state(&metadata_bytes)
+            .create(metadata)
             .await?;
 
         Ok(token_state)
@@ -119,27 +115,21 @@ impl LoginService {
             .delete_expired_states()
             .await?;
 
-        match self
+        let linked_token = self
             .oauth2_web_flow_state_repo
-            .link_temp_token(&token_id.0, state)
-            .await
-        {
-            Ok(Some(linked_token)) => {
-                let token = UnsafeTokenWithMetadata::try_from(linked_token).map_err(|e| {
-                    LoginError::InternalSerializationError {
-                        error: e,
-                        context: "Failed to deserialize temp token".to_string(),
-                    }
-                })?;
+            .set_token_id(&token_id.0, state)
+            .await?
+            .ok_or(LoginError::UnknownTokenState(state.to_string()))?;
 
-                Ok(token)
+
+        let token = UnsafeTokenWithMetadata::try_from(linked_token).map_err(|e| {
+            LoginError::InternalSerializationError {
+                error: e,
+                context: "Failed to deserialize temp token".to_string(),
             }
-            Ok(None) => Err(LoginError::UnknownTokenState(state.to_string())),
-            Err(error) => {
-                error!("Failed to link temporary token. {}", error);
-                Err(error.into())
-            }
-        }
+        })?;
+
+        Ok(token)
     }
 
     pub async fn unlink_temp_token(&self, token_id: &TokenId) -> Result<(), LoginError> {
