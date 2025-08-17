@@ -54,7 +54,7 @@ pub struct OAuth2Service {
 impl OAuth2Service {
     pub fn new(
         client: Arc<dyn OAuth2GithubClient>,
-        config: EdDsaConfig,
+        config: &EdDsaConfig,
     ) -> Result<Self, OAuth2Error> {
         let private_key = format_key(config.private_key.as_str(), "PRIVATE");
         let public_key = format_key(config.public_key.as_str(), "PUBLIC");
