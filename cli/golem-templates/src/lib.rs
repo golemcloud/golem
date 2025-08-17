@@ -26,18 +26,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use golem_rdbms as _;
-use golem_wit as _;
-
 pub mod model;
 
 #[cfg(test)]
 test_r::enable!();
 
 static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
-static ADAPTERS: Dir<'_> = include_dir!("$OUT_DIR/golem-wit/adapters");
-static WIT: Dir<'_> = include_dir!("$OUT_DIR/golem-wit/wit/deps");
-static RDBMS_WIT: Dir<'_> = include_dir!("$OUT_DIR/golem-rdbms/wit");
+static WIT: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/wit/deps");
 
 static APP_MANIFEST_HEADER: &str = indoc! {"
 # Schema for IDEA:
@@ -65,9 +60,6 @@ fn all_templates() -> Vec<Template> {
         if let Some(lang_dir) = entry.as_dir() {
             let lang_dir_name = lang_dir.path().file_name().unwrap().to_str().unwrap();
             if let Some(lang) = GuestLanguage::from_string(lang_dir_name) {
-                let adapters_path =
-                    Path::new(lang.tier().name()).join("wasi_snapshot_preview1.wasm");
-
                 for sub_entry in lang_dir.entries() {
                     if let Some(template_dir) = sub_entry.as_dir() {
                         let template_dir_name =
@@ -79,7 +71,6 @@ fn all_templates() -> Vec<Template> {
                                 lang,
                                 lang_dir.path(),
                                 Path::new("INSTRUCTIONS"),
-                                &adapters_path,
                                 template_dir.path(),
                             );
 
@@ -168,25 +159,6 @@ pub fn instantiate_template(
         parameters,
         resolve_mode,
     )?;
-    if let Some(adapter_path) = &template.adapter_source {
-        let adapter_dir = {
-            parameters
-                .target_path
-                .join(match &template.adapter_target {
-                    Some(target) => target.clone(),
-                    None => PathBuf::from("adapters"),
-                })
-                .join(template.language.tier().name())
-        };
-
-        fs::create_dir_all(&adapter_dir)?;
-        copy(
-            &ADAPTERS,
-            adapter_path,
-            &adapter_dir.join(adapter_path.file_name().unwrap().to_str().unwrap()),
-            TargetExistsResolveMode::MergeOrSkip,
-        )?;
-    }
     let wit_deps_targets = {
         match &template.wit_deps_targets {
             Some(paths) => paths
@@ -200,11 +172,7 @@ pub fn instantiate_template(
         for target_wit_deps in &wit_deps_targets {
             let name = wit_dep.file_name().unwrap().to_str().unwrap();
             let target = target_wit_deps.join(name);
-            if name == "golem-rdbms" {
-                copy_all_root(&RDBMS_WIT, &target, TargetExistsResolveMode::MergeOrSkip)?;
-            } else {
-                copy_all(&WIT, wit_dep, &target, TargetExistsResolveMode::MergeOrSkip)?;
-            }
+            copy_all(&WIT, wit_dep, &target, TargetExistsResolveMode::MergeOrSkip)?;
         }
     }
     Ok(render_template_instructions(template, parameters))
@@ -409,25 +377,6 @@ fn copy_all(
     Ok(())
 }
 
-fn copy_all_root(
-    catalog: &Dir<'_>,
-    target_path: &Path,
-    resolve_mode: TargetExistsResolveMode,
-) -> io::Result<()> {
-    fs::create_dir_all(target_path)?;
-
-    for file in catalog.files() {
-        copy(
-            catalog,
-            file.path(),
-            &target_path.join(file.path().file_name().unwrap().to_str().unwrap()),
-            resolve_mode,
-        )?;
-    }
-
-    Ok(())
-}
-
 enum TransformMode {
     All,
     PackageAndComponentOnly,
@@ -587,7 +536,6 @@ fn parse_template(
     lang: GuestLanguage,
     lang_path: &Path,
     default_instructions_file_name: &Path,
-    adapters_path: &Path,
     template_root: &Path,
 ) -> Template {
     let raw_metadata = TEMPLATES
@@ -678,10 +626,6 @@ fn parse_template(
         wit_deps.push(PathBuf::from("sockets"));
     }
 
-    let requires_adapter = metadata
-        .requires_adapter
-        .unwrap_or(metadata.adapter_target.is_some());
-
     Template {
         name,
         kind,
@@ -689,14 +633,6 @@ fn parse_template(
         description: metadata.description,
         template_path: template_root.to_path_buf(),
         instructions,
-        adapter_source: {
-            if requires_adapter {
-                Some(adapters_path.to_path_buf())
-            } else {
-                None
-            }
-        },
-        adapter_target: metadata.adapter_target.map(PathBuf::from),
         wit_deps,
         wit_deps_targets: metadata
             .wit_deps_paths
