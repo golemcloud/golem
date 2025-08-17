@@ -22,7 +22,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::PlanId;
 use golem_common::model::account::{Account, AccountId, NewAccountData};
 use golem_common::model::auth::TokenSecret;
-use golem_common::{SafeDisplay, error_forwarders};
+use golem_common::{error_forwarders, into_internal_error, SafeDisplay};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -44,6 +44,8 @@ impl SafeDisplay for AccountError {
         }
     }
 }
+
+into_internal_error!(AccountError);
 
 error_forwarders!(AccountError, RepoError, PlanError, TokenError,);
 

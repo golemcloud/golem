@@ -44,7 +44,7 @@ pub enum ComponentError {
     #[error("Malformed component archive: {message}")]
     MalformedComponentArchive { message: String },
     #[error("Provided component file not found: {path} (key: {key})")]
-    InitialComponentFileNotFound { path: String, key: String },
+    InitialComponentFileNotFound { path: ComponentFilePath, key: InitialComponentFileKey },
     #[error("Invalid file path: {0}")]
     InvalidFilePath(String),
     #[error(
@@ -84,18 +84,6 @@ pub enum ComponentError {
     },
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
-}
-
-impl ComponentError {
-    pub fn initial_component_file_not_found(
-        path: &ComponentFilePath,
-        key: &InitialComponentFileKey,
-    ) -> Self {
-        Self::InitialComponentFileNotFound {
-            path: path.to_string(),
-            key: key.to_string(),
-        }
-    }
 }
 
 impl SafeDisplay for ComponentError {
