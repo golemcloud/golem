@@ -2584,7 +2584,7 @@ paths:
               - metadata
               properties:
                 metadata:
-                  $ref: '#/components/schemas/UpdateComponentRequestComponentMetadata'
+                  $ref: '#/components/schemas/UpdateComponentRequestMetadata'
                 newComponentWasm:
                   type: string
                   format: binary
@@ -8565,9 +8565,9 @@ components:
           type: string
         certificatePrivateKey:
           type: string
-    UpdateComponentRequestComponentMetadata:
+    UpdateComponentRequestMetadata:
       type: object
-      title: UpdateComponentRequestComponentMetadata
+      title: UpdateComponentRequestMetadata
       required:
       - previousVersion
       properties:

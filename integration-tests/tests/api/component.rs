@@ -39,3 +39,31 @@ async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Re
 
     Ok(())
 }
+
+#[test]
+#[tracing::instrument]
+async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let component_1 = user.component(&env, "update-test-v1").store().await?;
+    let component_2 = user
+        .update_component_with(
+            &component_1.versioned_component_id.component_id,
+            component_1.versioned_component_id.version,
+            Some("update-test-v2"),
+            None,
+            vec![],
+            vec![],
+            None,
+            None,
+        )
+        .await?;
+
+    assert!(
+        component_2.versioned_component_id.component_id
+            == component_1.versioned_component_id.component_id
+    );
+    assert!(component_2.wasm_hash != component_1.wasm_hash);
+    Ok(())
+}

@@ -33,7 +33,7 @@ declare_structs! {
         pub agent_types: Option<Vec<AgentType>>
     }
 
-    pub struct UpdateComponentRequestComponentMetadata {
+    pub struct UpdateComponentRequestMetadata {
         pub previous_version: ComponentRevision,
         pub component_type: Option<ComponentType>,
         pub removed_files: Option<Vec<ComponentFilePath>>,

@@ -26,14 +26,17 @@ use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog};
 use golem_client::api::RegistryServiceClient;
-use golem_common::api::component::CreateComponentRequestMetadata;
+use golem_common::api::component::{
+    CreateComponentRequestMetadata, UpdateComponentRequestMetadata,
+};
 use golem_common::model::application::{ApplicationId, ApplicationName, NewApplicationData};
 use golem_common::model::component::{
     Component, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentName,
-    ComponentType,
+    ComponentRevision, ComponentType,
 };
 use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName, NewEnvironmentData};
+use golem_common::model::ComponentId;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -53,7 +56,7 @@ pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     unique: bool,
     unverified: bool,
     files: Vec<IFSEntry>,
-    dynamic_linking: BTreeMap<String, DynamicLinkedInstance>,
+    dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     env: BTreeMap<String, String>,
 }
 
@@ -68,7 +71,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
             unique: false,
             unverified: false,
             files: vec![],
-            dynamic_linking: BTreeMap::new(),
+            dynamic_linking: HashMap::new(),
             env: BTreeMap::new(),
         }
     }
@@ -210,8 +213,20 @@ pub trait TestDsl {
         unique: bool,
         unverified: bool,
         files: Vec<IFSEntry>,
-        dynamic_linking: BTreeMap<String, DynamicLinkedInstance>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
+    ) -> anyhow::Result<Component>;
+
+    async fn update_component_with(
+        &self,
+        component_id: &ComponentId,
+        previous_version: ComponentRevision,
+        wasm_name: Option<&str>,
+        component_type: Option<ComponentType>,
+        new_files: Vec<IFSEntry>,
+        removed_files: Vec<ComponentFilePath>,
+        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+        env: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<Component>;
 
     // async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
@@ -523,7 +538,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         unique: bool,
         unverified: bool,
         files: Vec<IFSEntry>,
-        dynamic_linking: BTreeMap<String, DynamicLinkedInstance>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
     ) -> anyhow::Result<Component> {
         let component_directy = self.deps.component_directory();
@@ -556,9 +571,9 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             source_path
         };
 
-        let (_tmp_dir, maybe_ifs_archive) = if !files.is_empty() {
-            let (tmp_dir, ifs_archive) = build_ifs_archive(component_directy, &files).await?;
-            (Some(tmp_dir), Some(File::open(ifs_archive).await?))
+        let (_tmp_dir, maybe_files_archive) = if !files.is_empty() {
+            let (tmp_dir, files_archive) = build_ifs_archive(component_directy, &files).await?;
+            (Some(tmp_dir), Some(File::open(files_archive).await?))
         } else {
             (None, None)
         };
@@ -589,7 +604,70 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                     agent_types: None,
                 },
                 File::open(source_path).await?,
-                maybe_ifs_archive,
+                maybe_files_archive,
+            )
+            .await?;
+
+        Ok(component)
+    }
+
+    async fn update_component_with(
+        &self,
+        component_id: &ComponentId,
+        previous_version: ComponentRevision,
+        wasm_name: Option<&str>,
+        component_type: Option<ComponentType>,
+        new_files: Vec<IFSEntry>,
+        removed_files: Vec<ComponentFilePath>,
+        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+        env: Option<BTreeMap<String, String>>,
+    ) -> anyhow::Result<Component> {
+        let component_directy = self.deps.component_directory();
+
+        let updated_wasm = if let Some(wasm_name) = wasm_name {
+            let source_path: PathBuf = component_directy.join(format!("{wasm_name}.wasm"));
+            Some(File::open(source_path).await?)
+        } else {
+            None
+        };
+
+        let (_tmp_dir, maybe_new_files_archive) = if !new_files.is_empty() {
+            let (tmp_dir, new_files_archive) =
+                build_ifs_archive(component_directy, &new_files).await?;
+            (Some(tmp_dir), Some(File::open(new_files_archive).await?))
+        } else {
+            (None, None)
+        };
+
+        let new_file_options = new_files
+            .into_iter()
+            .map(|f| {
+                (
+                    f.target_path,
+                    ComponentFileOptions {
+                        permissions: f.permissions,
+                    },
+                )
+            })
+            .apply(BTreeMap::from_iter);
+
+        let client = self.deps.registry_service().client(&self.token).await;
+
+        let component = client
+            .update_component(
+                &component_id.0,
+                &UpdateComponentRequestMetadata {
+                    previous_version,
+                    component_type,
+                    new_file_options: Some(new_file_options),
+                    removed_files: Some(removed_files),
+                    dynamic_linking,
+                    env,
+                    agent_types: None,
+                    plugin_installation_actions: None,
+                },
+                updated_wasm,
+                maybe_new_files_archive,
             )
             .await?;
 

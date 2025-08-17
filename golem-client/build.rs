@@ -45,8 +45,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::api::component::CreateComponentRequestMetadata",
             ),
             (
-                "UpdateComponentRequestComponentMetadata",
-                "golem_common::api::component::UpdateComponentRequestComponentMetadata",
+                "UpdateComponentRequestMetadata",
+                "golem_common::api::component::UpdateComponentRequestMetadata",
             ),
             (
                 "CreateAppPluginRequestMetadata",
