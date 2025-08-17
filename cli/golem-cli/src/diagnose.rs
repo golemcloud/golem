@@ -50,15 +50,8 @@ struct SelectedLanguage {
 impl SelectedLanguage {
     pub fn from_flag(dir: &Path, guest_language: GuestLanguage) -> Option<SelectedLanguage> {
         let language = match guest_language {
-            GuestLanguage::C => Some(Language::CCcp),
-            GuestLanguage::Go => Some(Language::Go),
-            GuestLanguage::JavaScript => Some(Language::JsTs),
-            GuestLanguage::Python => Some(Language::Python),
             GuestLanguage::Rust => Some(Language::Rust),
             GuestLanguage::TypeScript => Some(Language::JsTs),
-            GuestLanguage::Zig => Some(Language::Zig),
-            GuestLanguage::ScalaJs => Some(Language::ScalaJs),
-            GuestLanguage::MoonBit => Some(Language::MoonBit),
         };
 
         language.map(|language| SelectedLanguage {

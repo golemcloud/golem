@@ -77,24 +77,10 @@ fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tracing) 
     let app_name = "test-app-name";
 
     let mut ctx = TestContext::new();
-    let outputs = ctx.cli([
-        cmd::APP,
-        cmd::NEW,
-        app_name,
-        "c",
-        "go",
-        "typescript",
-        "rust",
-    ]);
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "typescript", "rust"]);
     assert!(outputs.success());
 
     ctx.cd(app_name);
-
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "c", "app:c"]);
-    assert!(outputs.success());
-
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "go", "app:go"]);
-    assert!(outputs.success());
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "typescript", "app:typescript"]);
     assert!(outputs.success());
@@ -108,8 +94,6 @@ fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tracing) 
     check!(outputs.stderr_contains(pattern::HELP_COMMANDS));
     check!(!outputs.stderr_contains(pattern::ERROR));
     check!(outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
-    check!(outputs.stderr_contains("app:c"));
-    check!(outputs.stderr_contains("app:go"));
     check!(outputs.stderr_contains("app:rust"));
     check!(outputs.stderr_contains("app:typescript"));
     check!(outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
@@ -221,7 +205,7 @@ fn basic_dependencies_build(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust", "go"]);
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]);
     assert!(outputs.success());
 
     ctx.cd(app_name);
@@ -229,7 +213,7 @@ fn basic_dependencies_build(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"]);
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "go", "app:go"]);
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust-other"]);
     assert!(outputs.success());
 
     fs::append_str(
@@ -243,20 +227,24 @@ fn basic_dependencies_build(_tracing: &Tracing) {
               app:rust:
               - target: app:rust
                 type: wasm-rpc
-              - target: app:go
+              - target: app:rust-other
                 type: wasm-rpc
         "},
     )
     .unwrap();
 
     fs::append_str(
-        ctx.cwd_path_join(Path::new("components-go").join("app-go").join("golem.yaml")),
+        ctx.cwd_path_join(
+            Path::new("components-rust")
+                .join("app-rust-other")
+                .join("golem.yaml"),
+        ),
         indoc! {"
             dependencies:
-              app:go:
+              app:rust-other:
               - target: app:rust
                 type: wasm-rpc
-              - target: app:go
+              - target: app:rust-other
                 type: wasm-rpc
         "},
     )
@@ -265,7 +253,7 @@ fn basic_dependencies_build(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::APP]);
     assert!(!outputs.success());
     check!(outputs.stderr_count_lines_containing("- app:rust (wasm-rpc)") == 2);
-    check!(outputs.stderr_count_lines_containing("- app:go (wasm-rpc)") == 2);
+    check!(outputs.stderr_count_lines_containing("- app:rust-other (wasm-rpc)") == 2);
 
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
     assert!(outputs.success());
