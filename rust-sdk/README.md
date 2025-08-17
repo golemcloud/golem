@@ -9,5 +9,4 @@ the [transaction API](https://learn.golem.cloud/docs/transaction-api).
 
 ## golem-rust-macro
 
-The `golem-rust-macro` crate contains Rust macros for working with generated bindings and implementing a code-first
-approach for component interfaces.
+The `golem-rust-macro` crate contains Rust derivation macros for working with Golem's `ValueAndType` types.
