@@ -72,6 +72,7 @@ run_task = [
         "wit-wasm-rpc",
         "wit-golem-common",
         "wit-golem-cli",
+        "wit-template-golem-agent-ts",
         "wit-done",
     ] },
 ]
@@ -119,6 +120,15 @@ private = true
 install_crate = { crate_name = "wit-deps-cli", binary = "wit-deps", test_arg = "--help" }
 command = "wit-deps"
 args = ["update"]
+
+[tasks.wit-template-golem-agent-ts]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r cli/template-golem-agent-ts/wit/deps
+mkdir cli/template-golem-agent-ts/wit/deps
+glob_cp wit/deps/**/* cli/template-golem-agent-ts/wit/deps
+"""
 
 [tasks.wit-done]
 private = true
