@@ -117,29 +117,15 @@ impl TemplateKind {
     Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, Serialize, Deserialize,
 )]
 pub enum GuestLanguage {
-    C,
-    Go,
-    JavaScript,
-    Python,
     Rust,
     TypeScript,
-    Zig,
-    ScalaJs,
-    MoonBit,
 }
 
 impl GuestLanguage {
     pub fn from_string(s: impl AsRef<str>) -> Option<GuestLanguage> {
         match s.as_ref().to_lowercase().as_str() {
-            "c" | "c++" | "cpp" => Some(GuestLanguage::C),
-            "go" => Some(GuestLanguage::Go),
-            "js" | "javascript" => Some(GuestLanguage::JavaScript),
-            "py" | "python" => Some(GuestLanguage::Python),
             "rust" => Some(GuestLanguage::Rust),
             "ts" | "typescript" => Some(GuestLanguage::TypeScript),
-            "zig" => Some(GuestLanguage::Zig),
-            "moon" | "moonbit" | "mbt" => Some(GuestLanguage::MoonBit),
-            "scala" | "scalajs" => Some(GuestLanguage::ScalaJs),
             _ => None,
         }
     }
@@ -147,42 +133,21 @@ impl GuestLanguage {
     pub fn id(&self) -> String {
         match self {
             GuestLanguage::Rust => "rust".to_string(),
-            GuestLanguage::Go => "go".to_string(),
-            GuestLanguage::C => "c".to_string(),
-            GuestLanguage::Zig => "zig".to_string(),
-            GuestLanguage::JavaScript => "js".to_string(),
             GuestLanguage::TypeScript => "ts".to_string(),
-            GuestLanguage::Python => "python".to_string(),
-            GuestLanguage::ScalaJs => "scala".to_string(),
-            GuestLanguage::MoonBit => "moonbit".to_string(),
         }
     }
 
     pub fn tier(&self) -> GuestLanguageTier {
         match self {
-            GuestLanguage::C => GuestLanguageTier::Tier1,
-            GuestLanguage::Go => GuestLanguageTier::Tier1,
-            GuestLanguage::JavaScript => GuestLanguageTier::Tier1,
-            GuestLanguage::Python => GuestLanguageTier::Tier1,
             GuestLanguage::Rust => GuestLanguageTier::Tier1,
             GuestLanguage::TypeScript => GuestLanguageTier::Tier1,
-            GuestLanguage::Zig => GuestLanguageTier::Tier1,
-            GuestLanguage::ScalaJs => GuestLanguageTier::Tier1,
-            GuestLanguage::MoonBit => GuestLanguageTier::Tier1,
         }
     }
 
     pub fn name(&self) -> &'static str {
         match self {
-            GuestLanguage::C => "C",
-            GuestLanguage::Go => "Go",
-            GuestLanguage::JavaScript => "JavaScript",
-            GuestLanguage::Python => "Python",
             GuestLanguage::Rust => "Rust",
             GuestLanguage::TypeScript => "TypeScript",
-            GuestLanguage::Zig => "Zig",
-            GuestLanguage::ScalaJs => "Scala.js",
-            GuestLanguage::MoonBit => "MoonBit",
         }
     }
 }

@@ -133,9 +133,6 @@ pub fn main() -> anyhow::Result<()> {
             for (language, templates) in &app_templates {
                 if !languages.is_empty() && !languages.contains(language) {
                     continue;
-                } else if languages.is_empty() && *language == GuestLanguage::ScalaJs {
-                    // Disable ScalaJs, unless explicitly asked for
-                    continue;
                 }
 
                 println!("Adding components for language {}", language.name().blue());
@@ -164,11 +161,6 @@ pub fn main() -> anyhow::Result<()> {
                         )?
                     }
                 }
-            }
-
-            if used_languages.contains(&GuestLanguage::JavaScript) {
-                println!("Installing npm packages with golem-cli");
-                golem_cli(&target_path, ["app", "js-npm-install"])?;
             }
 
             if used_languages.contains(&GuestLanguage::TypeScript) {
