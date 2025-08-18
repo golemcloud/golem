@@ -52,6 +52,7 @@ pub struct OAuth2AccessToken {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OAuth2WebflowStateMetadata {
     pub redirect: Option<url::Url>,
+    pub provider: OAuth2Provider,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

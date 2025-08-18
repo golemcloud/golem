@@ -39,6 +39,8 @@ use applying::Apply;
 pub enum OAuth2Error {
     #[error("Invalid encoded oauth2 session: {}", 0.to_string())]
     InvalidSession(jsonwebtoken::errors::Error),
+    #[error("OAuth2 web flow state not found: {0}")]
+    OAuth2WebflowStateNotFound(OAuth2WebflowStateId),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error)
 }
@@ -47,6 +49,7 @@ impl SafeDisplay for OAuth2Error {
     fn to_safe_string(&self) -> String {
         match self {
             Self::InvalidSession(_) => self.to_string(),
+            Self::OAuth2WebflowStateNotFound(_) => self.to_string(),
             Self::InternalError(_) => "Internal Error".to_string()
         }
     }
@@ -98,7 +101,7 @@ impl OAuth2Service {
         provider: &OAuth2Provider,
         redirect: Option<url::Url>,
     ) -> Result<OAuth2WebWorkflowData, OAuth2Error> {
-        let metadata = OAuth2WebflowStateMetadata { redirect };
+        let metadata = OAuth2WebflowStateMetadata { redirect, provider: provider.clone() };
 
         let state = self
             .oauth2_web_flow_state_repo
@@ -110,6 +113,62 @@ impl OAuth2Service {
         let url = self.get_authorize_url(provider, &state).await?;
 
         Ok(OAuth2WebWorkflowData { url, state })
+    }
+
+    pub async fn handle_web_workflow_callback(
+        &self,
+        state_id: &OAuth2WebflowStateId,
+        code: String,
+    ) -> Result<OAuth2WebflowStateMetadata, OAuth2Error> {
+        let state: OAuth2WebflowState = self
+            .oauth2_web_flow_state_repo
+            .get_by_id(&state_id.0)
+            .await?
+            .ok_or(OAuth2Error::OAuth2WebflowStateNotFound(state_id.clone()))?
+            .into();
+
+        let access_token = self.exchange_code_for_token(&state.metadata.provider, &code, &state_id).await?;
+
+        let external_login = self.get_external_login(&state.metadata.provider, &access_token).await?;
+
+        let existing_data = self
+            .oauth2_token_repo
+            .get_by_external_provider(&state.metadata.provider.to_string(), &external_login.external_id)
+            .await?
+            .map(TryInto::<OAuth2Token>::try_into)
+            .transpose()?;
+
+        let account_id = match &existing_data {
+            Some(token) => token.account_id.clone(),
+            None => self.make_account(&external_login).await?,
+        };
+
+        let token = match existing_data.and_then(|token| token.token_id) {
+            Some(token_id) => self.token_service.get(&token_id).await?,
+            None => {
+                // This will also link the external id to the account id, ensure that no additional
+                // accounts are created in the future.
+                self.make_token(state.metadata.provider.clone(), external_login, account_id).await?
+            }
+        };
+
+        self.oauth2_web_flow_state_repo.set_token_id(&state_id.0, &token.id.0).await?;
+
+        Ok(state.metadata)
+    }
+
+    pub async fn get_web_workflow_state(
+        &self,
+        state_id: &OAuth2WebflowStateId,
+    ) -> Result<OAuth2WebflowState, OAuth2Error> {
+        let state: OAuth2WebflowState = self
+            .oauth2_web_flow_state_repo
+            .get_by_id(&state_id.0)
+            .await?
+            .ok_or(OAuth2Error::OAuth2WebflowStateNotFound(state_id.clone()))?
+            .into();
+
+        Ok(state)
     }
 
     pub async fn start_device_workflow(&self) -> Result<OAuth2Data, OAuth2Error> {
@@ -142,7 +201,7 @@ impl OAuth2Service {
             .get_device_workflow_access_token(&session.device_code, session.interval, session.expires_at)
             .await?;
 
-        let external_login = self.client.external_user_id(&access_token).await?;
+        let external_login = self.client.get_external_login(&access_token).await?;
 
         let existing_data = self
             .oauth2_token_repo
@@ -151,8 +210,8 @@ impl OAuth2Service {
             .map(TryInto::<OAuth2Token>::try_into)
             .transpose()?;
 
-        let account_id = match existing_data.clone() {
-            Some(token) => token.account_id,
+        let account_id = match &existing_data {
+            Some(token) => token.account_id.clone(),
             None => self.make_account(&external_login).await?,
         };
 
@@ -168,7 +227,7 @@ impl OAuth2Service {
         Ok(token)
     }
 
-    pub async fn get_authorize_url(
+    async fn get_authorize_url(
         &self,
         provider: &OAuth2Provider,
         state: &OAuth2WebflowStateId,
@@ -181,14 +240,24 @@ impl OAuth2Service {
         }
     }
 
-    pub async fn exchange_code_for_token(
+    async fn exchange_code_for_token(
         &self,
-        provider: OAuth2Provider,
+        provider: &OAuth2Provider,
         code: &str,
-        state: &str,
+        state: &OAuth2WebflowStateId,
     ) -> Result<String, OAuth2Error> {
         match provider {
             OAuth2Provider::Github => Ok(self.client.exchange_code_for_token(code, state).await?),
+        }
+    }
+
+    async fn get_external_login(
+        &self,
+        provider: &OAuth2Provider,
+        access_token: &str,
+    ) -> Result<ExternalLogin, OAuth2Error> {
+        match provider {
+            OAuth2Provider::Github => Ok(self.client.get_external_login(access_token).await?),
         }
     }
 

@@ -229,6 +229,7 @@ impl From<OAuth2Error> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             OAuth2Error::InvalidSession(_) => Self::BadRequest(Json(ErrorsBody { errors: vec![error], cause: None })),
+            OAuth2Error::OAuth2WebflowStateNotFound(_) => Self::NotFound(Json(ErrorBody { error, cause: None })),
             OAuth2Error::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("OAuth2Error")),

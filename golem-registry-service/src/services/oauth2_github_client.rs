@@ -66,10 +66,10 @@ pub trait OAuth2GithubClient: Send + Sync {
     async fn exchange_code_for_token(
         &self,
         code: &str,
-        state: &str,
+        state: &OAuth2WebflowStateId,
     ) -> Result<String, OAuth2GithubClientError>;
 
-    async fn external_user_id(
+    async fn get_external_login(
         &self,
         access_token: &str,
     ) -> Result<ExternalLogin, OAuth2GithubClientError>;
@@ -183,7 +183,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
     async fn exchange_code_for_token(
         &self,
         code: &str,
-        state: &str,
+        state: &OAuth2WebflowStateId,
     ) -> Result<String, OAuth2GithubClientError> {
         let client = reqwest::Client::new();
 
@@ -193,7 +193,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
                 ("client_id", &self.config.client_id),
                 ("client_secret", &self.config.client_secret),
                 ("code", &String::from(code)),
-                ("state", &String::from(state)),
+                ("state", &state.0.to_string()),
             ])
             .header("Accept", "application/json")
             .send()
@@ -210,7 +210,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
         }
     }
 
-    async fn external_user_id(
+    async fn get_external_login(
         &self,
         access_token: &str,
     ) -> Result<ExternalLogin, OAuth2GithubClientError> {

@@ -108,7 +108,7 @@ impl Default for GitHubOAuth2Config {
             client_id: "GITHUB_CLIENT_ID".to_string(),
             client_secret: "GITHUB_CLIENT_SECRET".to_string(),
             redirect_uri: url::Url::parse(
-                "http://localhost:8080/v1/login/oauth2/web/callback/github",
+                "http://localhost:8080/v1/login/oauth2/web/callback",
             )
             .unwrap(),
         }

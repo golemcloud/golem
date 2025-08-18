@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use super::ApiResult;
-use super::model::{WebFlowCallbackResponse, WebFlowPollResponse};
-use golem_common::api::WebFlowAuthorizeUrlResponse;
+use super::model::{WebFlowCallbackResponse, WebFlowCallbackSuccess, WebFlowPollResponse};
 use golem_common::model::auth::{Token, TokenWithSecret};
-use golem_common::model::login::{EncodedOAuth2Session, OAuth2Data, OAuth2Provider, OAuth2WebWorkflowData};
+use golem_common::model::login::{EncodedOAuth2Session, OAuth2Data, OAuth2Provider, OAuth2WebWorkflowData, OAuth2WebflowStateId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -28,6 +27,7 @@ use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
 use std::sync::Arc;
 use super::error::ApiError;
 use golem_common::model::error::ErrorBody;
+use golem_common::model::Empty;
 
 pub struct LoginApi {
     pub login_system: LoginSystem
@@ -59,40 +59,6 @@ impl LoginApi {
     }
 
     async fn current_token_internal(&self, _token: GolemSecurityScheme) -> ApiResult<Json<Token>> {
-        todo!()
-    }
-
-    /// Acquire token with OAuth2 authorization
-    ///
-    /// Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
-    ///
-    /// In the response:
-    /// - `id` is the identifier of the token itself
-    /// - `accountId` is the account's identifier, can be used on the account API
-    /// - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
-    ///
-    #[oai(path = "/oauth2", method = "post", operation_id = "login_oauth2")]
-    async fn oauth2(
-        &self,
-        /// Currently only `github` is supported.
-        provider: Query<String>,
-        /// OAuth2 access token
-        #[oai(name = "access-token")]
-        access_token: Query<String>,
-    ) -> ApiResult<Json<TokenWithSecret>> {
-        let record = recorded_http_api_request!("login_oauth2",);
-        let response = self
-            .oauth2_internal(provider.0, access_token.0)
-            .instrument(record.span.clone())
-            .await;
-        record.result(response)
-    }
-
-    async fn oauth2_internal(
-        &self,
-        _provider: String,
-        _access_token: String,
-    ) -> ApiResult<Json<TokenWithSecret>> {
         todo!()
     }
 
@@ -225,7 +191,7 @@ impl LoginApi {
     /// This endpoint handles the callback from GitHub after the user has authorized the application.
     /// It exchanges the code for an access token and then uses that to log the user in.
     #[oai(
-        path = "/oauth2/web/callback/github",
+        path = "/oauth2/web/callback",
         method = "get",
         operation_id = "oauth2_web_flow_callback_github"
     )]
@@ -234,8 +200,8 @@ impl LoginApi {
         /// The authorization code returned by GitHub
         Query(code): Query<String>,
         /// The state parameter for CSRF protection
-        Query(state): Query<String>,
-    ) -> ApiResult<WebFlowCallbackResponse> {
+        Query(state): Query<OAuth2WebflowStateId>,
+    ) -> ApiResult<WebFlowCallbackSuccess> {
         let record = recorded_http_api_request!("oauth2_web_flow_callback_github",);
         let response = self
             .oauth2_web_flow_callback_github_internal(code, state)
@@ -247,10 +213,26 @@ impl LoginApi {
 
     async fn oauth2_web_flow_callback_github_internal(
         &self,
-        _code: String,
-        _state: String,
-    ) -> ApiResult<WebFlowCallbackResponse> {
-        todo!()
+        code: String,
+        state: OAuth2WebflowStateId,
+    ) -> ApiResult<WebFlowCallbackSuccess> {
+        let login_system = self.get_enabled_login_system()?;
+
+        let state_metadata = login_system
+            .oauth2_service
+            .handle_web_workflow_callback(&state, code).await?;
+
+        let response = if let Some(mut redirect) = state_metadata.redirect {
+            redirect.query_pairs_mut().append_pair("state", &state.0.to_string());
+            WebFlowCallbackSuccess::Redirect(
+                Json(Empty {}),
+                redirect.to_string(),
+            )
+        } else {
+            WebFlowCallbackSuccess::Success(Json(Empty {}))
+        };
+
+        Ok(response)
     }
 
     /// Poll for OAuth2 Web Flow token
@@ -264,7 +246,7 @@ impl LoginApi {
     async fn oauth2_web_flow_poll(
         &self,
         /// The state parameter for identifying the session
-        Query(state): Query<String>,
+        Query(state): Query<OAuth2WebflowStateId>,
     ) -> ApiResult<WebFlowPollResponse> {
         let record = recorded_http_api_request!("oauth2_web_flow_poll",);
         let response = self
@@ -277,9 +259,18 @@ impl LoginApi {
 
     async fn oauth2_web_flow_poll_internal(
         &self,
-        _state: String,
+        state_id: OAuth2WebflowStateId,
     ) -> ApiResult<WebFlowPollResponse> {
-        todo!()
+        let login_system = self.get_enabled_login_system()?;
+
+        let state = login_system.oauth2_service.get_web_workflow_state(&state_id).await?;
+
+        let response = match state.token {
+            Some(token) => WebFlowPollResponse::Completed(Json(token)),
+            None => WebFlowPollResponse::Pending(Json(Empty { }))
+        };
+
+        Ok(response)
     }
 
     fn get_enabled_login_system(&self) -> ApiResult<&LoginSystemEnabled> {
