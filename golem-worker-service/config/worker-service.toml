@@ -49,7 +49,6 @@ type = "Sqlite"
 
 [db.config]
 database = "../data/golem_worker.sqlite"
-foreign_keys = false
 max_connections = 10
 
 [domain_records]

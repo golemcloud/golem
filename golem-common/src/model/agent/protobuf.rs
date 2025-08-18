@@ -1,9 +1,14 @@
 use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentMethod, AgentType, BinaryDescriptor, BinaryType,
-    DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor, TextType,
+    AgentConstructor, AgentDependency, AgentMethod, AgentType, BinaryDescriptor, BinaryReference,
+    BinarySource, BinaryType, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, TextDescriptor,
+    TextReference, TextSource, TextType, Url,
 };
 use golem_api_grpc::proto::golem::component::data_schema;
 use golem_api_grpc::proto::golem::component::element_schema;
+use golem_api_grpc::proto::golem::component::{
+    binary_reference, data_value, element_value, text_reference,
+};
 
 impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
     type Error = String;
@@ -381,6 +386,251 @@ impl From<BinaryType> for golem_api_grpc::proto::golem::component::BinaryType {
     fn from(value: BinaryType) -> Self {
         golem_api_grpc::proto::golem::component::BinaryType {
             mime_type: value.mime_type,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::TextSource> for TextSource {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::TextSource,
+    ) -> Result<Self, Self::Error> {
+        Ok(TextSource {
+            data: value.data,
+            text_type: match value.text_type {
+                None => None,
+                Some(tt) => Some(tt.try_into()?),
+            },
+        })
+    }
+}
+
+impl From<TextSource> for golem_api_grpc::proto::golem::component::TextSource {
+    fn from(value: TextSource) -> Self {
+        golem_api_grpc::proto::golem::component::TextSource {
+            data: value.data,
+            text_type: value.text_type.map(|tt| tt.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::TextReference> for TextReference {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::TextReference,
+    ) -> Result<Self, Self::Error> {
+        match value.text {
+            None => Err("Missing field: text".to_string()),
+            Some(text) => match text {
+                text_reference::Text::Url(url) => Ok(TextReference::Url(Url { value: url })),
+                text_reference::Text::Inline(inline) => {
+                    Ok(TextReference::Inline(inline.try_into()?))
+                }
+            },
+        }
+    }
+}
+
+impl From<TextReference> for golem_api_grpc::proto::golem::component::TextReference {
+    fn from(value: TextReference) -> Self {
+        match value {
+            TextReference::Url(url) => golem_api_grpc::proto::golem::component::TextReference {
+                text: Some(text_reference::Text::Url(url.value)),
+            },
+            TextReference::Inline(inline) => {
+                golem_api_grpc::proto::golem::component::TextReference {
+                    text: Some(text_reference::Text::Inline(inline.into())),
+                }
+            }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::BinarySource> for BinarySource {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::BinarySource,
+    ) -> Result<Self, Self::Error> {
+        Ok(BinarySource {
+            data: value.data,
+            binary_type: value
+                .binary_type
+                .ok_or_else(|| "Missing field: binary_type".to_string())?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<BinarySource> for golem_api_grpc::proto::golem::component::BinarySource {
+    fn from(value: BinarySource) -> Self {
+        golem_api_grpc::proto::golem::component::BinarySource {
+            data: value.data,
+            binary_type: Some(value.binary_type.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::BinaryReference> for BinaryReference {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::BinaryReference,
+    ) -> Result<Self, Self::Error> {
+        match value.binary {
+            None => Err("Missing field: binary".to_string()),
+            Some(binary) => match binary {
+                binary_reference::Binary::Url(url) => Ok(BinaryReference::Url(Url { value: url })),
+                binary_reference::Binary::Inline(inline) => {
+                    Ok(BinaryReference::Inline(inline.try_into()?))
+                }
+            },
+        }
+    }
+}
+
+impl From<BinaryReference> for golem_api_grpc::proto::golem::component::BinaryReference {
+    fn from(value: BinaryReference) -> Self {
+        match value {
+            BinaryReference::Url(url) => golem_api_grpc::proto::golem::component::BinaryReference {
+                binary: Some(binary_reference::Binary::Url(url.value)),
+            },
+            BinaryReference::Inline(inline) => {
+                golem_api_grpc::proto::golem::component::BinaryReference {
+                    binary: Some(binary_reference::Binary::Inline(inline.into())),
+                }
+            }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::ElementValue> for ElementValue {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::ElementValue,
+    ) -> Result<Self, Self::Error> {
+        match value.value {
+            None => Err("Missing field: value".to_string()),
+            Some(v) => match v {
+                element_value::Value::ComponentModel(val) => {
+                    Ok(ElementValue::ComponentModel(val.try_into()?))
+                }
+                element_value::Value::UnstructuredText(text_ref) => {
+                    Ok(ElementValue::UnstructuredText(text_ref.try_into()?))
+                }
+                element_value::Value::UnstructuredBinary(bin_ref) => {
+                    Ok(ElementValue::UnstructuredBinary(bin_ref.try_into()?))
+                }
+            },
+        }
+    }
+}
+
+impl From<ElementValue> for golem_api_grpc::proto::golem::component::ElementValue {
+    fn from(value: ElementValue) -> Self {
+        match value {
+            ElementValue::ComponentModel(val) => {
+                golem_api_grpc::proto::golem::component::ElementValue {
+                    value: Some(element_value::Value::ComponentModel(val.into())),
+                }
+            }
+            ElementValue::UnstructuredText(text_ref) => {
+                golem_api_grpc::proto::golem::component::ElementValue {
+                    value: Some(element_value::Value::UnstructuredText(text_ref.into())),
+                }
+            }
+            ElementValue::UnstructuredBinary(bin_ref) => {
+                golem_api_grpc::proto::golem::component::ElementValue {
+                    value: Some(element_value::Value::UnstructuredBinary(bin_ref.into())),
+                }
+            }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::NamedElementValue> for NamedElementValue {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::NamedElementValue,
+    ) -> Result<Self, Self::Error> {
+        Ok(NamedElementValue {
+            name: value.name,
+            value: value
+                .value
+                .ok_or_else(|| "Missing field: value".to_string())?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<NamedElementValue> for golem_api_grpc::proto::golem::component::NamedElementValue {
+    fn from(value: NamedElementValue) -> Self {
+        golem_api_grpc::proto::golem::component::NamedElementValue {
+            name: value.name,
+            value: Some(value.value.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::DataValue> for DataValue {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::DataValue,
+    ) -> Result<Self, Self::Error> {
+        match value.value {
+            None => Err("Missing field: value".to_string()),
+            Some(v) => match v {
+                data_value::Value::Tuple(tuple) => Ok(DataValue::Tuple(ElementValues {
+                    elements: tuple
+                        .elements
+                        .into_iter()
+                        .map(ElementValue::try_from)
+                        .collect::<Result<Vec<_>, _>>()?,
+                })),
+                data_value::Value::Multimodal(mm) => {
+                    Ok(DataValue::Multimodal(NamedElementValues {
+                        elements: mm
+                            .elements
+                            .into_iter()
+                            .map(NamedElementValue::try_from)
+                            .collect::<Result<Vec<_>, _>>()?,
+                    }))
+                }
+            },
+        }
+    }
+}
+
+impl From<DataValue> for golem_api_grpc::proto::golem::component::DataValue {
+    fn from(value: DataValue) -> Self {
+        match value {
+            DataValue::Tuple(elements) => golem_api_grpc::proto::golem::component::DataValue {
+                value: Some(data_value::Value::Tuple(
+                    golem_api_grpc::proto::golem::component::TupleValue {
+                        elements: elements
+                            .elements
+                            .into_iter()
+                            .map(golem_api_grpc::proto::golem::component::ElementValue::from)
+                            .collect(),
+                    },
+                )),
+            },
+            DataValue::Multimodal(elements) => golem_api_grpc::proto::golem::component::DataValue {
+                value: Some(data_value::Value::Multimodal(
+                    golem_api_grpc::proto::golem::component::MultimodalValue {
+                        elements: elements
+                            .elements
+                            .into_iter()
+                            .map(golem_api_grpc::proto::golem::component::NamedElementValue::from)
+                            .collect(),
+                    },
+                )),
+            },
         }
     }
 }

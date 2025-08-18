@@ -16,7 +16,6 @@ use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig};
 use golem_common::model::auth::{AuthCtx, Namespace, ProjectAction, TokenSecret};
-use golem_common::model::base64::Base64;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::{AccountId, ComponentId, ComponentType, ProjectId, RetryConfig};
@@ -409,16 +408,14 @@ impl TestComponentService {
             versioned_component_id: id.clone(),
             component_name: ComponentName("test".to_string()),
             component_size: 0,
-            metadata: ComponentMetadata {
-                exports: Self::get_metadata(),
-                producers: vec![],
-                memories: vec![],
-                binary_wit: Base64(vec![]),
-                root_package_name: Some("golem:it".to_string()),
-                root_package_version: None,
-                dynamic_linking: HashMap::new(),
-                agent_types: Vec::new(),
-            },
+            metadata: ComponentMetadata::from_parts(
+                Self::get_metadata(),
+                vec![],
+                HashMap::new(),
+                Some("golem:it".to_string()),
+                None,
+                vec![],
+            ),
             created_at: Utc::now(),
             component_type: ComponentType::Durable,
             files: vec![],
@@ -636,7 +633,6 @@ pub async fn test_gateway_session_with_sqlite() {
     let db_config = DbSqliteConfig {
         database: db.db_path.clone(),
         max_connections: 10,
-        foreign_keys: false,
     };
 
     let db_pool = SqlitePool::configured(&db_config).await.unwrap();
@@ -663,7 +659,6 @@ pub async fn test_gateway_session_with_sqlite_expired() {
     let db_config = DbSqliteConfig {
         database: db.db_path.clone(),
         max_connections: 10,
-        foreign_keys: false,
     };
 
     let pool = SqlitePool::configured(&db_config).await.unwrap();
@@ -785,7 +780,6 @@ pub async fn test_with_sqlite_db() {
     let db_config = DbSqliteConfig {
         database: db.db_path.clone(),
         max_connections: 10,
-        foreign_keys: false,
     };
 
     db::sqlite::migrate(

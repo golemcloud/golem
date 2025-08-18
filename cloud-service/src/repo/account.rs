@@ -162,7 +162,7 @@ impl AccountRepo for DbAccountRepo<golem_service_base::db::postgres::PostgresPoo
 
         self.db_pool
             .with_ro("account", "find_all")
-            .fetch_all_as(query.build_query_as::<AccountRecord>())
+            .fetch_all(query.build_query_as::<AccountRecord>())
             .await
     }
 
@@ -188,7 +188,7 @@ impl AccountRepo for DbAccountRepo<golem_service_base::db::postgres::PostgresPoo
 
         self.db_pool
             .with_ro("account", "find")
-            .fetch_all_as(query.build_query_as::<AccountRecord>())
+            .fetch_all(query.build_query_as::<AccountRecord>())
             .await
     }
 
@@ -198,7 +198,7 @@ impl AccountRepo for DbAccountRepo<golem_service_base::db::postgres::PostgresPoo
 
         self.db_pool
             .with_ro("account", "get_all")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 

@@ -17,6 +17,7 @@ use crate::model::TrapType;
 use crate::virtual_export_compat;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
+use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
 use golem_common::model::oplog::{WorkerError, WorkerResourceId};
 use golem_common::model::{IdempotencyKey, WorkerStatus};
 use golem_common::virtual_exports;
@@ -46,6 +47,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
+    component_metadata: &ComponentMetadata,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
@@ -57,6 +59,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
         function_input,
         &mut store,
         instance,
+        component_metadata,
     )
     .await;
 
@@ -99,30 +102,6 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
             result
         }
     }
-}
-
-/// Returns the first function from the given list that is available on the instance
-///
-/// This can be used to find an exported function when multiple versions of an interface
-/// is supported, such as for the load-snapshot/save-snapshot interfaces.
-///
-/// This function should not be used on the hot path.
-pub fn find_first_available_function<Ctx: WorkerCtx>(
-    store: &mut impl AsContextMut<Data = Ctx>,
-    instance: &wasmtime::component::Instance,
-    names: Vec<String>,
-) -> Option<String> {
-    let mut store = store.as_context_mut();
-    for name in names {
-        let parsed = ParsedFunctionName::parse(&name).ok()?;
-
-        if let Ok(FindFunctionResult::ExportedFunction(_)) =
-            find_function(&mut store, instance, &parsed)
-        {
-            return Some(name);
-        }
-    }
-    None
 }
 
 fn find_function<'a, Ctx: WorkerCtx>(
@@ -201,6 +180,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     mut function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
+    component_metadata: &ComponentMetadata,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -235,9 +215,14 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     let mut extra_fuel = 0;
 
     if parsed.function().is_indexed_resource() {
-        let resource_handle =
-            get_or_create_indexed_resource(&mut store, instance, &parsed, &full_function_name)
-                .await?;
+        let resource_handle = get_or_create_indexed_resource(
+            &mut store,
+            instance,
+            &parsed,
+            &full_function_name,
+            component_metadata,
+        )
+        .await?;
 
         match resource_handle {
             InvokeResult::Succeeded {
@@ -253,6 +238,16 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             }
         }
     }
+
+    let metadata = component_metadata
+        .find_parsed_function(&parsed)
+        .await
+        .map_err(WorkerExecutorError::runtime)?
+        .ok_or_else(|| {
+            WorkerExecutorError::invalid_request(format!(
+                "Could not find exported function: {parsed}"
+            ))
+        })?;
 
     let mut call_result = match function {
         FindFunctionResult::ExportedFunction(function) => {
@@ -273,6 +268,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
                 function,
                 final_decoded_params,
                 &full_function_name,
+                &metadata,
             )
             .await
         }
@@ -375,10 +371,15 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
     instance: &'a wasmtime::component::Instance,
     parsed_function_name: &ParsedFunctionName,
     raw_function_name: &str,
+    component_metadata: &ComponentMetadata,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let resource_name = parsed_function_name.function().resource_name().ok_or(
         WorkerExecutorError::invalid_request("Cannot extract resource name from function name"),
     )?;
+    let resource_owner = parsed_function_name
+        .site()
+        .interface_name()
+        .unwrap_or_default();
 
     let resource_constructor_name = ParsedFunctionName::new(
         parsed_function_name.site().clone(),
@@ -410,7 +411,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
 
     match store
         .data()
-        .get_indexed_resource(resource_name, raw_constructor_params)
+        .get_indexed_resource(&resource_owner, resource_name, raw_constructor_params)
     {
         Some(resource_id) => {
             debug!("Using existing indexed resource with id {resource_id}");
@@ -451,11 +452,22 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
 
             debug!("Creating new indexed resource with parameters {constructor_params:?}");
 
+            let constructor_metadata = component_metadata
+                .find_parsed_function(&resource_constructor_name)
+                .await
+                .map_err(WorkerExecutorError::runtime)?
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "Could not find resource constructor: {resource_constructor_name}"
+                    ))
+                })?;
+
             let constructor_result = invoke(
                 store,
                 resource_constructor,
                 decoded_constructor_params,
                 raw_function_name,
+                &constructor_metadata,
             )
             .await?;
 
@@ -465,6 +477,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
                     store
                         .data_mut()
                         .store_indexed_resource(
+                            &resource_owner,
                             resource_name,
                             raw_constructor_params,
                             WorkerResourceId(*resource_id),
@@ -487,6 +500,7 @@ async fn invoke<Ctx: WorkerCtx>(
     function: Func,
     decoded_function_input: Vec<DecodeParamResult>,
     raw_function_name: &str,
+    metadata: &InvokableFunction,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -514,9 +528,14 @@ async fn invoke<Ctx: WorkerCtx>(
                     "Function returned with more than one values, which is not supported",
                 ))
             } else {
-                match results.iter().zip(types.iter()).next() {
-                    Some((val, typ)) => {
-                        let output = encode_output(val, typ, store.data_mut())
+                match results
+                    .iter()
+                    .zip(types.iter())
+                    .zip(metadata.analysed_export.result.as_ref().map(|r| &r.typ))
+                    .next()
+                {
+                    Some(((val, typ), analysed_type)) => {
+                        let output = encode_output(val, typ, analysed_type, store.data_mut())
                             .await
                             .map_err(WorkerExecutorError::from)?;
                         Ok(InvokeResult::from_success(consumed_fuel, Some(output)))
@@ -537,7 +556,7 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
 
-    let proxy = Proxy::new(&mut *store, instance).unwrap();
+    let proxy = Proxy::new(&mut *store, instance)?;
     let mut store_context = store.as_context_mut();
 
     store_context.data_mut().borrow_fuel().await?;
@@ -563,13 +582,11 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
         let incoming = store_context
             .data_mut()
             .as_wasi_http_view()
-            .new_incoming_request(scheme, hyper_request)
-            .unwrap();
+            .new_incoming_request(scheme, hyper_request)?;
         let outgoing = store_context
             .data_mut()
             .as_wasi_http_view()
-            .new_response_outparam(sender)
-            .unwrap();
+            .new_response_outparam(sender)?;
 
         // unsafety comes from scope_and_collect:
         //
@@ -647,12 +664,17 @@ async fn drop_resource<Ctx: WorkerCtx>(
         debug!(
             "Dropping indexed resource {resource:?} with params {resource_params:?} in {raw_function_name}"
         );
-        store
-            .data_mut()
-            .drop_indexed_resource(resource, resource_params);
+        store.data_mut().drop_indexed_resource(
+            &parsed_function_name
+                .site()
+                .interface_name()
+                .unwrap_or_default(),
+            resource,
+            resource_params,
+        );
     }
 
-    if let Some(resource) = store.data_mut().get(resource_id).await {
+    if let Some((_, resource)) = store.data_mut().get(resource_id).await {
         debug!("Dropping resource {resource:?} in {raw_function_name}");
         store.data_mut().borrow_fuel().await?;
 

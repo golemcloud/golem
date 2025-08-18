@@ -18,11 +18,11 @@ macro_rules! newtype_uuid {
         #[derive(Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
         #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
         #[cfg_attr(feature = "model", serde(transparent))]
-        pub struct $name(pub uuid::Uuid);
+        pub struct $name(pub Uuid);
 
         impl $name {
             pub fn new_v4() -> $name {
-                Self(uuid::Uuid::new_v4())
+                Self(Uuid::new_v4())
             }
         }
 
@@ -45,7 +45,7 @@ macro_rules! newtype_uuid {
 
                 let mut bytes = [0u8; 16];
                 decoder.reader().read(&mut bytes)?;
-                Ok(Self(uuid::Uuid::from_bytes(bytes)))
+                Ok(Self(Uuid::from_bytes(bytes)))
             }
         }
 
@@ -57,7 +57,7 @@ macro_rules! newtype_uuid {
 
                 let mut bytes = [0u8; 16];
                 decoder.reader().read(&mut bytes)?;
-                Ok(Self(uuid::Uuid::from_bytes(bytes)))
+                Ok(Self(Uuid::from_bytes(bytes)))
             }
         }
 
@@ -66,7 +66,7 @@ macro_rules! newtype_uuid {
 
             fn try_from(value: &str) -> Result<Self, Self::Error> {
                 let uuid =
-                    uuid::Uuid::parse_str(value).map_err(|err| format!("Invalid plan ID: {err}"))?;
+                    Uuid::parse_str(value).map_err(|err| format!("Invalid plan ID: {err}"))?;
                 Ok(Self(uuid))
             }
         }
@@ -111,7 +111,7 @@ macro_rules! newtype_uuid {
                 value: Option<serde_json::Value>,
             ) -> poem_openapi::types::ParseResult<Self> {
                 match value {
-                    Some(serde_json::Value::String(s)) => Ok(Self(<uuid::Uuid as std::str::FromStr>::from_str(&s)?)),
+                    Some(serde_json::Value::String(s)) => Ok(Self(Uuid::from_str(&s)?)),
                     _ => Err(poem_openapi::types::ParseError::<$name>::custom(format!(
                         "Unexpected representation of {}",
                         stringify!($name)

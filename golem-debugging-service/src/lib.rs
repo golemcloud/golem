@@ -35,7 +35,7 @@ use async_trait::async_trait;
 use golem_service_base::clients::auth::AuthService as BaseAuthService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
-use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
+use golem_worker_executor::preview2::{golem_agent, golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
@@ -353,6 +353,7 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
     golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    golem_agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_wasm_rpc::golem_rpc_0_2_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     Ok(linker)
 }

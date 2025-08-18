@@ -152,7 +152,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .await
             .map_err(|err| err.to_safe_string())?;
         }
-        tx.commit().await.map_err(|err| err.to_safe_string())
+        api.commit(tx).await.map_err(|err| err.to_safe_string())
     }
 
     async fn set_if_not_exists(
@@ -232,7 +232,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         let results: Vec<DBKeyValue> = self
             .pool
             .with_ro(svc_name, api_name)
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
             .map_err(|err| err.to_safe_string())?;
 
@@ -285,7 +285,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .await
             .map_err(|err| err.to_safe_string())?;
         }
-        tx.commit().await.map_err(|err| err.to_safe_string())
+        api.commit(tx).await.map_err(|err| err.to_safe_string())
     }
 
     async fn exists(
@@ -318,7 +318,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_all_as::<(String,), _>(query)
+            .fetch_all::<(String,), _>(query)
             .await
             .map(|vec| vec.into_iter().map(|k| k.0).collect::<Vec<String>>())
             .map_err(|err| err.to_safe_string())
@@ -386,7 +386,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_all_as::<DBValue, _>(query)
+            .fetch_all::<DBValue, _>(query)
             .await
             .map(|vec| {
                 vec.into_iter()
@@ -464,7 +464,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_all_as::<DBScoreValue, _>(query)
+            .fetch_all::<DBScoreValue, _>(query)
             .await
             .map(|vec| {
                 vec.into_iter()
@@ -493,7 +493,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_all_as::<DBScoreValue, _>(query)
+            .fetch_all::<DBScoreValue, _>(query)
             .await
             .map(|vec| {
                 vec.into_iter()

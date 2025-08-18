@@ -177,9 +177,7 @@ pub struct PublicOplogEntryWithIndex {
     pub entry: PublicOplogEntry,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntryWithIndex>
-    for PublicOplogEntryWithIndex
-{
+impl TryFrom<OplogEntryWithIndex> for PublicOplogEntryWithIndex {
     type Error = String;
 
     fn try_from(value: OplogEntryWithIndex) -> Result<Self, Self::Error> {
@@ -190,9 +188,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntryWithIndex>
     }
 }
 
-impl TryFrom<PublicOplogEntryWithIndex>
-    for golem_api_grpc::proto::golem::worker::OplogEntryWithIndex
-{
+impl TryFrom<PublicOplogEntryWithIndex> for OplogEntryWithIndex {
     type Error = String;
 
     fn try_from(value: PublicOplogEntryWithIndex) -> Result<Self, Self::Error> {
@@ -360,39 +356,10 @@ impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct ResourceMetadata {
-    pub created_at: Timestamp,
-    pub indexed: Option<IndexedWorkerMetadata>,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::ResourceMetadata> for ResourceMetadata {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::ResourceMetadata,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            created_at: value.created_at.ok_or("Missing created_at")?.into(),
-            indexed: value.indexed.map(|i| i.into()),
-        })
-    }
-}
-
-impl From<ResourceMetadata> for golem_api_grpc::proto::golem::worker::ResourceMetadata {
-    fn from(value: ResourceMetadata) -> Self {
-        Self {
-            created_at: Some(value.created_at.into()),
-            indexed: value.indexed.map(|i| i.into()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
 pub struct IndexedWorkerMetadata {
     pub resource_name: String,
     pub resource_params: Vec<String>,
+    pub resource_owner: String,
 }
 
 impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedWorkerMetadata {
@@ -400,6 +367,7 @@ impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for Ind
         Self {
             resource_name: value.resource_name,
             resource_params: value.resource_params,
+            resource_owner: value.resource_owner,
         }
     }
 }
@@ -409,6 +377,7 @@ impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::Index
         Self {
             resource_name: value.resource_name,
             resource_params: value.resource_params,
+            resource_owner: value.resource_owner,
         }
     }
 }
@@ -495,6 +464,28 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             installed_plugins,
             env: value.env,
         })
+    }
+}
+
+impl From<Component> for golem_api_grpc::proto::golem::component::Component {
+    fn from(value: Component) -> Self {
+        Self {
+            account_id: Some(value.owner.account_id.into()),
+            project_id: Some(value.owner.project_id.into()),
+            versioned_component_id: Some(value.versioned_component_id.into()),
+            component_name: value.component_name.0,
+            component_size: value.component_size,
+            metadata: Some(value.metadata.into()),
+            created_at: Some(SystemTime::from(value.created_at).into()),
+            component_type: Some(value.component_type as i32),
+            files: value.files.into_iter().map(Into::into).collect(),
+            installed_plugins: value
+                .installed_plugins
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            env: value.env,
+        }
     }
 }
 

@@ -15,9 +15,11 @@
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentType, BinaryDescriptor,
     BinaryReference, BinarySource, BinaryType, DataSchema, DataValue, ElementSchema, ElementValue,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, TextDescriptor, TextReference,
-    TextSource, TextType,
+    ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
+    TextDescriptor, TextReference, TextSource, TextType, Url,
 };
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::{Value, ValueAndType};
 
 impl From<super::bindings::golem::agent::common::AgentConstructor> for AgentConstructor {
     fn from(value: crate::model::agent::bindings::golem::agent::common::AgentConstructor) -> Self {
@@ -79,7 +81,7 @@ impl From<super::bindings::golem::agent::common::AgentError> for AgentError {
                 msg,
             ) => AgentError::InvalidAgentId(msg),
             crate::model::agent::bindings::golem::agent::common::AgentError::CustomError(value) => {
-                AgentError::CustomError(DataValue::from(value))
+                AgentError::CustomError(value.into())
             }
         }
     }
@@ -215,20 +217,48 @@ impl From<DataSchema> for super::bindings::golem::agent::common::DataSchema {
     }
 }
 
-impl From<super::bindings::golem::agent::common::DataValue> for DataValue {
-    fn from(value: crate::model::agent::bindings::golem::agent::common::DataValue) -> Self {
-        match value {
-            crate::model::agent::bindings::golem::agent::common::DataValue::Tuple(tuple) => {
-                DataValue::Tuple(tuple.into_iter().map(ElementValue::from).collect())
+impl DataValue {
+    pub fn try_from_bindings(
+        value: crate::model::agent::bindings::golem::agent::common::DataValue,
+        schema: crate::model::agent::bindings::golem::agent::common::DataSchema,
+    ) -> Result<Self, String> {
+        match (value, schema) {
+            (
+                crate::model::agent::bindings::golem::agent::common::DataValue::Tuple(tuple),
+                crate::model::agent::bindings::golem::agent::common::DataSchema::Tuple(schema),
+            ) => {
+                if tuple.len() != schema.len() {
+                    return Err("Tuple length mismatch".to_string());
+                }
+                Ok(DataValue::Tuple(ElementValues {
+                    elements: tuple
+                        .into_iter()
+                        .zip(schema)
+                        .map(|(value, schema)| ElementValue::try_from_bindings(value, schema.1))
+                        .collect::<Result<Vec<_>, _>>()?,
+                }))
             }
-            crate::model::agent::bindings::golem::agent::common::DataValue::Multimodal(
-                multimodal,
-            ) => DataValue::Multimodal(
-                multimodal
-                    .into_iter()
-                    .map(NamedElementValue::from)
-                    .collect(),
-            ),
+            (
+                crate::model::agent::bindings::golem::agent::common::DataValue::Multimodal(
+                    multimodal,
+                ),
+                crate::model::agent::bindings::golem::agent::common::DataSchema::Multimodal(schema),
+            ) => {
+                if multimodal.len() != schema.len() {
+                    return Err("Multimodal length mismatch".to_string());
+                }
+                Ok(DataValue::Multimodal(NamedElementValues {
+                    elements: multimodal
+                        .into_iter()
+                        .zip(schema)
+                        .map(|((name, value), schema)| {
+                            ElementValue::try_from_bindings(value, schema.1)
+                                .map(|v| NamedElementValue { name, value: v })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                }))
+            }
+            _ => Err("Data value does not match schema".to_string()),
         }
     }
 }
@@ -237,11 +267,12 @@ impl From<DataValue> for super::bindings::golem::agent::common::DataValue {
     fn from(value: DataValue) -> Self {
         match value {
             DataValue::Tuple(tuple) => super::bindings::golem::agent::common::DataValue::Tuple(
-                tuple.into_iter().map(ElementValue::into).collect(),
+                tuple.elements.into_iter().map(ElementValue::into).collect(),
             ),
             DataValue::Multimodal(multimodal) => {
                 super::bindings::golem::agent::common::DataValue::Multimodal(
                     multimodal
+                        .elements
                         .into_iter()
                         .map(|v| (v.name, ElementValue::into(v.value)))
                         .collect(),
@@ -287,32 +318,33 @@ impl From<ElementSchema> for super::bindings::golem::agent::common::ElementSchem
     }
 }
 
-impl From<(String, super::bindings::golem::agent::common::ElementValue)> for NamedElementValue {
-    fn from(
-        value: (
-            String,
-            crate::model::agent::bindings::golem::agent::common::ElementValue,
-        ),
-    ) -> Self {
-        Self {
-            name: value.0,
-            value: ElementValue::from(value.1),
-        }
-    }
-}
-
-impl From<super::bindings::golem::agent::common::ElementValue> for ElementValue {
-    fn from(value: crate::model::agent::bindings::golem::agent::common::ElementValue) -> Self {
-        match value {
-            crate::model::agent::bindings::golem::agent::common::ElementValue::ComponentModel(wit_value) => {
-                ElementValue::ComponentModel(wit_value.into())
+impl ElementValue {
+    pub fn try_from_bindings(
+        value: crate::model::agent::bindings::golem::agent::common::ElementValue,
+        schema: crate::model::agent::bindings::golem::agent::common::ElementSchema,
+    ) -> Result<Self, String> {
+        match (value, schema) {
+            (
+                crate::model::agent::bindings::golem::agent::common::ElementValue::ComponentModel(wit_value),
+                crate::model::agent::bindings::golem::agent::common::ElementSchema::ComponentModel(wit_schema),
+            ) => {
+                let val: Value = wit_value.into();
+                let typ: AnalysedType = wit_schema.into();
+                Ok(ElementValue::ComponentModel(ValueAndType::new(val, typ)))
             }
-            crate::model::agent::bindings::golem::agent::common::ElementValue::UnstructuredText(text) => {
-                ElementValue::UnstructuredText(text.into())
+            (
+                crate::model::agent::bindings::golem::agent::common::ElementValue::UnstructuredText(text),
+                crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredText(_),
+            ) => {
+                Ok(ElementValue::UnstructuredText(text.into()))
             }
-            crate::model::agent::bindings::golem::agent::common::ElementValue::UnstructuredBinary(binary) => {
-                ElementValue::UnstructuredBinary(binary.into())
+            (
+                crate::model::agent::bindings::golem::agent::common::ElementValue::UnstructuredBinary(binary),
+                crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredBinary(_),
+            ) => {
+                Ok(ElementValue::UnstructuredBinary(binary.into()))
             }
+            _ => Err("Element value does not match schema".to_string()),
         }
     }
 }
@@ -363,7 +395,7 @@ impl From<super::bindings::golem::agent::common::BinaryReference> for BinaryRefe
     fn from(value: crate::model::agent::bindings::golem::agent::common::BinaryReference) -> Self {
         match value {
             crate::model::agent::bindings::golem::agent::common::BinaryReference::Url(url) => {
-                BinaryReference::Url(url)
+                BinaryReference::Url(Url { value: url })
             }
             crate::model::agent::bindings::golem::agent::common::BinaryReference::Inline(
                 source,
@@ -376,7 +408,7 @@ impl From<BinaryReference> for super::bindings::golem::agent::common::BinaryRefe
     fn from(value: BinaryReference) -> Self {
         match value {
             BinaryReference::Url(url) => {
-                super::bindings::golem::agent::common::BinaryReference::Url(url)
+                super::bindings::golem::agent::common::BinaryReference::Url(url.value)
             }
             BinaryReference::Inline(source) => {
                 super::bindings::golem::agent::common::BinaryReference::Inline(source.into())
@@ -445,7 +477,7 @@ impl From<super::bindings::golem::agent::common::TextReference> for TextReferenc
     fn from(value: crate::model::agent::bindings::golem::agent::common::TextReference) -> Self {
         match value {
             crate::model::agent::bindings::golem::agent::common::TextReference::Url(url) => {
-                TextReference::Url(url)
+                TextReference::Url(Url { value: url })
             }
             crate::model::agent::bindings::golem::agent::common::TextReference::Inline(source) => {
                 TextReference::Inline(source.into())
@@ -458,7 +490,7 @@ impl From<TextReference> for super::bindings::golem::agent::common::TextReferenc
     fn from(value: TextReference) -> Self {
         match value {
             TextReference::Url(url) => {
-                super::bindings::golem::agent::common::TextReference::Url(url)
+                super::bindings::golem::agent::common::TextReference::Url(url.value)
             }
             TextReference::Inline(source) => {
                 super::bindings::golem::agent::common::TextReference::Inline(source.into())

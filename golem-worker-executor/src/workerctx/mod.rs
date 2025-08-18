@@ -76,6 +76,7 @@ pub trait WorkerCtx:
     + FileSystemReading
     + DynamicLinking<Self>
     + InvocationContextManagement
+    + AgentStore
     + Send
     + Sync
     + Sized
@@ -349,16 +350,41 @@ pub trait UpdateManagement {
 pub trait IndexedResourceStore {
     fn get_indexed_resource(
         &self,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
     ) -> Option<WorkerResourceId>;
     async fn store_indexed_resource(
         &mut self,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
         resource: WorkerResourceId,
     );
-    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]);
+    fn drop_indexed_resource(
+        &mut self,
+        resource_owner: &str,
+        resource_name: &str,
+        resource_params: &[String],
+    );
+}
+
+/// Stores information about living agent instances
+#[async_trait]
+pub trait AgentStore {
+    async fn store_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: golem_common::model::agent::DataValue,
+    );
+
+    async fn remove_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: golem_common::model::agent::DataValue,
+    );
 }
 
 /// Operations not requiring an active worker context, but still depending on the

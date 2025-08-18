@@ -1,4 +1,0 @@
-[rdbms]
-url = "https://github.com/golemcloud/wasi-rdbms/archive/golem-rdbms.tar.gz"
-sha256 = "708eab2beaf1a6a5621be4767aceb9e4f2766eaff1f0e3aa048376b28356517d"
-sha512 = "4b2375c120b453d6f1e8ac1e00c35d752fa1159bedf48183c2a804b823800011b99e16dba6a7c95c3e14a9e11586b37415d333ec56d05cba3e954e27a971f88f"

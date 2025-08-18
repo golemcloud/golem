@@ -12,23 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod account;
 pub mod agent;
-pub mod api_definition;
-pub mod api_deployment;
-pub mod api_domain;
-pub mod application;
 pub mod auth;
 pub mod base64;
-pub mod certificate;
 pub mod component;
 pub mod component_constraint;
+#[cfg(feature = "tokio")]
 pub mod component_metadata;
-pub mod environment;
 pub mod error;
 pub mod exports;
 pub mod invocation_context;
-pub mod login;
 pub mod lucene;
 pub mod oplog;
 pub mod plugin;
@@ -43,8 +36,9 @@ pub mod trim_date;
 pub mod worker;
 
 pub use crate::base_model::*;
+use crate::model::agent::DataValue;
 use crate::model::invocation_context::InvocationContextStack;
-use crate::model::oplog::{IndexedResourceKey, TimestampedUpdateDescription, WorkerResourceId};
+use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
@@ -549,10 +543,10 @@ impl IntoValue for WorkerMetadata {
             self.worker_id.into_value(),
             self.args.into_value(),
             self.env.into_value(),
+            self.wasi_config_vars.into_value(),
             self.last_known_status.status.into_value(),
             self.last_known_status.component_version.into_value(),
             0u64.into_value(), // retry count could be computed from the worker status record here but we don't support it yet
-            self.wasi_config_vars.into_value(),
         ])
     }
 
@@ -561,18 +555,124 @@ impl IntoValue for WorkerMetadata {
             field("worker-id", WorkerId::get_type()),
             field("args", list(str())),
             field("env", list(tuple(vec![str(), str()]))),
+            field("wasi-config-vars", HashMap::<String, String>::get_type()),
             field("status", WorkerStatus::get_type()),
             field("component-version", u64()),
             field("retry-count", u64()),
-            field("wasi_config_vars", HashMap::<String, String>::get_type()),
         ])
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct WorkerResourceDescription {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+pub struct ExportedResourceInstanceKey {
+    pub resource_id: WorkerResourceId,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+pub struct ExportedResourceInstanceDescription {
     pub created_at: Timestamp,
-    pub indexed_resource_key: Option<IndexedResourceKey>,
+    pub resource_owner: String,
+    pub resource_name: String,
+    pub resource_params: Option<Vec<String>>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+pub struct AgentInstanceKey {
+    pub agent_type: String,
+    pub agent_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+pub struct AgentInstanceDescription {
+    pub created_at: Timestamp,
+    pub agent_parameters: DataValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum WorkerResourceKey {
+    /// A living resource instance that has been returned through invocation
+    /// and can be referenced to from outside the worker
+    ExportedResourceInstanceKey(ExportedResourceInstanceKey),
+    /// An agent instance
+    AgentInstanceKey(AgentInstanceKey),
+}
+
+impl Display for WorkerResourceKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerResourceKey::ExportedResourceInstanceKey(key) => {
+                write!(f, "resource({})", key.resource_id)
+            }
+            WorkerResourceKey::AgentInstanceKey(key) => {
+                write!(f, "agent({}, {})", key.agent_type, key.agent_id)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum WorkerResourceDescription {
+    /// A living resource instance that has been returned through invocation
+    /// and can be referenced to from outside the worker
+    ExportedResourceInstance(ExportedResourceInstanceDescription),
+    /// An agent instance
+    AgentInstance(AgentInstanceDescription),
+}
+
+impl WorkerResourceDescription {
+    pub fn with_timestamp(&self, new_timestamp: Timestamp) -> Self {
+        match self {
+            WorkerResourceDescription::ExportedResourceInstance(desc) => {
+                WorkerResourceDescription::ExportedResourceInstance(
+                    ExportedResourceInstanceDescription {
+                        created_at: new_timestamp,
+                        resource_owner: desc.resource_owner.clone(),
+                        resource_name: desc.resource_name.clone(),
+                        resource_params: desc.resource_params.clone(),
+                    },
+                )
+            }
+            WorkerResourceDescription::AgentInstance(desc) => {
+                WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
+                    created_at: new_timestamp,
+                    agent_parameters: desc.agent_parameters.clone(),
+                })
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
@@ -605,7 +705,7 @@ pub struct WorkerStatusRecord {
     pub component_version: ComponentVersion,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
+    pub owned_resources: HashMap<WorkerResourceKey, WorkerResourceDescription>,
     pub oplog_idx: OplogIndex,
     pub active_plugins: HashSet<PluginInstallationId>,
     pub deleted_regions: DeletedRegions,
@@ -1864,10 +1964,10 @@ impl<'de> Deserialize<'de> for ComponentFilePath {
     }
 }
 
-impl FromStr for ComponentFilePath {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_either_str(s)
+impl TryFrom<&str> for ComponentFilePath {
+    type Error = String;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::from_either_str(value)
     }
 }
 

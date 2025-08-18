@@ -7,4 +7,4 @@ includes:
 - common-*/golem.yaml
 - components-*/*/golem.yaml
 witDeps:
-- common-wit-deps
+- wit/deps

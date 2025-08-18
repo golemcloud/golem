@@ -62,7 +62,6 @@ impl Default for WorkerServiceConfig {
             db: DbConfig::Sqlite(DbSqliteConfig {
                 database: "../data/golem_worker.sqlite".to_string(),
                 max_connections: 10,
-                foreign_keys: false,
             }),
             gateway_session_storage: GatewaySessionStorageConfig::default_redis(),
             component_service: ComponentServiceConfig::default(),

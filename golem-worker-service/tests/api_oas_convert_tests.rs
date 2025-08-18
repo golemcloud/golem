@@ -618,6 +618,7 @@ async fn test_multi_component_binding() {
             let mut types = HashMap::new();
             let path_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "user".to_string(),
                     typ: AnalysedType::Str(TypeStr),
@@ -625,6 +626,7 @@ async fn test_multi_component_binding() {
             });
             let request_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "path".to_string(),
                     typ: path_record,
@@ -664,6 +666,7 @@ async fn test_multi_component_binding() {
             let mut types = HashMap::new();
             let path_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "user".to_string(),
                     typ: AnalysedType::Str(TypeStr),
@@ -671,6 +674,7 @@ async fn test_multi_component_binding() {
             });
             let query_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "echo".to_string(),
                     typ: AnalysedType::Str(TypeStr),
@@ -678,6 +682,7 @@ async fn test_multi_component_binding() {
             });
             let request_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "path".to_string(),
@@ -696,6 +701,7 @@ async fn test_multi_component_binding() {
     let response_output = RibOutputTypeInfo {
         analysed_type: AnalysedType::Record(TypeRecord {
             name: None,
+            owner: None,
             fields: vec![
                 NameTypePair {
                     name: "status".to_string(),
@@ -825,6 +831,7 @@ async fn test_basic_types_and_record_conversion() {
         let mut types = HashMap::new();
         let body_record = AnalysedType::Record(TypeRecord {
             name: None,
+            owner: None,
             fields: vec![NameTypePair {
                 name: "input".to_string(),
                 typ: body_type,
@@ -832,6 +839,7 @@ async fn test_basic_types_and_record_conversion() {
         });
         let request_record = AnalysedType::Record(TypeRecord {
             name: None,
+            owner: None,
             fields: vec![NameTypePair {
                 name: "body".to_string(),
                 typ: body_record,
@@ -846,6 +854,7 @@ async fn test_basic_types_and_record_conversion() {
         RibOutputTypeInfo {
             analysed_type: AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "status".to_string(),
@@ -866,6 +875,7 @@ async fn test_basic_types_and_record_conversion() {
             let mut types = HashMap::new();
             let path_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "user".to_string(),
                     typ: AnalysedType::Str(TypeStr),
@@ -873,6 +883,7 @@ async fn test_basic_types_and_record_conversion() {
             });
             let request_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "path".to_string(),
                     typ: path_record,
@@ -937,6 +948,7 @@ async fn test_basic_types_and_record_conversion() {
     // Record route
     let record_type = AnalysedType::Record(TypeRecord {
         name: None,
+        owner: None,
         fields: vec![
             NameTypePair {
                 name: "id".to_string(),
@@ -979,6 +991,7 @@ async fn test_basic_types_and_record_conversion() {
     // Enum route
     let enum_type = AnalysedType::Enum(TypeEnum {
         name: None,
+        owner: None,
         cases: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
     });
 
@@ -1103,6 +1116,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
     // Create request body with optional field
     let request_body_type = AnalysedType::Record(TypeRecord {
         name: None,
+        owner: None,
         fields: vec![
             NameTypePair {
                 name: "title".to_string(),
@@ -1112,6 +1126,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
                 name: "priority".to_string(),
                 typ: AnalysedType::Enum(TypeEnum {
                     name: None,
+                    owner: None,
                     cases: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
                 }),
             },
@@ -1119,6 +1134,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
                 name: "deadline".to_string(),
                 typ: AnalysedType::Option(TypeOption {
                     name: None,
+                    owner: None,
                     inner: Box::new(AnalysedType::Str(TypeStr)),
                 }),
             },
@@ -1130,6 +1146,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
             let mut types = HashMap::new();
             let body_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "input".to_string(),
                     typ: request_body_type,
@@ -1137,6 +1154,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
             });
             let path_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "user".to_string(),
                     typ: AnalysedType::Str(TypeStr),
@@ -1144,6 +1162,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
             });
             let request_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "body".to_string(),
@@ -1163,6 +1182,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
     // Create response with Result type (oneOf)
     let todo_record = AnalysedType::Record(TypeRecord {
         name: None,
+        owner: None,
         fields: vec![
             NameTypePair {
                 name: "id".to_string(),
@@ -1176,6 +1196,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
                 name: "priority".to_string(),
                 typ: AnalysedType::Enum(TypeEnum {
                     name: None,
+                    owner: None,
                     cases: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
                 }),
             },
@@ -1183,6 +1204,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
                 name: "status".to_string(),
                 typ: AnalysedType::Enum(TypeEnum {
                     name: None,
+                    owner: None,
                     cases: vec![
                         "backlog".to_string(),
                         "in-progress".to_string(),
@@ -1202,6 +1224,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
                 name: "deadline".to_string(),
                 typ: AnalysedType::Option(TypeOption {
                     name: None,
+                    owner: None,
                     inner: Box::new(AnalysedType::S64(TypeS64)),
                 }),
             },
@@ -1210,6 +1233,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
 
     let response_type = AnalysedType::Result(TypeResult {
         name: None,
+        owner: None,
         ok: Some(Box::new(todo_record)),
         err: Some(Box::new(AnalysedType::Str(TypeStr))),
     });
@@ -1217,6 +1241,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
     let response_output = RibOutputTypeInfo {
         analysed_type: AnalysedType::Record(TypeRecord {
             name: None,
+            owner: None,
             fields: vec![
                 NameTypePair {
                     name: "status".to_string(),
@@ -1340,6 +1365,7 @@ async fn test_variant_output_structure() {
             let mut types = HashMap::new();
             let body_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "message".to_string(),
                     typ: AnalysedType::Str(TypeStr),
@@ -1347,6 +1373,7 @@ async fn test_variant_output_structure() {
             });
             let request_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "body".to_string(),
                     typ: body_record,
@@ -1360,6 +1387,7 @@ async fn test_variant_output_structure() {
     // Create variant response type
     let variant_type = AnalysedType::Variant(TypeVariant {
         name: None,
+        owner: None,
         cases: vec![
             NameOptionTypePair {
                 name: "rand1".to_string(),
@@ -1379,6 +1407,7 @@ async fn test_variant_output_structure() {
     let response_output = RibOutputTypeInfo {
         analysed_type: AnalysedType::Record(TypeRecord {
             name: None,
+            owner: None,
             fields: vec![
                 NameTypePair {
                     name: "status".to_string(),
@@ -1512,6 +1541,7 @@ async fn test_oas_conversion_full_structure_shopping_cart() {
             let mut types = HashMap::new();
             let path_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "user".to_string(),
                     typ: AnalysedType::Str(TypeStr),
@@ -1519,6 +1549,7 @@ async fn test_oas_conversion_full_structure_shopping_cart() {
             });
             let request_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "path".to_string(),
                     typ: path_record,
@@ -1532,6 +1563,7 @@ async fn test_oas_conversion_full_structure_shopping_cart() {
     // Create cart item record type
     let cart_item_type = AnalysedType::Record(TypeRecord {
         name: None,
+        owner: None,
         fields: vec![
             NameTypePair {
                 name: "product-id".to_string(),
@@ -1555,12 +1587,14 @@ async fn test_oas_conversion_full_structure_shopping_cart() {
     // Create list of cart items
     let cart_items_list = AnalysedType::List(TypeList {
         name: None,
+        owner: None,
         inner: Box::new(cart_item_type),
     });
 
     let response_output = RibOutputTypeInfo {
         analysed_type: AnalysedType::Record(TypeRecord {
             name: None,
+            owner: None,
             fields: vec![
                 NameTypePair {
                     name: "status".to_string(),
@@ -1775,6 +1809,7 @@ async fn test_path_query_header_parameter_combinations() {
             // Create path record with both user and user_id
             let path_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "user".to_string(),
@@ -1790,6 +1825,7 @@ async fn test_path_query_header_parameter_combinations() {
             // Create query record with limit and offset
             let query_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "limit".to_string(),
@@ -1805,6 +1841,7 @@ async fn test_path_query_header_parameter_combinations() {
             // Create headers record with age and country
             let headers_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "age".to_string(),
@@ -1820,6 +1857,7 @@ async fn test_path_query_header_parameter_combinations() {
             // Combine all into a single request record
             let request_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "path".to_string(),
@@ -1861,6 +1899,7 @@ async fn test_path_query_header_parameter_combinations() {
                 rib_output: Some(RibOutputTypeInfo {
                     analysed_type: AnalysedType::Record(TypeRecord {
                         name: None,
+                        owner: None,
                         fields: vec![
                             NameTypePair {
                                 name: "status".to_string(),
@@ -1901,6 +1940,7 @@ async fn test_path_query_header_parameter_combinations() {
                 rib_output: Some(RibOutputTypeInfo {
                     analysed_type: AnalysedType::Record(TypeRecord {
                         name: None,
+                        owner: None,
                         fields: vec![
                             NameTypePair {
                                 name: "status".to_string(),
@@ -2099,6 +2139,7 @@ async fn test_comprehensive_analysed_type_coverage() {
             let mut types = HashMap::new();
             let body_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "input".to_string(),
                     typ: req_type,
@@ -2106,6 +2147,7 @@ async fn test_comprehensive_analysed_type_coverage() {
             });
             let request_record = AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![NameTypePair {
                     name: "body".to_string(),
                     typ: body_record,
@@ -2133,6 +2175,7 @@ async fn test_comprehensive_analysed_type_coverage() {
                 rib_output: Some(RibOutputTypeInfo {
                     analysed_type: AnalysedType::Record(TypeRecord {
                         name: None,
+                        owner: None,
                         fields: vec![
                             NameTypePair {
                                 name: "status".to_string(),
@@ -2159,6 +2202,7 @@ async fn test_comprehensive_analysed_type_coverage() {
             1,
             Some(AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "boolean_val".to_string(),
@@ -2200,11 +2244,13 @@ async fn test_comprehensive_analysed_type_coverage() {
             1,
             Some(AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "list_val".to_string(),
                         typ: AnalysedType::List(TypeList {
                             name: None,
+                            owner: None,
                             inner: Box::new(AnalysedType::Str(TypeStr)),
                         }),
                     },
@@ -2212,6 +2258,7 @@ async fn test_comprehensive_analysed_type_coverage() {
                         name: "tuple_val".to_string(),
                         typ: AnalysedType::Tuple(TypeTuple {
                             name: None,
+                            owner: None,
                             items: vec![AnalysedType::Str(TypeStr), AnalysedType::U32(TypeU32)],
                         }),
                     },
@@ -2219,6 +2266,7 @@ async fn test_comprehensive_analysed_type_coverage() {
                         name: "optional_val".to_string(),
                         typ: AnalysedType::Option(TypeOption {
                             name: None,
+                            owner: None,
                             inner: Box::new(AnalysedType::Str(TypeStr)),
                         }),
                     },
@@ -2226,6 +2274,7 @@ async fn test_comprehensive_analysed_type_coverage() {
             })),
             AnalysedType::List(TypeList {
                 name: None,
+                owner: None,
                 inner: Box::new(AnalysedType::U32(TypeU32)),
             }),
         ))),
@@ -2241,6 +2290,7 @@ async fn test_comprehensive_analysed_type_coverage() {
             1,
             Some(AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "id".to_string(),
@@ -2258,6 +2308,7 @@ async fn test_comprehensive_analysed_type_coverage() {
             })),
             AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "result_id".to_string(),
@@ -2282,11 +2333,13 @@ async fn test_comprehensive_analysed_type_coverage() {
             1,
             Some(AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "color".to_string(),
                         typ: AnalysedType::Enum(TypeEnum {
                             name: None,
+                            owner: None,
                             cases: vec!["red".to_string(), "green".to_string(), "blue".to_string()],
                         }),
                     },
@@ -2294,6 +2347,7 @@ async fn test_comprehensive_analysed_type_coverage() {
                         name: "permissions".to_string(),
                         typ: AnalysedType::Flags(TypeFlags {
                             name: None,
+                            owner: None,
                             names: vec![
                                 "read".to_string(),
                                 "write".to_string(),
@@ -2305,6 +2359,7 @@ async fn test_comprehensive_analysed_type_coverage() {
             })),
             AnalysedType::Enum(TypeEnum {
                 name: None,
+                owner: None,
                 cases: vec![
                     "success".to_string(),
                     "warning".to_string(),
@@ -2324,11 +2379,13 @@ async fn test_comprehensive_analysed_type_coverage() {
             1,
             Some(AnalysedType::Result(TypeResult {
                 name: None,
+                owner: None,
                 ok: Some(Box::new(AnalysedType::Str(TypeStr))),
                 err: Some(Box::new(AnalysedType::Str(TypeStr))),
             })),
             AnalysedType::Result(TypeResult {
                 name: None,
+                owner: None,
                 ok: Some(Box::new(AnalysedType::U64(TypeU64))),
                 err: Some(Box::new(AnalysedType::Str(TypeStr))),
             }),
@@ -2345,6 +2402,7 @@ async fn test_comprehensive_analysed_type_coverage() {
             1,
             Some(AnalysedType::Variant(TypeVariant {
                 name: None,
+                owner: None,
                 cases: vec![
                     NameOptionTypePair {
                         name: "text".to_string(),
@@ -2362,6 +2420,7 @@ async fn test_comprehensive_analysed_type_coverage() {
             })),
             AnalysedType::Variant(TypeVariant {
                 name: None,
+                owner: None,
                 cases: vec![
                     NameOptionTypePair {
                         name: "success".to_string(),
@@ -2386,13 +2445,16 @@ async fn test_comprehensive_analysed_type_coverage() {
             1,
             Some(AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "optional_list".to_string(),
                         typ: AnalysedType::Option(TypeOption {
                             name: None,
+                            owner: None,
                             inner: Box::new(AnalysedType::List(TypeList {
                                 name: None,
+                                owner: None,
                                 inner: Box::new(AnalysedType::Str(TypeStr)),
                             })),
                         }),
@@ -2401,8 +2463,10 @@ async fn test_comprehensive_analysed_type_coverage() {
                         name: "result_record".to_string(),
                         typ: AnalysedType::Result(TypeResult {
                             name: None,
+                            owner: None,
                             ok: Some(Box::new(AnalysedType::Record(TypeRecord {
                                 name: None,
+                                owner: None,
                                 fields: vec![NameTypePair {
                                     name: "value".to_string(),
                                     typ: AnalysedType::U32(TypeU32),
@@ -2415,8 +2479,10 @@ async fn test_comprehensive_analysed_type_coverage() {
             })),
             AnalysedType::List(TypeList {
                 name: None,
+                owner: None,
                 inner: Box::new(AnalysedType::Record(TypeRecord {
                     name: None,
+                    owner: None,
                     fields: vec![
                         NameTypePair {
                             name: "id".to_string(),
@@ -2426,6 +2492,7 @@ async fn test_comprehensive_analysed_type_coverage() {
                             name: "status".to_string(),
                             typ: AnalysedType::Enum(TypeEnum {
                                 name: None,
+                                owner: None,
                                 cases: vec!["pending".to_string(), "completed".to_string()],
                             }),
                         },
@@ -2445,6 +2512,7 @@ async fn test_comprehensive_analysed_type_coverage() {
             1,
             Some(AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "s32_val".to_string(),
@@ -2471,8 +2539,10 @@ async fn test_comprehensive_analysed_type_coverage() {
             Some(AnalysedType::Str(TypeStr)),
             AnalysedType::List(TypeList {
                 name: None,
+                owner: None,
                 inner: Box::new(AnalysedType::Record(TypeRecord {
                     name: None,
+                    owner: None,
                     fields: vec![
                         NameTypePair {
                             name: "name".to_string(),
@@ -2499,6 +2569,7 @@ async fn test_comprehensive_analysed_type_coverage() {
             None, // No request body
             AnalysedType::Record(TypeRecord {
                 name: None,
+                owner: None,
                 fields: vec![
                     NameTypePair {
                         name: "api_version".to_string(),
@@ -2508,6 +2579,7 @@ async fn test_comprehensive_analysed_type_coverage() {
                         name: "supported_types".to_string(),
                         typ: AnalysedType::List(TypeList {
                             name: None,
+                            owner: None,
                             inner: Box::new(AnalysedType::Str(TypeStr)),
                         }),
                     },
