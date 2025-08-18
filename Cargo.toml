@@ -93,7 +93,6 @@ golem-common = { version = "=0.0.0", path = "golem-common", default-features = f
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-component-service = { path = "golem-component-service" }
 golem-openapi-client-generator = "=0.0.16"
-golem-rdbms = "=0.0.2"
 golem-rib = { version = "=0.0.0", path = "golem-rib", default-features = false }
 golem-rib-repl = { version = "=0.0.0", path = "golem-rib-repl" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
@@ -103,7 +102,6 @@ golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
 golem-wasm-ast = { version = "=0.0.0", path = "wasm-ast", default-features = false }
 golem-wasm-rpc = { version = "=0.0.0", path = "wasm-rpc", default-features = false }
 golem-wasm-rpc-derive = { version = "=0.0.0", path = "wasm-rpc-derive" }
-golem-wit = "=1.3.0-dev.6"
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
 golem-worker-service = { path = "golem-worker-service" }
 

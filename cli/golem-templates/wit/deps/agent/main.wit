@@ -1,0 +1,5 @@
+package golem:agent-guest;
+
+world agent-guest {
+  include golem:agent/agent-guest;
+}

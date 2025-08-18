@@ -26,3 +26,26 @@ pub const WIT_BINDGEN_VERSION: &str = "0.40.0";
 pub const WASI_WIT_VERSION: &str = "0.2.3";
 pub const GOLEM_RPC_WIT_VERSION: &str = "0.2.2";
 pub const GOLEM_API_VERSION: &str = "1.1.7";
+
+pub const GOLEM_RPC_WIT: &str = include_str!("../../wit/deps/golem-rpc/wasm-rpc.wit");
+pub const WASI_IO_WIT: &[(&str, &str)] = &[
+    ("error.wit", include_str!("../../wit/deps/io/error.wit")),
+    ("poll.wit", include_str!("../../wit/deps/io/poll.wit")),
+    ("streams.wit", include_str!("../../wit/deps/io/streams.wit")),
+    ("world.wit", include_str!("../../wit/deps/io/world.wit")),
+];
+pub const WASI_CLOCKS_WIT: &[(&str, &str)] = &[
+    (
+        "wall-clock.wit",
+        include_str!("../../wit/deps/clocks/wall-clock.wit"),
+    ),
+    (
+        "monotonic-clock.wit",
+        include_str!("../../wit/deps/clocks/monotonic-clock.wit"),
+    ),
+    (
+        "timezone.wit",
+        include_str!("../../wit/deps/clocks/timezone.wit"),
+    ),
+    ("world.wit", include_str!("../../wit/deps/clocks/world.wit")),
+];

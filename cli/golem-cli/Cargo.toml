@@ -37,7 +37,6 @@ golem-rib-repl = { workspace = true }
 golem-wasm-ast = { workspace = true, default-features = true }
 golem-wasm-rpc = { workspace = true, default-features = true }
 golem-wasm-rpc-derive = { workspace = true }
-golem-wit = { workspace = true }
 
 # External deps
 anyhow = { workspace = true }
