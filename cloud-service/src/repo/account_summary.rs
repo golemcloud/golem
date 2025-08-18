@@ -85,7 +85,7 @@ impl AccountSummaryRepo for DbAccountSummaryRepo<golem_service_base::db::postgre
         let result = self
             .db_pool
             .with_ro("account_summary", "get")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await?;
 
         Ok(result.into_iter().map(|r| r.into()).collect())
@@ -113,7 +113,7 @@ impl AccountSummaryRepo for DbAccountSummaryRepo<golem_service_base::db::postgre
         let result = self
             .db_pool
             .with_ro("account_summary", "get")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await?;
 
         Ok(result.into_iter().map(|r| r.into()).collect())

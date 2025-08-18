@@ -398,7 +398,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with("api_definition", "get_all")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 
@@ -411,7 +411,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with_ro("api_definition", "get_all")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 
@@ -427,7 +427,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with("api_definition", "get_all_versions")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 
@@ -443,7 +443,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<golem_service_base::db::postgres:
 
         self.db_pool
             .with_ro("api_definition", "get_all_versions")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 }

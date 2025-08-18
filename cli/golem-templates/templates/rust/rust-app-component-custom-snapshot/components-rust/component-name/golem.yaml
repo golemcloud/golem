@@ -1,0 +1,7 @@
+# golem-app-manifest-header
+
+components:
+  componentname:
+    template: rust
+
+# golem-app-manifest-component-hints

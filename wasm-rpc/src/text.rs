@@ -28,7 +28,6 @@ pub fn parse_value_and_type(
 }
 
 pub fn print_value_and_type(value: &ValueAndType) -> Result<String, String> {
-    println!("[print_value_and_type] value: {value:?}");
     if value.typ.contains_handle() {
         Err("Cannot print handle type".to_string())
     } else {

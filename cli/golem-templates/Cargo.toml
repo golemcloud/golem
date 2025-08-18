@@ -1,0 +1,52 @@
+[package]
+name = "golem-templates"
+version = "0.0.0"
+edition = "2021"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Golem templates"
+license-file = "../../LICENSE"
+
+default-run = "golem-templates-test-cli"
+autotests = false
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+colored = { workspace = true }
+fancy-regex = { workspace = true }
+fs_extra = { workspace = true }
+heck = { workspace = true }
+include_dir = { workspace = true }
+itertools = { workspace = true }
+nanoid = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+toml_edit = { workspace = true }
+test-r = { workspace = true }
+indoc = { workspace = true }
+
+[build-dependencies]
+cargo_metadata = { workspace = true }
+dir-diff = { workspace = true }
+fs_extra = { workspace = true }
+
+[dev-dependencies]
+assert2 = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[[bin]]
+name = "golem-templates-test-cli"
+path = "src/test/main.rs"
+test = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+harness = false

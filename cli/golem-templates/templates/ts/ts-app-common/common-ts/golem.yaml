@@ -1,0 +1,40 @@
+# golem-app-manifest-header
+
+templates:
+  ts:
+    build:
+    - command: npx --no @rttist/typegen generate -p components-ts/{{ component_name | to_kebab_case }}
+      sources:
+        - src
+        - ../../common-ts
+      targets:
+        - .metadata
+      dir: ../..
+    - command: npx --no rollup -- -c
+      sources:
+      - src
+      - ../../common-ts
+      - rollup.config.mjs
+      - tsconfig.js
+      targets:
+      - dist/main.js
+    - injectToPrebuiltQuickjs: ../../wasm/golem_agent.wasm
+      module: dist/main.js
+      moduleWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.module.wasm
+      into: ../../golem-temp/agents/{{ component_name | to_snake_case }}.dynamic.wasm
+    - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+      basedOnCompiledWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.dynamic.wasm
+    - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+      withAgent: ../../golem-temp/agents/{{ component_name | to_snake_case }}.dynamic.wasm
+      to: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
+
+    sourceWit: ../../wasm/golem_agent.wasm
+    generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
+    componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
+    linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wasm
+    clean:
+    - dist
+    - .metadata
+customCommands:
+  ts-npm-install:
+  - command: npm install

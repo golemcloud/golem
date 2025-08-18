@@ -10,7 +10,6 @@ members = [
     "golem-service-base",
     "golem-component-service",
     "golem-component-compilation-service",
-    "golem-registry-service",
     "golem-rib",
     "golem-rib-repl",
     "golem-test-framework",
@@ -21,9 +20,14 @@ members = [
     "wasm-ast",
     "wasm-rpc",
     "wasm-rpc-derive",
+    "cli/golem",
+    "cli/golem-cli",
+    "cli/golem-templates",
 ]
 
 exclude = [
+    "cli/desktop-app/src-tauri",
+    "cli/template-golem-agent-ts",
     "test-components/app-and-library",
     "test-components/shopping-cart",
     "test-components/write-stdout",
@@ -75,12 +79,33 @@ exclude = [
     "test-components/write-stderr",
     "test-components/write-stdout",
     "test-components/rdbms-service",
+    "sdks/golem-rust"
 ]
 
 [workspace.metadata]
 license-file = "LICENSE"
 
 [workspace.dependencies]
+golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
+golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
+golem-client = { version = "=0.0.0", path = "golem-client" }
+golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
+golem-component-compilation-service = { path = "golem-component-compilation-service" }
+golem-component-service = { path = "golem-component-service" }
+golem-openapi-client-generator = "=0.0.16"
+golem-rib = { version = "=0.0.0", path = "golem-rib", default-features = false }
+golem-rib-repl = { version = "=0.0.0", path = "golem-rib-repl" }
+golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
+golem-shard-manager = { path = "golem-shard-manager" }
+golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
+golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
+golem-wasm-ast = { version = "=0.0.0", path = "wasm-ast", default-features = false }
+golem-wasm-rpc = { version = "=0.0.0", path = "wasm-rpc", default-features = false }
+golem-wasm-rpc-derive = { version = "=0.0.0", path = "wasm-rpc-derive" }
+golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
+golem-worker-service = { path = "golem-worker-service" }
+
+
 anyhow = "1.0.97"
 applying = "1.0.1"
 assert2 = "0.3.15"
@@ -94,7 +119,7 @@ async-hash = "0.5.4"
 async-lock = "3.4.0"
 async-recursion = "1.1.1"
 async-trait = "0.1.87"
-async_zip = "0.0.17"
+async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
 aws-config = "=1.5.10" # Pinned because newer versions were failing with localstack
 aws-sdk-s3 = "=1.65.0" # Pinned because newer versions were failing with localstack
 axum = { version = "0.7.9", features = ["multipart"] }
@@ -104,9 +129,14 @@ bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bincode = { version = "2.0.1", features = ["serde"] }
 bincode_derive = { version = "2.0.1" }
 bit-vec = { version = "0.6.3", features = ["serde"] }
-blake3 = { version = "1.8.2", features = ["rayon"] }
+blake3 = "1.5.5"
 bytes = "1.10.1"
+camino = "1.1.10"
 cap-std = "3.4.2" # keep in sync with wasmtime
+cargo-component = "0.21.1"
+cargo-component-core = "0.21.1"
+cargo_metadata = "0.21.0"
+cargo_toml = "0.22.1"
 chrono = { version = "0.4.40", features = ["serde"] }
 clap = { version = "4.5.32", features = [
     "derive",
@@ -114,6 +144,8 @@ clap = { version = "4.5.32", features = [
     "color",
     "help",
 ] }
+clap-verbosity-flag = { version = "3.0.2", features = ["tracing"] }
+clap_complete = "4.5.45"
 cli-table = "0.4.9"
 colored = "3.0.0"
 combine = "4.6.7"
@@ -127,6 +159,9 @@ dashmap = "6.1.0"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 dirs = "4.0.0"
 drop-stream = "0.3.2"
+dir-diff = "0.3.3"
+envsubst = "0.2.1"
+fancy-regex = "0.14.0"
 fastrand = "2.3.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 fred = { version = "=9.4.0", features = [
@@ -134,9 +169,12 @@ fred = { version = "=9.4.0", features = [
     "serde-json",
     "partial-tracing",
 ] } # pinned to 9.x to avoid conflicting cookie-factory dependencies
+fs_extra = "1.3.0"
 futures = "0.3.31"
 futures-concurrency = "7.6.3"
-gethostname = "0.5.0"
+futures-util = "0.3.31"
+fuzzy-matcher = "0.3.7"
+gethostname = "1.0.0"
 headers = "0.4.0"
 heck = "0.5.0"
 hex = "0.4.3"
@@ -147,19 +185,27 @@ humansize = "2.1.3"
 humantime-serde = "1.1.1"
 hyper = { version = "1.6.0", features = ["full"] }
 include_dir = "0.7.4"
-indoc = "2.0.6"
+indexmap = "2.10.0"
+indoc = "2.0.5"
+inquire = "0.7.5"
+iso8601 = "0.6.2"
 iso8601-timestamp = "0.3.3"
 itertools = "0.14.0"
 jsonwebtoken = "9.2.0"
-indexmap = "2.10.0"
 k8s-openapi = { version = "0.24.0", features = ["earliest"] }
 kube = { version = "0.98.0", features = ["runtime", "derive"] }
 kube-derive = "0.98.0"
 lazy_static = "1.5.0"
+lenient_bool = "0.1.1"
 log = "0.4.26"
 mappable-rc = "0.1.1"
 mime = "0.3.17"
 mime_guess = "2.0.5"
+minijinja = "2.7.0"
+moonbit-component-generator = { version = "0.0.2", features = ["get-script"] }
+nanoid = "0.4.0"
+native-tls = "0.2.13"
+nondestructive = "0.0.26"
 nom = "7.1.3"
 nonempty-collections = "0.3.0"
 num-traits = "0.2.19"
@@ -169,6 +215,7 @@ openidconnect = "3.5.0"
 opentelemetry = "0.28.0"
 opentelemetry-prometheus = "0.28.0"
 opentelemetry_sdk = "0.28.0"
+phf = { version = "0.11.3", features = ["macros"] }
 poem = { version = "=3.1.10", features = [
     "cookie",
     "multipart",
@@ -189,10 +236,14 @@ poem-openapi = { version = "=5.1.14", features = [
 ] }
 poem-openapi-derive = "=5.1.14"
 postgres = "0.19.10"
+pretty_env_logger = "0.5.0"
+prettyplease = "0.2.25"
+proc-macro2 = "1.0.92"
 prometheus = { version = "0.13.4", features = ["process"] }
 proptest = "=1.5.0"
 prost = "0.13.5"
 prost-types = "0.13.5"
+quote = "1.0.37"
 rand = "0.9.0"
 redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
 regex = "1.11.1"
@@ -216,11 +267,13 @@ sanitize-filename = "0.6.0"
 semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
+serde_json_path = "0.7.1"
 serde_with = "3.5.0"
 serde_yaml = { version = "0.9.34" }
 sha2 = "0.10.8"
 shadow-rs = "1.2.0"
 shell-words = "1.1.0"
+shlex = "1.3.0"
 similar = "2.7.0"
 sqlx-core = { version = "0.8" }
 sqlx = { version = "0.8", features = [
@@ -237,8 +290,10 @@ sqlx = { version = "0.8", features = [
     "bit-vec",
     "ipnetwork",
 ] }
+strip-ansi-escapes = "0.2.0"
 strum = "0.27.1"
 strum_macros = "0.27.1"
+syn = "2.0.90"
 system-interface = "0.27.3"
 tap = "1.0.1"
 tempfile = "3.18.0"
@@ -252,6 +307,8 @@ testcontainers-modules = { version = "0.11.6", features = [
 test-r = { version = "2.2.1", default-features = true }
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
+terminal_size = "0.4.2"
+textwrap = "0.16.1"
 tokio = { version = "1.44", features = [
     "macros",
     "rt-multi-thread",
@@ -264,9 +321,10 @@ tokio = { version = "1.44", features = [
 tokio-postgres = "0.7.13"
 tokio-rustls = { version = "0.26.2" }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tokio-tungstenite = { version = "0.25.0" }
+tokio-tungstenite = { version = "0.25.0", features = ["native-tls"] }
 tokio-util = "0.7.13"
-toml = "0.8.20"
+toml = "0.9.5"
+toml_edit = "0.23.3"
 tonic = { version = "0.12.3", features = ["gzip"] }
 tonic-reflection = "0.12.3"
 tonic-health = "0.12.3"
@@ -285,15 +343,58 @@ typed-path = "0.10.0"
 url = { version = "2.5.4", features = ["serde"] }
 urlencoding = "2.1.3"
 uuid = { version = "1.15.1", features = ["serde", "v4", "v5"] }
+version-compare = "0.2.0"
 wac-graph = "=0.6.1"
+walkdir = "2.5.0"
+wasm-encoder = "0.235.0"
+wasm-metadata = { version = "0.235.0", features = ["oci"] }
+wasm-rquickjs = "0.0.5"
 wasm-wave = "0.235"
+wasmparser = "0.235.0"
 wasmtime = { version = "=33.0.0", features = ["component-model"] }
 wasmtime-wasi = { version = "=33.0.0" }
 wasmtime-wasi-http = { version = "=33.0.0" }
+wax = "0.6.0"
 webpki-roots = { version = "0.26.7" }
+wit-bindgen = "0.43.0"
+wit-bindgen-rust = "0.43.0"
 wit-component = "0.235"
 wit-parser = "0.235"
+wit-encoder = "0.235"
 x509-certificate = "0.23.1"
+arbitrary = "1.4.1"
+async-mutex = "1.4.0"
+async-rwlock = "1.3.0"
+async-scoped = "0.9.0"
+auditable-serde = "0.8.0"
+bitflags = "2.6.0"
+cap-time-ext = "3.4.2"
+cloud-service = { path = "cloud-service" }
+colored-diff = "0.2.3"
+evicting_cache_map = "0.4.0"
+flate2 = "1.1.0"
+fs-set-times = "0.20.3"
+git-version = "0.3.9"
+goldenfile = "1.8.0"
+kill_tree = "0.2.4"
+leb128 = "0.2.5"
+mac_address = "1.1.8"
+md5 = "0.7.0"
+metrohash = "1.0.7"
+pin-project = "1.1.10"
+pretty_assertions = "1.4.1"
+proptest-arbitrary-interop = "0.1.0"
+prost-build = "0.13.5"
+range-set-blaze = "0.1.16"
+ringbuf = "0.4.7"
+serde_derive = "1.0.219"
+spdx = "0.10.8"
+sysinfo = "0.33.1"
+tonic-build = "0.12.3"
+try_match = "0.4.2"
+wasmprinter = "0.219.1"
+wit-bindgen-rt = "=0.40.0"
+zstd = "0.13"
 
 [patch.crates-io]
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }

@@ -1,0 +1,119 @@
+// Test WIT covering examples of all the types supported by WIT,
+// each used in both input and output positions in exported functions.
+
+package test:main;
+
+interface iface1 {
+
+  enum color {
+    red,
+    green,
+    blue
+  }
+
+  flags permissions {
+    read,
+    write,
+    exec,
+    close
+  }
+
+  record metadata {
+    name: string,
+    origin: string,
+    perms: permissions
+  }
+
+  record point {
+    x: s32,
+    y: s32,
+    metadata: metadata
+  }
+
+  type point-tuple = tuple<s32, s32>;
+
+
+  record product-item {
+    product-id: string,
+    name: string,
+    price: float32,
+    quantity: u32,
+  }
+
+  record order {
+    order-id: string,
+    items: list<product-item>,
+    total: float32,
+    timestamp: u64,
+  }
+
+  record order-confirmation {
+    order-id: string,
+  }
+
+  variant checkout-result {
+    error(string),
+    success(order-confirmation),
+    unknown,
+  }
+
+  // example of no parameter and no return value
+  no-op: func();
+  get-bool: func() -> bool;
+  set-bool: func(b: bool);
+
+  // identity functions for primitive types
+  identity-bool: func(b: bool) -> bool;
+
+  identity-s8: func(x: s8) -> s8;
+  identity-s16: func(x: s16) -> s16;
+  identity-s32: func(x: s32) -> s32;
+  identity-s64: func(x: s64) -> s64;
+
+  identity-u8: func(x: u8) -> u8;
+  identity-u16: func(x: u16) -> u16;
+  identity-u32: func(x: u32) -> u32;
+  identity-u64: func(x: u64) -> u64;
+
+  identity-f32: func(x: f32) -> f32;
+  identity-f64: func(x: f64) -> f64;
+
+  identity-char: func(x: char) -> char;
+  identity-string: func(x: string) -> string;
+
+  // list
+  get-orders: func() -> list<order>;
+  set-orders: func(orders: list<order>);
+
+  // options
+  apply-metadata: func(metadata: option<metadata>) -> option<metadata>;
+  get-option-bool: func() -> option<bool>;
+  set-option-bool: func(b: option<bool>);
+
+  // tuple
+  get-coordinates: func() -> tuple<s32, s32>;
+  get-coordinates-alias: func () -> point-tuple;
+  set-coordinates: func(c: tuple<s32, s32>);
+  set-coordinates-alias: func(c: point-tuple);
+
+  // result
+  tuple-to-point: func(t: point-tuple, metadata: option<metadata>) -> result<point, string>;
+  pt-log-error: func(r: result<point, string>) -> result<point>;
+  validate-pt: func(pt: point) -> result<_, string>;
+
+
+  // variant
+  print-checkout-result: func(r: checkout-result) -> string;
+  get-checkout-result: func() -> checkout-result;
+
+  // enum
+  get-color: func() -> color;
+  set-color: func(c: color);
+
+  // flags
+  validate-permissions: func(p: permissions) -> permissions;
+}
+
+world api {
+  export iface1;
+}

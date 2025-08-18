@@ -176,7 +176,7 @@ impl ApiCertificateRepo for DbApiCertificateRepo<golem_service_base::db::postgre
 
         self.db_pool
             .with_ro("api_certificate", "get_all")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 
@@ -189,7 +189,7 @@ impl ApiCertificateRepo for DbApiCertificateRepo<golem_service_base::db::postgre
 
         self.db_pool
             .with_ro("api_certificate", "get_all")
-            .fetch_all_as(query)
+            .fetch_all(query)
             .await
     }
 }

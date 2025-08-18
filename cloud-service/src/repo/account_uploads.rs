@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::AccountId;
-use golem_service_base::db::{LabelledPoolTransaction, Pool};
+use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
 
 #[async_trait]
@@ -128,7 +128,10 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<golem_service_base::db::postgre
 
         transaction.execute(query).await?;
 
-        transaction.commit().await?;
+        self.db_pool
+            .with_rw("account_uploads", "update")
+            .commit(transaction)
+            .await?;
 
         Ok(())
     }
@@ -174,7 +177,10 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<golem_service_base::db::postgre
 
         transaction.execute(query).await?;
 
-        transaction.commit().await?;
+        self.db_pool
+            .with_rw("account_uploads", "update")
+            .commit(transaction)
+            .await?;
 
         Ok(())
     }
