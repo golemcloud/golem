@@ -12,17 +12,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{declare_structs, declare_transparent_newtypes};
+use crate::{declare_enums, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use chrono::Utc;
+use std::fmt::Display;
+use std::str::FromStr;
+use anyhow::anyhow;
+
+newtype_uuid!(OAuth2WebflowStateId);
 
 declare_transparent_newtypes! {
     pub struct EncodedOAuth2Session(pub String);
 }
+
 declare_structs! {
+    pub struct OAuth2WebWorkflowData {
+        pub url: String,
+        pub state: OAuth2WebflowStateId,
+    }
+
     pub struct OAuth2Data {
         pub url: String,
         pub user_code: String,
         pub expires: chrono::DateTime<Utc>,
-        pub encoded_session: String,
+        pub encoded_session: EncodedOAuth2Session,
+    }
+}
+
+declare_enums! {
+    pub enum OAuth2Provider {
+        Github,
+    }
+}
+
+impl Display for OAuth2Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OAuth2Provider::Github => write!(f, "github"),
+        }
+    }
+}
+
+impl FromStr for OAuth2Provider {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "github" => Ok(OAuth2Provider::Github),
+            _ => Err(anyhow!("Invalid OAuth2Provider: {s}")),
+        }
     }
 }

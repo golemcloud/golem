@@ -16,7 +16,7 @@ use super::ApiResult;
 use super::model::{WebFlowCallbackResponse, WebFlowPollResponse};
 use golem_common::api::WebFlowAuthorizeUrlResponse;
 use golem_common::model::auth::{Token, TokenWithSecret};
-use golem_common::model::login::{EncodedOAuth2Session, OAuth2Data};
+use golem_common::model::login::{EncodedOAuth2Session, OAuth2Data, OAuth2Provider, OAuth2WebWorkflowData};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -176,10 +176,10 @@ impl LoginApi {
     async fn oauth2_web_flow_start(
         &self,
         /// Currently only `github` is supported.
-        Query(provider): Query<String>,
+        Query(provider): Query<OAuth2Provider>,
         /// The redirect URL to redirect to after the user has authorized the application
         Query(redirect): Query<Option<String>>,
-    ) -> ApiResult<Json<WebFlowAuthorizeUrlResponse>> {
+    ) -> ApiResult<Json<OAuth2WebWorkflowData>> {
         let record = recorded_http_api_request!("oauth2_web_flow_start",);
         let response = self
             .oauth2_web_flow_start_internal(provider, redirect)
@@ -191,10 +191,33 @@ impl LoginApi {
 
     async fn oauth2_web_flow_start_internal(
         &self,
-        _provider: String,
-        _redirect: Option<String>,
-    ) -> ApiResult<Json<WebFlowAuthorizeUrlResponse>> {
-        todo!()
+        provider: OAuth2Provider,
+        redirect: Option<String>,
+    ) -> ApiResult<Json<OAuth2WebWorkflowData>> {
+        let login_system = self.get_enabled_login_system()?;
+
+        let redirect = match redirect {
+            Some(r) => {
+                let url = url::Url::parse(&r)
+                    .map_err(|_| ApiError::bad_request("Invalid redirect URL".to_string()))?;
+                if url
+                    .domain()
+                    .is_some_and(|d| d.starts_with("localhost") || d.contains("golem.cloud"))
+                {
+                    Some(url)
+                } else {
+                    return Err(ApiError::bad_request("Invalid redirect domain".to_string()));
+                }
+            }
+            None => None,
+        };
+
+        let result = login_system
+            .oauth2_service
+            .start_web_workflow(&provider, redirect)
+            .await?;
+
+        Ok(Json(result))
     }
 
     /// GitHub OAuth2 Web Flow callback

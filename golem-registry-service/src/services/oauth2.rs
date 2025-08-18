@@ -14,7 +14,7 @@
 
 use super::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientError};
 use crate::model::login::{
-    EncodedOAuth2Session, ExternalLogin, OAuth2AccessToken, OAuth2Provider, OAuth2Session, OAuth2Token
+    ExternalLogin, OAuth2AccessToken, OAuth2Session, OAuth2Token, OAuth2WebflowState, OAuth2WebflowStateMetadata
 };
 use golem_common::{error_forwarders, into_internal_error, SafeDisplay};
 use std::sync::Arc;
@@ -23,7 +23,7 @@ use serde_with::serde_as;
 use serde::{Deserialize, Serialize};
 use crate::config::EdDsaConfig;
 use anyhow::anyhow;
-use golem_common::model::login::OAuth2Data;
+use golem_common::model::login::{EncodedOAuth2Session, OAuth2Data, OAuth2Provider, OAuth2WebWorkflowData, OAuth2WebflowStateId};
 use crate::repo::oauth2_token::OAuth2TokenRepo;
 use crate::repo::oauth2_webflow_state::OAuth2WebflowStateRepo;
 use golem_service_base::repo::RepoError;
@@ -33,6 +33,7 @@ use golem_common::model::auth::{TokenSecret, TokenWithSecret};
 use chrono::Utc;
 use super::token::{TokenError, TokenService};
 use crate::repo::model::oauth2_token::OAuth2TokenRecord;
+use applying::Apply;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2Error {
@@ -92,6 +93,25 @@ impl OAuth2Service {
         })
     }
 
+    pub async fn start_web_workflow(
+        &self,
+        provider: &OAuth2Provider,
+        redirect: Option<url::Url>,
+    ) -> Result<OAuth2WebWorkflowData, OAuth2Error> {
+        let metadata = OAuth2WebflowStateMetadata { redirect };
+
+        let state = self
+            .oauth2_web_flow_state_repo
+            .create(metadata)
+            .await?
+            .state_id
+            .apply(OAuth2WebflowStateId);
+
+        let url = self.get_authorize_url(provider, &state).await?;
+
+        Ok(OAuth2WebWorkflowData { url, state })
+    }
+
     pub async fn start_device_workflow(&self) -> Result<OAuth2Data, OAuth2Error> {
         let data = self.client.initiate_device_workflow().await?;
         let now = chrono::Utc::now();
@@ -101,11 +121,12 @@ impl OAuth2Service {
             expires_at: now + data.expires_in,
         };
         let encoded_session = self.encode_session(&session)?;
+
         Ok(OAuth2Data {
             url: data.verification_uri,
             user_code: data.user_code,
             expires: session.expires_at,
-            encoded_session: encoded_session.value,
+            encoded_session,
         })
     }
 
@@ -149,8 +170,8 @@ impl OAuth2Service {
 
     pub async fn get_authorize_url(
         &self,
-        provider: OAuth2Provider,
-        state: &str,
+        provider: &OAuth2Provider,
+        state: &OAuth2WebflowStateId,
     ) -> Result<String, OAuth2Error> {
         match provider {
             OAuth2Provider::Github => {
@@ -179,7 +200,7 @@ impl OAuth2Service {
         let encoded = jsonwebtoken::encode(&header, session, &self.encoding_key)
             .map_err(anyhow::Error::from)?;
 
-        Ok(EncodedOAuth2Session { value: encoded })
+        Ok(EncodedOAuth2Session(encoded))
     }
 
     fn decode_session(
@@ -188,7 +209,7 @@ impl OAuth2Service {
     ) -> Result<OAuth2Session, OAuth2Error> {
         let validation = Validation::new(Algorithm::EdDSA);
         let session =
-            jsonwebtoken::decode::<OAuth2Session>(&encoded_session.value, &self.decoding_key, &validation)
+            jsonwebtoken::decode::<OAuth2Session>(&encoded_session.0, &self.decoding_key, &validation)
                 .map_err(OAuth2Error::InvalidSession)?;
 
         Ok(session.claims)

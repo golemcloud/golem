@@ -49,6 +49,12 @@ pub enum ApiError {
     InternalError(Json<ErrorBody>),
 }
 
+impl ApiError {
+    pub fn bad_request(message: String) -> Self {
+        Self::BadRequest(Json(ErrorsBody { errors: vec![message], cause: None }))
+    }
+}
+
 impl ApiErrorDetails for ApiError {
     fn trace_error_kind(&self) -> &'static str {
         match &self {

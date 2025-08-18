@@ -20,6 +20,7 @@ use std::time::Duration;
 use url::Url;
 use anyhow::{anyhow, Context};
 use crate::model::login::ExternalLogin;
+use golem_common::model::login::OAuth2WebflowStateId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2GithubClientError {
@@ -60,7 +61,7 @@ pub trait OAuth2GithubClient: Send + Sync {
         expires: DateTime<Utc>,
     ) -> Result<String, OAuth2GithubClientError>;
 
-    async fn get_authorize_url(&self, state: &str) -> String;
+    async fn get_authorize_url(&self, state: &OAuth2WebflowStateId) -> String;
 
     async fn exchange_code_for_token(
         &self,
@@ -165,13 +166,13 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
         }
     }
 
-    async fn get_authorize_url(&self, state: &str) -> String {
+    async fn get_authorize_url(&self, state: &OAuth2WebflowStateId) -> String {
         Url::parse_with_params(
             "https://github.com/login/oauth/authorize",
             &[
                 ("client_id", self.config.client_id.as_str()),
                 ("redirect_uri", self.config.redirect_uri.as_str()),
-                ("state", state),
+                ("state", &state.to_string()),
                 ("scope", "user:email"),
             ],
         )

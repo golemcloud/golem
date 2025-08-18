@@ -14,11 +14,13 @@
 
 use sqlx::FromRow;
 use uuid::Uuid;
-use crate::model::login::{OAuth2Provider, OAuth2Token};
+use crate::model::login::{OAuth2Token};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenId;
 use golem_service_base::repo::RepoError;
 use std::str::FromStr;
+use golem_common::model::login::OAuth2Provider;
+use anyhow::anyhow;
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct OAuth2TokenRecord {
@@ -32,7 +34,7 @@ impl TryFrom<OAuth2TokenRecord> for OAuth2Token {
     type Error = RepoError;
     fn try_from(value: OAuth2TokenRecord) -> Result<Self, Self::Error> {
         Ok(Self {
-            provider: OAuth2Provider::from_str(&value.provider).map_err(|e| RepoError::InternalError(format!("Failed converting oauth2 provider")))?,
+            provider: OAuth2Provider::from_str(&value.provider).map_err(|e| RepoError::InternalError(anyhow!("Failed converting oauth2 provider")))?,
             external_id: value.external_id,
             account_id: AccountId(value.account_id),
             token_id: value.token_id.map(TokenId)
@@ -45,7 +47,7 @@ impl From<OAuth2Token> for OAuth2TokenRecord {
         Self {
             provider: value.provider.to_string(),
             external_id: value.external_id,
-            token_id: value.token_id.map(|tid| tid.0).iter().collect(),
+            token_id: value.token_id.map(|tid| tid.0),
             account_id: value.account_id.0
         }
     }

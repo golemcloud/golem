@@ -18,6 +18,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::auth::{TokenId, TokenWithSecret};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use golem_common::model::login::OAuth2Provider;
 
 #[derive(Clone, Debug)]
 pub struct ExternalLogin {
@@ -25,30 +26,6 @@ pub struct ExternalLogin {
     pub name: Option<String>,
     pub email: Option<String>,
     pub verified_emails: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum OAuth2Provider {
-    Github,
-}
-
-impl Display for OAuth2Provider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            OAuth2Provider::Github => write!(f, "github"),
-        }
-    }
-}
-
-impl FromStr for OAuth2Provider {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "github" => Ok(OAuth2Provider::Github),
-            _ => Err(format!("Invalid OAuth2Provider: {s}")),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

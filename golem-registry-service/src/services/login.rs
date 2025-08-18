@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::login::{ExternalLogin, OAuth2Provider, OAuth2Token, OAuth2WebflowState, OAuth2WebflowStateMetadata};
+use crate::model::login::{ExternalLogin, OAuth2Token, OAuth2WebflowState, OAuth2WebflowStateMetadata};
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
@@ -31,7 +31,6 @@ use super::account::AccountError;
 use super::token::TokenError;
 use crate::repo::oauth2_token::OAuth2TokenRepo;
 use crate::repo::oauth2_webflow_state::OAuth2WebflowStateRepo;
-use super::oauth2_provider_client::OAuth2ProviderClient;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoginError {
@@ -113,7 +112,7 @@ impl LoginService {
     //     Ok(unsafe_token)
     // }
 
-    pub async fn generate_temp_token_state(
+    pub async fn generate_webflow_state(
         &self,
         redirect: Option<url::Url>,
     ) -> Result<OAuth2WebflowState, LoginError> {
