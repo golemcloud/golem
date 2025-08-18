@@ -81,3 +81,23 @@ pub struct UpdateComponentRequest {
     pub new_component_wasm: Option<Upload>,
     pub new_files: Option<TempFileUpload>,
 }
+
+#[derive(Debug, Clone, ApiResponse)]
+pub enum WebFlowCallbackSuccess {
+    /// Redirect to the given URL specified in the web flow start
+    #[oai(status = 302)]
+    Redirect(Json<Empty>, #[oai(header = "Location")] String),
+    /// OAuth flow has completed
+    #[oai(status = 200)]
+    Success(Json<Empty>),
+}
+
+#[derive(Debug, Clone, ApiResponse)]
+pub enum WebFlowPoll {
+    /// OAuth flow has completed
+    #[oai(status = 200)]
+    Completed(Json<TokenWithSecret>),
+    /// OAuth flow is pending
+    #[oai(status = 202)]
+    Pending(Json<Empty>),
+}

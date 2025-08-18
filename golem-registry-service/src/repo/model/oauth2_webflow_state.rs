@@ -12,25 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::login::{OAuth2WebflowState, OAuth2WebflowStateMetadata};
 use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::model::token::TokenRecord;
-use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use sqlx::types::Json;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct OAuth2WebFlowStateMetadata {
-    pub redirect: Option<url::Url>,
-}
-
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct OAuth2WebFlowStateRecord {
     pub state_id: Uuid,
-    pub metadata: Json<OAuth2WebFlowStateMetadata>,
+    pub metadata: Json<OAuth2WebflowStateMetadata>,
     pub token_id: Option<Uuid>,
     pub created_at: SqlDateTime,
 
     #[sqlx(skip)]
     pub token: Option<TokenRecord>,
+}
+
+impl From<OAuth2WebFlowStateRecord> for OAuth2WebflowState {
+    fn from(value: OAuth2WebFlowStateRecord) -> Self {
+        Self {
+            metadata: value.metadata.0,
+            token: value.token.map(|t| t.into()),
+        }
+    }
 }

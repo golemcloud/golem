@@ -5238,103 +5238,29 @@ paths:
       - Cookie: []
       - Token: []
       operationId: current_login_token
-  /v1/login/oauth2:
-    post:
-      tags:
-      - RegistryService
-      - Login
-      summary: Acquire token with OAuth2 authorization
-      description: |
-        Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
-
-        In the response:
-        - `id` is the identifier of the token itself
-        - `accountId` is the account's identifier, can be used on the account API
-        - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
-      parameters:
-      - name: provider
-        schema:
-          type: string
-        in: query
-        description: Currently only `github` is supported.
-        required: true
-        deprecated: false
-        explode: true
-      - name: access-token
-        schema:
-          type: string
-        in: query
-        description: OAuth2 access token
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/TokenWithSecret'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: login_oauth2
   /v1/login/oauth2/device/start:
     post:
       tags:
       - RegistryService
       - Login
-      summary: Start GitHub OAuth2 interactive flow
+      summary: Start OAuth2 interactive flow
       description: |-
         Starts an interactive authorization flow.
         The user must open the returned url and enter the userCode in a form before the expires deadline.
         Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/OAuth2DeviceFlowStartRequest'
+        required: true
       responses:
         '200':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/OAuth2Data'
+                $ref: '#/components/schemas/OAuth2DeviceFlowData'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5453,7 +5379,7 @@ paths:
       parameters:
       - name: provider
         schema:
-          type: string
+          $ref: '#/components/schemas/OAuth2Provider'
         in: query
         description: Currently only `github` is supported.
         required: true
@@ -5473,7 +5399,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WebFlowAuthorizeUrlResponse'
+                $ref: '#/components/schemas/OAuth2WebWorkflowData'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5517,7 +5443,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
       operationId: oauth2_web_flow_start
-  /v1/login/oauth2/web/callback/github:
+  /v1/login/oauth2/web/callback:
     get:
       tags:
       - RegistryService
@@ -5538,6 +5464,7 @@ paths:
       - name: state
         schema:
           type: string
+          format: uuid
         in: query
         description: The state parameter for CSRF protection
         required: true
@@ -5616,6 +5543,7 @@ paths:
       - name: state
         schema:
           type: string
+          format: uuid
         in: query
         description: The state parameter for identifying the session
         required: true
@@ -7693,9 +7621,9 @@ components:
           type: boolean
         securityOverrides:
           type: boolean
-    OAuth2Data:
+    OAuth2DeviceFlowData:
       type: object
-      title: OAuth2Data
+      title: OAuth2DeviceFlowData
       required:
       - url
       - userCode
@@ -7711,6 +7639,30 @@ components:
           format: date-time
         encodedSession:
           type: string
+    OAuth2DeviceFlowStartRequest:
+      type: object
+      title: OAuth2DeviceFlowStartRequest
+      required:
+      - provider
+      properties:
+        provider:
+          $ref: '#/components/schemas/OAuth2Provider'
+    OAuth2Provider:
+      type: string
+      enum:
+      - github
+    OAuth2WebWorkflowData:
+      type: object
+      title: OAuth2WebWorkflowData
+      required:
+      - url
+      - state
+      properties:
+        url:
+          type: string
+        state:
+          type: string
+          format: uuid
     OplogProcessorDefinition:
       type: object
       title: OplogProcessorDefinition
@@ -8666,17 +8618,6 @@ components:
           type: string
         componentType:
           $ref: '#/components/schemas/ComponentType'
-    WebFlowAuthorizeUrlResponse:
-      type: object
-      title: WebFlowAuthorizeUrlResponse
-      required:
-      - url
-      - state
-      properties:
-        url:
-          type: string
-        state:
-          type: string
   securitySchemes:
     Cookie:
       type: apiKey

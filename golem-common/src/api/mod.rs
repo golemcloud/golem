@@ -50,11 +50,6 @@ declare_structs! {
         pub scope: PluginScope,
     }
 
-    pub struct WebFlowAuthorizeUrlResponse {
-        pub url: String,
-        pub state: String,
-    }
-
     pub struct CreateApiDeploymentRequest {
         pub api_definitions: Vec<ApiDefinitionId>,
     }

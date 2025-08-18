@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::model::oauth2_webflow_state::OAuth2WebFlowStateRecord;
+use crate::model::login::OAuth2WebflowStateMetadata;
 use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::model::new_repo_uuid;
-use crate::repo::model::oauth2_webflow_state::{
-    OAuth2WebFlowStateMetadata, OAuth2WebFlowStateRecord,
-};
 use crate::repo::model::token::TokenRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -34,7 +33,7 @@ use uuid::Uuid;
 pub trait OAuth2WebflowStateRepo: Send + Sync {
     async fn create(
         &self,
-        metadata: OAuth2WebFlowStateMetadata,
+        metadata: OAuth2WebflowStateMetadata,
     ) -> RepoResult<OAuth2WebFlowStateRecord>;
 
     async fn set_token_id(
@@ -72,7 +71,7 @@ impl<Repo: OAuth2WebflowStateRepo> LoggedOAuth2WebflowStateRepo<Repo> {
 impl<Repo: OAuth2WebflowStateRepo> OAuth2WebflowStateRepo for LoggedOAuth2WebflowStateRepo<Repo> {
     async fn create(
         &self,
-        metadata: OAuth2WebFlowStateMetadata,
+        metadata: OAuth2WebflowStateMetadata,
     ) -> RepoResult<OAuth2WebFlowStateRecord> {
         self.repo.create(metadata).await
     }
@@ -132,7 +131,7 @@ impl<DBP: Pool> DbOAuth2WebflowStateRepo<DBP> {
 impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
     async fn create(
         &self,
-        metadata: OAuth2WebFlowStateMetadata,
+        metadata: OAuth2WebflowStateMetadata,
     ) -> RepoResult<OAuth2WebFlowStateRecord> {
         self.with_rw("create")
             .fetch_one_as(

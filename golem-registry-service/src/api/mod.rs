@@ -116,7 +116,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 EnvironmentsApi {},
                 EnvironmentSecuritySchemesApi {},
             ),
-            LoginApi {},
+            LoginApi::new(services.login_system.clone()),
             PluginRegistrationApi {},
             SecuritySchemesApi {},
             TokensApi {},
