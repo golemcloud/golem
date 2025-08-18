@@ -246,6 +246,7 @@ cargo test -p golem-wasm-ast --tests --all-features -- --nocapture --report-time
 script_runner = "pwsh"
 script_extension = "ps1"
 script = '''
+mkdir target/
 $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
 cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- --nocapture $additional_params > ./target/result.xml
 cargo test -p golem-wasm-ast --tests --all-features -- --nocapture $additional_params >> ./target/result.xml
