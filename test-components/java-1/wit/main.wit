@@ -1,6 +1,0 @@
-package golem:it;
-
-world java-example {
-  export run-example1: func(a: string) -> u32;
-}
-
