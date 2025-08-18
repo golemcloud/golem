@@ -86,10 +86,7 @@ pub struct UpdateComponentRequest {
 pub enum WebFlowCallbackSuccess {
     /// Redirect to the given URL specified in the web flow start
     #[oai(status = 302)]
-    Redirect(
-        Json<Empty>,
-        #[oai(header = "Location")] String,
-    ),
+    Redirect(Json<Empty>, #[oai(header = "Location")] String),
     /// OAuth flow has completed
     #[oai(status = 200)]
     Success(Json<Empty>),

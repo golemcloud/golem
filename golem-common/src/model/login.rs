@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::{declare_enums, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use anyhow::anyhow;
 use chrono::Utc;
 use std::fmt::Display;
 use std::str::FromStr;
-use anyhow::anyhow;
 
 newtype_uuid!(OAuth2WebflowStateId);
 
@@ -29,16 +29,16 @@ declare_structs! {
         pub provider: OAuth2Provider,
     }
 
-    pub struct OAuth2WebWorkflowData {
-        pub url: String,
-        pub state: OAuth2WebflowStateId,
-    }
-
-    pub struct OAuth2Data {
+    pub struct OAuth2DeviceFlowData {
         pub url: String,
         pub user_code: String,
         pub expires: chrono::DateTime<Utc>,
         pub encoded_session: EncodedOAuth2Session,
+    }
+
+    pub struct OAuth2WebWorkflowData {
+        pub url: String,
+        pub state: OAuth2WebflowStateId,
     }
 }
 

@@ -44,7 +44,10 @@ pub enum ComponentError {
     #[error("Malformed component archive: {message}")]
     MalformedComponentArchive { message: String },
     #[error("Provided component file not found: {path} (key: {key})")]
-    InitialComponentFileNotFound { path: ComponentFilePath, key: InitialComponentFileKey },
+    InitialComponentFileNotFound {
+        path: ComponentFilePath,
+        key: InitialComponentFileKey,
+    },
     #[error("Invalid file path: {0}")]
     InvalidFilePath(String),
     #[error(

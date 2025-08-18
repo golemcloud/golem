@@ -16,6 +16,7 @@ use crate::services::account::AccountError;
 use crate::services::application::ApplicationError;
 use crate::services::component::ComponentError;
 use crate::services::environment::EnvironmentError;
+use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
 use crate::services::token::TokenError;
 use golem_common::SafeDisplay;
@@ -23,7 +24,6 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
-use crate::services::oauth2::OAuth2Error;
 
 #[derive(ApiResponse, Debug)]
 pub enum ApiError {
@@ -51,7 +51,10 @@ pub enum ApiError {
 
 impl ApiError {
     pub fn bad_request(message: String) -> Self {
-        Self::BadRequest(Json(ErrorsBody { errors: vec![message], cause: None }))
+        Self::BadRequest(Json(ErrorsBody {
+            errors: vec![message],
+            cause: None,
+        }))
     }
 }
 
@@ -228,8 +231,13 @@ impl From<OAuth2Error> for ApiError {
     fn from(value: OAuth2Error) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            OAuth2Error::InvalidSession(_) => Self::BadRequest(Json(ErrorsBody { errors: vec![error], cause: None })),
-            OAuth2Error::OAuth2WebflowStateNotFound(_) => Self::NotFound(Json(ErrorBody { error, cause: None })),
+            OAuth2Error::InvalidSession(_) => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            })),
+            OAuth2Error::OAuth2WebflowStateNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
             OAuth2Error::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("OAuth2Error")),

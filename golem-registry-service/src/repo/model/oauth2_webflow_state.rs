@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::login::{OAuth2WebflowState, OAuth2WebflowStateMetadata};
 use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::model::token::TokenRecord;
-use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use sqlx::types::Json;
 use uuid::Uuid;
-use crate::model::login::{OAuth2WebflowState, OAuth2WebflowStateMetadata};
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct OAuth2WebFlowStateRecord {
@@ -31,11 +30,11 @@ pub struct OAuth2WebFlowStateRecord {
     pub token: Option<TokenRecord>,
 }
 
-impl From<OAuth2WebFlowStateRecord> for OAuth2WebflowState  {
+impl From<OAuth2WebFlowStateRecord> for OAuth2WebflowState {
     fn from(value: OAuth2WebFlowStateRecord) -> Self {
         Self {
             metadata: value.metadata.0,
-            token: value.token.map(|t| t.into())
+            token: value.token.map(|t| t.into()),
         }
     }
 }

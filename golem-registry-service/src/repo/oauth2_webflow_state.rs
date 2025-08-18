@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::model::oauth2_webflow_state::OAuth2WebFlowStateRecord;
+use crate::model::login::OAuth2WebflowStateMetadata;
 use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::model::new_repo_uuid;
-use crate::repo::model::oauth2_webflow_state;
 use crate::repo::model::token::TokenRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -27,9 +28,6 @@ use sqlx::Database;
 use sqlx::types::Json;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
-use sqlx::prelude::FromRow;
-use crate::model::login::OAuth2WebflowStateMetadata;
-use super::model::oauth2_webflow_state::OAuth2WebFlowStateRecord;
 
 #[async_trait]
 pub trait OAuth2WebflowStateRepo: Send + Sync {

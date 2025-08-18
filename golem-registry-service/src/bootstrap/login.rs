@@ -13,14 +13,13 @@
 // limitations under the License.
 
 use crate::config::LoginConfig;
+use crate::repo::oauth2_token::OAuth2TokenRepo;
+use crate::repo::oauth2_webflow_state::OAuth2WebflowStateRepo;
 use crate::services::account::AccountService;
-use crate::services::token::TokenService;
-use golem_service_base::db::Pool;
-use std::sync::Arc;
-use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
-use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo};
-use crate::services::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientDefault};
 use crate::services::oauth2::OAuth2Service;
+use crate::services::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientDefault};
+use crate::services::token::TokenService;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct LoginSystemEnabled {
@@ -39,32 +38,27 @@ impl LoginSystem {
         account_service: Arc<AccountService>,
         token_service: Arc<TokenService>,
         oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
-        oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>
+        oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
     ) -> anyhow::Result<Self>
-    where
-    {
+where {
         match config {
             LoginConfig::Disabled(_) => Ok(Self::Disabled),
             LoginConfig::OAuth2(oauth2_config) => {
-
                 let oauth2_github_client: Arc<dyn OAuth2GithubClient> =
                     Arc::new(OAuth2GithubClientDefault {
                         config: oauth2_config.github.clone(),
                     });
 
-                let oauth2_service: Arc<OAuth2Service> =
-                    Arc::new(OAuth2Service::new(
-                        oauth2_github_client,
-                        account_service,
-                        token_service,
-                        oauth2_token_repo,
-                        oauth2_webflow_state_repo,
-                        &oauth2_config.ed_dsa
-                    )?);
+                let oauth2_service: Arc<OAuth2Service> = Arc::new(OAuth2Service::new(
+                    oauth2_github_client,
+                    account_service,
+                    token_service,
+                    oauth2_token_repo,
+                    oauth2_webflow_state_repo,
+                    &oauth2_config.ed_dsa,
+                )?);
 
-                Ok(Self::Enabled(LoginSystemEnabled {
-                    oauth2_service,
-                }))
+                Ok(Self::Enabled(LoginSystemEnabled { oauth2_service }))
             }
         }
     }

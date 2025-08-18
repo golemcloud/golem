@@ -13,9 +13,16 @@
 // limitations under the License.
 
 use super::ApiResult;
-use super::model::{WebFlowCallbackResponse, WebFlowCallbackSuccess, WebFlowPollResponse};
+use super::error::ApiError;
+use super::model::{WebFlowCallbackSuccess, WebFlowPollResponse};
+use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
+use golem_common::model::Empty;
 use golem_common::model::auth::{Token, TokenWithSecret};
-use golem_common::model::login::{EncodedOAuth2Session, OAuth2Data, OAuth2DeviceFlowStartRequest, OAuth2Provider, OAuth2WebWorkflowData, OAuth2WebflowStateId};
+use golem_common::model::error::ErrorBody;
+use golem_common::model::login::{
+    EncodedOAuth2Session, OAuth2DeviceFlowData, OAuth2DeviceFlowStartRequest, OAuth2Provider,
+    OAuth2WebWorkflowData, OAuth2WebflowStateId,
+};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -23,14 +30,9 @@ use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::Instrument;
-use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
-use std::sync::Arc;
-use super::error::ApiError;
-use golem_common::model::error::ErrorBody;
-use golem_common::model::Empty;
 
 pub struct LoginApi {
-    pub login_system: LoginSystem
+    pub login_system: LoginSystem,
 }
 
 #[OpenApi(
@@ -75,7 +77,7 @@ impl LoginApi {
     async fn start_oauth2_device_flow(
         &self,
         request: Json<OAuth2DeviceFlowStartRequest>,
-    ) -> ApiResult<Json<OAuth2Data>> {
+    ) -> ApiResult<Json<OAuth2DeviceFlowData>> {
         let record = recorded_http_api_request!("start_oauth2_device_flow",);
 
         let response = self
@@ -88,8 +90,8 @@ impl LoginApi {
 
     async fn start_oauth2_device_flow_internal(
         &self,
-        request: OAuth2DeviceFlowStartRequest
-    ) -> ApiResult<Json<OAuth2Data>> {
+        request: OAuth2DeviceFlowStartRequest,
+    ) -> ApiResult<Json<OAuth2DeviceFlowData>> {
         let login_system = self.get_enabled_login_system()?;
 
         let result = login_system
@@ -226,14 +228,14 @@ impl LoginApi {
 
         let state_metadata = login_system
             .oauth2_service
-            .handle_web_workflow_callback(&state, code).await?;
+            .handle_web_workflow_callback(&state, code)
+            .await?;
 
         let response = if let Some(mut redirect) = state_metadata.redirect {
-            redirect.query_pairs_mut().append_pair("state", &state.0.to_string());
-            WebFlowCallbackSuccess::Redirect(
-                Json(Empty {}),
-                redirect.to_string(),
-            )
+            redirect
+                .query_pairs_mut()
+                .append_pair("state", &state.0.to_string());
+            WebFlowCallbackSuccess::Redirect(Json(Empty {}), redirect.to_string())
         } else {
             WebFlowCallbackSuccess::Success(Json(Empty {}))
         };
@@ -269,11 +271,14 @@ impl LoginApi {
     ) -> ApiResult<WebFlowPollResponse> {
         let login_system = self.get_enabled_login_system()?;
 
-        let state = login_system.oauth2_service.get_web_workflow_state(&state_id).await?;
+        let state = login_system
+            .oauth2_service
+            .get_web_workflow_state(&state_id)
+            .await?;
 
         let response = match state.token {
             Some(token) => WebFlowPollResponse::Completed(Json(token)),
-            None => WebFlowPollResponse::Pending(Json(Empty { }))
+            None => WebFlowPollResponse::Pending(Json(Empty {})),
         };
 
         Ok(response)
@@ -284,7 +289,7 @@ impl LoginApi {
             LoginSystem::Enabled(inner) => Ok(inner),
             LoginSystem::Disabled => Err(ApiError::Conflict(Json(ErrorBody {
                 error: "Logins are disabled by configuration".to_string(),
-                cause: None
+                cause: None,
             }))),
         }
     }

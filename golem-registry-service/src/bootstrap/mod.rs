@@ -14,12 +14,15 @@
 
 pub mod login;
 
+use self::login::LoginSystem;
 use crate::config::RegistryServiceConfig;
 use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
 use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
 use crate::repo::environment::{DbEnvironmentRepo, EnvironmentRepo};
+use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
+use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo};
 use crate::repo::plan::{DbPlanRepo, PlanRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
 use crate::services::account::AccountService;
@@ -44,9 +47,6 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use include_dir::include_dir;
 use std::sync::Arc;
-use self::login::LoginSystem;
-use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
-use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo};
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
@@ -58,7 +58,7 @@ pub struct Services {
     pub environment_service: Arc<EnvironmentService>,
     pub token_service: Arc<TokenService>,
 
-    pub login_system: LoginSystem
+    pub login_system: LoginSystem,
 }
 
 struct Repos {
@@ -70,7 +70,7 @@ struct Repos {
     plan_repo: Arc<dyn PlanRepo>,
     token_repo: Arc<dyn TokenRepo>,
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
-    oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>
+    oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
 }
 
 impl Services {
@@ -121,7 +121,7 @@ impl Services {
             account_service.clone(),
             token_service.clone(),
             repos.oauth2_token_repo.clone(),
-            repos.oauth2_webflow_state_repo.clone()
+            repos.oauth2_webflow_state_repo.clone(),
         )?;
 
         Ok(Self {
@@ -130,7 +130,7 @@ impl Services {
             component_service,
             environment_service,
             token_service,
-            login_system
+            login_system,
         })
     }
 }

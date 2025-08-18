@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
-use std::str::FromStr;
+use chrono::Utc;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{TokenId, TokenWithSecret};
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use golem_common::model::login::OAuth2Provider;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
 pub struct ExternalLogin {
@@ -59,5 +57,5 @@ pub struct OAuth2WebflowStateMetadata {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OAuth2WebflowState {
     pub metadata: OAuth2WebflowStateMetadata,
-    pub token: Option<TokenWithSecret>
+    pub token: Option<TokenWithSecret>,
 }

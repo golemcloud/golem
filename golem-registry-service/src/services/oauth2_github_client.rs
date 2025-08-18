@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::login::ExternalLogin;
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::{into_internal_error, SafeDisplay};
+use golem_common::model::login::OAuth2WebflowStateId;
+use golem_common::{SafeDisplay, into_internal_error};
 use std::fmt::{Debug, Display, Formatter};
 use std::time::Duration;
 use url::Url;
-use anyhow::{anyhow, Context};
-use crate::model::login::ExternalLogin;
-use golem_common::model::login::OAuth2WebflowStateId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2GithubClientError {
@@ -30,7 +30,7 @@ pub enum OAuth2GithubClientError {
         current_time: DateTime<Utc>,
     },
     #[error(transparent)]
-    InternalError(#[from] anyhow::Error)
+    InternalError(#[from] anyhow::Error),
 }
 
 into_internal_error!(OAuth2GithubClientError);
@@ -39,7 +39,7 @@ impl SafeDisplay for OAuth2GithubClientError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::InternalError(_) => "Internal Error".to_string(),
-            Self::Expired { .. } => self.to_string()
+            Self::Expired { .. } => self.to_string(),
         }
     }
 }
@@ -52,7 +52,8 @@ impl From<reqwest::Error> for OAuth2GithubClientError {
 
 #[async_trait]
 pub trait OAuth2GithubClient: Send + Sync {
-    async fn initiate_device_workflow(&self) -> Result<DeviceWorkflowData, OAuth2GithubClientError>;
+    async fn initiate_device_workflow(&self)
+    -> Result<DeviceWorkflowData, OAuth2GithubClientError>;
 
     async fn get_device_workflow_access_token(
         &self,
@@ -106,9 +107,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
             .await?;
 
         if res.status().is_success() {
-            let response: DeviceCodeResponse = res
-                .json()
-                .await?;
+            let response: DeviceCodeResponse = res.json().await?;
 
             Ok(DeviceWorkflowData {
                 device_code: response.device_code,
@@ -118,7 +117,10 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
                 interval: Duration::from_secs(response.interval),
             })
         } else {
-            Err(anyhow!("Failed to start devicde flow with status: {}", res.status()))?
+            Err(anyhow!(
+                "Failed to start devicde flow with status: {}",
+                res.status()
+            ))?
         }
     }
 
@@ -200,13 +202,14 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
             .await?;
 
         if res.status().is_success() {
-            let access_token: AccessToken = res
-                .json()
-                .await?;
+            let access_token: AccessToken = res.json().await?;
 
             Ok(access_token.access_token)
         } else {
-            Err(anyhow!("Failed to to exchange code, status: {}", res.status()))?
+            Err(anyhow!(
+                "Failed to to exchange code, status: {}",
+                res.status()
+            ))?
         }
     }
 
@@ -259,15 +262,14 @@ async fn execute_access_token_request(
         .send()
         .await?;
 
-    let body = response
-        .text()
-        .await?;
+    let body = response.text().await?;
 
     match serde_json::from_str::<ErrorResponse>(&body) {
         Ok(error_response) => Ok(AccessTokenResponse::ErrorResponse(error_response)),
 
         Err(_) => {
-            let access_token_response = serde_json::from_str::<AccessToken>(&body).map_err(anyhow::Error::from)?;
+            let access_token_response =
+                serde_json::from_str::<AccessToken>(&body).map_err(anyhow::Error::from)?;
             Ok(AccessTokenResponse::AccessToken(access_token_response))
         }
     }
@@ -461,7 +463,6 @@ impl serde::ser::Serialize for ErrorResponseKind {
 struct GithubUserDetails {
     login: String,
     name: Option<String>,
-    email: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -479,7 +480,6 @@ fn add_headers(request: reqwest::RequestBuilder, access_token: &str) -> reqwest:
         .header("User-Agent", "Golem Cloud")
         .header("X-GitHub-Api-Version", "2022-11-28")
 }
-
 
 async fn github_user_details(
     access_token: &str,
