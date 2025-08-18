@@ -31,12 +31,14 @@ skip_core_tasks = true       # we are not using the predefined cargo-make flows,
 
 [env]
 JUNIT_OPTS = ""
+JUNIT_OPTS_WIN = ""
 AWS_EC2_METADATA_DISABLED = "true"
 
 [env.ci]
 CARGO_INCREMENTAL = "false"
 # CARGO_LOG="cargo::core::compiler::fingerprint=trace"
 JUNIT_OPTS = "--format junit --logfile target/report.xml"
+JUNIT_OPTS_WIN = "--color=never --test-threads=1 --report-time --format junit"
 
 [tasks.default]
 description = "This is the task that gets executed by 'cargo make' when no task is specified"
@@ -238,6 +240,15 @@ description = "Runs unit tests only"
 script = '''
 cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- --nocapture --report-time $JUNIT_OPTS
 cargo test -p golem-wasm-ast --tests --all-features -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[tasks.unit-tests.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- --nocapture $additional_params > ./target/result.xml
+cargo test -p golem-wasm-ast --tests --all-features -- --nocapture $additional_params >> ./target/result.xml
 '''
 
 [tasks.worker-executor-tests]
