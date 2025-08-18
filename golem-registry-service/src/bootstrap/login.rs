@@ -20,13 +20,10 @@ use std::sync::Arc;
 use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
 use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo};
 use crate::services::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientDefault};
-use crate::services::oauth2_provider_client::OAuth2ProviderClient;
 use crate::services::oauth2::OAuth2Service;
-use crate::services::login::LoginService;
 
 #[derive(Clone)]
 pub struct LoginSystemEnabled {
-    pub login_service: Arc<LoginService>,
     pub oauth2_service: Arc<OAuth2Service>,
 }
 
@@ -55,26 +52,17 @@ impl LoginSystem {
                         config: oauth2_config.github.clone(),
                     });
 
-                let oauth2_provider_client: Arc<OAuth2ProviderClient> =
-                    Arc::new(OAuth2ProviderClient::new(oauth2_github_client.clone()));
-
                 let oauth2_service: Arc<OAuth2Service> =
                     Arc::new(OAuth2Service::new(
                         oauth2_github_client,
-                        &oauth2_config.ed_dsa
-                    )?);
-
-                let login_service: Arc<LoginService> =
-                    Arc::new(LoginService::new(
-                        oauth2_provider_client,
                         account_service,
                         token_service,
                         oauth2_token_repo,
                         oauth2_webflow_state_repo,
-                    ));
+                        &oauth2_config.ed_dsa
+                    )?);
 
                 Ok(Self::Enabled(LoginSystemEnabled {
-                    login_service,
                     oauth2_service,
                 }))
             }
