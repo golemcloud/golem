@@ -63,10 +63,12 @@ use golem_common::model::worker::WasiConfigVars;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
+use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -985,6 +987,18 @@ impl WorkerCommandHandler {
                 .unwrap_or_else(|| "output.bin".to_string())
         };
 
+        // Check if file exists and ask for confirmation if needed
+        if Path::new(&output_path).exists() {
+            let should_overwrite = self.confirm_file_overwrite(&output_path)?;
+            if !should_overwrite {
+                log_action(
+                    "File download cancelled",
+                    format!("by user for file {}", output_path.log_color_highlight()),
+                );
+                return Ok(());
+            }
+        }
+
         match File::create(&output_path).and_then(|mut file| file.write_all(&file_contents)) {
             Ok(_) => {
                 log_action(
@@ -1874,6 +1888,17 @@ impl WorkerCommandHandler {
                 bail!(NonSuccessfulExit);
             }
         }
+    }
+
+    fn confirm_file_overwrite(&self, output_path: &str) -> anyhow::Result<bool> {
+        let result = Confirm::new(&format!(
+            "File {} already exists. Do you want to overwrite it?",
+            output_path.log_color_highlight()
+        ))
+        .with_default(false)
+        .prompt()?;
+
+        Ok(result)
     }
 }
 
