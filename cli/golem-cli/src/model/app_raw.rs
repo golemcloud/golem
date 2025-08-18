@@ -181,6 +181,7 @@ pub enum HttpApiDefinitionBindingType {
     CorsPreflight,
     FileServer,
     HttpHandler,
+    SwaggerUi,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

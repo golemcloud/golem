@@ -2542,6 +2542,12 @@ mod app_builder {
                                             check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
                                             check_not_allowed(validation, "response", &route.binding.response);
                                         }
+                                        app_raw::HttpApiDefinitionBindingType::SwaggerUi => {
+                                                check_not_allowed(validation, "component_name", &route.binding.component_name);
+                                                check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
+                                                check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
+                                                check_not_allowed(validation, "response", &route.binding.response); 
+                                        }
                                     }
                                 },
                             );
