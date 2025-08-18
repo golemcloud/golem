@@ -16,7 +16,7 @@ use super::ApiResult;
 use super::model::{WebFlowCallbackResponse, WebFlowPollResponse};
 use golem_common::api::WebFlowAuthorizeUrlResponse;
 use golem_common::model::auth::{Token, TokenWithSecret};
-use golem_common::model::login::OAuth2Data;
+use golem_common::model::login::{EncodedOAuth2Session, OAuth2Data};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -28,7 +28,6 @@ use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
 use std::sync::Arc;
 use super::error::ApiError;
 use golem_common::model::error::ErrorBody;
-use crate::model::login::EncodedOAuth2Session;
 
 pub struct LoginApi {
     pub login_system: LoginSystem
@@ -141,7 +140,7 @@ impl LoginApi {
     )]
     async fn complete_oauth2_device_flow(
         &self,
-        result: Json<String>,
+        result: Json<EncodedOAuth2Session>,
     ) -> ApiResult<Json<TokenWithSecret>> {
         let record = recorded_http_api_request!("complete_oauth2_device_flow",);
         let response = self
@@ -154,13 +153,13 @@ impl LoginApi {
 
     async fn complete_oauth2_device_flow_internal(
         &self,
-        result: String,
+        result: EncodedOAuth2Session,
     ) -> ApiResult<Json<TokenWithSecret>> {
         let login_system = self.get_enabled_login_system()?;
 
-        let token = login_system
+        let result = login_system
             .oauth2_service
-            .finish_device_workflow(&EncodedOAuth2Session { value: result })
+            .finish_device_workflow(&result)
             .await?;
 
         Ok(Json(result))
