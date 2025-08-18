@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientError};
+use super::oauth2_github_client::{DeviceWorkflowData, OAuth2GithubClient, OAuth2GithubClientError};
 use crate::model::login::{
-    ExternalLogin, OAuth2AccessToken, OAuth2Session, OAuth2Token, OAuth2WebflowState, OAuth2WebflowStateMetadata
+    ExternalLogin, OAuth2AccessToken, OAuth2DeviceFlowSession, OAuth2Token, OAuth2WebflowState, OAuth2WebflowStateMetadata
 };
 use golem_common::{error_forwarders, into_internal_error, SafeDisplay};
 use std::sync::Arc;
@@ -34,6 +34,7 @@ use chrono::Utc;
 use super::token::{TokenError, TokenService};
 use crate::repo::model::oauth2_token::OAuth2TokenRecord;
 use applying::Apply;
+use opentelemetry_sdk::metrics::data;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2Error {
@@ -171,10 +172,14 @@ impl OAuth2Service {
         Ok(state)
     }
 
-    pub async fn start_device_workflow(&self) -> Result<OAuth2Data, OAuth2Error> {
-        let data = self.client.initiate_device_workflow().await?;
+    pub async fn start_device_workflow(
+        &self,
+        provider: OAuth2Provider,
+    ) -> Result<OAuth2Data, OAuth2Error> {
+        let data = self.initiate_device_workflow(&provider).await?;
         let now = chrono::Utc::now();
-        let session = OAuth2Session {
+        let session = OAuth2DeviceFlowSession {
+            provider,
             device_code: data.device_code,
             interval: data.interval,
             expires_at: now + data.expires_in,
@@ -193,8 +198,6 @@ impl OAuth2Service {
         &self,
         encoded_session: &EncodedOAuth2Session,
     ) -> Result<TokenWithSecret, OAuth2Error> {
-        let provider = OAuth2Provider::Github;
-
         let session = self.decode_session(encoded_session)?;
         let access_token = self
             .client
@@ -205,7 +208,7 @@ impl OAuth2Service {
 
         let existing_data = self
             .oauth2_token_repo
-            .get_by_external_provider(&provider.to_string(), &external_login.external_id)
+            .get_by_external_provider(&session.provider.to_string(), &external_login.external_id)
             .await?
             .map(TryInto::<OAuth2Token>::try_into)
             .transpose()?;
@@ -220,11 +223,23 @@ impl OAuth2Service {
             None => {
                 // This will also link the external id to the account id, ensure that no additional
                 // accounts are created in the future.
-                self.make_token(provider, external_login, account_id).await?
+                self.make_token(session.provider, external_login, account_id).await?
             }
         };
 
         Ok(token)
+    }
+
+    async fn initiate_device_workflow(
+        &self,
+        provider: &OAuth2Provider
+    ) -> Result<DeviceWorkflowData, OAuth2Error> {
+        match provider {
+            OAuth2Provider::Github => {
+                let data = self.client.initiate_device_workflow().await?;
+                Ok(data)
+            }
+        }
     }
 
     async fn get_authorize_url(
@@ -233,10 +248,7 @@ impl OAuth2Service {
         state: &OAuth2WebflowStateId,
     ) -> Result<String, OAuth2Error> {
         match provider {
-            OAuth2Provider::Github => {
-                let url = self.client.get_authorize_url(state).await;
-                Ok(url)
-            }
+            OAuth2Provider::Github => Ok(self.client.get_authorize_url(state).await)
         }
     }
 
@@ -263,7 +275,7 @@ impl OAuth2Service {
 
     fn encode_session(
         &self,
-        session: &OAuth2Session,
+        session: &OAuth2DeviceFlowSession,
     ) -> Result<EncodedOAuth2Session, OAuth2Error> {
         let header = Header::new(Algorithm::EdDSA);
         let encoded = jsonwebtoken::encode(&header, session, &self.encoding_key)
@@ -275,10 +287,10 @@ impl OAuth2Service {
     fn decode_session(
         &self,
         encoded_session: &EncodedOAuth2Session,
-    ) -> Result<OAuth2Session, OAuth2Error> {
+    ) -> Result<OAuth2DeviceFlowSession, OAuth2Error> {
         let validation = Validation::new(Algorithm::EdDSA);
         let session =
-            jsonwebtoken::decode::<OAuth2Session>(&encoded_session.0, &self.decoding_key, &validation)
+            jsonwebtoken::decode::<OAuth2DeviceFlowSession>(&encoded_session.0, &self.decoding_key, &validation)
                 .map_err(OAuth2Error::InvalidSession)?;
 
         Ok(session.claims)

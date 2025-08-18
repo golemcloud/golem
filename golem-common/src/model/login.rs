@@ -25,6 +25,10 @@ declare_transparent_newtypes! {
 }
 
 declare_structs! {
+    pub struct OAuth2DeviceFlowStartRequest {
+        pub provider: OAuth2Provider,
+    }
+
     pub struct OAuth2WebWorkflowData {
         pub url: String,
         pub state: OAuth2WebflowStateId,

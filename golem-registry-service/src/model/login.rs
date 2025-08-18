@@ -37,7 +37,8 @@ pub struct OAuth2Token {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OAuth2Session {
+pub struct OAuth2DeviceFlowSession {
+    pub provider: OAuth2Provider,
     pub device_code: String,
     pub interval: std::time::Duration,
     pub expires_at: chrono::DateTime<Utc>,

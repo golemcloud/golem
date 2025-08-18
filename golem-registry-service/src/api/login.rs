@@ -15,7 +15,7 @@
 use super::ApiResult;
 use super::model::{WebFlowCallbackResponse, WebFlowCallbackSuccess, WebFlowPollResponse};
 use golem_common::model::auth::{Token, TokenWithSecret};
-use golem_common::model::login::{EncodedOAuth2Session, OAuth2Data, OAuth2Provider, OAuth2WebWorkflowData, OAuth2WebflowStateId};
+use golem_common::model::login::{EncodedOAuth2Session, OAuth2Data, OAuth2DeviceFlowStartRequest, OAuth2Provider, OAuth2WebWorkflowData, OAuth2WebflowStateId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -62,7 +62,7 @@ impl LoginApi {
         todo!()
     }
 
-    /// Start GitHub OAuth2 interactive flow
+    /// Start OAuth2 interactive flow
     ///
     /// Starts an interactive authorization flow.
     /// The user must open the returned url and enter the userCode in a form before the expires deadline.
@@ -72,23 +72,29 @@ impl LoginApi {
         method = "post",
         operation_id = "start_login_oauth2"
     )]
-    async fn start_oauth2_device_flow(&self) -> ApiResult<Json<OAuth2Data>> {
+    async fn start_oauth2_device_flow(
+        &self,
+        request: Json<OAuth2DeviceFlowStartRequest>,
+    ) -> ApiResult<Json<OAuth2Data>> {
         let record = recorded_http_api_request!("start_oauth2_device_flow",);
 
         let response = self
-            .start_oauth2_device_flow_internal()
+            .start_oauth2_device_flow_internal(request.0)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn start_oauth2_device_flow_internal(&self) -> ApiResult<Json<OAuth2Data>> {
+    async fn start_oauth2_device_flow_internal(
+        &self,
+        request: OAuth2DeviceFlowStartRequest
+    ) -> ApiResult<Json<OAuth2Data>> {
         let login_system = self.get_enabled_login_system()?;
 
         let result = login_system
             .oauth2_service
-            .start_device_workflow()
+            .start_device_workflow(request.provider)
             .await
             .map(Json)?;
 
