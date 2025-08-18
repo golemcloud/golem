@@ -5302,7 +5302,7 @@ paths:
         Starts an interactive authorization flow.
         The user must open the returned url and enter the userCode in a form before the expires deadline.
         Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
-      operationId: start_login_oauth2
+      operationId: start_oauth2_device_flow
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -5315,7 +5315,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/OAuth2DeviceFlowData'
+                $ref: '#/components/schemas/OAuth2DeviceflowData'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5367,7 +5367,7 @@ paths:
       description: |-
         Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
         Returns a JSON string containing the encodedSession from the start endpoint's response.
-      operationId: complete_login_oauth2
+      operationId: complete_oauth2_device_flow
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -5430,7 +5430,7 @@ paths:
       - Login
       summary: Initiate OAuth2 Web Flow
       description: Starts the OAuth2 web flow authorization process by returning the authorization URL for the given provider.
-      operationId: oauth2_web_flow_start
+      operationId: start_oauth2_webflow
       parameters:
       - in: query
         name: provider
@@ -5455,7 +5455,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/OAuth2WebWorkflowData'
+                $ref: '#/components/schemas/OAuth2WebflowData'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5503,11 +5503,11 @@ paths:
       tags:
       - RegistryService
       - Login
-      summary: GitHub OAuth2 Web Flow callback
+      summary: OAuth2 Web Flow callback
       description: |-
-        This endpoint handles the callback from GitHub after the user has authorized the application.
+        This endpoint handles the callback from the provider after the user has authorized the application.
         It exchanges the code for an access token and then uses that to log the user in.
-      operationId: oauth2_web_flow_callback_github
+      operationId: submit_oauth2_webflow_callback
       parameters:
       - in: query
         name: code
@@ -5597,7 +5597,7 @@ paths:
       - Login
       summary: Poll for OAuth2 Web Flow token
       description: This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
-      operationId: oauth2_web_flow_poll
+      operationId: poll_oauth2_webflow
       parameters:
       - in: query
         name: state
@@ -7687,8 +7687,16 @@ components:
       - compatibilityCheck
       - versionCheck
       - securityOverrides
-    OAuth2DeviceFlowData:
-      title: OAuth2DeviceFlowData
+    OAuth2DeviceFlowStartRequest:
+      title: OAuth2DeviceFlowStartRequest
+      type: object
+      properties:
+        provider:
+          $ref: '#/components/schemas/OAuth2Provider'
+      required:
+      - provider
+    OAuth2DeviceflowData:
+      title: OAuth2DeviceflowData
       type: object
       properties:
         url:
@@ -7705,20 +7713,12 @@ components:
       - userCode
       - expires
       - encodedSession
-    OAuth2DeviceFlowStartRequest:
-      title: OAuth2DeviceFlowStartRequest
-      type: object
-      properties:
-        provider:
-          $ref: '#/components/schemas/OAuth2Provider'
-      required:
-      - provider
     OAuth2Provider:
       type: string
       enum:
       - github
-    OAuth2WebWorkflowData:
-      title: OAuth2WebWorkflowData
+    OAuth2WebflowData:
+      title: OAuth2WebflowData
       type: object
       properties:
         url:

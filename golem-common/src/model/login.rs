@@ -21,22 +21,18 @@ use std::str::FromStr;
 newtype_uuid!(OAuth2WebflowStateId);
 
 declare_transparent_newtypes! {
-    pub struct EncodedOAuth2Session(pub String);
+    pub struct EncodedOAuth2DeviceflowSession(pub String);
 }
 
 declare_structs! {
-    pub struct OAuth2DeviceFlowStartRequest {
-        pub provider: OAuth2Provider,
-    }
-
-    pub struct OAuth2DeviceFlowData {
+    pub struct OAuth2DeviceflowData {
         pub url: String,
         pub user_code: String,
         pub expires: chrono::DateTime<Utc>,
-        pub encoded_session: EncodedOAuth2Session,
+        pub encoded_session: EncodedOAuth2DeviceflowSession,
     }
 
-    pub struct OAuth2WebWorkflowData {
+    pub struct OAuth2WebflowData {
         pub url: String,
         pub state: OAuth2WebflowStateId,
     }

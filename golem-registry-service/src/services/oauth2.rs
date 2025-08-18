@@ -31,7 +31,7 @@ use chrono::Utc;
 use golem_common::model::account::{AccountId, NewAccountData};
 use golem_common::model::auth::TokenWithSecret;
 use golem_common::model::login::{
-    EncodedOAuth2Session, OAuth2DeviceFlowData, OAuth2Provider, OAuth2WebWorkflowData,
+    EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2Provider, OAuth2WebflowData,
     OAuth2WebflowStateId,
 };
 use golem_common::{SafeDisplay, error_forwarders, into_internal_error};
@@ -108,11 +108,11 @@ impl OAuth2Service {
         })
     }
 
-    pub async fn start_web_workflow(
+    pub async fn start_webflow(
         &self,
         provider: &OAuth2Provider,
         redirect: Option<url::Url>,
-    ) -> Result<OAuth2WebWorkflowData, OAuth2Error> {
+    ) -> Result<OAuth2WebflowData, OAuth2Error> {
         let metadata = OAuth2WebflowStateMetadata {
             redirect,
             provider: provider.clone(),
@@ -127,10 +127,10 @@ impl OAuth2Service {
 
         let url = self.get_authorize_url(provider, &state).await?;
 
-        Ok(OAuth2WebWorkflowData { url, state })
+        Ok(OAuth2WebflowData { url, state })
     }
 
-    pub async fn handle_web_workflow_callback(
+    pub async fn handle_webflow_callback(
         &self,
         state_id: &OAuth2WebflowStateId,
         code: String,
@@ -182,7 +182,7 @@ impl OAuth2Service {
         Ok(state.metadata)
     }
 
-    pub async fn get_web_workflow_state(
+    pub async fn get_webflow_state(
         &self,
         state_id: &OAuth2WebflowStateId,
     ) -> Result<OAuth2WebflowState, OAuth2Error> {
@@ -196,11 +196,11 @@ impl OAuth2Service {
         Ok(state)
     }
 
-    pub async fn start_device_workflow(
+    pub async fn start_device_flow(
         &self,
         provider: OAuth2Provider,
-    ) -> Result<OAuth2DeviceFlowData, OAuth2Error> {
-        let data = self.initiate_device_workflow(&provider).await?;
+    ) -> Result<OAuth2DeviceflowData, OAuth2Error> {
+        let data = self.initiate_provider_device_flow(&provider).await?;
         let now = chrono::Utc::now();
         let session = OAuth2DeviceFlowSession {
             provider,
@@ -210,7 +210,7 @@ impl OAuth2Service {
         };
         let encoded_session = self.encode_session(&session)?;
 
-        Ok(OAuth2DeviceFlowData {
+        Ok(OAuth2DeviceflowData {
             url: data.verification_uri,
             user_code: data.user_code,
             expires: session.expires_at,
@@ -218,9 +218,9 @@ impl OAuth2Service {
         })
     }
 
-    pub async fn finish_device_workflow(
+    pub async fn finish_device_flow(
         &self,
-        encoded_session: &EncodedOAuth2Session,
+        encoded_session: &EncodedOAuth2DeviceflowSession,
     ) -> Result<TokenWithSecret, OAuth2Error> {
         let session = self.decode_session(encoded_session)?;
         let access_token = self
@@ -259,7 +259,7 @@ impl OAuth2Service {
         Ok(token)
     }
 
-    async fn initiate_device_workflow(
+    async fn initiate_provider_device_flow(
         &self,
         provider: &OAuth2Provider,
     ) -> Result<DeviceWorkflowData, OAuth2Error> {
@@ -305,17 +305,17 @@ impl OAuth2Service {
     fn encode_session(
         &self,
         session: &OAuth2DeviceFlowSession,
-    ) -> Result<EncodedOAuth2Session, OAuth2Error> {
+    ) -> Result<EncodedOAuth2DeviceflowSession, OAuth2Error> {
         let header = Header::new(Algorithm::EdDSA);
         let encoded = jsonwebtoken::encode(&header, session, &self.encoding_key)
             .map_err(anyhow::Error::from)?;
 
-        Ok(EncodedOAuth2Session(encoded))
+        Ok(EncodedOAuth2DeviceflowSession(encoded))
     }
 
     fn decode_session(
         &self,
-        encoded_session: &EncodedOAuth2Session,
+        encoded_session: &EncodedOAuth2DeviceflowSession,
     ) -> Result<OAuth2DeviceFlowSession, OAuth2Error> {
         let validation = Validation::new(Algorithm::EdDSA);
         let session = jsonwebtoken::decode::<OAuth2DeviceFlowSession>(

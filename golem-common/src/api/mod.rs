@@ -19,11 +19,10 @@ pub mod certificate;
 pub mod component;
 pub mod environment;
 
+use crate::declare_structs;
 use crate::model::api_definition::ApiDefinitionId;
 use crate::model::component::ComponentRevision;
-use crate::model::plugin::{ComponentTransformerDefinition, OplogProcessorDefinition, PluginScope};
 use crate::model::ComponentId;
-use crate::{declare_structs, declare_unions};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
@@ -40,16 +39,6 @@ declare_structs! {
         pub expires_at: chrono::DateTime<Utc>,
     }
 
-    pub struct CreatePluginRequest {
-        pub name: String,
-        pub version: String,
-        pub description: String,
-        pub icon: Vec<u8>,
-        pub homepage: String,
-        pub specs: PluginTypeSpecificCreation,
-        pub scope: PluginScope,
-    }
-
     pub struct CreateApiDeploymentRequest {
         pub api_definitions: Vec<ApiDefinitionId>,
     }
@@ -62,12 +51,5 @@ declare_structs! {
         name: String,
         revision: ComponentRevision,
         id: ComponentId
-    }
-}
-
-declare_unions! {
-    pub enum PluginTypeSpecificCreation {
-        ComponentTransformer(ComponentTransformerDefinition),
-        OplogProcessor(OplogProcessorDefinition),
     }
 }

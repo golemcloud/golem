@@ -42,12 +42,6 @@ pub struct OAuth2DeviceFlowSession {
     pub expires_at: chrono::DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
-pub struct OAuth2AccessToken {
-    pub provider: OAuth2Provider,
-    pub access_token: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OAuth2WebflowStateMetadata {
     pub redirect: Option<url::Url>,

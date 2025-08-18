@@ -14,14 +14,13 @@
 
 use super::ApiResult;
 use super::error::ApiError;
-use super::model::{WebFlowCallbackSuccess, WebFlowPollResponse};
 use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
 use golem_common::model::Empty;
 use golem_common::model::auth::{Token, TokenWithSecret};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::login::{
-    EncodedOAuth2Session, OAuth2DeviceFlowData, OAuth2DeviceFlowStartRequest, OAuth2Provider,
-    OAuth2WebWorkflowData, OAuth2WebflowStateId,
+    EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2Provider, OAuth2WebflowData,
+    OAuth2WebflowStateId,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -72,12 +71,12 @@ impl LoginApi {
     #[oai(
         path = "/oauth2/device/start",
         method = "post",
-        operation_id = "start_login_oauth2"
+        operation_id = "start_oauth2_device_flow"
     )]
     async fn start_oauth2_device_flow(
         &self,
         request: Json<OAuth2DeviceFlowStartRequest>,
-    ) -> ApiResult<Json<OAuth2DeviceFlowData>> {
+    ) -> ApiResult<Json<OAuth2DeviceflowData>> {
         let record = recorded_http_api_request!("start_oauth2_device_flow",);
 
         let response = self
@@ -91,12 +90,12 @@ impl LoginApi {
     async fn start_oauth2_device_flow_internal(
         &self,
         request: OAuth2DeviceFlowStartRequest,
-    ) -> ApiResult<Json<OAuth2DeviceFlowData>> {
+    ) -> ApiResult<Json<OAuth2DeviceflowData>> {
         let login_system = self.get_enabled_login_system()?;
 
         let result = login_system
             .oauth2_service
-            .start_device_workflow(request.provider)
+            .start_device_flow(request.provider)
             .await
             .map(Json)?;
 
@@ -110,11 +109,11 @@ impl LoginApi {
     #[oai(
         path = "/oauth2/device/complete",
         method = "post",
-        operation_id = "complete_login_oauth2"
+        operation_id = "complete_oauth2_device_flow"
     )]
     async fn complete_oauth2_device_flow(
         &self,
-        result: Json<EncodedOAuth2Session>,
+        result: Json<EncodedOAuth2DeviceflowSession>,
     ) -> ApiResult<Json<TokenWithSecret>> {
         let record = recorded_http_api_request!("complete_oauth2_device_flow",);
         let response = self
@@ -127,13 +126,13 @@ impl LoginApi {
 
     async fn complete_oauth2_device_flow_internal(
         &self,
-        result: EncodedOAuth2Session,
+        result: EncodedOAuth2DeviceflowSession,
     ) -> ApiResult<Json<TokenWithSecret>> {
         let login_system = self.get_enabled_login_system()?;
 
         let result = login_system
             .oauth2_service
-            .finish_device_workflow(&result)
+            .finish_device_flow(&result)
             .await?;
 
         Ok(Json(result))
@@ -145,29 +144,29 @@ impl LoginApi {
     #[oai(
         path = "/oauth2/web/authorize",
         method = "get",
-        operation_id = "oauth2_web_flow_start"
+        operation_id = "start_oauth2_webflow"
     )]
-    async fn oauth2_web_flow_start(
+    async fn start_oauth2_webflow(
         &self,
         /// Currently only `github` is supported.
         Query(provider): Query<OAuth2Provider>,
         /// The redirect URL to redirect to after the user has authorized the application
         Query(redirect): Query<Option<String>>,
-    ) -> ApiResult<Json<OAuth2WebWorkflowData>> {
-        let record = recorded_http_api_request!("oauth2_web_flow_start",);
+    ) -> ApiResult<Json<OAuth2WebflowData>> {
+        let record = recorded_http_api_request!("start_oauth2_webflow",);
         let response = self
-            .oauth2_web_flow_start_internal(provider, redirect)
+            .start_oauth2_webflow_internal(provider, redirect)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn oauth2_web_flow_start_internal(
+    async fn start_oauth2_webflow_internal(
         &self,
         provider: OAuth2Provider,
         redirect: Option<String>,
-    ) -> ApiResult<Json<OAuth2WebWorkflowData>> {
+    ) -> ApiResult<Json<OAuth2WebflowData>> {
         let login_system = self.get_enabled_login_system()?;
 
         let redirect = match redirect {
@@ -188,56 +187,56 @@ impl LoginApi {
 
         let result = login_system
             .oauth2_service
-            .start_web_workflow(&provider, redirect)
+            .start_webflow(&provider, redirect)
             .await?;
 
         Ok(Json(result))
     }
 
-    /// GitHub OAuth2 Web Flow callback
+    /// OAuth2 Web Flow callback
     ///
-    /// This endpoint handles the callback from GitHub after the user has authorized the application.
+    /// This endpoint handles the callback from the provider after the user has authorized the application.
     /// It exchanges the code for an access token and then uses that to log the user in.
     #[oai(
         path = "/oauth2/web/callback",
         method = "get",
-        operation_id = "oauth2_web_flow_callback_github"
+        operation_id = "submit_oauth2_webflow_callback"
     )]
-    async fn oauth2_web_flow_callback_github(
+    async fn submit_oauth2_webflow_callback(
         &self,
         /// The authorization code returned by GitHub
         Query(code): Query<String>,
         /// The state parameter for CSRF protection
         Query(state): Query<OAuth2WebflowStateId>,
-    ) -> ApiResult<WebFlowCallbackSuccess> {
-        let record = recorded_http_api_request!("oauth2_web_flow_callback_github",);
+    ) -> ApiResult<WebFlowCallbackResponse> {
+        let record = recorded_http_api_request!("submit_oauth2_webflow_callback",);
         let response = self
-            .oauth2_web_flow_callback_github_internal(code, state)
+            .submit_oauth2_webflow_callback_internal(code, state)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn oauth2_web_flow_callback_github_internal(
+    async fn submit_oauth2_webflow_callback_internal(
         &self,
         code: String,
         state: OAuth2WebflowStateId,
-    ) -> ApiResult<WebFlowCallbackSuccess> {
+    ) -> ApiResult<WebFlowCallbackResponse> {
         let login_system = self.get_enabled_login_system()?;
 
         let state_metadata = login_system
             .oauth2_service
-            .handle_web_workflow_callback(&state, code)
+            .handle_webflow_callback(&state, code)
             .await?;
 
         let response = if let Some(mut redirect) = state_metadata.redirect {
             redirect
                 .query_pairs_mut()
                 .append_pair("state", &state.0.to_string());
-            WebFlowCallbackSuccess::Redirect(Json(Empty {}), redirect.to_string())
+            WebFlowCallbackResponse::Redirect(Json(Empty {}), redirect.to_string())
         } else {
-            WebFlowCallbackSuccess::Success(Json(Empty {}))
+            WebFlowCallbackResponse::Success(Json(Empty {}))
         };
 
         Ok(response)
@@ -249,23 +248,23 @@ impl LoginApi {
     #[oai(
         path = "/oauth2/web/poll",
         method = "get",
-        operation_id = "oauth2_web_flow_poll"
+        operation_id = "poll_oauth2_webflow"
     )]
-    async fn oauth2_web_flow_poll(
+    async fn poll_oauth2_webflow(
         &self,
         /// The state parameter for identifying the session
         Query(state): Query<OAuth2WebflowStateId>,
     ) -> ApiResult<WebFlowPollResponse> {
-        let record = recorded_http_api_request!("oauth2_web_flow_poll",);
+        let record = recorded_http_api_request!("poll_oauth2_webflow",);
         let response = self
-            .oauth2_web_flow_poll_internal(state)
+            .poll_oauth2_webflow_internal(state)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn oauth2_web_flow_poll_internal(
+    async fn poll_oauth2_webflow_internal(
         &self,
         state_id: OAuth2WebflowStateId,
     ) -> ApiResult<WebFlowPollResponse> {
@@ -273,7 +272,7 @@ impl LoginApi {
 
         let state = login_system
             .oauth2_service
-            .get_web_workflow_state(&state_id)
+            .get_webflow_state(&state_id)
             .await?;
 
         let response = match state.token {
@@ -293,4 +292,29 @@ impl LoginApi {
             }))),
         }
     }
+}
+
+#[derive(Debug, Clone, Object)]
+struct OAuth2DeviceFlowStartRequest {
+    provider: OAuth2Provider,
+}
+
+#[derive(Debug, Clone, ApiResponse)]
+enum WebFlowPollResponse {
+    /// OAuth flow has completed
+    #[oai(status = 200)]
+    Completed(Json<TokenWithSecret>),
+    /// OAuth flow is pending
+    #[oai(status = 202)]
+    Pending(Json<Empty>),
+}
+
+#[derive(Debug, Clone, ApiResponse)]
+enum WebFlowCallbackResponse {
+    /// Redirect to the given URL specified in the web flow start
+    #[oai(status = 302)]
+    Redirect(Json<Empty>, #[oai(header = "Location")] String),
+    /// OAuth flow has completed
+    #[oai(status = 200)]
+    Success(Json<Empty>),
 }

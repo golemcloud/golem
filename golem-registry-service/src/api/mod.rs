@@ -31,7 +31,6 @@ pub mod environment_security_schemes;
 pub mod environments;
 pub mod error;
 pub mod login;
-pub mod model;
 pub mod plugin_registration;
 pub mod security_schemes;
 pub mod tokens;

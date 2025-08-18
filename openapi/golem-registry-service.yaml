@@ -5260,7 +5260,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/OAuth2DeviceFlowData'
+                $ref: '#/components/schemas/OAuth2DeviceflowData'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5303,7 +5303,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: start_login_oauth2
+      operationId: start_oauth2_device_flow
   /v1/login/oauth2/device/complete:
     post:
       tags:
@@ -5368,7 +5368,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: complete_login_oauth2
+      operationId: complete_oauth2_device_flow
   /v1/login/oauth2/web/authorize:
     get:
       tags:
@@ -5399,7 +5399,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/OAuth2WebWorkflowData'
+                $ref: '#/components/schemas/OAuth2WebflowData'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5442,15 +5442,15 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: oauth2_web_flow_start
+      operationId: start_oauth2_webflow
   /v1/login/oauth2/web/callback:
     get:
       tags:
       - RegistryService
       - Login
-      summary: GitHub OAuth2 Web Flow callback
+      summary: OAuth2 Web Flow callback
       description: |-
-        This endpoint handles the callback from GitHub after the user has authorized the application.
+        This endpoint handles the callback from the provider after the user has authorized the application.
         It exchanges the code for an access token and then uses that to log the user in.
       parameters:
       - name: code
@@ -5531,7 +5531,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: oauth2_web_flow_callback_github
+      operationId: submit_oauth2_webflow_callback
   /v1/login/oauth2/web/poll:
     get:
       tags:
@@ -5604,7 +5604,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: oauth2_web_flow_poll
+      operationId: poll_oauth2_webflow
   /v1/plugins:
     get:
       tags:
@@ -7621,9 +7621,17 @@ components:
           type: boolean
         securityOverrides:
           type: boolean
-    OAuth2DeviceFlowData:
+    OAuth2DeviceFlowStartRequest:
       type: object
-      title: OAuth2DeviceFlowData
+      title: OAuth2DeviceFlowStartRequest
+      required:
+      - provider
+      properties:
+        provider:
+          $ref: '#/components/schemas/OAuth2Provider'
+    OAuth2DeviceflowData:
+      type: object
+      title: OAuth2DeviceflowData
       required:
       - url
       - userCode
@@ -7639,21 +7647,13 @@ components:
           format: date-time
         encodedSession:
           type: string
-    OAuth2DeviceFlowStartRequest:
-      type: object
-      title: OAuth2DeviceFlowStartRequest
-      required:
-      - provider
-      properties:
-        provider:
-          $ref: '#/components/schemas/OAuth2Provider'
     OAuth2Provider:
       type: string
       enum:
       - github
-    OAuth2WebWorkflowData:
+    OAuth2WebflowData:
       type: object
-      title: OAuth2WebWorkflowData
+      title: OAuth2WebflowData
       required:
       - url
       - state
