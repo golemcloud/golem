@@ -125,6 +125,9 @@ impl From<durability::DurableFunctionType> for DurableFunctionType {
             }
             durability::DurableFunctionType::ReadRemote => DurableFunctionType::ReadRemote,
             durability::DurableFunctionType::ReadLocal => DurableFunctionType::ReadLocal,
+            durability::DurableFunctionType::WriteRemoteTransaction(oplog_index) => {
+                DurableFunctionType::WriteRemoteTransaction(oplog_index.map(OplogIndex::from_u64))
+            }
         }
     }
 }
@@ -141,7 +144,11 @@ impl From<DurableFunctionType> for durability::DurableFunctionType {
             }
             DurableFunctionType::ReadRemote => durability::DurableFunctionType::ReadRemote,
             DurableFunctionType::ReadLocal => durability::DurableFunctionType::ReadLocal,
-            DurableFunctionType::WriteRemoteTransaction(_) => todo!(),
+            DurableFunctionType::WriteRemoteTransaction(oplog_index) => {
+                durability::DurableFunctionType::WriteRemoteTransaction(
+                    oplog_index.map(|idx| idx.into()),
+                )
+            }
         }
     }
 }

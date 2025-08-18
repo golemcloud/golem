@@ -17,18 +17,19 @@ use crate::preview2::golem_api_1_x::oplog;
 use crate::preview2::wasi::clocks::wall_clock::Datetime;
 use golem_common::base_model::ProjectId;
 use golem_common::model::public_oplog::{
-    ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
-    ChangeRetryPolicyParameters, CreateAgentInstanceParameters, CreateParameters,
-    DeactivatePluginParameters, DescribeResourceParameters, DropAgentInstanceParameters,
-    EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
-    ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
-    FinishSpanParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters,
-    LogParameters, ManualUpdateParameters, PendingUpdateParameters,
-    PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttributeValue,
-    PublicDurableFunctionType, PublicRetryConfig, PublicSpanData, PublicWorkerInvocation,
-    ResourceParameters, RevertParameters, SetSpanAttributeParameters,
-    SnapshotBasedUpdateParameters, StartSpanParameters, StringAttributeValue,
-    SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters,
+    ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
+    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateAgentInstanceParameters,
+    CreateParameters, DeactivatePluginParameters, DescribeResourceParameters,
+    DropAgentInstanceParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
+    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+    PublicAttributeValue, PublicDurableFunctionType, PublicRetryConfig, PublicSpanData,
+    PublicWorkerInvocation, RemoteTransactionParameters, ResourceParameters, RevertParameters,
+    SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters,
+    StringAttributeValue, SuccessfulUpdateParameters, TimestampParameter,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::Timestamp;
 use golem_wasm_rpc::WitValue;
@@ -343,11 +344,41 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                     message: format!("Key: {key:?}"),
                 })
             }
-            PublicOplogEntry::BeginRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
-            PublicOplogEntry::PreCommitRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
-            PublicOplogEntry::PreRollbackRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
-            PublicOplogEntry::CommittedRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
-            PublicOplogEntry::RolledBackRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
+            PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParameters {
+                timestamp,
+                transaction_id,
+            }) => Self::BeginRemoteTransaction(oplog::BeginRemoteTransactionParameters {
+                timestamp: timestamp.into(),
+                transaction_id: transaction_id.into(),
+            }),
+            PublicOplogEntry::PreCommitRemoteTransaction(RemoteTransactionParameters {
+                timestamp,
+                begin_index,
+            }) => Self::PreCommitRemoteTransaction(oplog::RemoteTransactionParameters {
+                timestamp: timestamp.into(),
+                begin_index: begin_index.into(),
+            }),
+            PublicOplogEntry::PreRollbackRemoteTransaction(RemoteTransactionParameters {
+                timestamp,
+                begin_index,
+            }) => Self::PreRollbackRemoteTransaction(oplog::RemoteTransactionParameters {
+                timestamp: timestamp.into(),
+                begin_index: begin_index.into(),
+            }),
+            PublicOplogEntry::CommittedRemoteTransaction(RemoteTransactionParameters {
+                timestamp,
+                begin_index,
+            }) => Self::CommittedRemoteTransaction(oplog::RemoteTransactionParameters {
+                timestamp: timestamp.into(),
+                begin_index: begin_index.into(),
+            }),
+            PublicOplogEntry::RolledBackRemoteTransaction(RemoteTransactionParameters {
+                timestamp,
+                begin_index,
+            }) => Self::RolledBackRemoteTransaction(oplog::RemoteTransactionParameters {
+                timestamp: timestamp.into(),
+                begin_index: begin_index.into(),
+            }),
         }
     }
 }
@@ -372,7 +403,9 @@ impl From<PublicDurableFunctionType> for oplog::WrappedFunctionType {
             PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
                 index: idx,
             }) => Self::WriteRemoteBatched(idx.map(|idx| idx.into())),
-            PublicDurableFunctionType::WriteRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
+            PublicDurableFunctionType::WriteRemoteTransaction(
+                WriteRemoteTransactionParameters { index: idx },
+            ) => Self::WriteRemoteTransaction(idx.map(|idx| idx.into())),
         }
     }
 }
