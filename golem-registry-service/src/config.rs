@@ -211,8 +211,6 @@ mod tests {
 
     use crate::config::make_config_loader;
 
-    // TODO
-    #[ignore]
     #[test]
     pub fn config_is_loadable() {
         make_config_loader().load().expect("Failed to load config");
