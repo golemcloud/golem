@@ -2851,8 +2851,8 @@ mod tests {
         let expr = r#"
            let worker = instance();
            let cart = worker.cart("s");
-           cart.create(user_id);
-           "afsal"
+           let result = cart.create("afsal");
+           result.checkout()
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
@@ -4795,7 +4795,7 @@ mod tests {
             case, f32, field, handle, list, option, r#enum, record, result, s32, str, tuple, u32,
             u64, unit_case, variant,
         };
-        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
+        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle, TypeResult};
         use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
         use uuid::Uuid;
@@ -5025,22 +5025,17 @@ mod tests {
                         name: "[static]cart.create".to_string(),
                         parameters: vec![
                             AnalysedFunctionParameter {
-                                name: "item".to_string(),
-                                typ: record(vec![
-                                    field("product-id", str()),
-                                    field("name", str()),
-                                    field("price", f32()),
-                                    field("quantity", u32()),
-                                ]),
+                                name: "item-name".to_string(),
+                                typ: str(),
                             },
                         ],
                         result: Some(AnalysedFunctionResult {
-                            typ: AnalysedType::Handle(TypeHandle {
+                            typ:AnalysedType::Handle(TypeHandle {
                                 name: Some("cart".to_string()),
                                 owner: None,
                                 resource_id: AnalysedResourceId(0),
                                 mode: AnalysedResourceMode::Owned,
-                            }),
+                            })
                         }),
                     },
                     AnalysedFunction {
@@ -5345,6 +5340,31 @@ mod tests {
                         Ok(Some(ValueAndType::new(Value::List(vec![value]), typ)))
                     }
 
+                    "golem:it/api.{[static]cart.create}" => {
+                        let function_args = args.0[1..].to_vec();
+
+                        if function_args.len() != 1 {
+                            return Err("expected exactly one argument for cart.create".into());
+                        }
+
+                        let item_name = function_args[0].value.clone();
+
+                        let uri = format!(
+                            "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
+                            worker_name.map(|x| x.0).unwrap_or_default()
+                        );
+
+                        let value = Value::Handle {
+                            uri,
+                            resource_id: 0,
+                        };
+
+                        Ok(Some(ValueAndType::new(value, handle(
+                            AnalysedResourceId(0),
+                            AnalysedResourceMode::Owned,
+                        ))))
+                    }
+
                     "golem:it/api.{cart.pass-through}" => {
                         let worker_name = worker_name.map(|x| x.0);
                         let function_args = args.0[1..].to_vec();
@@ -5380,6 +5400,8 @@ mod tests {
 
                         Ok(Some(value_and_type))
                     }
+
+
 
                     _ => Err(format!("unexpected function name: {}", function_name.0).into()),
                 }

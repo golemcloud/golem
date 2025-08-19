@@ -564,7 +564,8 @@ impl FullyQualifiedResourceMethod {
         }
     }
 
-    // We rely on the fully parsed function name itself to retrieve the original function name
+    // TODO; Remove this conversion inside Rib.
+    // FunctionName (the structure used by rib) can be used in all places of usage of DynamicParsedFunctionName
     pub fn dynamic_parsed_function_name(&self) -> Result<DynamicParsedFunctionName, String> {
         let mut dynamic_parsed_str = String::new();
 
@@ -581,6 +582,11 @@ impl FullyQualifiedResourceMethod {
 
         // Start the dynamic function name with resource
         dynamic_parsed_str.push('{');
+        if self.static_function {
+            dynamic_parsed_str.push_str("[static]");
+        } else {
+            dynamic_parsed_str.push_str("[method]");
+        }
         dynamic_parsed_str.push_str(&self.resource_name);
         dynamic_parsed_str.push('.');
         dynamic_parsed_str.push_str(&self.method_name);

@@ -67,10 +67,6 @@ impl ComponentDependencies {
                         .name_and_types
                         .iter()
                         .filter_map(|(f_name, function_type)| {
-                            if f_name.name() == "create" {
-                                dbg!(f_name);
-                                dbg!(function_name);
-                            }
                             if f_name == function_name {
                                 Some(function_type)
                             } else {
