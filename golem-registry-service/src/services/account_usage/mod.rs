@@ -54,6 +54,8 @@ pub struct AccountUsageService {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
 }
 
+// TODO: do we want to add component max size limit?
+//       if so, probably should be much bigger then the previous 50mb
 impl AccountUsageService {
     pub fn new(account_usage_repo: Arc<dyn AccountUsageRepo>) -> Self {
         Self { account_usage_repo }

@@ -25,7 +25,8 @@ use golem_registry_service::repo::model::audit::{
     AuditFields, DeletableRevisionAuditFields, RevisionAuditFields,
 };
 use golem_registry_service::repo::model::component::{
-    ComponentFileRecord, ComponentRevisionRecord, ComponentRevisionRepoError,
+    ComponentFileRecord, ComponentPluginInstallationRecord, ComponentRevisionRecord,
+    ComponentRevisionRepoError,
 };
 use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
@@ -36,6 +37,7 @@ use golem_registry_service::repo::model::http_api_deployment::{
     HttpApiDeploymentRevisionRecord, HttpApiDeploymentRevisionRepoError,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
+use golem_registry_service::repo::model::plugin::PluginRecord;
 use std::collections::{BTreeMap, HashMap};
 use std::default::Default;
 use strum::IntoEnumIterator;
@@ -439,8 +441,62 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
 pub async fn test_component_stage(deps: &Deps) {
     let user = deps.create_account().await;
     let env = deps.create_env().await;
+    let app = deps
+        .application_repo
+        .get_by_id(&env.application_id)
+        .await
+        .unwrap()
+        .unwrap();
     let component_name = "test-component";
     let component_id = new_repo_uuid();
+
+    let plugin_a = deps
+        .plugin_repo
+        .create(PluginRecord {
+            plugin_id: new_repo_uuid(),
+            account_id: app.account_id,
+            name: "a".to_string(),
+            version: "1.0.0".to_string(),
+            audit: DeletableRevisionAuditFields::new(user.account_id),
+            description: "".to_string(),
+            icon: vec![],
+            homepage: "".to_string(),
+            plugin_type: 0,
+            provided_wit_package: None,
+            json_schema: None,
+            validate_url: None,
+            transform_url: None,
+            component_id: None,
+            component_revision_id: None,
+            blob_storage_key: None,
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+    let plugin_b = deps
+        .plugin_repo
+        .create(PluginRecord {
+            plugin_id: new_repo_uuid(),
+            account_id: app.account_id,
+            name: "b".to_string(),
+            version: "1.0.0".to_string(),
+            audit: DeletableRevisionAuditFields::new(user.account_id),
+            description: "".to_string(),
+            icon: vec![],
+            homepage: "".to_string(),
+            plugin_type: 0,
+            provided_wit_package: None,
+            json_schema: None,
+            validate_url: None,
+            transform_url: None,
+            component_id: None,
+            component_revision_id: None,
+            blob_storage_key: None,
+        })
+        .await
+        .unwrap()
+        .unwrap();
 
     let revision_0 = ComponentRevisionRecord {
         component_id,
@@ -473,6 +529,28 @@ pub async fn test_component_stage(deps: &Deps) {
             file_key: "xdxd".to_string(),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
         }],
+        plugins: vec![
+            ComponentPluginInstallationRecord {
+                component_id,
+                revision_id: 0,
+                plugin_id: plugin_a.plugin_id,
+                plugin_name: plugin_a.name.clone(),
+                plugin_version: plugin_a.version.clone(),
+                audit: RevisionAuditFields::new(user.account_id),
+                priority: 1,
+                parameters: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
+            },
+            ComponentPluginInstallationRecord {
+                component_id,
+                revision_id: 0,
+                plugin_id: plugin_b.plugin_id,
+                plugin_name: plugin_b.name.clone(),
+                plugin_version: plugin_b.version.clone(),
+                audit: RevisionAuditFields::new(user.account_id),
+                priority: 2,
+                parameters: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
+            },
+        ],
         files: vec![ComponentFileRecord {
             component_id,
             revision_id: 0,
@@ -554,6 +632,14 @@ pub async fn test_component_stage(deps: &Deps) {
                 ..file.clone()
             })
             .collect(),
+        plugins: revision_0
+            .plugins
+            .iter()
+            .map(|plugin| ComponentPluginInstallationRecord {
+                revision_id: 1,
+                ..plugin.clone()
+            })
+            .collect(),
         files: revision_0
             .files
             .iter()
@@ -596,6 +682,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let other_component_revision_0 = ComponentRevisionRecord {
         component_id: other_component_id,
         original_files: Default::default(),
+        plugins: Default::default(),
         files: Default::default(),
         ..revision_0.clone()
     }
@@ -649,6 +736,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let revision_after_delete = ComponentRevisionRecord {
         component_id: new_repo_uuid(),
         original_files: Default::default(),
+        plugins: Default::default(),
         files: Default::default(),
         ..revision_0.clone()
     };
@@ -1226,6 +1314,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     transformed_object_store_key: "".to_string(),
                     binary_hash: SqlBlake3Hash::empty(),
                     original_files: vec![],
+                    plugins: vec![],
                     files: vec![],
                 },
             )

@@ -7,6 +7,7 @@ edition = "2024"
 name = "golem-registry-service"
 path = "src/server.rs"
 harness = false
+test = false
 
 [lib]
 path = "src/lib.rs"
@@ -25,8 +26,8 @@ golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
 
-anyhow = { workspace = true}
-applying = {workspace = true }
+anyhow = { workspace = true }
+applying = { workspace = true }
 assert2 = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }

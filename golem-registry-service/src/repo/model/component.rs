@@ -20,7 +20,7 @@ use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision,
-    InitialComponentFile, InitialComponentFileKey, VersionedComponentId,
+    InitialComponentFile, InitialComponentFileKey, PluginInstallation, VersionedComponentId,
 };
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
@@ -289,12 +289,11 @@ pub struct ComponentRevisionRecord {
 
     #[sqlx(skip)]
     pub original_files: Vec<ComponentFileRecord>,
+    #[sqlx(skip)]
+    pub plugins: Vec<ComponentPluginInstallationRecord>,
 
     #[sqlx(skip)]
     pub files: Vec<ComponentFileRecord>,
-    // TODO:
-    //#[sqlx(skip)]
-    //pub installed_plugins: Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>,
 }
 
 impl ComponentRevisionRecord {
@@ -329,8 +328,9 @@ impl ComponentRevisionRecord {
             object_store_key: "".to_string(),
             binary_hash: SqlBlake3Hash::empty(),
             transformed_object_store_key: "".to_string(),
-            files: vec![],
             original_files: vec![],
+            plugins: vec![],
+            files: vec![],
         }
     }
 
@@ -373,8 +373,8 @@ impl ComponentRevisionRecord {
             }
             .into(),
             binary_hash: self.binary_hash.into_blake3_hash().into(),
-            files: self
-                .files
+            files_by_path: self
+                .original_files
                 .iter()
                 .map(|file| {
                     (
@@ -386,6 +386,11 @@ impl ComponentRevisionRecord {
                         .into(),
                     )
                 })
+                .collect(),
+            plugins_by_priority: self
+                .plugins
+                .iter()
+                .map(|plugin| (plugin.priority.to_string(), plugin.plugin_id))
                 .collect(),
         }
     }
@@ -407,6 +412,11 @@ impl ComponentRevisionRecord {
                 .files
                 .into_iter()
                 .map(|f| ComponentFileRecord::from_model(f, component_id, actor))
+                .collect(),
+            plugins: value
+                .installed_plugins
+                .into_iter()
+                .map(|p| ComponentPluginInstallationRecord::from_model(p, component_id, actor))
                 .collect(),
             original_files: value
                 .original_files
@@ -532,6 +542,55 @@ impl TryFrom<ComponentFileRecord> for InitialComponentFile {
                 .map_err(|e| anyhow!("Failed converting component file record to model: {e}"))?,
             permissions: value.file_permissions.into(),
         })
+    }
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ComponentPluginInstallationRecord {
+    pub component_id: Uuid,
+    pub revision_id: i64,       // NOTE: Set by repo during insert
+    pub plugin_id: Uuid,        // NOTE: required for insert
+    pub plugin_name: String,    // NOTE: returned by repo, not required to set
+    pub plugin_version: String, // NOTE: returned by repo, not required to set
+    #[sqlx(flatten)]
+    pub audit: RevisionAuditFields,
+    pub priority: i32,
+    pub parameters: Json<BTreeMap<String, String>>,
+}
+
+impl ComponentPluginInstallationRecord {
+    pub fn ensure_component(self, component_id: Uuid, revision_id: i64, created_by: Uuid) -> Self {
+        Self {
+            component_id,
+            revision_id,
+            audit: RevisionAuditFields {
+                created_by,
+                ..self.audit
+            },
+            ..self
+        }
+    }
+
+    fn from_model(
+        plugin_installation: PluginInstallation,
+        component_id: Uuid,
+        actor: &AccountId,
+    ) -> Self {
+        Self {
+            component_id,
+            revision_id: 0,
+            plugin_id: plugin_installation.id.0,
+            plugin_name: plugin_installation.name,
+            plugin_version: plugin_installation.version,
+            audit: RevisionAuditFields::new(actor.0),
+            priority: plugin_installation.priority,
+            parameters: Json::from(
+                plugin_installation
+                    .parameters
+                    .into_iter()
+                    .collect::<BTreeMap<_, _>>(),
+            ),
+        }
     }
 }
 

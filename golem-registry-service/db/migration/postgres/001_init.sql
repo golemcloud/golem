@@ -396,7 +396,7 @@ CREATE TABLE deployment_component_revisions
 );
 
 CREATE INDEX deployment_component_revisions_component_idx
-    ON deployment_component_revisions (environment_id, component_id, component_revision_id);
+    ON deployment_component_revisions (component_id, component_revision_id);
 
 CREATE TABLE http_api_definitions
 (
@@ -517,6 +517,9 @@ CREATE TABLE deployment_http_api_definition_revisions
             REFERENCES http_api_definition_revisions (http_api_definition_id, revision_id)
 );
 
+CREATE INDEX deployment_http_api_deployment_revisions_definition_idx
+    ON deployment_http_api_definition_revisions (http_api_definition_id, http_api_definition_revision_id);
+
 CREATE TABLE deployment_http_api_deployment_revisions
 (
     environment_id                  UUID   NOT NULL,
@@ -532,3 +535,68 @@ CREATE TABLE deployment_http_api_deployment_revisions
         FOREIGN KEY (http_api_deployment_id, http_api_deployment_revision_id)
             REFERENCES http_api_deployment_revisions (http_api_deployment_id, revision_id)
 );
+
+CREATE INDEX deployment_http_api_deployment_revisions_deployment_idx
+    ON deployment_http_api_deployment_revisions (http_api_deployment_id, http_api_deployment_revision_id);
+
+CREATE TABLE plugins
+(
+    plugin_id             UUID      NOT NULL,
+    account_id            UUID      NOT NULL,
+    name                  TEXT      NOT NULL,
+    version               TEXT      NOT NULL,
+
+    created_at            TIMESTAMP NOT NULL,
+    created_by            UUID      NOT NULL,
+    deleted               BOOLEAN   NOT NULL,
+
+    description           TEXT      NOT NULL,
+    icon                  BYTEA     NOT NULL,
+    homepage              TEXT      NOT NULL,
+    plugin_type           SMALLINT  NOT NULL,
+    provided_wit_package  TEXT,
+    json_schema           JSONB,
+    validate_url          TEXT,
+    transform_url         TEXT,
+    component_id          UUID,
+    component_revision_id BIGINT,
+    blob_storage_key      TEXT,
+
+    CONSTRAINT plugins_pk
+        PRIMARY KEY (plugin_id),
+    CONSTRAINT plugins_components_fk
+        FOREIGN KEY (component_id, component_revision_id)
+            REFERENCES component_revisions (component_id, revision_id),
+    CONSTRAINT plugins_accounts_fk
+        FOREIGN KEY (account_id) REFERENCES accounts
+);
+
+CREATE UNIQUE INDEX plugins_name_version_uk ON plugins (account_id, name, version)
+    WHERE deleted IS FALSE;
+
+CREATE INDEX plugins_component_idx ON plugins (component_id, component_revision_id);
+
+CREATE TABLE component_plugin_installations
+(
+    component_id UUID      NOT NULL,
+    revision_id  BIGINT    NOT NULL,
+    plugin_id    UUID      NOT NULL,
+
+    created_at   TIMESTAMP NOT NULL,
+    created_by   UUID      NOT NULL,
+
+    priority     INT       NOT NULL,
+    parameters   JSONB     NOT NULL,
+
+    CONSTRAINT component_plugin_installations_pk
+        PRIMARY KEY (component_id, revision_id, plugin_id),
+    CONSTRAINT component_plugin_installations_components_fk
+        FOREIGN KEY (component_id, revision_id) REFERENCES component_revisions,
+    CONSTRAINT component_plugin_installations_plugins_fk
+        FOREIGN KEY (plugin_id) REFERENCES plugins,
+    CONSTRAINT component_plugin_installations_priority_uk
+        UNIQUE (component_id, revision_id, priority)
+);
+
+CREATE INDEX component_plugin_installations_plugin_idx ON component_plugin_installations (plugin_id);
+

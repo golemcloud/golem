@@ -15,8 +15,9 @@
 use crate::repo::environment::{EnvironmentSharedRepo, EnvironmentSharedRepoDefault};
 use crate::repo::model::BindFields;
 use crate::repo::model::component::{
-    ComponentExtRevisionRecord, ComponentFileRecord, ComponentRecord,
-    ComponentRevisionIdentityRecord, ComponentRevisionRecord, ComponentRevisionRepoError,
+    ComponentExtRevisionRecord, ComponentFileRecord, ComponentPluginInstallationRecord,
+    ComponentRecord, ComponentRevisionIdentityRecord, ComponentRevisionRecord,
+    ComponentRevisionRepoError,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -868,6 +869,18 @@ trait ComponentRepoInternal: ComponentRepo {
         revision_id: i64,
     ) -> RepoResult<Vec<ComponentFileRecord>>;
 
+    async fn get_component_plugins(
+        &self,
+        component_id: &Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<ComponentPluginInstallationRecord>>;
+
+    async fn get_component_plugins_tx(
+        tx: &mut Self::Tx,
+        component_id: &Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<ComponentPluginInstallationRecord>>;
+
     async fn get_component_files(
         &self,
         component_id: &Uuid,
@@ -882,6 +895,12 @@ trait ComponentRepoInternal: ComponentRepo {
     ) -> RepoResult<ComponentExtRevisionRecord> {
         component.revision.original_files = self
             .get_original_component_files(
+                &component.revision.component_id,
+                component.revision.revision_id,
+            )
+            .await?;
+        component.revision.plugins = self
+            .get_component_plugins(
                 &component.revision.component_id,
                 component.revision.revision_id,
             )
@@ -911,6 +930,11 @@ trait ComponentRepoInternal: ComponentRepo {
         tx: &mut Self::Tx,
         file: ComponentFileRecord,
     ) -> RepoResult<ComponentFileRecord>;
+
+    async fn insert_plugin(
+        tx: &mut Self::Tx,
+        plugin: ComponentPluginInstallationRecord,
+    ) -> RepoResult<()>;
 
     async fn version_exists(
         tx: &mut Self::Tx,
@@ -966,6 +990,49 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
             .await
     }
 
+    async fn get_component_plugins(
+        &self,
+        component_id: &Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<ComponentPluginInstallationRecord>> {
+        self.with_ro("get_component_plugins")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT cpi.component_id, cpi.revision_id, cpi.plugin_id,
+                           p.name as plugin_name, p.version as plugin_version,
+                           cpi.created_at, cpi.created_by, cpi.priority, cpi.parameters
+                    FROM component_plugin_installations cpi
+                    JOIN plugins p ON p.plugin_id = cpi.plugin_id
+                    WHERE cpi.component_id = $1 AND cpi.revision_id = $2
+                    ORDER BY priority
+                "#})
+                .bind(component_id)
+                .bind(revision_id),
+            )
+            .await
+    }
+
+    async fn get_component_plugins_tx(
+        tx: &mut Self::Tx,
+        component_id: &Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<ComponentPluginInstallationRecord>> {
+        tx.fetch_all_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT cpi.component_id, cpi.revision_id, cpi.plugin_id,
+                       p.name as plugin_name, p.version as plugin_version,
+                       cpi.created_at, cpi.created_by, cpi.priority, cpi.parameters
+                FROM component_plugin_installations cpi
+                JOIN plugins p ON p.plugin_id = cpi.plugin_id
+                WHERE cpi.component_id = $1 AND cpi.revision_id = $2
+                ORDER BY priority
+            "#})
+            .bind(component_id)
+            .bind(revision_id),
+        )
+        .await
+    }
+
     async fn get_component_files(
         &self,
         component_id: &Uuid,
@@ -1010,6 +1077,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
 
         let revision = revision.with_updated_hash();
         let original_files = revision.original_files;
+        let plugins = revision.plugins;
         let files = revision.files;
 
         let mut revision: ComponentRevisionRecord = {
@@ -1059,12 +1127,25 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                     .await?,
                 );
             }
+            inserted_files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
             inserted_files
         };
 
-        revision
-            .original_files
-            .sort_by(|a, b| a.file_path.cmp(&b.file_path));
+        revision.plugins = {
+            for plugin in plugins {
+                Self::insert_plugin(
+                    tx,
+                    plugin.ensure_component(
+                        revision.component_id,
+                        revision.revision_id,
+                        revision.audit.created_by,
+                    ),
+                )
+                .await?
+            }
+
+            Self::get_component_plugins_tx(tx, &revision.component_id, revision.revision_id).await?
+        };
 
         revision.files = {
             let mut inserted_files = Vec::<ComponentFileRecord>::with_capacity(files.len());
@@ -1081,10 +1162,9 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                     .await?,
                 );
             }
+            inserted_files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
             inserted_files
         };
-
-        revision.files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
 
         Ok(revision)
     }
@@ -1131,6 +1211,26 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         ).await
     }
 
+    async fn insert_plugin(
+        tx: &mut Self::Tx,
+        plugin: ComponentPluginInstallationRecord,
+    ) -> RepoResult<()> {
+        tx.fetch_one_as(
+            sqlx::query_as(indoc! { r#"
+                INSERT INTO component_plugin_installations
+                (component_id, revision_id, plugin_id, created_at, created_by, priority, parameters)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING component_id, revision_id, plugin_id, created_at, created_by, priority, parameters
+            "#})
+                .bind(plugin.component_id)
+                .bind(plugin.revision_id)
+                .bind(plugin.plugin_id)
+                .bind_revision_audit(plugin.audit)
+                .bind(plugin.priority)
+                .bind(plugin.parameters)
+        ).await
+    }
+
     async fn version_exists(
         tx: &mut Self::Tx,
         environment_id: &Uuid,
@@ -1148,9 +1248,9 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                     GROUP BY dr.component_id
                     LIMIT 1
                 "#})
-                .bind(environment_id)
-                .bind(component_id)
-                .bind(version),
+                    .bind(environment_id)
+                    .bind(component_id)
+                    .bind(version),
             )
             .await?
             .is_some())

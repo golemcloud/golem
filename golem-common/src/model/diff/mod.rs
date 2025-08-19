@@ -219,7 +219,7 @@ mod test {
                 }
                 .into(),
                 binary_hash: blake3::hash(name.as_bytes()).into(),
-                files: BTreeMap::from([
+                files_by_path: BTreeMap::from([
                     (
                         "lol".to_string(),
                         ComponentFile {
@@ -237,6 +237,7 @@ mod test {
                         .into(),
                     ),
                 ]),
+                plugins_by_priority: Default::default(),
             }
         }
 
@@ -407,7 +408,7 @@ mod test {
                     .as_value()
                     .unwrap();
                 let mut comp = comp.clone();
-                comp.files.insert(
+                comp.files_by_path.insert(
                     "new_file".to_string(),
                     ComponentFile {
                         hash: blake3::hash("xxx".as_bytes()).into(),

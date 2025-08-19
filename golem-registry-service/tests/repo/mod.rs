@@ -30,6 +30,7 @@ use golem_registry_service::repo::model::environment::{
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::plan::PlanRepo;
+use golem_registry_service::repo::plugin::PluginRepo;
 use std::str::FromStr;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;
@@ -53,6 +54,7 @@ pub struct Deps {
     pub http_api_definition_repo: Box<dyn HttpApiDefinitionRepo>,
     pub http_api_deployment_repo: Box<dyn HttpApiDeploymentRepo>,
     pub deployment_repo: Box<dyn HttpApiDeploymentRepo>,
+    pub plugin_repo: Box<dyn PluginRepo>,
 }
 
 impl Deps {
