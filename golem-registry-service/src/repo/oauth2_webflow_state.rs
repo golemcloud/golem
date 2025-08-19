@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::model::oauth2_webflow_state::OAuth2WebFlowStateRecord;
+use crate::model::login::OAuth2WebflowStateMetadata;
 use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::model::new_repo_uuid;
-use crate::repo::model::oauth2_webflow_state::{
-    OAuth2WebFlowStateMetadata, OAuth2WebFlowStateRecord,
-};
 use crate::repo::model::token::TokenRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -34,7 +33,7 @@ use uuid::Uuid;
 pub trait OAuth2WebflowStateRepo: Send + Sync {
     async fn create(
         &self,
-        metadata: OAuth2WebFlowStateMetadata,
+        metadata: OAuth2WebflowStateMetadata,
     ) -> RepoResult<OAuth2WebFlowStateRecord>;
 
     async fn set_token_id(
@@ -44,6 +43,8 @@ pub trait OAuth2WebflowStateRepo: Send + Sync {
     ) -> RepoResult<OAuth2WebFlowStateRecord>;
 
     async fn get_by_id(&self, state_id: &Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>>;
+
+    async fn delete_by_id(&self, state_id: &Uuid) -> RepoResult<u64>;
 
     async fn delete_expired(&self, delete_before: SqlDateTime) -> RepoResult<u64>;
 }
@@ -72,7 +73,7 @@ impl<Repo: OAuth2WebflowStateRepo> LoggedOAuth2WebflowStateRepo<Repo> {
 impl<Repo: OAuth2WebflowStateRepo> OAuth2WebflowStateRepo for LoggedOAuth2WebflowStateRepo<Repo> {
     async fn create(
         &self,
-        metadata: OAuth2WebFlowStateMetadata,
+        metadata: OAuth2WebflowStateMetadata,
     ) -> RepoResult<OAuth2WebFlowStateRecord> {
         self.repo.create(metadata).await
     }
@@ -91,6 +92,13 @@ impl<Repo: OAuth2WebflowStateRepo> OAuth2WebflowStateRepo for LoggedOAuth2Webflo
     async fn get_by_id(&self, state_id: &Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>> {
         self.repo
             .get_by_id(state_id)
+            .instrument(Self::span_id(state_id))
+            .await
+    }
+
+    async fn delete_by_id(&self, state_id: &Uuid) -> RepoResult<u64> {
+        self.repo
+            .delete_by_id(state_id)
             .instrument(Self::span_id(state_id))
             .await
     }
@@ -132,7 +140,7 @@ impl<DBP: Pool> DbOAuth2WebflowStateRepo<DBP> {
 impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
     async fn create(
         &self,
-        metadata: OAuth2WebFlowStateMetadata,
+        metadata: OAuth2WebflowStateMetadata,
     ) -> RepoResult<OAuth2WebFlowStateRecord> {
         self.with_rw("create")
             .fetch_one_as(
@@ -187,6 +195,20 @@ impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
             Some(state) => Ok(Some(self.with_token(state).await?)),
             None => Ok(None),
         }
+    }
+
+    async fn delete_by_id(&self, state_id: &Uuid) -> RepoResult<u64> {
+        let result = self
+            .with_rw("delete_by_id")
+            .execute(
+                sqlx::query(indoc! { r#"
+                    DELETE FROM oauth2_web_flow_states WHERE state_id = $1
+                "#})
+                .bind(state_id),
+            )
+            .await?;
+
+        Ok(result.rows_affected())
     }
 
     async fn delete_expired(&self, delete_before: SqlDateTime) -> RepoResult<u64> {

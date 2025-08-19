@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod login;
+
+use self::login::LoginSystem;
 use crate::config::RegistryServiceConfig;
 use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
 use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
 use crate::repo::environment::{DbEnvironmentRepo, EnvironmentRepo};
+use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
+use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo};
 use crate::repo::plan::{DbPlanRepo, PlanRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
 use crate::services::account::AccountService;
@@ -52,6 +57,8 @@ pub struct Services {
     pub component_service: Arc<ComponentService>,
     pub environment_service: Arc<EnvironmentService>,
     pub token_service: Arc<TokenService>,
+
+    pub login_system: LoginSystem,
 }
 
 struct Repos {
@@ -62,6 +69,8 @@ struct Repos {
     environment_repo: Arc<dyn EnvironmentRepo>,
     plan_repo: Arc<dyn PlanRepo>,
     token_repo: Arc<dyn TokenRepo>,
+    oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
+    oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
 }
 
 impl Services {
@@ -107,12 +116,21 @@ impl Services {
             application_service.clone(),
         ));
 
+        let login_system = LoginSystem::new(
+            &config.login,
+            account_service.clone(),
+            token_service.clone(),
+            repos.oauth2_token_repo.clone(),
+            repos.oauth2_webflow_state_repo.clone(),
+        )?;
+
         Ok(Self {
             account_service,
             application_service,
             component_service,
             environment_service,
             token_service,
+            login_system,
         })
     }
 }
@@ -134,7 +152,9 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
             let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
             let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
-            let token_repo = Arc::new(DbTokenRepo::logged(db_pool));
+            let token_repo = Arc::new(DbTokenRepo::logged(db_pool.clone()));
+            let oauth2_token_repo = Arc::new(DbOAuth2TokenRepo::logged(db_pool.clone()));
+            let oauth2_webflow_state_repo = Arc::new(DbOAuth2WebflowStateRepo::logged(db_pool));
 
             Ok(Repos {
                 account_repo,
@@ -144,6 +164,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 environment_repo,
                 plan_repo,
                 token_repo,
+                oauth2_token_repo,
+                oauth2_webflow_state_repo,
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
@@ -159,7 +181,9 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
             let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
             let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
-            let token_repo = Arc::new(DbTokenRepo::logged(db_pool));
+            let token_repo = Arc::new(DbTokenRepo::logged(db_pool.clone()));
+            let oauth2_token_repo = Arc::new(DbOAuth2TokenRepo::logged(db_pool.clone()));
+            let oauth2_webflow_state_repo = Arc::new(DbOAuth2WebflowStateRepo::logged(db_pool));
 
             Ok(Repos {
                 account_repo,
@@ -169,6 +193,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 environment_repo,
                 plan_repo,
                 token_repo,
+                oauth2_token_repo,
+                oauth2_webflow_state_repo,
             })
         }
     }

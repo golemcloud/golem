@@ -13,16 +13,21 @@
 // limitations under the License.
 
 use super::ApiResult;
-use super::model::{CreateAppPluginRequest, CreateLibraryPluginRequest};
-use golem_common::api::{CreatePluginRequest, Page};
+use golem_common::api::Page;
+use golem_common::api::component::{
+    CreateAppPluginRequestMetadata, CreateLibraryPluginRequestMetadata, CreatePluginRequest,
+};
 use golem_common::model::plugin::{PluginDefinition, PluginScope};
 use golem_common::model::{Empty, PluginId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
+use golem_service_base::poem::TempFileUpload;
 use poem_openapi::OpenApi;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
+use poem_openapi::types::Binary;
+use poem_openapi::types::multipart::JsonField;
 use tracing::Instrument;
 
 pub struct PluginRegistrationApi {}
@@ -93,7 +98,7 @@ impl PluginRegistrationApi {
         method = "delete",
         operation_id = "delete_plugin"
     )]
-    pub async fn delete_plugin(
+    async fn delete_plugin(
         &self,
         plugin_id: Path<PluginId>,
         token: GolemSecurityScheme,
@@ -119,7 +124,7 @@ impl PluginRegistrationApi {
 
     /// Registers a new plugin
     #[oai(path = "/plugins", method = "post", operation_id = "create_plugin")]
-    pub async fn create_plugin(
+    async fn create_plugin(
         &self,
         plugin: Json<CreatePluginRequest>,
         token: GolemSecurityScheme,
@@ -152,7 +157,7 @@ impl PluginRegistrationApi {
         method = "post",
         operation_id = "create_library_plugin"
     )]
-    pub async fn create_library_plugin(
+    async fn create_library_plugin(
         &self,
         plugin: CreateLibraryPluginRequest,
         token: GolemSecurityScheme,
@@ -185,7 +190,7 @@ impl PluginRegistrationApi {
         method = "post",
         operation_id = "create_app_plugin"
     )]
-    pub async fn create_app_plugin(
+    async fn create_app_plugin(
         &self,
         plugin: CreateAppPluginRequest,
         token: GolemSecurityScheme,
@@ -211,4 +216,20 @@ impl PluginRegistrationApi {
     ) -> ApiResult<Json<Empty>> {
         todo!()
     }
+}
+
+#[derive(Debug, poem_openapi::Multipart)]
+#[oai(rename_all = "camelCase")]
+struct CreateLibraryPluginRequest {
+    metadata: JsonField<CreateLibraryPluginRequestMetadata>,
+    _icon: Binary<Vec<u8>>,
+    _plugin_wasm: TempFileUpload,
+}
+
+#[derive(Debug, poem_openapi::Multipart)]
+#[oai(rename_all = "camelCase")]
+struct CreateAppPluginRequest {
+    metadata: JsonField<CreateAppPluginRequestMetadata>,
+    _icon: Binary<Vec<u8>>,
+    _plugin_wasm: TempFileUpload,
 }

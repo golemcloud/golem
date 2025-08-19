@@ -189,6 +189,7 @@ macro_rules! newtype_uuid {
     };
 }
 
+// Could be a derive macro
 // Can be removed and inlined into error_forwarders once https://github.com/rust-lang/rust/issues/86935 is stable.
 #[macro_export]
 macro_rules! into_internal_error {

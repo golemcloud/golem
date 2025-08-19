@@ -16,6 +16,7 @@ use crate::services::account::AccountError;
 use crate::services::application::ApplicationError;
 use crate::services::component::ComponentError;
 use crate::services::environment::EnvironmentError;
+use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
 use crate::services::token::TokenError;
 use golem_common::SafeDisplay;
@@ -46,6 +47,15 @@ pub enum ApiError {
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<ErrorBody>),
+}
+
+impl ApiError {
+    pub fn bad_request(message: String) -> Self {
+        Self::BadRequest(Json(ErrorsBody {
+            errors: vec![message],
+            cause: None,
+        }))
+    }
 }
 
 impl ApiErrorDetails for ApiError {
@@ -206,12 +216,34 @@ impl From<TokenError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             TokenError::TokenNotFound(_) => Self::NotFound(Json(ErrorBody { error, cause: None })),
+            TokenError::TokenBySecretFound => {
+                Self::InternalError(Json(ErrorBody { error, cause: None }))
+            }
             TokenError::TokenSecretAlreadyExists => {
                 Self::InternalError(Json(ErrorBody { error, cause: None }))
             }
             TokenError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("TokenError")),
+            })),
+        }
+    }
+}
+
+impl From<OAuth2Error> for ApiError {
+    fn from(value: OAuth2Error) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            OAuth2Error::InvalidSession(_) => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            })),
+            OAuth2Error::OAuth2WebflowStateNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+            OAuth2Error::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("OAuth2Error")),
             })),
         }
     }

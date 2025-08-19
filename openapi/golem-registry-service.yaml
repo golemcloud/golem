@@ -5176,69 +5176,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_environment_security_scheme
-  /v1/login/token:
-    get:
-      tags:
-      - RegistryService
-      - Login
-      summary: Get information about a token
-      description: |-
-        Gets information about a token that is selected by the secret key passed in the Authorization header.
-        The JSON is the same as the data object in the oauth2 endpoint's response.
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Token'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: current_login_token
-  /v1/login/oauth2:
+  /v1/login/v1/oauth2:
     post:
       tags:
       - RegistryService
@@ -5254,7 +5192,7 @@ paths:
       parameters:
       - name: provider
         schema:
-          type: string
+          $ref: '#/components/schemas/OAuth2Provider'
         in: query
         description: Currently only `github` is supported.
         required: true
@@ -5318,23 +5256,22 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
       operationId: login_oauth2
-  /v1/login/oauth2/device/start:
-    post:
+  /v1/login/token:
+    get:
       tags:
       - RegistryService
       - Login
-      summary: Start GitHub OAuth2 interactive flow
+      summary: Get information about a token
       description: |-
-        Starts an interactive authorization flow.
-        The user must open the returned url and enter the userCode in a form before the expires deadline.
-        Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
+        Gets information about a token that is selected by the secret key passed in the Authorization header.
+        The JSON is the same as the data object in the oauth2 endpoint's response.
       responses:
         '200':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/OAuth2Data'
+                $ref: '#/components/schemas/Token'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5377,7 +5314,76 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: start_login_oauth2
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: current_login_token
+  /v1/login/oauth2/device/start:
+    post:
+      tags:
+      - RegistryService
+      - Login
+      summary: Start OAuth2 interactive flow
+      description: |-
+        Starts an interactive authorization flow.
+        The user must open the returned url and enter the userCode in a form before the expires deadline.
+        Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/OAuth2DeviceFlowStartRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OAuth2DeviceflowData'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: start_oauth2_device_flow
   /v1/login/oauth2/device/complete:
     post:
       tags:
@@ -5442,7 +5448,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: complete_login_oauth2
+      operationId: complete_oauth2_device_flow
   /v1/login/oauth2/web/authorize:
     get:
       tags:
@@ -5453,7 +5459,7 @@ paths:
       parameters:
       - name: provider
         schema:
-          type: string
+          $ref: '#/components/schemas/OAuth2Provider'
         in: query
         description: Currently only `github` is supported.
         required: true
@@ -5473,7 +5479,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WebFlowAuthorizeUrlResponse'
+                $ref: '#/components/schemas/OAuth2WebflowData'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5516,15 +5522,15 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: oauth2_web_flow_start
-  /v1/login/oauth2/web/callback/github:
+      operationId: start_oauth2_webflow
+  /v1/login/oauth2/web/callback:
     get:
       tags:
       - RegistryService
       - Login
-      summary: GitHub OAuth2 Web Flow callback
+      summary: OAuth2 Web Flow callback
       description: |-
-        This endpoint handles the callback from GitHub after the user has authorized the application.
+        This endpoint handles the callback from the provider after the user has authorized the application.
         It exchanges the code for an access token and then uses that to log the user in.
       parameters:
       - name: code
@@ -5538,6 +5544,7 @@ paths:
       - name: state
         schema:
           type: string
+          format: uuid
         in: query
         description: The state parameter for CSRF protection
         required: true
@@ -5604,18 +5611,21 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: oauth2_web_flow_callback_github
+      operationId: submit_oauth2_webflow_callback
   /v1/login/oauth2/web/poll:
     get:
       tags:
       - RegistryService
       - Login
       summary: Poll for OAuth2 Web Flow token
-      description: This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+      description: |-
+        This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+        A given state might only be exchanged for a token once. Any further attempts to exchange the state will fail.
       parameters:
       - name: state
         schema:
           type: string
+          format: uuid
         in: query
         description: The state parameter for identifying the session
         required: true
@@ -5676,7 +5686,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: oauth2_web_flow_poll
+      operationId: poll_oauth2_webflow
   /v1/plugins:
     get:
       tags:
@@ -6256,9 +6266,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Token'
+                $ref: '#/components/schemas/Token'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -7693,9 +7701,17 @@ components:
           type: boolean
         securityOverrides:
           type: boolean
-    OAuth2Data:
+    OAuth2DeviceFlowStartRequest:
       type: object
-      title: OAuth2Data
+      title: OAuth2DeviceFlowStartRequest
+      required:
+      - provider
+      properties:
+        provider:
+          $ref: '#/components/schemas/OAuth2Provider'
+    OAuth2DeviceflowData:
+      type: object
+      title: OAuth2DeviceflowData
       required:
       - url
       - userCode
@@ -7711,6 +7727,22 @@ components:
           format: date-time
         encodedSession:
           type: string
+    OAuth2Provider:
+      type: string
+      enum:
+      - github
+    OAuth2WebflowData:
+      type: object
+      title: OAuth2WebflowData
+      required:
+      - url
+      - state
+      properties:
+        url:
+          type: string
+        state:
+          type: string
+          format: uuid
     OplogProcessorDefinition:
       type: object
       title: OplogProcessorDefinition
@@ -8666,17 +8698,6 @@ components:
           type: string
         componentType:
           $ref: '#/components/schemas/ComponentType'
-    WebFlowAuthorizeUrlResponse:
-      type: object
-      title: WebFlowAuthorizeUrlResponse
-      required:
-      - url
-      - state
-      properties:
-        url:
-          type: string
-        state:
-          type: string
   securitySchemes:
     Cookie:
       type: apiKey

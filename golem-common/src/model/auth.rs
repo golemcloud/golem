@@ -44,6 +44,22 @@ declare_structs! {
         pub created_at: chrono::DateTime<Utc>,
         pub expires_at: chrono::DateTime<Utc>,
     }
+
+    pub struct AccountAuthorisation {
+        pub token: Token,
+        pub roles: Vec<Role>,
+    }
+}
+
+impl TokenWithSecret {
+    pub fn without_secret(self) -> Token {
+        Token {
+            id: self.id,
+            account_id: self.account_id,
+            created_at: self.created_at,
+            expires_at: self.expires_at,
+        }
+    }
 }
 
 #[derive(

@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use super::ApiResult;
-use super::model::CreateComponentRequest;
 use crate::services::component::ComponentService;
 use golem_common::api::Page;
+use golem_common::api::component::CreateComponentRequestMetadata;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::Component;
@@ -26,8 +26,10 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
+use golem_service_base::poem::TempFileUpload;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
+use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -293,4 +295,12 @@ impl EnvironmentComponentsApi {
 
         Ok(Json(component))
     }
+}
+
+#[derive(Multipart)]
+#[oai(rename_all = "camelCase")]
+struct CreateComponentRequest {
+    metadata: JsonField<CreateComponentRequestMetadata>,
+    component_wasm: Upload,
+    files: Option<TempFileUpload>,
 }
