@@ -875,6 +875,12 @@ trait ComponentRepoInternal: ComponentRepo {
         revision_id: i64,
     ) -> RepoResult<Vec<ComponentPluginInstallationRecord>>;
 
+    async fn get_component_plugins_tx(
+        tx: &mut Self::Tx,
+        component_id: &Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<ComponentPluginInstallationRecord>>;
+
     async fn get_component_files(
         &self,
         component_id: &Uuid,
@@ -928,7 +934,7 @@ trait ComponentRepoInternal: ComponentRepo {
     async fn insert_plugin(
         tx: &mut Self::Tx,
         plugin: ComponentPluginInstallationRecord,
-    ) -> RepoResult<ComponentPluginInstallationRecord>;
+    ) -> RepoResult<()>;
 
     async fn version_exists(
         tx: &mut Self::Tx,
@@ -992,16 +998,39 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         self.with_ro("get_component_plugins")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT component_id, revision_id, plugin_id,
-                           created_at, created_by, priority, parameters
-                    FROM component_plugin_installations
-                    WHERE component_id = $1 AND revision_id = $2
+                    SELECT cpi.component_id, cpi.revision_id, cpi.plugin_id,
+                           p.name as plugin_name, p.version as plugin_version,
+                           cpi.created_at, cpi.created_by, cpi.priority, cpi.parameters
+                    FROM component_plugin_installations cpi
+                    JOIN plugins p ON p.plugin_id = cpi.plugin_id
+                    WHERE cpi.component_id = $1 AND cpi.revision_id = $2
                     ORDER BY priority
                 "#})
                 .bind(component_id)
                 .bind(revision_id),
             )
             .await
+    }
+
+    async fn get_component_plugins_tx(
+        tx: &mut Self::Tx,
+        component_id: &Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<ComponentPluginInstallationRecord>> {
+        tx.fetch_all_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT cpi.component_id, cpi.revision_id, cpi.plugin_id,
+                       p.name as plugin_name, p.version as plugin_version,
+                       cpi.created_at, cpi.created_by, cpi.priority, cpi.parameters
+                FROM component_plugin_installations cpi
+                JOIN plugins p ON p.plugin_id = cpi.plugin_id
+                WHERE cpi.component_id = $1 AND cpi.revision_id = $2
+                ORDER BY priority
+            "#})
+            .bind(component_id)
+            .bind(revision_id),
+        )
+        .await
     }
 
     async fn get_component_files(
@@ -1103,22 +1132,19 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         };
 
         revision.plugins = {
-            let mut inserted_plugins = Vec::<ComponentPluginInstallationRecord>::new();
             for plugin in plugins {
-                inserted_plugins.push(
-                    Self::insert_plugin(
-                        tx,
-                        plugin.ensure_component(
-                            revision.component_id,
-                            revision.revision_id,
-                            revision.audit.created_by,
-                        ),
-                    )
-                    .await?,
+                Self::insert_plugin(
+                    tx,
+                    plugin.ensure_component(
+                        revision.component_id,
+                        revision.revision_id,
+                        revision.audit.created_by,
+                    ),
                 )
+                .await?
             }
-            inserted_plugins.sort_by(|a, b| a.priority.cmp(&b.priority));
-            inserted_plugins
+
+            Self::get_component_plugins_tx(tx, &revision.component_id, revision.revision_id).await?
         };
 
         revision.files = {
@@ -1188,7 +1214,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
     async fn insert_plugin(
         tx: &mut Self::Tx,
         plugin: ComponentPluginInstallationRecord,
-    ) -> RepoResult<ComponentPluginInstallationRecord> {
+    ) -> RepoResult<()> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                 INSERT INTO component_plugin_installations

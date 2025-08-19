@@ -376,8 +376,8 @@ impl ComponentRevisionRecord {
             }
             .into(),
             binary_hash: self.binary_hash.into_blake3_hash().into(),
-            files: self
-                .files
+            files_by_path: self
+                .original_files
                 .iter()
                 .map(|file| {
                     (
@@ -389,6 +389,11 @@ impl ComponentRevisionRecord {
                         .into(),
                     )
                 })
+                .collect(),
+            plugins_by_priority: self
+                .plugins
+                .iter()
+                .map(|plugin| (plugin.priority.to_string(), plugin.plugin_id))
                 .collect(),
         }
     }
@@ -503,6 +508,8 @@ pub struct ComponentPluginInstallationRecord {
     // Note: Set by repo during insert
     pub revision_id: i64,
     pub plugin_id: Uuid,
+    pub plugin_name: String,
+    pub plugin_version: String,
     #[sqlx(flatten)]
     pub audit: RevisionAuditFields,
     pub priority: i32,
@@ -531,6 +538,8 @@ impl ComponentPluginInstallationRecord {
             component_id,
             revision_id: 0,
             plugin_id: plugin_installation.id.0,
+            plugin_name: plugin_installation.plugin_name,
+            plugin_version: plugin_installation.plugin_version,
             audit: RevisionAuditFields::new(actor.0),
             priority: plugin_installation.priority,
             parameters: Json::from(

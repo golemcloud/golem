@@ -18,6 +18,7 @@ use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,7 +75,7 @@ pub struct ComponentMetadata {
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub dynamic_linking_wasm_rpc: BTreeMap<String, BTreeMap<String, ComponentWasmRpcTarget>>,
-    // TODO: agents
+    // TODO: agents? or should consider that part of the wasm binary?
 }
 
 impl Hashable for ComponentMetadata {
@@ -91,7 +92,9 @@ pub struct Component {
     pub binary_hash: Hash,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
-    pub files: BTreeMap<String, HashOf<ComponentFile>>,
+    pub files_by_path: BTreeMap<String, HashOf<ComponentFile>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins_by_priority: BTreeMap<String, Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -101,6 +104,7 @@ pub struct ComponentDiff {
     metadata_changed: bool,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     file_changes: BTreeMapDiff<String, HashOf<ComponentFile>>,
+    plugins_changed: bool,
 }
 
 impl Diffable for Component {
@@ -109,13 +113,15 @@ impl Diffable for Component {
     fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
         let update_metadata = local.metadata != remote.metadata;
         let update_binary = local.binary_hash != remote.binary_hash;
-        let files_diff = local.files.diff_with_server(&remote.files);
+        let file_changes = local.files_by_path.diff_with_server(&remote.files_by_path);
+        let plugins_changed = local.plugins_by_priority == remote.plugins_by_priority;
 
-        if update_metadata || update_binary || files_diff.is_some() {
+        if update_metadata || update_binary || file_changes.is_some() || plugins_changed {
             Some(ComponentDiff {
                 metadata_changed: update_metadata,
                 binary_changed: update_binary,
-                file_changes: files_diff.unwrap_or_default(),
+                file_changes: file_changes.unwrap_or_default(),
+                plugins_changed,
             })
         } else {
             None
