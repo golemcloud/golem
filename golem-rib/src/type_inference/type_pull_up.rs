@@ -55,19 +55,50 @@ pub fn type_pull_up(expr: &mut Expr, component_dependencies: &ComponentDependenc
                         resource_mode,
                         resource_id
                     } => {
-                        let fully_qualified_resource_method = FullyQualifiedResourceMethod {
-                            package_name:Some(PackageName {
-                                namespace: "golem".to_string(),
-                                package_name: "it".to_string(),
-                                version: None,
-                            }),
-                            interface_name:Some(InterfaceName {
-                                name: "api".to_string(),
-                                version: None,
-                            }),
-                            resource_name: name.clone().unwrap(),
-                            method_name: method.clone(),
-                            static_function: false,
+
+                        let fully_qualified_resource_method = if let Some(owner) = owner {
+                            // an owner is typically `golem:it/api`
+                            // hence namespace will be golem
+                            // poackage is it
+                            // and interface is api
+
+                            let owner_string : String = owner;
+                            let parts: Vec<&str> = owner_string.split('/').collect();
+                            let namespace_and_package = parts.get(0).map(|s| s.to_string());
+
+                            let namespace = namespace_and_package
+                                .as_ref()
+                                .and_then(|s| s.split(':').next())
+                                .map(|s| s.to_string());
+                            let package_name = namespace_and_package
+                                .as_ref()
+                                .and_then(|s| s.split(':').nth(1))
+                                .map(|s| s.to_string());
+
+                            let interface_name = parts.get(1).map(|s| s.to_string());
+
+                            FullyQualifiedResourceMethod {
+                                package_name: namespace.map(|namespace| PackageName {
+                                    namespace,
+                                    package_name: package_name.unwrap(),
+                                    version: None,
+                                }),
+                                interface_name: interface_name.map(|name| InterfaceName {
+                                    name,
+                                    version: None,
+                                }),
+                                resource_name: name.clone().unwrap(),
+                                method_name: method.clone(),
+                                static_function: false,
+                            }
+                        } else {
+                            FullyQualifiedResourceMethod {
+                                package_name: None,
+                                interface_name: None,
+                                resource_name: name.clone().unwrap(),
+                                method_name: method.clone(),
+                                static_function: false,
+                            }
                         };
 
                         let function_name = FunctionName::ResourceMethod(fully_qualified_resource_method.clone());
