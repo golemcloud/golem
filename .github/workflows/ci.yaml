@@ -121,18 +121,18 @@ jobs:
           7z.exe x "mingw-w64.7z" -aoa -r
           gcc --version
         
-      # - name: Setup vcpkg
-        # uses: lukka/run-vcpkg@v11
-        # id: runvcpkg
-        # with:
-          # vcpkgDirectory: "C:/vcpkg"
-          # doNotUpdateVcpkg: true
-          # doNotCache: true
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        id: runvcpkg
+        with:
+          vcpkgDirectory: "C:/vcpkg"
+          doNotUpdateVcpkg: true
+          doNotCache: true
           
-      # - name: Vcpkg build and install packages
-        # run: |
-          # ${{ env.VCPKG_ROOT }}/vcpkg.exe install --recurse --clean-after-build --x-install-root "${{ env.VCPKG_PKG_INSTALL_DIR }}" --triplet "${{ env.VCPKG_DEFAULT_TRIPLET }}"
-            
+      - name: Vcpkg build and install packages
+        run: |
+          ${{ env.VCPKG_ROOT }}/vcpkg.exe install --recurse --clean-after-build --x-install-root "${{ env.VCPKG_PKG_INSTALL_DIR }}" --triplet "${{ env.VCPKG_DEFAULT_TRIPLET }}"
+      
       - name: Setup Rust
         run: |
           rustup install stable-gnu
@@ -144,10 +144,10 @@ jobs:
         # run: cargo make --profile ci unit-tests
       - name: check formatting and clippy rules
         run: cargo make --profile ci check
-      # - name: Check openapi is up to date
-        # run: cargo make --profile ci check-openapi
-      # - name: Check configs are up to date
-        # run: cargo make --profile ci check-configs
+      - name: Check openapi is up to date
+        run: cargo make --profile ci check-openapi
+      - name: Check configs are up to date
+        run: cargo make --profile ci check-configs
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
         if: always()
