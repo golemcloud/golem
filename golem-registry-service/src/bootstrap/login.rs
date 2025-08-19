@@ -39,14 +39,13 @@ impl LoginSystem {
         token_service: Arc<TokenService>,
         oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
         oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
-    ) -> anyhow::Result<Self>
-where {
+    ) -> anyhow::Result<Self> {
         match config {
             LoginConfig::Disabled(_) => Ok(Self::Disabled),
-            LoginConfig::OAuth2(oauth2_config) => {
+            LoginConfig::OAuth2(oauth2_login_config) => {
                 let oauth2_github_client: Arc<dyn OAuth2GithubClient> =
                     Arc::new(OAuth2GithubClientDefault {
-                        config: oauth2_config.github.clone(),
+                        config: oauth2_login_config.github.clone(),
                     });
 
                 let oauth2_service: Arc<OAuth2Service> = Arc::new(OAuth2Service::new(
@@ -55,7 +54,7 @@ where {
                     token_service,
                     oauth2_token_repo,
                     oauth2_webflow_state_repo,
-                    &oauth2_config.ed_dsa,
+                    &oauth2_login_config.oauth2,
                 )?);
 
                 Ok(Self::Enabled(LoginSystemEnabled { oauth2_service }))

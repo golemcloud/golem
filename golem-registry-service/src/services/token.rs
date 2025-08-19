@@ -29,6 +29,8 @@ pub enum TokenError {
     TokenSecretAlreadyExists,
     #[error("Token for id not found")]
     TokenNotFound(TokenId),
+    #[error("Token for secret not found")]
+    TokenBySecretFound,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -36,8 +38,9 @@ pub enum TokenError {
 impl SafeDisplay for TokenError {
     fn to_safe_string(&self) -> String {
         match self {
-            Self::TokenSecretAlreadyExists => self.to_safe_string(),
-            Self::TokenNotFound(_) => self.to_safe_string(),
+            Self::TokenSecretAlreadyExists => self.to_string(),
+            Self::TokenNotFound(_) => self.to_string(),
+            Self::TokenBySecretFound => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -56,7 +59,7 @@ impl TokenService {
         Self { token_repo }
     }
 
-    pub async fn get(&self, token_id: &TokenId) -> anyhow::Result<TokenWithSecret> {
+    pub async fn get(&self, token_id: &TokenId) -> Result<TokenWithSecret, TokenError> {
         let record = self
             .token_repo
             .get_by_id(&token_id.0)
@@ -66,9 +69,15 @@ impl TokenService {
         Ok(record.into())
     }
 
-    pub async fn get_by_secret(&self, _token_id: &TokenId) -> Result<TokenWithSecret, TokenError> {
-        // TODO: missing in repo
-        todo!()
+    pub async fn get_by_secret(&self, secret: &TokenSecret) -> Result<TokenWithSecret, TokenError> {
+        let token = self
+            .token_repo
+            .get_by_secret(&secret.0)
+            .await?
+            .ok_or(TokenError::TokenBySecretFound)?
+            .into();
+
+        Ok(token)
     }
 
     pub async fn create(
@@ -105,5 +114,11 @@ impl TokenService {
             .ok_or(TokenError::TokenSecretAlreadyExists)?;
 
         Ok(record.into())
+    }
+
+    pub async fn delete(&self, token_id: &TokenId) -> Result<(), TokenError> {
+        self.token_repo.delete(&token_id.0).await?;
+
+        Ok(())
     }
 }

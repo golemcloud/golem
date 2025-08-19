@@ -15,6 +15,7 @@
 use super::ApiResult;
 use super::error::ApiError;
 use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
+use crate::services::token::TokenService;
 use golem_common::model::Empty;
 use golem_common::model::auth::{Token, TokenWithSecret};
 use golem_common::model::error::ErrorBody;
@@ -28,10 +29,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct LoginApi {
     pub login_system: LoginSystem,
+    pub token_service: Arc<TokenService>,
 }
 
 #[OpenApi(
@@ -40,8 +43,53 @@ pub struct LoginApi {
     tag = ApiTags::Login
 )]
 impl LoginApi {
-    pub fn new(login_system: LoginSystem) -> Self {
-        Self { login_system }
+    pub fn new(login_system: LoginSystem, token_service: Arc<TokenService>) -> Self {
+        Self {
+            login_system,
+            token_service,
+        }
+    }
+
+    /// Acquire token with OAuth2 authorization
+    ///
+    /// Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
+    ///
+    /// In the response:
+    /// - `id` is the identifier of the token itself
+    /// - `accountId` is the account's identifier, can be used on the account API
+    /// - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
+    ///
+    #[oai(path = "/v1/oauth2", method = "post", operation_id = "login_oauth2")]
+    async fn oauth2(
+        &self,
+        /// Currently only `github` is supported.
+        provider: Query<OAuth2Provider>,
+        /// OAuth2 access token
+        #[oai(name = "access-token")]
+        access_token: Query<String>,
+    ) -> ApiResult<Json<TokenWithSecret>> {
+        let record = recorded_http_api_request!("login_oauth2",);
+        let response = self
+            .oauth2_internal(provider.0, access_token.0)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn oauth2_internal(
+        &self,
+        provider: OAuth2Provider,
+        access_token: String,
+    ) -> ApiResult<Json<TokenWithSecret>> {
+        let login_system = self.get_enabled_login_system()?;
+
+        let result = login_system
+            .oauth2_service
+            .exchange_external_access_token_for_token(&provider, &access_token)
+            .await?;
+
+        Ok(Json(result))
     }
 
     /// Get information about a token
@@ -59,8 +107,9 @@ impl LoginApi {
         record.result(response)
     }
 
-    async fn current_token_internal(&self, _token: GolemSecurityScheme) -> ApiResult<Json<Token>> {
-        todo!()
+    async fn current_token_internal(&self, token: GolemSecurityScheme) -> ApiResult<Json<Token>> {
+        let token_info = self.token_service.get_by_secret(&token.secret()).await?;
+        Ok(Json(token_info.without_secret()))
     }
 
     /// Start OAuth2 interactive flow
@@ -245,6 +294,7 @@ impl LoginApi {
     /// Poll for OAuth2 Web Flow token
     ///
     /// This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+    /// A given state might only be exchanged for a token once. Any further attempts to exchange the state will fail.
     #[oai(
         path = "/oauth2/web/poll",
         method = "get",
@@ -272,7 +322,7 @@ impl LoginApi {
 
         let state = login_system
             .oauth2_service
-            .get_webflow_state(&state_id)
+            .exchange_webflow_state_for_token(&state_id)
             .await?;
 
         let response = match state.token {

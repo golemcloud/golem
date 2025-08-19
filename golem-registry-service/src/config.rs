@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use chrono::Duration;
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
 use golem_common::model::auth::Role;
@@ -61,38 +62,40 @@ impl Default for RegistryServiceConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EdDsaConfig {
-    pub private_key: String,
-    pub public_key: String,
-}
-
-impl Default for EdDsaConfig {
-    fn default() -> Self {
-        EdDsaConfig {
-            private_key: "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
-                .to_string(),
-            public_key: "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg=".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum LoginConfig {
-    OAuth2(OAuth2Config),
+    OAuth2(OAuth2LoginSystemConfig),
     Disabled(Empty),
 }
 
 impl Default for LoginConfig {
     fn default() -> LoginConfig {
-        LoginConfig::OAuth2(OAuth2Config::default())
+        LoginConfig::OAuth2(OAuth2LoginSystemConfig::default())
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct OAuth2Config {
+pub struct OAuth2LoginSystemConfig {
     pub github: GitHubOAuth2Config,
-    pub ed_dsa: EdDsaConfig,
+    pub oauth2: OAuth2Config,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OAuth2Config {
+    pub webflow_state_expiry: Duration,
+    pub private_key: String,
+    pub public_key: String,
+}
+
+impl Default for OAuth2Config {
+    fn default() -> Self {
+        Self {
+            webflow_state_expiry: Duration::minutes(5),
+            private_key: "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
+                .to_string(),
+            public_key: "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg=".to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

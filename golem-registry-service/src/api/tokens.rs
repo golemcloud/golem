@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::api::ApiResult;
+use crate::services::token::TokenService;
 use golem_common::model::Empty;
 use golem_common::model::auth::{AuthCtx, Token, TokenId};
 use golem_common::recorded_http_api_request;
@@ -21,9 +22,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct TokensApi {}
+pub struct TokensApi {
+    token_service: Arc<TokenService>,
+}
 
 #[OpenApi(
     prefix_path = "/v1/tokens",
@@ -31,13 +35,17 @@ pub struct TokensApi {}
     tag = ApiTags::Token
 )]
 impl TokensApi {
+    pub fn new(token_service: Arc<TokenService>) -> Self {
+        Self { token_service }
+    }
+
     /// Get token by id
     #[oai(path = "/:token_id", method = "get", operation_id = "get_token")]
     async fn get_token(
         &self,
         token_id: Path<TokenId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Vec<Token>>> {
+    ) -> ApiResult<Json<Token>> {
         let record = recorded_http_api_request!("get_token", token_id = token_id.0.to_string());
 
         let auth = AuthCtx::new(token.secret());
@@ -52,10 +60,12 @@ impl TokensApi {
 
     async fn get_token_internal(
         &self,
-        _token_id: TokenId,
+        token_id: TokenId,
         _auth: AuthCtx,
-    ) -> ApiResult<Json<Vec<Token>>> {
-        todo!()
+    ) -> ApiResult<Json<Token>> {
+        let result = self.token_service.get(&token_id).await?;
+
+        Ok(Json(result.without_secret()))
     }
 
     #[oai(path = "/:token_id", method = "delete", operation_id = "delete_token")]
@@ -78,9 +88,10 @@ impl TokensApi {
 
     async fn delete_token_internal(
         &self,
-        _token_id: TokenId,
+        token_id: TokenId,
         _token: GolemSecurityScheme,
     ) -> ApiResult<Json<Empty>> {
-        todo!()
+        self.token_service.delete(&token_id).await?;
+        Ok(Json(Empty {}))
     }
 }

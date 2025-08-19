@@ -5230,6 +5230,88 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/login/v1/oauth2:
+    post:
+      tags:
+      - RegistryService
+      - Login
+      summary: Acquire token with OAuth2 authorization
+      description: |
+        Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
+
+        In the response:
+        - `id` is the identifier of the token itself
+        - `accountId` is the account's identifier, can be used on the account API
+        - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
+      operationId: login_oauth2
+      parameters:
+      - in: query
+        name: provider
+        description: Currently only `github` is supported.
+        required: true
+        deprecated: false
+        schema:
+          $ref: '#/components/schemas/OAuth2Provider'
+        explode: true
+        style: form
+      - in: query
+        name: access-token
+        description: OAuth2 access token
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/TokenWithSecret'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/login/token:
     get:
       tags:
@@ -5596,7 +5678,9 @@ paths:
       - RegistryService
       - Login
       summary: Poll for OAuth2 Web Flow token
-      description: This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+      description: |-
+        This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+        A given state might only be exchanged for a token once. Any further attempts to exchange the state will fail.
       operationId: poll_oauth2_webflow
       parameters:
       - in: query
@@ -6250,9 +6334,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Token'
+                $ref: '#/components/schemas/Token'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:

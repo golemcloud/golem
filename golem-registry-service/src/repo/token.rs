@@ -29,6 +29,8 @@ pub trait TokenRepo: Send + Sync {
 
     async fn get_by_id(&self, token_id: &Uuid) -> RepoResult<Option<TokenRecord>>;
 
+    async fn get_by_secret(&self, secret: &Uuid) -> RepoResult<Option<TokenRecord>>;
+
     async fn get_by_account(&self, account_id: &Uuid) -> RepoResult<Vec<TokenRecord>>;
 
     async fn delete(&self, token_id: &Uuid) -> RepoResult<()>;
@@ -52,6 +54,10 @@ impl<Repo: TokenRepo> LoggedTokenRepo<Repo> {
     fn span_account(account_id: &Uuid) -> Span {
         info_span!(SPAN_NAME, account_id = %account_id)
     }
+
+    fn span_secret(secret: &Uuid) -> Span {
+        info_span!(SPAN_NAME, secret = %secret)
+    }
 }
 
 #[async_trait]
@@ -65,6 +71,13 @@ impl<Repo: TokenRepo> TokenRepo for LoggedTokenRepo<Repo> {
         self.repo
             .get_by_id(token_id)
             .instrument(Self::span_id(token_id))
+            .await
+    }
+
+    async fn get_by_secret(&self, secret: &Uuid) -> RepoResult<Option<TokenRecord>> {
+        self.repo
+            .get_by_secret(secret)
+            .instrument(Self::span_secret(secret))
             .await
     }
 
@@ -140,6 +153,19 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                     WHERE token_id = $1
                 "#})
                 .bind(token_id),
+            )
+            .await
+    }
+
+    async fn get_by_secret(&self, secret: &Uuid) -> RepoResult<Option<TokenRecord>> {
+        self.with_ro("get_by_id")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT token_id, secret, account_id, created_at, expires_at
+                    FROM tokens
+                    WHERE secret = $1
+                "#})
+                .bind(secret),
             )
             .await
     }
