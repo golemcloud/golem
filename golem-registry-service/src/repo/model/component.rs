@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{Component, FinalizedComponentRevision, PluginInstallation};
+use crate::model::component::{Component, FinalizedComponentRevision};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
@@ -20,7 +20,7 @@ use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision,
-    InitialComponentFile, InitialComponentFileKey, VersionedComponentId,
+    InitialComponentFile, InitialComponentFileKey, PluginInstallation, VersionedComponentId,
 };
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
@@ -580,8 +580,8 @@ impl ComponentPluginInstallationRecord {
             component_id,
             revision_id: 0,
             plugin_id: plugin_installation.id.0,
-            plugin_name: plugin_installation.plugin_name,
-            plugin_version: plugin_installation.plugin_version,
+            plugin_name: plugin_installation.name,
+            plugin_version: plugin_installation.version,
             audit: RevisionAuditFields::new(actor.0),
             priority: plugin_installation.priority,
             parameters: Json::from(
