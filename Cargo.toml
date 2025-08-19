@@ -393,6 +393,8 @@ sysinfo = "0.33.1"
 tonic-build = "0.12.3"
 try_match = "0.4.2"
 wasmprinter = "0.219.1"
+webbrowser = "1.0.4"
+warp = "0.3.7"
 wit-bindgen-rt = "=0.40.0"
 zstd = "0.13"
 

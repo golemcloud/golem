@@ -119,6 +119,8 @@ wit-bindgen-rust = { workspace = true }
 wit-component = { workspace = true }
 wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
+webbrowser = { workspace = true }
+warp = { workspace = true }
 
 # --- added for MCP HTTP server mode ---
 axum = { workspace = true }     # move from dev-dependencies → dependencies
