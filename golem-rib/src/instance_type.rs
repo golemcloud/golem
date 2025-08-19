@@ -586,7 +586,9 @@ fn search_function_in_instance(
                 let functions = function_dictionary
                     .name_and_types
                     .iter()
-                    .filter(|(f, _)| f.name() == function_name)
+                    .filter(|(f, _)| {
+                        f.name() == function_name
+                    })
                     .collect::<Vec<_>>();
 
                 if functions.is_empty() {
@@ -617,6 +619,7 @@ fn search_function_in_instance(
                     _ => {
                         let function =
                             search_function_in_multiple_packages(function_name, package_map)?;
+
                         component_info_functions.push((info.clone(), function));
                     }
                 }
@@ -765,6 +768,7 @@ mod protobuf {
                 method_name: proto.method_name,
                 package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
                 interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
+                static_function: false, //FIXME
             })
         }
     }

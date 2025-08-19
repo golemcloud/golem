@@ -2847,6 +2847,39 @@ mod tests {
     }
 
     #[test]
+    async fn test_interpreter_with_indexed_resources_static_functions() {
+        let expr = r#"
+           let worker = instance();
+           let cart = worker.cart("s");
+           cart.create(user_id);
+           "afsal"
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+        let compiler = RibCompiler::new(compiler_config);
+
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_executor = test_deps.interpreter;
+        let result = rib_executor.run(compiled.byte_code).await.unwrap();
+
+        let expected_value = Value::Variant {
+            case_idx: 1,
+            case_value: Some(Box::new(Value::Record(vec![Value::String(
+                "foo".to_string(),
+            )]))),
+        };
+
+        assert_eq!(result.get_val().unwrap().value, expected_value);
+    }
+
+
+    #[test]
     async fn test_interpreter_with_indexed_resource_get_cart_contents() {
         let expr = r#"
            let user_id = "bar";
@@ -4762,10 +4795,7 @@ mod tests {
             case, f32, field, handle, list, option, r#enum, record, result, s32, str, tuple, u32,
             u64, unit_case, variant,
         };
-        use golem_wasm_ast::analysis::{
-            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
-        };
+        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
         use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
         use uuid::Uuid;
@@ -4989,6 +5019,28 @@ mod tests {
                         parameters: resource_constructor_params,
                         result: Some(AnalysedFunctionResult {
                             typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                        }),
+                    },
+                    AnalysedFunction {
+                        name: "[static]cart.create".to_string(),
+                        parameters: vec![
+                            AnalysedFunctionParameter {
+                                name: "item".to_string(),
+                                typ: record(vec![
+                                    field("product-id", str()),
+                                    field("name", str()),
+                                    field("price", f32()),
+                                    field("quantity", u32()),
+                                ]),
+                            },
+                        ],
+                        result: Some(AnalysedFunctionResult {
+                            typ: AnalysedType::Handle(TypeHandle {
+                                name: Some("cart".to_string()),
+                                owner: None,
+                                resource_id: AnalysedResourceId(0),
+                                mode: AnalysedResourceMode::Owned,
+                            }),
                         }),
                     },
                     AnalysedFunction {

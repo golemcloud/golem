@@ -155,6 +155,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 .with_inferred_type(new_inferred_type)
                                 .with_source_span(source_span.clone());
                         }
+
                         // If resource method is called, we could convert to strict call
                         // however it can only be possible if the instance type of LHS is
                         // a resource type
