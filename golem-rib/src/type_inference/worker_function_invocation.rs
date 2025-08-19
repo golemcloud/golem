@@ -15,10 +15,7 @@
 use crate::call_type::{CallType, InstanceCreationType, InstanceIdentifier};
 use crate::rib_type_error::RibTypeErrorInternal;
 use crate::type_parameter::TypeParameter;
-use crate::{
-    CustomError, DynamicParsedFunctionName, Expr, FunctionCallError, InferredType, TypeInternal,
-    TypeOrigin,
-};
+use crate::{CustomError, DynamicParsedFunctionName, Expr, FullyQualifiedResourceConstructor, FunctionCallError, InferredType, TypeInternal, TypeOrigin};
 use crate::{FunctionName, InstanceType};
 use std::collections::VecDeque;
 
@@ -129,6 +126,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                     instance_type.worker_name(),
                                     resource_id,
                                     resource_mode,
+                                    false
                                 )
                                 .map_err(|err| {
                                     RibTypeErrorInternal::from(CustomError::new(
@@ -163,7 +161,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                             let resource_method_dictionary =
                                 instance_type.resource_method_dictionary();
 
-                            let _ =
+                            let resource_method_info =
                                 resource_method_dictionary.get(&FunctionName::ResourceMethod(resource_method.clone()))
                                     .ok_or(FunctionCallError::invalid_function_call(
                                         resource_method.method_name(),
@@ -173,6 +171,46 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                         resource_method.method_name()
                                     ),
                                 ))?;
+
+                            let resource_method_return_type  =
+                                resource_method_info.return_type.clone().unwrap_or(InferredType::unknown());
+
+                            let new_inferred_type = match resource_method_return_type.internal_type() {
+                                TypeInternal::Resource {resource_id, resource_mode} => {
+                                    let resource_instance_type = instance_type
+                                        .get_resource_instance_type(
+                                            FullyQualifiedResourceConstructor {
+                                                package_name: resource_method.package_name.clone(),
+                                                interface_name: resource_method.interface_name.clone(),
+                                                resource_name: "cart".to_string(),
+                                            },
+                                            args.clone(),
+                                            instance_type.worker_name(),
+                                            *resource_id,
+                                            *resource_mode,
+                                            true
+                                        )
+                                        .map_err(|err| {
+                                            RibTypeErrorInternal::from(CustomError::new(
+                                                lhs.source_span(),
+                                                format!("Failed to get resource instance type: {err}"),
+                                            ))
+                                        })?;
+
+                                    let rr = InferredType::new(
+                                        TypeInternal::Instance {
+                                            instance_type: Box::new(resource_instance_type),
+                                        },
+                                        TypeOrigin::NoOrigin,
+                                    );
+
+                                    rr
+                                }
+
+                                _ => {
+                                   InferredType::unknown()
+                                }
+                            };
 
                             let dynamic_parsed_function_name = resource_method
                                 .dynamic_parsed_function_name()
@@ -191,6 +229,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 args.clone(),
                                 Some(component),
                             )
+                                .with_inferred_type(new_inferred_type)
                             .with_source_span(source_span.clone());
 
                             *expr = new_call;

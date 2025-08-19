@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{Expr, ExprVisitor, InferredType, TypeInternal, TypeOrigin};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 // This is about binding the `InstanceType` to the corresponding identifiers.
 //

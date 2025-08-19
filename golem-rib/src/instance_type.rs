@@ -170,8 +170,6 @@ impl InstanceType {
         }
     }
 
-    // Get InstanceType::Resource from the fully qualified resource constructor
-    // from an existing instance type
     pub fn get_resource_instance_type(
         &self,
         fully_qualified_resource_constructor: FullyQualifiedResourceConstructor,
@@ -179,6 +177,7 @@ impl InstanceType {
         worker_name: Option<Box<Expr>>,
         analysed_resource_id: u64,
         analysed_resource_mode: u8,
+        hello: bool
     ) -> Result<InstanceType, String> {
         let interface_name = fully_qualified_resource_constructor.interface_name.clone();
         let package_name = fully_qualified_resource_constructor.package_name.clone();
@@ -230,6 +229,7 @@ impl InstanceType {
             ))
         }
     }
+
 
     pub fn interface_name(&self) -> Option<InterfaceName> {
         match self {

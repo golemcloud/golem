@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::VecDeque;
 use crate::{ComponentDependencies, Expr, ExprVisitor, FunctionCallError};
 
 // Resolving function arguments and return types based on function type registry
@@ -23,7 +24,8 @@ pub fn infer_function_call_types(
     expr: &mut Expr,
     component_dependency: &ComponentDependencies,
 ) -> Result<(), FunctionCallError> {
-    let mut visitor = ExprVisitor::bottom_up(expr);
+    let mut visitor = VecDeque::new();
+    visitor.push_back(expr);
     while let Some(expr) = visitor.pop_back() {
         let source_span = expr.source_span();
 
@@ -41,6 +43,8 @@ pub fn infer_function_call_types(
                 args,
                 inferred_type,
             )?;
+        } else {
+            expr.visit_expr_nodes_lazy(&mut visitor);
         }
     }
 

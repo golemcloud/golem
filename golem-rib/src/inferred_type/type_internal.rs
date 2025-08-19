@@ -60,6 +60,10 @@ pub enum TypeInternal {
 }
 
 impl TypeInternal {
+    pub fn is_instance(&self) -> bool {
+        matches!(self, TypeInternal::Instance { .. })
+    }
+
     pub fn to_inferred_type(&self) -> InferredType {
         InferredType::new(self.clone(), TypeOrigin::NoOrigin)
     }
