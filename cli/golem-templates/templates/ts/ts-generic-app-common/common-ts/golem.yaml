@@ -1,0 +1,36 @@
+# golem-app-manifest-header
+
+templates:
+  ts:
+    build:
+    - generateQuickjsDts: src/generated/interfaces
+      wit: wit-generated
+    - command: npx rollup -c
+      sources:
+      - src
+      - ../../common-ts
+      - rollup.config.mjs
+      - tsconfig.js
+      targets:
+      - dist/main.js
+    - generateQuickjsCrate: ../../golem-temp/quickjs-wrappers/{{ component_name | to_snake_case }}
+      wit: wit-generated
+      jsModules:
+        main: dist/main.js
+    - command: cargo component build --release
+      dir: ../../golem-temp/quickjs-wrappers/{{ component_name | to_snake_case }}
+      sources:
+      - src
+      - wit
+      - Cargo.toml
+      targets:
+      - target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+    sourceWit: wit
+    generatedWit: wit-generated
+    componentWasm: ../../golem-temp/quickjs-wrappers/{{ component_name | to_snake_case }}/target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+    linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}.wasm
+    clean:
+    - dist
+customCommands:
+  ts-npm-install:
+  - command: npm install

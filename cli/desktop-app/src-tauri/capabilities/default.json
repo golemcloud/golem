@@ -1,0 +1,71 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "store:default",
+    "fs:read-all",
+    "fs:read-files",
+    "fs:allow-write-file",
+    "fs:allow-open",
+    "fs:allow-home-read",
+    "fs:allow-home-read-recursive",
+    "fs:allow-desktop-read",
+    "fs:allow-desktop-read-recursive",
+    "fs:allow-document-read",
+    "fs:allow-document-read-recursive",
+    "fs:allow-download-read",
+    "fs:allow-download-read-recursive",
+    "fs:allow-home-write",
+    "fs:allow-home-write-recursive",
+    {
+      "identifier": "http:default",
+      "allow": [
+        {
+          "url": "http://*"
+        },
+        {
+          "url": "https://*"
+        },
+        {
+          "url": "http://*:*"
+        },
+        {
+          "url": "https://*:*"
+        }
+      ],
+      "deny": []
+    },
+    {
+      "identifier": "websocket:default",
+      "allow": [
+        {
+          "url": "http://*"
+        },
+        {
+          "url": "https://*"
+        },
+        {
+          "url": "http://*:*"
+        },
+        {
+          "url": "https://*:*"
+        }
+      ],
+      "deny": []
+    },
+    {
+      "identifier": "fs:allow-download-write-recursive",
+      "allow": [
+        {
+          "path": "$DOWNLOAD/**"
+        }
+      ],
+      "deny": []
+    },
+    "dialog:default"
+  ]
+}

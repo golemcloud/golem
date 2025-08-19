@@ -1,0 +1,31 @@
+[package]
+name = "golem-rust"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem-rust"
+description = "Golem Rust tooling library that facilitates writing Golem backends in Rust"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+golem-rust-macro = { path = "../golem-rust-macro", version = "0.0.0", optional = true }
+serde = { version = "1", optional = true }
+serde_json = { version = "1", optional = true }
+uuid = { version = "1", features = ["v4"] }
+golem-wasm-rpc = { version = "1.3.0-dev.25", default-features = false, features = [
+    "stub",
+] }
+wit-bindgen = { version = "0.40.0" }
+
+[features]
+default = ["durability", "json", "macro"]
+durability = []
+json = ["dep:serde", "dep:serde_json"]
+macro = ["dep:golem-rust-macro"]
+export_load_snapshot = []
+export_save_snapshot = []
+export_oplog_processor = []

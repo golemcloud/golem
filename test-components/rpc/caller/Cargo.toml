@@ -26,7 +26,7 @@ path = "wit-generated"
 "golem:api/host@1.1.7" = "golem_rust::bindings::golem::api::host"
 
 [dependencies]
-golem-rust = { git = "https://github.com/golemcloud/golem-rust", branch = "type-owner" }
+golem-rust = { path = "../../../sdks/rust/golem-rust" }
 once_cell = "1.19.0"
 rand = "0.8.5"
 

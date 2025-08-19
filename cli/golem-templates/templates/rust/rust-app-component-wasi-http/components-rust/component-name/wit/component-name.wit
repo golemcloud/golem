@@ -1,0 +1,8 @@
+package pack:name;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+// See https://github.com/WebAssembly/wasi-http for an introduction to wasi-http
+
+world component-name {
+  export wasi:http/incoming-handler@0.2.3;
+}

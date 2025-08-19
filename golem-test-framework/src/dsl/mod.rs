@@ -45,7 +45,7 @@ use tokio::fs::File;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::info;
 use uuid::Uuid;
-use wasm_metadata::AddMetadata;
+use wasm_metadata::{AddMetadata, AddMetadataField};
 
 pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     dsl: &'a DSL,
@@ -2176,7 +2176,7 @@ pub fn worker_error_logs(error: &Error) -> Option<String> {
 //                                 .timestamp
 //                                 .as_ref()
 //                                 .expect("no timestamp on update record"))
-//                             .into(),
+//                                 .into(),
 //                             oplog_index: OplogIndex::from_u64(0),
 //                             description: UpdateDescription::Automatic {
 //                                 target_version: u.target_version,
@@ -2194,7 +2194,7 @@ pub fn worker_error_logs(error: &Error) -> Option<String> {
 //                                 .timestamp
 //                                 .as_ref()
 //                                 .expect("no timestamp on update record"))
-//                             .into(),
+//                                 .into(),
 //                             target_version: u.target_version,
 //                             details: failed_update.details.clone(),
 //                         }),
@@ -2210,7 +2210,7 @@ pub fn worker_error_logs(error: &Error) -> Option<String> {
 //                                 .timestamp
 //                                 .as_ref()
 //                                 .expect("no timestamp on update record"))
-//                             .into(),
+//                                 .into(),
 //                             target_version: u.target_version,
 //                         }),
 //                         _ => None,
@@ -2224,18 +2224,39 @@ pub fn worker_error_logs(error: &Error) -> Option<String> {
 //                 owned_resources: metadata
 //                     .owned_resources
 //                     .iter()
-//                     .map(|(k, v)| {
-//                         (
-//                             WorkerResourceId(*k),
-//                             WorkerResourceDescription {
-//                                 created_at: (*v
-//                                     .created_at
-//                                     .as_ref()
-//                                     .expect("no timestamp on resource metadata"))
-//                                 .into(),
-//                                 indexed_resource_key: v.indexed.clone().map(|i| i.into()),
-//                             },
-//                         )
+//                     .map(|description| {
+//                         match &description.description {
+//                             Some(golem_api_grpc::proto::golem::worker::resource_description::Description::ExportedResourceInstance(desc)) => {
+//                                 (
+//                                     WorkerResourceKey::ExportedResourceInstanceKey(ExportedResourceInstanceKey { resource_id: WorkerResourceId(desc.resource_id) }),
+//                                     WorkerResourceDescription::ExportedResourceInstance(ExportedResourceInstanceDescription {
+//                                         created_at: desc.created_at.expect("Missing created_at").into(),
+//                                         resource_name: desc.resource_name.clone(),
+//                                         resource_owner: desc.resource_owner.clone(),
+//                                         resource_params: if desc.is_indexed {
+//                                             Some(desc.resource_params.clone())
+//                                         } else {
+//                                             None
+//                                         },
+//                                     })
+//                                 )
+//                             }
+//                             Some(golem_api_grpc::proto::golem::worker::resource_description::Description::AgentInstance(desc)) => {
+//                                 (
+//                                     WorkerResourceKey::AgentInstanceKey(AgentInstanceKey {
+//                                         agent_type: desc.agent_type.clone(),
+//                                         agent_id: desc.agent_id.clone(),
+//                                     }),
+//                                     WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
+//                                         created_at: desc.created_at.expect("Missing created_at").into(),
+//                                         agent_parameters: desc.clone().agent_parameters.expect("Missing agent_parameters").try_into().expect("invalid agent_parameters"),
+//                                     })
+//                                 )
+//                             }
+//                             None => {
+//                                 panic!("Invalid resource description: {description:?}");
+//                             }
+//                         }
 //                     })
 //                     .collect(),
 //                 active_plugins: HashSet::from_iter(
@@ -2947,12 +2968,12 @@ fn rename_component_if_needed(temp_dir: &Path, path: &Path, name: &str) -> anyho
         Ok(path.to_path_buf())
     } else {
         let new_path = Builder::new().disable_cleanup(true).tempfile_in(temp_dir)?;
-        let add_metadata = AddMetadata {
-            name: Some(name.to_string()),
-            version: metadata
-                .root_package_version
-                .map(|v| wasm_metadata::Version::new(v.to_string())),
-            ..Default::default()
+        let mut add_metadata = AddMetadata::default();
+        add_metadata.name = AddMetadataField::Set(name.to_string());
+        add_metadata.version = if let Some(v) = &metadata.root_package_version {
+            AddMetadataField::Set(wasm_metadata::Version::new(v.to_string()))
+        } else {
+            AddMetadataField::Clear
         };
 
         info!(
