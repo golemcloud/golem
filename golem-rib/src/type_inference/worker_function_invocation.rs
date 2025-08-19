@@ -105,7 +105,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                         FunctionName::ResourceConstructor(fully_qualified_resource_constructor) => {
                             let (resource_id, resource_mode) = match function.function_type.return_type {
                                 Some(return_type) => match return_type.internal_type()  {
-                                    TypeInternal::Resource {resource_id, resource_mode} =>  {
+                                    TypeInternal::Resource {resource_id, resource_mode, owner, name} =>  {
                                         (*resource_id, *resource_mode)
                                     }
                                     _ => return Err(RibTypeErrorInternal::from(CustomError::new(expr.source_span(), "expected resource type as return type of resource constructor"))),
@@ -176,7 +176,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 resource_method_info.return_type.clone().unwrap_or(InferredType::unknown());
 
                             let new_inferred_type = match resource_method_return_type.internal_type() {
-                                TypeInternal::Resource {resource_id, resource_mode} => {
+                                TypeInternal::Resource {resource_id, resource_mode, ..} => {
                                     let resource_instance_type = instance_type
                                         .get_resource_instance_type(
                                             FullyQualifiedResourceConstructor {

@@ -221,7 +221,7 @@ mod internal {
         args: &mut [Expr],
         function_result_inferred_type: Option<&mut InferredType>,
     ) -> Result<(), FunctionCallError> {
-        let function_type = component_dependency
+        let (_, function_type) = component_dependency
             .get_function_type(&None, key)
             .map_err(|err| FunctionCallError::InvalidFunctionCall {
                 function_name: function_name.to_string(),

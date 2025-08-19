@@ -2847,12 +2847,47 @@ mod tests {
     }
 
     #[test]
-    async fn test_interpreter_with_indexed_resources_static_functions() {
+    async fn test_interpreter_with_indexed_resources_static_functions_1() {
         let expr = r#"
            let worker = instance();
-           let cart = worker.cart("s");
+           let cart = worker.cart("hello");
            let result = cart.create("afsal");
            result.checkout()
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+        let compiler = RibCompiler::new(compiler_config);
+
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_executor = test_deps.interpreter;
+        let result = rib_executor.run(compiled.byte_code).await.unwrap();
+
+        let expected_value = Value::Variant {
+            case_idx: 1,
+            case_value: Some(Box::new(Value::Record(vec![Value::String(
+                "foo".to_string(),
+            )]))),
+        };
+
+        assert_eq!(result.get_val().unwrap().value, expected_value);
+    }
+
+    #[test]
+    async fn test_interpreter_with_indexed_resources_static_functions_2() {
+        let expr = r#"
+           let worker = instance();
+           let cart = worker.cart("hello");
+           let result = cart.create-safe("afsal");
+           match result {
+             ok(x) => x.checkout(),
+             err(x) => cart.checkout()
+           }
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
@@ -5030,12 +5065,32 @@ mod tests {
                             },
                         ],
                         result: Some(AnalysedFunctionResult {
-                            typ:AnalysedType::Handle(TypeHandle {
+                            typ: AnalysedType::Handle(TypeHandle {
                                 name: Some("cart".to_string()),
-                                owner: None,
+                                owner: Some("golem:it/api".to_string()),
                                 resource_id: AnalysedResourceId(0),
                                 mode: AnalysedResourceMode::Owned,
                             })
+                        }),
+                    },
+                    AnalysedFunction {
+                        name: "[static]cart.create-safe".to_string(),
+                        parameters: vec![
+                            AnalysedFunctionParameter {
+                                name: "item-name".to_string(),
+                                typ: str(),
+                            },
+                        ],
+                        result: Some(AnalysedFunctionResult {
+                            typ: result(
+                                AnalysedType::Handle(TypeHandle {
+                                    name: Some("cart".to_string()),
+                                    owner: Some("golem:it/api".to_string()),
+                                    resource_id: AnalysedResourceId(0),
+                                    mode: AnalysedResourceMode::Owned,
+                                }),
+                                str(),
+                            )
                         }),
                     },
                     AnalysedFunction {
@@ -5363,6 +5418,33 @@ mod tests {
                             AnalysedResourceId(0),
                             AnalysedResourceMode::Owned,
                         ))))
+                    }
+
+                    "golem:it/api.{[static]cart.create-safe}" => {
+                        let function_args = args.0[1..].to_vec();
+
+                        if function_args.len() != 1 {
+                            return Err("expected exactly one argument for cart.create".into());
+                        }
+
+                        let item_name = function_args[0].value.clone();
+
+                        let uri = format!(
+                            "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
+                            worker_name.map(|x| x.0).unwrap_or_default()
+                        );
+
+                        let resource = Value::Handle {
+                            uri,
+                            resource_id: 0,
+                        };
+
+                        let value = Value::Result(Ok(Some(Box::new(resource))));
+
+                        Ok(Some(ValueAndType::new(value, result(handle(
+                            AnalysedResourceId(0),
+                            AnalysedResourceMode::Owned,
+                        ), str()))))
                     }
 
                     "golem:it/api.{cart.pass-through}" => {
