@@ -17,7 +17,7 @@ use super::oauth2_github_client::{
     DeviceWorkflowData, OAuth2GithubClient, OAuth2GithubClientError,
 };
 use super::token::{TokenError, TokenService};
-use crate::config::{EdDsaConfig, OAuth2Config};
+use crate::config::OAuth2Config;
 use crate::model::login::{
     ExternalLogin, OAuth2DeviceFlowSession, OAuth2Token, OAuth2WebflowState,
     OAuth2WebflowStateMetadata,
@@ -106,7 +106,7 @@ impl OAuth2Service {
             decoding_key,
             oauth2_token_repo,
             oauth2_web_flow_state_repo,
-            webflow_state_expiry: config.webflow_state_expiry
+            webflow_state_expiry: config.webflow_state_expiry,
         })
     }
 
@@ -115,16 +115,11 @@ impl OAuth2Service {
         provider: &OAuth2Provider,
         access_token: &str,
     ) -> Result<TokenWithSecret, OAuth2Error> {
-        let external_login = self
-            .get_external_login(provider, access_token)
-            .await?;
+        let external_login = self.get_external_login(provider, access_token).await?;
 
         let existing_data = self
             .oauth2_token_repo
-            .get_by_external_provider(
-                &provider.to_string(),
-                &external_login.external_id,
-            )
+            .get_by_external_provider(&provider.to_string(), &external_login.external_id)
             .await?
             .map(TryInto::<OAuth2Token>::try_into)
             .transpose()?;
@@ -144,7 +139,7 @@ impl OAuth2Service {
             }
         };
 
-       Ok(token)
+        Ok(token)
     }
 
     pub async fn start_webflow(
@@ -174,6 +169,10 @@ impl OAuth2Service {
         state_id: &OAuth2WebflowStateId,
         code: String,
     ) -> Result<OAuth2WebflowStateMetadata, OAuth2Error> {
+        self.oauth2_web_flow_state_repo
+            .delete_expired((Utc::now() - self.webflow_state_expiry).into())
+            .await?;
+
         let state: OAuth2WebflowState = self
             .oauth2_web_flow_state_repo
             .get_by_id(&state_id.0)
@@ -185,7 +184,9 @@ impl OAuth2Service {
             .exchange_code_for_token(&state.metadata.provider, &code, state_id)
             .await?;
 
-        let token = self.exchange_external_access_token_for_token(&state.metadata.provider, &access_token).await?;
+        let token = self
+            .exchange_external_access_token_for_token(&state.metadata.provider, &access_token)
+            .await?;
 
         self.oauth2_web_flow_state_repo
             .set_token_id(&state_id.0, &token.id.0)
@@ -194,16 +195,28 @@ impl OAuth2Service {
         Ok(state.metadata)
     }
 
-    pub async fn get_webflow_state(
+    pub async fn exchange_webflow_state_for_token(
         &self,
         state_id: &OAuth2WebflowStateId,
     ) -> Result<OAuth2WebflowState, OAuth2Error> {
+        self.oauth2_web_flow_state_repo
+            .delete_expired((Utc::now() - self.webflow_state_expiry).into())
+            .await?;
+
         let state: OAuth2WebflowState = self
             .oauth2_web_flow_state_repo
             .get_by_id(&state_id.0)
             .await?
             .ok_or(OAuth2Error::OAuth2WebflowStateNotFound(state_id.clone()))?
             .into();
+
+        // State is only allowed to be exchanged once for access tokens.
+        // If we found a token attached to this state, invalidate it for future use.
+        if state.token.is_some() {
+            self.oauth2_web_flow_state_repo
+                .delete_by_id(&state_id.0)
+                .await?;
+        }
 
         Ok(state)
     }
@@ -244,7 +257,9 @@ impl OAuth2Service {
             )
             .await?;
 
-        let token = self.exchange_external_access_token_for_token(&session.provider, &access_token).await?;
+        let token = self
+            .exchange_external_access_token_for_token(&session.provider, &access_token)
+            .await?;
 
         Ok(token)
     }

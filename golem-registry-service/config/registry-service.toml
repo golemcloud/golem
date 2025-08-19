@@ -45,14 +45,15 @@ max_connections = 10
 [login]
 type = "OAuth2"
 
-[login.config.ed_dsa]
-private_key = "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
-public_key = "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg="
-
 [login.config.github]
 client_id = "GITHUB_CLIENT_ID"
 client_secret = "GITHUB_CLIENT_SECRET"
 redirect_uri = "http://localhost:8080/v1/login/oauth2/web/callback"
+
+[login.config.oauth2]
+private_key = "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
+public_key = "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg="
+webflow_state_expiry = [300, 0]
 
 [plans.plans.default]
 app_limit = 10

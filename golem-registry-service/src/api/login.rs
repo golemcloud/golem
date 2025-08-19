@@ -15,6 +15,7 @@
 use super::ApiResult;
 use super::error::ApiError;
 use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
+use crate::services::token::TokenService;
 use golem_common::model::Empty;
 use golem_common::model::auth::{Token, TokenWithSecret};
 use golem_common::model::error::ErrorBody;
@@ -28,13 +29,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
-use tracing::Instrument;
-use crate::services::token::TokenService;
 use std::sync::Arc;
+use tracing::Instrument;
 
 pub struct LoginApi {
     pub login_system: LoginSystem,
-    pub token_service: Arc<TokenService>
+    pub token_service: Arc<TokenService>,
 }
 
 #[OpenApi(
@@ -43,14 +43,14 @@ pub struct LoginApi {
     tag = ApiTags::Login
 )]
 impl LoginApi {
-    pub fn new(
-        login_system: LoginSystem,
-        token_service: Arc<TokenService>
-    ) -> Self {
-        Self { login_system, token_service }
+    pub fn new(login_system: LoginSystem, token_service: Arc<TokenService>) -> Self {
+        Self {
+            login_system,
+            token_service,
+        }
     }
 
-   /// Acquire token with OAuth2 authorization
+    /// Acquire token with OAuth2 authorization
     ///
     /// Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
     ///
@@ -294,6 +294,7 @@ impl LoginApi {
     /// Poll for OAuth2 Web Flow token
     ///
     /// This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+    /// A given state might only be exchanged for a token once. Any further attempts to exchange the state will fail.
     #[oai(
         path = "/oauth2/web/poll",
         method = "get",
@@ -321,7 +322,7 @@ impl LoginApi {
 
         let state = login_system
             .oauth2_service
-            .get_webflow_state(&state_id)
+            .exchange_webflow_state_for_token(&state_id)
             .await?;
 
         let response = match state.token {

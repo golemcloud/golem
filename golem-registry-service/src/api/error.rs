@@ -216,6 +216,9 @@ impl From<TokenError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             TokenError::TokenNotFound(_) => Self::NotFound(Json(ErrorBody { error, cause: None })),
+            TokenError::TokenBySecretFound => {
+                Self::InternalError(Json(ErrorBody { error, cause: None }))
+            }
             TokenError::TokenSecretAlreadyExists => {
                 Self::InternalError(Json(ErrorBody { error, cause: None }))
             }

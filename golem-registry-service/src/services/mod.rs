@@ -15,6 +15,7 @@
 pub mod account;
 pub mod account_usage;
 pub mod application;
+pub mod auth;
 pub mod component;
 pub mod component_compilation;
 pub mod component_object_store;
@@ -24,4 +25,3 @@ pub mod oauth2;
 pub mod oauth2_github_client;
 pub mod plan;
 pub mod token;
-pub mod auth;

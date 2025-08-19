@@ -57,7 +57,7 @@ impl TokenWithSecret {
             id: self.id,
             account_id: self.account_id,
             created_at: self.created_at,
-            expires_at: self.created_at
+            expires_at: self.expires_at,
         }
     }
 }

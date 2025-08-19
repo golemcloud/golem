@@ -117,11 +117,11 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
             ),
             LoginApi::new(
                 services.login_system.clone(),
-                services.token_service.clone()
+                services.token_service.clone(),
             ),
             PluginRegistrationApi {},
             SecuritySchemesApi {},
-            TokensApi {},
+            TokensApi::new(services.token_service.clone()),
         ),
         "Golem API",
         "1.0",

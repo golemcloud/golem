@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use chrono::Duration;
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
 use golem_common::model::auth::Role;
@@ -23,7 +24,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 use uuid::uuid;
-use chrono::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegistryServiceConfig {
@@ -77,7 +77,7 @@ impl Default for LoginConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct OAuth2LoginSystemConfig {
     pub github: GitHubOAuth2Config,
-    pub oauth2: OAuth2Config
+    pub oauth2: OAuth2Config,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -91,7 +91,8 @@ impl Default for OAuth2Config {
     fn default() -> Self {
         Self {
             webflow_state_expiry: Duration::minutes(5),
-             private_key: "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW".to_string(),
+            private_key: "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
+                .to_string(),
             public_key: "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg=".to_string(),
         }
     }

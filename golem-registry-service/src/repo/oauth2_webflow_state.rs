@@ -44,6 +44,8 @@ pub trait OAuth2WebflowStateRepo: Send + Sync {
 
     async fn get_by_id(&self, state_id: &Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>>;
 
+    async fn delete_by_id(&self, state_id: &Uuid) -> RepoResult<u64>;
+
     async fn delete_expired(&self, delete_before: SqlDateTime) -> RepoResult<u64>;
 }
 
@@ -90,6 +92,13 @@ impl<Repo: OAuth2WebflowStateRepo> OAuth2WebflowStateRepo for LoggedOAuth2Webflo
     async fn get_by_id(&self, state_id: &Uuid) -> RepoResult<Option<OAuth2WebFlowStateRecord>> {
         self.repo
             .get_by_id(state_id)
+            .instrument(Self::span_id(state_id))
+            .await
+    }
+
+    async fn delete_by_id(&self, state_id: &Uuid) -> RepoResult<u64> {
+        self.repo
+            .delete_by_id(state_id)
             .instrument(Self::span_id(state_id))
             .await
     }
@@ -186,6 +195,20 @@ impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
             Some(state) => Ok(Some(self.with_token(state).await?)),
             None => Ok(None),
         }
+    }
+
+    async fn delete_by_id(&self, state_id: &Uuid) -> RepoResult<u64> {
+        let result = self
+            .with_rw("delete_by_id")
+            .execute(
+                sqlx::query(indoc! { r#"
+                    DELETE FROM oauth2_web_flow_states WHERE state_id = $1
+                "#})
+                .bind(state_id),
+            )
+            .await?;
+
+        Ok(result.rows_affected())
     }
 
     async fn delete_expired(&self, delete_before: SqlDateTime) -> RepoResult<u64> {

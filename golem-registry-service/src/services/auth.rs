@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::{into_internal_error, SafeDisplay};
+use golem_common::{SafeDisplay, into_internal_error};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
     #[error(transparent)]
-    InternalError(#[from] anyhow::Error)
+    InternalError(#[from] anyhow::Error),
 }
 
 impl SafeDisplay for AuthError {
@@ -30,12 +30,16 @@ impl SafeDisplay for AuthError {
 
 into_internal_error!(AuthError);
 
-pub struct AuthService {
+pub struct AuthService {}
 
+impl Default for AuthService {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AuthService {
     pub fn new() -> Self {
-        Self { }
+        Self {}
     }
 }
