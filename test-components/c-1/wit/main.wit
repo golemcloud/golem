@@ -1,6 +1,0 @@
-package golem:it;
-
-world c-api1 {
-    export run: func() -> s32;
-    export print: func(s: string);
-}
