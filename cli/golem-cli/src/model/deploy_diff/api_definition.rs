@@ -125,6 +125,7 @@ fn normalize_http_api_route(
                         HttpApiDefinitionBindingType::HttpHandler => {
                             GatewayBindingType::HttpHandler
                         }
+                        HttpApiDefinitionBindingType::SwaggerUi => GatewayBindingType::SwaggerUi,
                     })
                     .unwrap_or_else(|| GatewayBindingType::Default),
             ),
