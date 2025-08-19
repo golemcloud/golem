@@ -237,6 +237,7 @@ mod test {
                         .into(),
                     ),
                 ]),
+                plugins_by_priority: Default::default(),
             }
         }
 
