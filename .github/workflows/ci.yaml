@@ -26,7 +26,7 @@ jobs:
   build:
     if: false
     env:
-      CARGO_BUILD_JOBS: 2
+      CARGO_BUILD_JOBS: 4
       VCPKG_PKG_INSTALL_DIR: "${{ github.workspace }}/vcpkg_installed/"
       PROTOC: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/tools/protobuf/protoc.exe"
       PROTOC_INCLUDE: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/include"
@@ -91,7 +91,7 @@ jobs:
   unit-tests-and-checks:
     # if: false
     env:
-      CARGO_BUILD_JOBS: 2
+      CARGO_BUILD_JOBS: 4
       VCPKG_PKG_INSTALL_DIR: "${{ github.workspace }}/vcpkg_installed/"
       PROTOC: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/tools/protobuf/protoc.exe"
       PROTOC_INCLUDE: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/include"
@@ -121,17 +121,17 @@ jobs:
           7z.exe x "mingw-w64.7z" -aoa -r
           gcc --version
         
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
-        id: runvcpkg
-        with:
-          vcpkgDirectory: "C:/vcpkg"
-          doNotUpdateVcpkg: true
-          doNotCache: true
+      # - name: Setup vcpkg
+        # uses: lukka/run-vcpkg@v11
+        # id: runvcpkg
+        # with:
+          # vcpkgDirectory: "C:/vcpkg"
+          # doNotUpdateVcpkg: true
+          # doNotCache: true
           
-      - name: Vcpkg build and install packages
-        run: |
-          ${{ env.VCPKG_ROOT }}/vcpkg.exe install --recurse --clean-after-build --x-install-root "${{ env.VCPKG_PKG_INSTALL_DIR }}" --triplet "${{ env.VCPKG_DEFAULT_TRIPLET }}"
+      # - name: Vcpkg build and install packages
+        # run: |
+          # ${{ env.VCPKG_ROOT }}/vcpkg.exe install --recurse --clean-after-build --x-install-root "${{ env.VCPKG_PKG_INSTALL_DIR }}" --triplet "${{ env.VCPKG_DEFAULT_TRIPLET }}"
             
       - name: Setup Rust
         run: |
@@ -140,10 +140,10 @@ jobs:
           rustup set default-host x86_64-pc-windows-gnu
           rustup override set stable-x86_64-pc-windows-gnu
       
-      - name: Unit tests
-        run: cargo make --profile ci unit-tests
-      # - name: Check formatting and clippy rules
-        # run: cargo make --profile ci check
+      # - name: Unit tests
+        # run: cargo make --profile ci unit-tests
+      - name: check formatting and clippy rules
+        run: cargo make --profile ci check
       # - name: Check openapi is up to date
         # run: cargo make --profile ci check-openapi
       # - name: Check configs are up to date
