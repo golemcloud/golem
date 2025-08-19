@@ -1200,6 +1200,7 @@ impl Expr {
         self.infer_all_identifiers();
         self.pull_types_up(component_dependencies)?;
         self.infer_global_inputs();
+        self.infer_function_call_types(&component_dependencies)?;
         Ok(())
     }
 

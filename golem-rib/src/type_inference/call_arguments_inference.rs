@@ -388,7 +388,9 @@ mod internal {
         expected: &AnalysedType,
         provided: &Expr,
     ) -> Result<(), FunctionCallError> {
-        let is_valid = if provided.inferred_type().is_unknown() {
+        dbg!(provided.to_string());
+        dbg!(provided.inferred_type());
+        let is_valid = if provided.inferred_type().is_unknown()  | provided.inferred_type().is_all_of() {
             true
         } else {
             provided.inferred_type().get_type_hint().get_type_kind()
