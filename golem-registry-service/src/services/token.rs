@@ -66,7 +66,7 @@ impl TokenService {
         Ok(record.into())
     }
 
-    pub async fn get_by_secret(&self, _token_id: &TokenId) -> Result<TokenWithSecret, TokenError> {
+    pub async fn get_by_secret(&self, secret: &TokenSecret) -> Result<TokenWithSecret, TokenError> {
         // TODO: missing in repo
         todo!()
     }

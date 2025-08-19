@@ -39,8 +39,7 @@ impl LoginSystem {
         token_service: Arc<TokenService>,
         oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
         oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
-    ) -> anyhow::Result<Self>
-where {
+    ) -> anyhow::Result<Self> {
         match config {
             LoginConfig::Disabled(_) => Ok(Self::Disabled),
             LoginConfig::OAuth2(oauth2_config) => {

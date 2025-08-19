@@ -17,7 +17,7 @@ use super::oauth2_github_client::{
     DeviceWorkflowData, OAuth2GithubClient, OAuth2GithubClientError,
 };
 use super::token::{TokenError, TokenService};
-use crate::config::EdDsaConfig;
+use crate::config::{EdDsaConfig, OAuth2Config};
 use crate::model::login::{
     ExternalLogin, OAuth2DeviceFlowSession, OAuth2Token, OAuth2WebflowState,
     OAuth2WebflowStateMetadata,
@@ -27,7 +27,7 @@ use crate::repo::oauth2_token::OAuth2TokenRepo;
 use crate::repo::oauth2_webflow_state::OAuth2WebflowStateRepo;
 use anyhow::anyhow;
 use applying::Apply;
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use golem_common::model::account::{AccountId, NewAccountData};
 use golem_common::model::auth::TokenWithSecret;
 use golem_common::model::login::{
@@ -77,6 +77,7 @@ pub struct OAuth2Service {
     oauth2_web_flow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
+    webflow_state_expiry: Duration,
 }
 
 impl OAuth2Service {
@@ -86,7 +87,7 @@ impl OAuth2Service {
         token_service: Arc<TokenService>,
         oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
         oauth2_web_flow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
-        config: &EdDsaConfig,
+        config: &OAuth2Config,
     ) -> Result<Self, OAuth2Error> {
         let private_key = format_key(config.private_key.as_str(), "PRIVATE");
         let public_key = format_key(config.public_key.as_str(), "PUBLIC");
@@ -105,7 +106,45 @@ impl OAuth2Service {
             decoding_key,
             oauth2_token_repo,
             oauth2_web_flow_state_repo,
+            webflow_state_expiry: config.webflow_state_expiry
         })
+    }
+
+    pub async fn exchange_external_access_token_for_token(
+        &self,
+        provider: &OAuth2Provider,
+        access_token: &str,
+    ) -> Result<TokenWithSecret, OAuth2Error> {
+        let external_login = self
+            .get_external_login(provider, access_token)
+            .await?;
+
+        let existing_data = self
+            .oauth2_token_repo
+            .get_by_external_provider(
+                &provider.to_string(),
+                &external_login.external_id,
+            )
+            .await?
+            .map(TryInto::<OAuth2Token>::try_into)
+            .transpose()?;
+
+        let account_id = match &existing_data {
+            Some(token) => token.account_id.clone(),
+            None => self.make_account(&external_login).await?,
+        };
+
+        let token = match existing_data.and_then(|token| token.token_id) {
+            Some(token_id) => self.token_service.get(&token_id).await?,
+            None => {
+                // This will also link the external id to the account id, ensure that no additional
+                // accounts are created in the future.
+                self.make_token(provider.clone(), external_login, account_id)
+                    .await?
+            }
+        };
+
+       Ok(token)
     }
 
     pub async fn start_webflow(
@@ -146,34 +185,7 @@ impl OAuth2Service {
             .exchange_code_for_token(&state.metadata.provider, &code, state_id)
             .await?;
 
-        let external_login = self
-            .get_external_login(&state.metadata.provider, &access_token)
-            .await?;
-
-        let existing_data = self
-            .oauth2_token_repo
-            .get_by_external_provider(
-                &state.metadata.provider.to_string(),
-                &external_login.external_id,
-            )
-            .await?
-            .map(TryInto::<OAuth2Token>::try_into)
-            .transpose()?;
-
-        let account_id = match &existing_data {
-            Some(token) => token.account_id.clone(),
-            None => self.make_account(&external_login).await?,
-        };
-
-        let token = match existing_data.and_then(|token| token.token_id) {
-            Some(token_id) => self.token_service.get(&token_id).await?,
-            None => {
-                // This will also link the external id to the account id, ensure that no additional
-                // accounts are created in the future.
-                self.make_token(state.metadata.provider.clone(), external_login, account_id)
-                    .await?
-            }
-        };
+        let token = self.exchange_external_access_token_for_token(&state.metadata.provider, &access_token).await?;
 
         self.oauth2_web_flow_state_repo
             .set_token_id(&state_id.0, &token.id.0)
@@ -232,29 +244,7 @@ impl OAuth2Service {
             )
             .await?;
 
-        let external_login = self.client.get_external_login(&access_token).await?;
-
-        let existing_data = self
-            .oauth2_token_repo
-            .get_by_external_provider(&session.provider.to_string(), &external_login.external_id)
-            .await?
-            .map(TryInto::<OAuth2Token>::try_into)
-            .transpose()?;
-
-        let account_id = match &existing_data {
-            Some(token) => token.account_id.clone(),
-            None => self.make_account(&external_login).await?,
-        };
-
-        let token = match existing_data.and_then(|token| token.token_id) {
-            Some(token_id) => self.token_service.get(&token_id).await?,
-            None => {
-                // This will also link the external id to the account id, ensure that no additional
-                // accounts are created in the future.
-                self.make_token(session.provider, external_login, account_id)
-                    .await?
-            }
-        };
+        let token = self.exchange_external_access_token_for_token(&session.provider, &access_token).await?;
 
         Ok(token)
     }
