@@ -12,7 +12,7 @@ lto = true
 opt-level = 's'
 
 [dependencies]
-golem-rust = { git = "https://github.com/golemcloud/golem-rust", branch = "type-owner" }
+golem-rust = { path = "../../sdks/rust/golem-rust" }
 wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 
 [package.metadata.component.target]

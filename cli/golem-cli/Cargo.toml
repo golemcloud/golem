@@ -1,0 +1,136 @@
+[package]
+name = "golem-cli"
+version = "0.0.0"
+edition = "2021"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem"
+description = "Command line interface for Golem."
+license-file = "../../LICENSE"
+
+autotests = false
+build = "build.rs"
+
+[features]
+default = []
+server-commands = []
+
+[lib]
+harness = false
+
+[[bin]]
+name = "golem-cli"
+path = "src/main.rs"
+test = false
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+test = true
+harness = false
+
+[dependencies]
+golem-templates = { workspace = true }
+golem-client = { workspace = true }
+golem-common = { workspace = true, default-features = true, features = ["agent-extraction"] }
+golem-rib = { workspace = true, default-features = true }
+golem-rib-repl = { workspace = true }
+golem-wasm-ast = { workspace = true, default-features = true }
+golem-wasm-rpc = { workspace = true, default-features = true }
+golem-wasm-rpc-derive = { workspace = true }
+
+# External deps
+anyhow = { workspace = true }
+assert2 = { workspace = true }
+async-trait = { workspace = true }
+async_zip = { workspace = true }
+auditable-serde = { workspace = true }
+base64 = { workspace = true }
+bincode = { workspace = true }
+blake3 = { workspace = true }
+bytes = { workspace = true }
+camino = { workspace = true }
+cargo-component = { workspace = true }
+cargo-component-core = { workspace = true }
+cargo_toml = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+clap-verbosity-flag = { workspace = true }
+clap_complete = { workspace = true }
+cli-table = { workspace = true }
+colored = { workspace = true }
+dirs = { workspace = true }
+envsubst = { workspace = true }
+flate2 = { workspace = true }
+fs_extra = { workspace = true }
+futures-util = { workspace = true }
+fuzzy-matcher = { workspace = true }
+heck = { workspace = true }
+humansize = { workspace = true }
+indexmap = { workspace = true }
+indoc = { workspace = true }
+inquire = { workspace = true }
+iso8601 = { workspace = true }
+itertools = { workspace = true }
+lenient_bool = { workspace = true }
+minijinja = { workspace = true }
+moonbit-component-generator = { workspace = true }
+native-tls = { workspace = true }
+nondestructive = { workspace = true }
+phf = { workspace = true }
+prettyplease = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_derive = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+shadow-rs = { workspace = true }
+shlex = { workspace = true }
+similar = { workspace = true }
+spdx = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+syn = { workspace = true }
+tempfile = { workspace = true }
+terminal_size = { workspace = true }
+textwrap = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-tungstenite = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+version-compare = { workspace = true }
+wac-graph = { workspace = true }
+walkdir = { workspace = true }
+wax = { workspace = true }
+wasmparser = { workspace = true }
+wasm-encoder = { workspace = true }
+wasm-rquickjs = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wit-bindgen-rust = { workspace = true }
+wit-component = { workspace = true }
+wit-encoder = { workspace = true }
+wit-parser = { workspace = true }
+
+[dev-dependencies]
+
+# External deps
+axum = { workspace = true }
+log = { workspace = true }
+pretty_env_logger = { workspace = true }
+reqwest = { workspace = true }
+serde_json_path = { workspace = true }
+strip-ansi-escapes = { workspace = true }
+test-r = { workspace = true }
+wasm-metadata = { workspace = true }
+
+[build-dependencies]
+shadow-rs = { workspace = true }

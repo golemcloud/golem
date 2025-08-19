@@ -2,13 +2,11 @@
 url = "https://github.com/golemcloud/golem-agentic/archive/main.tar.gz"
 sha256 = "92738a15004db69c4c7dd4c7d531d3fb40d10779ff130d2c0d008d3984d2f73f"
 sha512 = "b37e4979adfe4f35c44786a1b79db9455ab56a02f28dfc6ae1cfb8d658bd92793d87e6aef98fa8b21c5ffdef1016893887199011953cae6744e74efefbd186af"
-deps = ["blobstore", "cli", "clocks", "config", "filesystem", "golem-1.x", "golem-agent", "golem-durability", "golem-rpc", "http", "io", "keyvalue", "logging", "random", "sockets"]
+deps = ["all", "blobstore", "cli", "clocks", "config", "filesystem", "golem-1.x", "golem-agent", "golem-durability", "golem-rpc", "http", "io", "keyvalue", "logging", "random", "sockets"]
 
 [all]
-url = "https://github.com/golemcloud/golem-wit/archive/v1.3.0-dev.6.tar.gz"
 sha256 = "6ac4f1553003474229bb40a885b48d1eaa4bea2f9d679a115da9afede30b5ad4"
 sha512 = "ced8c18a35dc04123386465d98d2aeba54c486e4e22a30e7efac0548974e176528fcba36c64942d67fa35d9135806ff0fcde259eb4af051c4a29fcb397e9af1c"
-deps = ["blobstore", "cli", "clocks", "config", "filesystem", "golem-1.x", "golem-durability", "golem-rpc", "http", "io", "keyvalue", "logging", "random", "sockets"]
 
 [blobstore]
 sha256 = "f7857c92a8d540ebfe10c9ac3b8cfe160d2303ca638d59aec3c18406e084d367"
@@ -65,11 +63,6 @@ sha512 = "ceb68410bb46176051b0eee54e1a60831ca2fe820892c5f5f739e76efd4fe6ee6dc5e3
 [random]
 sha256 = "dd0c91e7125172eb8fd4568e15ad9fc7305643015e6ece4396c3cc5e8c2bf79a"
 sha512 = "d1ca2e7b0616a94a3b39d1b9450bb3fb595b01fd94a8626ad75433038dde40988ecb41ab93a374d569ab72163af3b30038d7bfc3499b9c07193181f4f1d9292a"
-
-[rdbms]
-url = "https://github.com/golemcloud/wasi-rdbms/archive/golem-rdbms.tar.gz"
-sha256 = "708eab2beaf1a6a5621be4767aceb9e4f2766eaff1f0e3aa048376b28356517d"
-sha512 = "4b2375c120b453d6f1e8ac1e00c35d752fa1159bedf48183c2a804b823800011b99e16dba6a7c95c3e14a9e11586b37415d333ec56d05cba3e954e27a971f88f"
 
 [sockets]
 sha256 = "2bc0f65a8046207ee3330ad7d63f6fafeafd4cc0ea4084f081bd5e4f7b177e74"

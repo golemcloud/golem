@@ -47,9 +47,6 @@ pub mod api;
 pub mod blobstore;
 pub mod compatibility;
 pub mod durability;
-pub mod guest_languages1;
-pub mod guest_languages2;
-pub mod guest_languages3;
 pub mod hot_update;
 pub mod http;
 pub mod indexed_storage;
@@ -75,29 +72,23 @@ tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 tag_suite!(http, group1);
 tag_suite!(rdbms, group1);
+tag_suite!(agent, group1);
 
-tag_suite!(guest_languages1, group2);
-tag_suite!(agent, group2);
+tag_suite!(transactions, group2);
+tag_suite!(wasi, group2);
+tag_suite!(revert, group2);
+tag_suite!(durability, group2);
 
-tag_suite!(transactions, group3);
-tag_suite!(wasi, group3);
-tag_suite!(revert, group3);
-tag_suite!(durability, group3);
+tag_suite!(scalability, group3);
+tag_suite!(hot_update, group3);
+tag_suite!(rust_rpc, group3);
+tag_suite!(rust_rpc_stubless, group3);
 
-tag_suite!(scalability, group4);
-tag_suite!(hot_update, group4);
-tag_suite!(rust_rpc, group4);
-tag_suite!(rust_rpc_stubless, group4);
+tag_suite!(ts_rpc1, group4);
+tag_suite!(ts_rpc1_stubless, group4);
 
-tag_suite!(guest_languages2, group5);
-
-tag_suite!(ts_rpc1, group6);
-tag_suite!(ts_rpc1_stubless, group6);
-
-tag_suite!(guest_languages3, group7);
-
-tag_suite!(ts_rpc2, group8);
-tag_suite!(ts_rpc2_stubless, group8);
+tag_suite!(ts_rpc2, group5);
+tag_suite!(ts_rpc2_stubless, group5);
 
 tag_suite!(rdbms_service, rdbms_service);
 

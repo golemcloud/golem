@@ -1,0 +1,11 @@
+{
+  "name": "app",
+  "dependencies": {
+    "@golemcloud/golem-ts-sdk": "0.0.1-dev.14"
+  },
+  "scripts": {
+    "update": "wit-deps update",
+    "generate": "wasm-rquickjs generate-wrapper-crate --wit wit --output dist/wrapper --world golem-agent --js-modules '@golemcloud/golem-ts-sdk=node_modules/@golemcloud/golem-ts-sdk/dist/index.mjs' --js-modules 'user=@composition'",
+    "build": "cargo component build --manifest-path=dist/wrapper/Cargo.toml --release"
+  }
+}

@@ -13,13 +13,13 @@ name = "golem-debugging-service"
 path = "src/server.rs"
 
 [dependencies]
-golem-worker-executor = { path = "../golem-worker-executor", version = "=0.0.0" }
-golem-common = { path = "../golem-common", version = "=0.0.0" }
-golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
-golem-rib = { path = "../golem-rib", version = "=0.0.0" }
-golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
+golem-worker-executor = { workspace = true }
+golem-common = { workspace = true, default-features = true }
+golem-api-grpc = { workspace = true }
+golem-rib = { workspace = true, default-features = true }
+golem-service-base = { workspace = true }
+golem-wasm-ast = { workspace = true, default-features = true }
+golem-wasm-rpc = { workspace = true, default-features = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -49,14 +49,14 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 url = { workspace = true }
 
-wasmtime = { version = "=33.0.0", features = ["component-model"] }
-wasmtime-wasi = { version = "=33.0.0" }
-wasmtime-wasi-http = { version = "=33.0.0" }
+wasmtime = { workspace = true, features = ["component-model"] }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
 
 
 [dev-dependencies]
 test-r = { workspace = true }
-golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
+golem-test-framework = { workspace = true }
 
 [[test]]
 name = "integration"
