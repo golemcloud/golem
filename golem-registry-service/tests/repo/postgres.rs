@@ -23,6 +23,7 @@ use golem_registry_service::repo::environment::DbEnvironmentRepo;
 use golem_registry_service::repo::http_api_definition::DbHttpApiDefinitionRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
+use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
@@ -103,6 +104,7 @@ async fn deps(db: &PostgresDb) -> Deps {
         http_api_definition_repo: Box::new(DbHttpApiDefinitionRepo::logged(db.pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
         deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
+        plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
     };
     deps.setup().await;
     deps

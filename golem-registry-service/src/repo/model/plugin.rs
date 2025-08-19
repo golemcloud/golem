@@ -12,12 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::model::audit::DeletableRevisionAuditFields;
 use sqlx::FromRow;
+use sqlx::types::Json;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct PluginIdentityRecord {
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct PluginRecord {
     pub plugin_id: Uuid,
+    pub account_id: Uuid,
+
     pub name: String,
     pub version: String,
+
+    #[sqlx(flatten)]
+    pub audit: DeletableRevisionAuditFields,
+
+    pub description: String,
+    pub icon: Vec<u8>,
+    pub homepage: String,
+    pub plugin_type: i16,
+
+    // for ComponentTransformer plugin type
+    pub provided_wit_package: Option<String>,
+    pub json_schema: Option<Json<serde_json::Value>>,
+    pub validate_url: Option<String>,
+    pub transform_url: Option<String>,
+
+    // for OplogProcessor plugin type
+    pub component_id: Option<Uuid>,
+    pub component_revision_id: Option<i64>,
+
+    // for LibraryPlugin plugin type
+    pub blob_storage_key: Option<String>,
 }
