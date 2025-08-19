@@ -120,10 +120,14 @@ wit-component = { workspace = true }
 wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 
-[dev-dependencies]
+# --- added for MCP HTTP server mode ---
+axum = { workspace = true }     # move from dev-dependencies → dependencies
+globwalk = "0.9"                # for manifest discovery
 
+
+[dev-dependencies]
 # External deps
-axum = { workspace = true }
+# (remove axum from here if it’s present)
 log = { workspace = true }
 pretty_env_logger = { workspace = true }
 reqwest = { workspace = true }
