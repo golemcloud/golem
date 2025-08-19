@@ -261,8 +261,6 @@ impl Display for Rebalance {
 mod tests {
     use test_r::test;
 
-    use tracing_test::traced_test;
-
     use golem_common::model::ShardId;
 
     use crate::model::{Pod, RoutingTable};
@@ -364,7 +362,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn rebalance_empty_table() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 1000,
@@ -377,7 +374,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn rebalance_single_pod_no_unassigned() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 4,
@@ -390,7 +386,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn rebalance_single_pod_unassigned() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 6,
@@ -405,7 +400,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn rebalance_three_balanced_pods_no_unassigned() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 9,
@@ -423,7 +417,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn rebalance_three_balanced_pods_unassigned() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 9,
@@ -451,7 +444,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn rebalance_one_new_pod() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 9,
@@ -487,7 +479,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn rebalance_one_new_pod_with_threshold() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 9,
@@ -523,7 +514,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn rebalance_one_new_pod_after_removing_two() {
         // 3,4,5 and 9,10,11 are unassigned
         // pod3 is empty
@@ -561,7 +551,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn rebalance_two_new_pods() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 9,
@@ -593,7 +582,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn rebalance_two_new_pods_after_removing_one() {
         // pod1 and pod2 has 4-4 shards because previously we had 3 pods for 12 shards
         // 4,5,6,11 are unassigned
@@ -634,7 +622,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn two_empty_pods_one_filled() {
         // pod2 is empty
         // pod3 is new and empty
@@ -658,7 +645,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn initial_assign_is_ordered_and_no_rebalance_needed() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 8,
@@ -683,7 +669,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn initial_assign_is_ordered_and_no_rebalance_needed_with_less_then_opt() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 14,
@@ -708,7 +693,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn initial_assign_is_ordered_and_no_rebalance_with_some_saturated_pod() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 8,
