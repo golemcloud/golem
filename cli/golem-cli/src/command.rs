@@ -1132,6 +1132,24 @@ pub mod worker {
             /// Idempotency key of the invocation to be cancelled
             idempotency_key: IdempotencyKey,
         },
+        /// List files in a worker's directory
+        Files {
+            #[command(flatten)]
+            worker_name: WorkerNameArg,
+            /// Path to the directory to list files from
+            #[arg(default_value = "/")]
+            path: String,
+        },
+        /// Get contents of a file in a worker
+        FileContents {
+            #[command(flatten)]
+            worker_name: WorkerNameArg,
+            /// Path to the file to get contents from
+            path: String,
+            /// Local path (including filename) to save the file contents. Optional.
+            #[arg(long)]
+            output: Option<String>,
+        },
     }
 }
 
