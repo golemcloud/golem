@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::declare_structs;
 use crate::model::agent::AgentType;
 use crate::model::component::ComponentName;
 use crate::model::component::{
     ComponentFileOptions, ComponentFilePath, ComponentRevision, ComponentType,
 };
 use crate::model::component_metadata::DynamicLinkedInstance;
+use crate::model::plugin::ComponentTransformerDefinition;
+use crate::model::plugin::OplogProcessorDefinition;
 use crate::model::plugin::{PluginInstallationAction, PluginScope};
+use crate::{declare_structs, declare_unions};
 use std::collections::{BTreeMap, HashMap};
 
 declare_structs! {
-
     pub struct CreateComponentRequestMetadata {
         pub component_name: ComponentName,
         pub component_type: Option<ComponentType>,
@@ -33,7 +34,7 @@ declare_structs! {
         pub agent_types: Option<Vec<AgentType>>
     }
 
-    pub struct UpdateComponentRequestComponentMetadata {
+    pub struct UpdateComponentRequestMetadata {
         pub previous_version: ComponentRevision,
         pub component_type: Option<ComponentType>,
         pub removed_files: Option<Vec<ComponentFilePath>>,
@@ -42,6 +43,16 @@ declare_structs! {
         pub env: Option<BTreeMap<String, String>>,
         pub agent_types: Option<Vec<AgentType>>,
         pub plugin_installation_actions: Option<Vec<PluginInstallationAction>>,
+    }
+
+    pub struct CreatePluginRequest {
+        pub name: String,
+        pub version: String,
+        pub description: String,
+        pub icon: Vec<u8>,
+        pub homepage: String,
+        pub specs: PluginTypeSpecificCreation,
+        pub scope: PluginScope,
     }
 
     pub struct CreateLibraryPluginRequestMetadata {
@@ -60,4 +71,11 @@ declare_structs! {
         pub scope: PluginScope
     }
 
+}
+
+declare_unions! {
+    pub enum PluginTypeSpecificCreation {
+        ComponentTransformer(ComponentTransformerDefinition),
+        OplogProcessor(OplogProcessorDefinition),
+    }
 }

@@ -1,0 +1,43 @@
+[package]
+name = "golem_it"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []
+
+[dependencies]
+# To use common shared libs, use the following:
+# common-lib = { path = "../../common-rust/common-lib" }
+
+golem-rust = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wit-bindgen-rt = { workspace = true }
+
+[package.metadata.component.target]
+path = "wit-generated"
+
+[package.metadata.component.bindings.with]
+"wasi:io/poll@0.2.3" = "golem_rust::wasm_rpc::wasi::io::poll"
+"wasi:clocks/monotonic-clock@0.2.3" = "golem_rust::bindings::wasi::clocks::monotonic_clock"
+"wasi:clocks/wall-clock@0.2.3" = "golem_rust::wasm_rpc::wasi::clocks::wall_clock"
+"golem:rpc/types@0.2.2" = "golem_rust::wasm_rpc::golem_rpc_0_2_x::types"
+"golem:api/host@1.1.7" = "golem_rust::bindings::golem::api::host"
+
+[package.metadata.component.target.dependencies]
+"wasi:io" = { path = "wit-generated/deps/io" }
+"wasi:clocks" = { path = "wit-generated/deps/clocks" }
+"golem:rpc" = { path = "wit-generated/deps/golem-rpc" }
+"golem:api" = { path = "wit-generated/deps/golem-1.x" }
+"golem:agent" = { path = "wit-generated/deps/golem-agent" }
+"golem:it-exports" = { path = "wit-generated/deps/golem_it-exports" }
+
+[package.metadata.component.bindings]
+# See https://github.com/bytecodealliance/cargo-component/blob/main/src/metadata.rs#L62
+
+# derives = ["serde::Serialize", "serde::Deserialize"]
+# generate_unused_types = true

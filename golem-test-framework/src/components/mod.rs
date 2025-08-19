@@ -16,7 +16,6 @@ use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatu
 use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
 use golem_client::api::HealthCheckClient;
 use golem_client::Security;
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::Child;
 use std::str::FromStr;
@@ -27,19 +26,21 @@ use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
 use url::Url;
 
-pub mod cloud_service;
-pub mod component_compilation_service;
-pub mod component_service;
+// pub mod cloud_service;
+// pub mod component_compilation_service;
+// pub mod component_service;
+pub mod blob_storage;
 mod docker;
 pub mod k8s;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
+pub mod registry_service;
 pub mod service;
-pub mod shard_manager;
-pub mod worker_executor;
-pub mod worker_executor_cluster;
-pub mod worker_service;
+// pub mod shard_manager;
+// pub mod worker_executor;
+// pub mod worker_executor_cluster;
+// pub mod worker_service;
 
 pub struct ChildProcessLogger {
     _out_handle: JoinHandle<()>,
@@ -170,72 +171,72 @@ pub async fn wait_for_startup_http(host: &str, http_port: u16, name: &str, timeo
     }
 }
 
-struct EnvVarBuilder {
-    env_vars: HashMap<String, String>,
-}
+// struct EnvVarBuilder {
+//     env_vars: HashMap<String, String>,
+// }
 
-impl EnvVarBuilder {
-    fn default() -> Self {
-        Self {
-            env_vars: HashMap::new(),
-        }
-    }
+// impl EnvVarBuilder {
+//     fn default() -> Self {
+//         Self {
+//             env_vars: HashMap::new(),
+//         }
+//     }
 
-    fn golem_service(verbosity: Level) -> Self {
-        Self::default()
-            .with_rust_log_with_dep_defaults(verbosity)
-            .with_rust_back_log()
-            .with_tracing_from_env()
-    }
+//     fn golem_service(verbosity: Level) -> Self {
+//         Self::default()
+//             .with_rust_log_with_dep_defaults(verbosity)
+//             .with_rust_back_log()
+//             .with_tracing_from_env()
+//     }
 
-    fn with(mut self, name: &str, value: String) -> Self {
-        self.env_vars.insert(name.to_string(), value);
-        self
-    }
+//     fn with(mut self, name: &str, value: String) -> Self {
+//         self.env_vars.insert(name.to_string(), value);
+//         self
+//     }
 
-    fn with_str(self, name: &str, value: &str) -> Self {
-        self.with(name, value.to_string())
-    }
+//     fn with_str(self, name: &str, value: &str) -> Self {
+//         self.with(name, value.to_string())
+//     }
 
-    fn with_all(mut self, env_vars: HashMap<String, String>) -> Self {
-        self.env_vars.extend(env_vars);
-        self
-    }
+//     fn with_all(mut self, env_vars: HashMap<String, String>) -> Self {
+//         self.env_vars.extend(env_vars);
+//         self
+//     }
 
-    fn with_rust_log_with_dep_defaults(self, verbosity: Level) -> Self {
-        let rust_log_level_str = verbosity.as_str().to_lowercase();
-        self.with(
-            "RUST_LOG",
-            format!(
-                "{rust_log_level_str},\
-                cranelift_codegen=warn,\
-                wasmtime_cranelift=warn,\
-                wasmtime_jit=warn,\
-                h2=warn,\
-                hyper=warn,\
-                tower=warn,\
-                fred=warn"
-            ),
-        )
-    }
+//     fn with_rust_log_with_dep_defaults(self, verbosity: Level) -> Self {
+//         let rust_log_level_str = verbosity.as_str().to_lowercase();
+//         self.with(
+//             "RUST_LOG",
+//             format!(
+//                 "{rust_log_level_str},\
+//                 cranelift_codegen=warn,\
+//                 wasmtime_cranelift=warn,\
+//                 wasmtime_jit=warn,\
+//                 h2=warn,\
+//                 hyper=warn,\
+//                 tower=warn,\
+//                 fred=warn"
+//             ),
+//         )
+//     }
 
-    fn with_rust_back_log(self) -> Self {
-        self.with_str("RUST_BACKLOG", "1")
-    }
+//     fn with_rust_back_log(self) -> Self {
+//         self.with_str("RUST_BACKLOG", "1")
+//     }
 
-    fn with_tracing_from_env(mut self) -> Self {
-        for (name, value) in
-            std::env::vars().filter(|(name, _value)| name.starts_with("GOLEM__TRACING_"))
-        {
-            self.env_vars.insert(name, value);
-        }
-        self
-    }
+//     fn with_tracing_from_env(mut self) -> Self {
+//         for (name, value) in
+//             std::env::vars().filter(|(name, _value)| name.starts_with("GOLEM__TRACING_"))
+//         {
+//             self.env_vars.insert(name, value);
+//         }
+//         self
+//     }
 
-    fn build(self) -> HashMap<String, String> {
-        self.env_vars
-    }
-}
+//     fn build(self) -> HashMap<String, String> {
+//         self.env_vars
+//     }
+// }
 
 fn new_reqwest_client() -> reqwest::Client {
     reqwest::ClientBuilder::new()

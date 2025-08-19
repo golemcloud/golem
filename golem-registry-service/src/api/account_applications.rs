@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::services::application::ApplicationService;
 use golem_common::api::Page;
-use golem_common::api::application::CreateApplicationRequest;
 use golem_common::model::account::AccountId;
-use golem_common::model::application::Application;
+use golem_common::model::application::{Application, NewApplicationData};
 use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -24,12 +24,27 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
+use std::sync::Arc;
 use tracing::Instrument;
+use uuid::Uuid;
 
-pub struct AccountApplicationsApi {}
+pub struct AccountApplicationsApi {
+    application_service: Arc<ApplicationService>,
+}
 
-#[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Account, tag = ApiTags::Application)]
+#[OpenApi(
+    prefix_path = "/v1/accounts",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Account,
+    tag = ApiTags::Application
+)]
 impl AccountApplicationsApi {
+    pub fn new(application_service: Arc<ApplicationService>) -> Self {
+        Self {
+            application_service,
+        }
+    }
+
     /// Get all applications in the account
     #[oai(
         path = "/:account_id/apps",
@@ -110,7 +125,7 @@ impl AccountApplicationsApi {
     pub async fn create_application(
         &self,
         account_id: Path<AccountId>,
-        data: Json<CreateApplicationRequest>,
+        data: Json<NewApplicationData>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Application>> {
         let record = recorded_http_api_request!(
@@ -130,10 +145,17 @@ impl AccountApplicationsApi {
 
     async fn create_application_internal(
         &self,
-        _account_id: AccountId,
-        _data: CreateApplicationRequest,
+        account_id: AccountId,
+        data: NewApplicationData,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Application>> {
-        todo!()
+        // TODO
+        let actor = AccountId(Uuid::nil());
+        let result = self
+            .application_service
+            .create(account_id, data, actor)
+            .await?;
+
+        Ok(Json(result))
     }
 }

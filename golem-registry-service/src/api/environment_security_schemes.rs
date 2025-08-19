@@ -27,7 +27,12 @@ use tracing::Instrument;
 
 pub struct EnvironmentSecuritySchemesApi {}
 
-#[OpenApi(prefix_path = "/v1/envs", tag = ApiTags::Environment, tag = ApiTags::ApiSecurity)]
+#[OpenApi(
+    prefix_path = "/v1/envs",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Environment,
+    tag = ApiTags::ApiSecurity
+)]
 impl EnvironmentSecuritySchemesApi {
     /// Get all security schemes in the environment
     #[oai(

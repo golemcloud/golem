@@ -1,0 +1,29 @@
+[package]
+name = "component_name"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []
+
+[dependencies]
+# To use common shared libs, use the following:
+# common-lib = { path = "../../common-rust/common-lib" }
+
+futures = { version = "0.3.31", features = [] }
+futures-concurrency = "7.6.3"
+golem-rust = { workspace = true }
+reqwest = { workspace = true, features=["async"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasi = "0.12.1+wasi-0.2.0"
+wasi-async-runtime = "0.1.2"
+wit-bindgen-rt = { workspace = true }
+
+[package.metadata.component.bindings]
+# See https://github.com/bytecodealliance/cargo-component/blob/main/src/metadata.rs#L62
+
+# derives = ["serde::Serialize", "serde::Deserialize"]
+# generate_unused_types = true

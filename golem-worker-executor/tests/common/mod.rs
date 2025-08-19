@@ -7,6 +7,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataSuccessResponse,
 };
 use golem_common::config::RedisConfig;
+use golem_common::model::agent::DataValue;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -33,7 +34,7 @@ use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, WasmRpc};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{HostFutureInvokeResult, Pollable};
-use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
@@ -42,7 +43,7 @@ use golem_worker_executor::model::{
     CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use golem_worker_executor::preview2::golem::durability;
-use golem_worker_executor::preview2::golem_api_1_x;
+use golem_worker_executor::preview2::{golem_agent, golem_api_1_x};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
@@ -79,9 +80,9 @@ use golem_worker_executor::services::{
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    AgentStore, DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
+    IndexedResourceStore, InvocationContextManagement, InvocationHooks, InvocationManagement,
+    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
@@ -369,27 +370,59 @@ impl FuelManagement for TestWorkerCtx {
 impl IndexedResourceStore for TestWorkerCtx {
     fn get_indexed_resource(
         &self,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
     ) -> Option<WorkerResourceId> {
         self.durable_ctx
-            .get_indexed_resource(resource_name, resource_params)
+            .get_indexed_resource(resource_owner, resource_name, resource_params)
     }
 
     async fn store_indexed_resource(
         &mut self,
+        resource_owner: &str,
         resource_name: &str,
         resource_params: &[String],
         resource: WorkerResourceId,
     ) {
         self.durable_ctx
-            .store_indexed_resource(resource_name, resource_params, resource)
+            .store_indexed_resource(resource_owner, resource_name, resource_params, resource)
             .await
     }
 
-    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
+    fn drop_indexed_resource(
+        &mut self,
+        resource_owner: &str,
+        resource_name: &str,
+        resource_params: &[String],
+    ) {
         self.durable_ctx
-            .drop_indexed_resource(resource_name, resource_params)
+            .drop_indexed_resource(resource_owner, resource_name, resource_params)
+    }
+}
+
+#[async_trait]
+impl AgentStore for TestWorkerCtx {
+    async fn store_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: DataValue,
+    ) {
+        self.durable_ctx
+            .store_agent_instance(agent_type, agent_id, parameters)
+            .await;
+    }
+
+    async fn remove_agent_instance(
+        &mut self,
+        agent_type: String,
+        agent_id: String,
+        parameters: DataValue,
+    ) {
+        self.durable_ctx
+            .remove_agent_instance(agent_type, agent_id, parameters)
+            .await;
     }
 }
 
@@ -582,15 +615,15 @@ impl ResourceStore for TestWorkerCtx {
         self.durable_ctx.self_uri()
     }
 
-    async fn add(&mut self, resource: ResourceAny) -> u64 {
-        self.durable_ctx.add(resource).await
+    async fn add(&mut self, resource: ResourceAny, name: ResourceTypeId) -> u64 {
+        self.durable_ctx.add(resource, name).await
     }
 
-    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+    async fn get(&mut self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         ResourceStore::get(&mut self.durable_ctx, resource_id).await
     }
 
-    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+    async fn borrow(&self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         self.durable_ctx.borrow(resource_id).await
     }
 }
@@ -1122,6 +1155,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem_rpc_0_2_x::types::add_to_linker_get_host(
             &mut linker,
             get_durable_ctx,

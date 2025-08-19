@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use futures::Stream;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
-use futures::Stream;
 use std::convert::Infallible;
 use std::fmt::{Debug, Display};
 use std::future::Future;
@@ -100,9 +100,7 @@ pub type BoxReplayableStream<'a, Item, Error> =
     Box<dyn ErasedReplayableStream<Item = Item, Error = Error> + 'a>;
 
 /// Specialized impls for the two common ways of using dynsafe objects
-impl<Item: 'static, Error> ReplayableStream
-    for &'_ dyn ErasedReplayableStream<Item = Item, Error = Error>
-{
+impl<Item: 'static, Error> ReplayableStream for &'_ dyn ErasedReplayableStream<Item = Item, Error = Error> {
     type Item = Item;
     type Error = Error;
 
@@ -204,10 +202,10 @@ impl<E: Debug + Display> std::error::Error for HashingError<E> {}
 
 pub mod internal {
     use super::{ErasedReplayableStream, ReplayableStream};
-    use futures::future::BoxFuture;
-    use futures::stream::BoxStream;
     use futures::Stream;
     use futures::StreamExt;
+    use futures::future::BoxFuture;
+    use futures::stream::BoxStream;
 
     pub struct Erased<T>(pub(super) T);
 

@@ -420,6 +420,7 @@ impl<'de, Context> BorrowDecode<'de, Context> for ResourceMode {
 impl Encode for NamedWitTypeNode {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
         self.name.encode(encoder)?;
+        self.owner.encode(encoder)?;
         self.type_.encode(encoder)
     }
 }
@@ -427,8 +428,9 @@ impl Encode for NamedWitTypeNode {
 impl<Context> Decode<Context> for NamedWitTypeNode {
     fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let name = Option::<String>::decode(decoder)?;
+        let owner = Option::<String>::decode(decoder)?;
         let type_ = WitTypeNode::decode(decoder)?;
-        Ok(NamedWitTypeNode { name, type_ })
+        Ok(NamedWitTypeNode { name, owner, type_ })
     }
 }
 
@@ -437,8 +439,9 @@ impl<'de, Context> BorrowDecode<'de, Context> for NamedWitTypeNode {
         decoder: &mut D,
     ) -> Result<Self, DecodeError> {
         let name = Option::<String>::borrow_decode(decoder)?;
+        let owner = Option::<String>::borrow_decode(decoder)?;
         let type_ = WitTypeNode::borrow_decode(decoder)?;
-        Ok(NamedWitTypeNode { name, type_ })
+        Ok(NamedWitTypeNode { name, owner, type_ })
     }
 }
 

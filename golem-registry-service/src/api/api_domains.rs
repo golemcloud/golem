@@ -27,7 +27,11 @@ use tracing::Instrument;
 
 pub struct ApiDomainsApi {}
 
-#[OpenApi(prefix_path = "/v1/domains", tag = ApiTags::ApiDomain)]
+#[OpenApi(
+    prefix_path = "/v1/domains",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::ApiDomain
+)]
 impl ApiDomainsApi {
     /// Get api domain by id
     #[oai(path = "/:domain_id", method = "get", operation_id = "get_domain")]

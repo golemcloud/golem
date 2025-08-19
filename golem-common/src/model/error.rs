@@ -14,18 +14,26 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 pub struct ErrorsBody {
     pub errors: Vec<String>,
+
+    #[oai(skip)]
+    #[serde(skip)]
+    pub cause: Option<anyhow::Error>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 pub struct ErrorBody {
     pub error: String,
+
+    #[oai(skip)]
+    #[serde(skip)]
+    pub cause: Option<anyhow::Error>,
 }
 
 #[cfg(feature = "protobuf")]
@@ -35,7 +43,10 @@ mod protobuf {
 
     impl From<golem_api_grpc::proto::golem::common::ErrorBody> for ErrorBody {
         fn from(value: golem_api_grpc::proto::golem::common::ErrorBody) -> Self {
-            Self { error: value.error }
+            Self {
+                error: value.error,
+                cause: None,
+            }
         }
     }
 
@@ -43,6 +54,7 @@ mod protobuf {
         fn from(value: golem_api_grpc::proto::golem::common::ErrorsBody) -> Self {
             Self {
                 errors: value.errors,
+                cause: None,
             }
         }
     }

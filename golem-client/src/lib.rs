@@ -14,7 +14,7 @@
 
 use self::model::{
     CreateAppPluginRequestMetadata, CreateComponentRequestMetadata,
-    CreateLibraryPluginRequestMetadata, UpdateComponentRequestComponentMetadata,
+    CreateLibraryPluginRequestMetadata, UpdateComponentRequestMetadata,
 };
 use crate::model::MultipartField;
 
@@ -33,7 +33,7 @@ impl MultipartField for CreateComponentRequestMetadata {
     }
 }
 
-impl MultipartField for UpdateComponentRequestComponentMetadata {
+impl MultipartField for UpdateComponentRequestMetadata {
     fn to_multipart_field(&self) -> String {
         serde_json::to_string(&self).unwrap()
     }

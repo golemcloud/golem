@@ -1,0 +1,10 @@
+See the documentation about installing tooling: https://learn.golem.cloud/ts-language-guide/setup
+
+First time node package install:
+  golem-cli app ts-npm-install
+
+Generate wit and bindings, build and link component:
+  golem-cli app build
+
+Deploy the component:
+  golem-cli app deploy

@@ -16,6 +16,8 @@ pub use crate::base_model::OplogIndex;
 use crate::model::account::AccountId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
+use crate::model::AgentInstanceKey;
+use crate::model::DataValue;
 use crate::model::{
     ComponentRevision, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId, WorkerInvocation,
 };
@@ -26,6 +28,7 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
+use golem_wasm_rpc::wasmtime::ResourceTypeId;
 use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
@@ -198,6 +201,7 @@ impl Display for WorkerResourceId {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct IndexedResourceKey {
+    pub resource_owner: String,
     pub resource_name: String,
     pub resource_params: Vec<String>,
 }
@@ -358,17 +362,20 @@ pub enum OplogEntry {
     CreateResource {
         timestamp: Timestamp,
         id: WorkerResourceId,
+        resource_type_id: ResourceTypeId,
     },
     /// Dropped a resource instance
     DropResource {
         timestamp: Timestamp,
         id: WorkerResourceId,
+        resource_type_id: ResourceTypeId,
     },
     /// Adds additional information for a created resource instance
     DescribeResource {
         timestamp: Timestamp,
         id: WorkerResourceId,
-        indexed_resource: IndexedResourceKey,
+        resource_type_id: ResourceTypeId,
+        indexed_resource_parameters: Vec<String>,
     },
     /// The worker emitted a log message
     Log {
@@ -463,6 +470,17 @@ pub enum OplogEntry {
     ChangePersistenceLevel {
         timestamp: Timestamp,
         level: PersistenceLevel,
+    },
+    /// Created an agent instance
+    CreateAgentInstance {
+        timestamp: Timestamp,
+        key: AgentInstanceKey,
+        parameters: DataValue,
+    },
+    /// Dropped an agent instance
+    DropAgentInstance {
+        timestamp: Timestamp,
+        key: AgentInstanceKey,
     },
 }
 
@@ -609,28 +627,32 @@ impl OplogEntry {
         }
     }
 
-    pub fn create_resource(id: WorkerResourceId) -> OplogEntry {
+    pub fn create_resource(id: WorkerResourceId, resource_type_id: ResourceTypeId) -> OplogEntry {
         OplogEntry::CreateResource {
             timestamp: Timestamp::now_utc(),
             id,
+            resource_type_id,
         }
     }
 
-    pub fn drop_resource(id: WorkerResourceId) -> OplogEntry {
+    pub fn drop_resource(id: WorkerResourceId, resource_type_id: ResourceTypeId) -> OplogEntry {
         OplogEntry::DropResource {
             timestamp: Timestamp::now_utc(),
             id,
+            resource_type_id,
         }
     }
 
     pub fn describe_resource(
         id: WorkerResourceId,
-        indexed_resource: IndexedResourceKey,
+        resource_type_id: ResourceTypeId,
+        indexed_resource_parameters: Vec<String>,
     ) -> OplogEntry {
         OplogEntry::DescribeResource {
             timestamp: Timestamp::now_utc(),
             id,
-            indexed_resource,
+            resource_type_id,
+            indexed_resource_parameters,
         }
     }
 
@@ -716,6 +738,21 @@ impl OplogEntry {
         }
     }
 
+    pub fn create_agent_instance(key: AgentInstanceKey, parameters: DataValue) -> OplogEntry {
+        OplogEntry::CreateAgentInstance {
+            timestamp: Timestamp::now_utc(),
+            key,
+            parameters,
+        }
+    }
+
+    pub fn drop_agent_instance(key: AgentInstanceKey) -> OplogEntry {
+        OplogEntry::DropAgentInstance {
+            timestamp: Timestamp::now_utc(),
+            key,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -769,6 +806,8 @@ impl OplogEntry {
                 | OplogEntry::DeactivatePlugin { .. }
                 | OplogEntry::Revert { .. }
                 | OplogEntry::CancelPendingInvocation { .. }
+                | OplogEntry::CreateAgentInstance { .. }
+                | OplogEntry::DropAgentInstance { .. }
         )
     }
 
@@ -806,7 +845,9 @@ impl OplogEntry {
             | OplogEntry::StartSpan { timestamp, .. }
             | OplogEntry::FinishSpan { timestamp, .. }
             | OplogEntry::SetSpanAttribute { timestamp, .. }
-            | OplogEntry::ChangePersistenceLevel { timestamp, .. } => *timestamp,
+            | OplogEntry::ChangePersistenceLevel { timestamp, .. }
+            | OplogEntry::CreateAgentInstance { timestamp, .. }
+            | OplogEntry::DropAgentInstance { timestamp, .. } => *timestamp,
         }
     }
 
@@ -956,16 +997,22 @@ mod protobuf {
             golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
                 resource_name: value.resource_name,
                 resource_params: value.resource_params,
+                resource_owner: value.resource_owner,
             }
         }
     }
 
-    impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
-        fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
-            IndexedResourceKey {
+    impl TryFrom<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata,
+        ) -> Result<Self, Self::Error> {
+            Ok(IndexedResourceKey {
+                resource_owner: value.resource_owner,
                 resource_name: value.resource_name,
                 resource_params: value.resource_params,
-            }
+            })
         }
     }
 

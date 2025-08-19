@@ -604,8 +604,8 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         {
             enrich_function_name_by_target_information(
                 function_name,
-                target_component.metadata.root_package_name,
-                target_component.metadata.root_package_version,
+                target_component.metadata.root_package_name().clone(),
+                target_component.metadata.root_package_version().clone(),
             )
         } else {
             // If we cannot get the target metadata, we just go with the original function name

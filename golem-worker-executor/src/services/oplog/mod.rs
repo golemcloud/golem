@@ -71,14 +71,14 @@ pub trait OplogService: Debug + Send + Sync {
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + 'static>;
+    ) -> Arc<dyn Oplog>;
     async fn open(
         &self,
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + 'static>;
+    ) -> Arc<dyn Oplog>;
 
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
 
@@ -100,9 +100,7 @@ pub trait OplogService: Debug + Send + Sync {
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         assert!(
             start_idx <= last_idx,
-            "Invalid range passed to OplogService::read_range: start_idx = {}, last_idx = {}",
-            start_idx,
-            last_idx
+            "Invalid range passed to OplogService::read_range: start_idx = {start_idx}, last_idx = {last_idx}"
         );
 
         self.read(

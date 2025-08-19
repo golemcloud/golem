@@ -33,7 +33,11 @@ fn find_package_root(name: &str) -> String {
         .manifest_path("./Cargo.toml")
         .exec()
         .unwrap();
-    let package = metadata.packages.iter().find(|p| p.name == name).unwrap();
+    let package = metadata
+        .packages
+        .iter()
+        .find(|p| p.name.as_str() == name)
+        .unwrap();
     package.manifest_path.parent().unwrap().to_string()
 }
 

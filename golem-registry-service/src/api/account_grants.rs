@@ -26,7 +26,12 @@ use tracing::Instrument;
 
 pub struct AccountGrantsApi {}
 
-#[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Account, tag = ApiTags::Grant)]
+#[OpenApi(
+    prefix_path = "/v1/accounts",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Account,
+    tag = ApiTags::Grant
+)]
 impl AccountGrantsApi {
     #[oai(
         path = "/:account_id/grants",

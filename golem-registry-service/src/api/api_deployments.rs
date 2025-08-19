@@ -27,7 +27,11 @@ use tracing::Instrument;
 
 pub struct ApiDeploymentsApi {}
 
-#[OpenApi(prefix_path = "/v1/api-deployments", tag = ApiTags::ApiDeployment)]
+#[OpenApi(
+    prefix_path = "/v1/api-deployments",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::ApiDeployment
+)]
 impl ApiDeploymentsApi {
     /// Get an api-deployment by id
     #[oai(

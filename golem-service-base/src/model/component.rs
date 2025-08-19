@@ -12,60 +12,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::component::{ComponentName, VersionedComponentId};
-use golem_common::model::component::{ComponentType, InitialComponentFile};
-use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{PluginId, PluginInstallationId};
-use std::collections::HashMap;
+// #[derive(Debug, Clone)]
+// pub struct PluginInstallation {
+//     pub id: PluginInstallationId,
+//     pub plugin_id: PluginId,
+//     pub priority: i32,
+//     pub parameters: HashMap<String, String>,
+// }
 
-#[derive(Debug, Clone)]
-pub struct PluginInstallation {
-    pub id: PluginInstallationId,
-    pub plugin_id: PluginId,
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
-}
+// impl From<PluginInstallation> for golem_api_grpc::proto::golem::component::PluginInstallation {
+//     fn from(plugin_installation: PluginInstallation) -> Self {
+//         golem_api_grpc::proto::golem::component::PluginInstallation {
+//             id: Some(plugin_installation.id.into()),
+//             plugin_id: Some(plugin_installation.plugin_id.into()),
+//             priority: plugin_installation.priority,
+//             parameters: plugin_installation.parameters,
+//         }
+//     }
+// }
 
-impl From<PluginInstallation> for golem_api_grpc::proto::golem::component::PluginInstallation {
-    fn from(plugin_installation: PluginInstallation) -> Self {
-        golem_api_grpc::proto::golem::component::PluginInstallation {
-            id: Some(plugin_installation.id.into()),
-            plugin_id: Some(plugin_installation.plugin_id.into()),
-            priority: plugin_installation.priority,
-            parameters: plugin_installation.parameters,
-        }
-    }
-}
+// impl TryFrom<golem_api_grpc::proto::golem::component::PluginInstallation> for PluginInstallation {
+//     type Error = String;
 
-impl TryFrom<golem_api_grpc::proto::golem::component::PluginInstallation> for PluginInstallation {
-    type Error = String;
+//     fn try_from(
+//         proto: golem_api_grpc::proto::golem::component::PluginInstallation,
+//     ) -> Result<Self, Self::Error> {
+//         Ok(PluginInstallation {
+//             id: proto.id.ok_or("Missing id")?.try_into()?,
+//             plugin_id: proto.plugin_id.ok_or("Missing plugin id")?.try_into()?,
+//             priority: proto.priority,
+//             parameters: proto.parameters,
+//         })
+//     }
+// }
 
-    fn try_from(
-        proto: golem_api_grpc::proto::golem::component::PluginInstallation,
-    ) -> Result<Self, Self::Error> {
-        Ok(PluginInstallation {
-            id: proto.id.ok_or("Missing id")?.try_into()?,
-            plugin_id: proto.plugin_id.ok_or("Missing plugin id")?.try_into()?,
-            priority: proto.priority,
-            parameters: proto.parameters,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Component {
-    pub environment_id: EnvironmentId,
-    pub versioned_component_id: VersionedComponentId,
-    pub component_name: ComponentName,
-    pub component_size: u64,
-    pub metadata: ComponentMetadata,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub component_type: ComponentType,
-    pub files: Vec<InitialComponentFile>,
-    pub installed_plugins: Vec<PluginInstallation>,
-    pub env: HashMap<String, String>,
-}
+// #[derive(Debug, Clone)]
+// pub struct Component {
+//     pub environment_id: EnvironmentId,
+//     pub versioned_component_id: VersionedComponentId,
+//     pub component_name: ComponentName,
+//     pub component_size: u64,
+//     pub metadata: ComponentMetadata,
+//     pub created_at: chrono::DateTime<chrono::Utc>,
+//     pub component_type: ComponentType,
+//     pub files: Vec<InitialComponentFile>,
+//     pub installed_plugins: Vec<PluginInstallation>,
+//     pub env: HashMap<String, String>,
+// }
 
 // TODO:
 // impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {

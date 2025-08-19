@@ -12,36 +12,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::TokenId;
-use crate::model::account::AccountId;
+use crate::{declare_enums, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use anyhow::anyhow;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use std::fmt::Display;
+use std::str::FromStr;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct Token {
-    pub id: TokenId,
-    pub account_id: AccountId,
-    pub created_at: chrono::DateTime<Utc>,
-    pub expires_at: chrono::DateTime<Utc>,
+newtype_uuid!(OAuth2WebflowStateId);
+
+declare_transparent_newtypes! {
+    pub struct EncodedOAuth2DeviceflowSession(pub String);
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-pub struct TokenWithSecret {
-    pub data: Token,
-    pub secret: String,
+declare_structs! {
+    pub struct OAuth2DeviceflowData {
+        pub url: String,
+        pub user_code: String,
+        pub expires: chrono::DateTime<Utc>,
+        pub encoded_session: EncodedOAuth2DeviceflowSession,
+    }
+
+    pub struct OAuth2WebflowData {
+        pub url: String,
+        pub state: OAuth2WebflowStateId,
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct OAuth2Data {
-    pub url: String,
-    pub user_code: String,
-    pub expires: chrono::DateTime<Utc>,
-    pub encoded_session: String,
+declare_enums! {
+    pub enum OAuth2Provider {
+        Github,
+    }
+}
+
+impl Display for OAuth2Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OAuth2Provider::Github => write!(f, "github"),
+        }
+    }
+}
+
+impl FromStr for OAuth2Provider {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "github" => Ok(OAuth2Provider::Github),
+            _ => Err(anyhow!("Invalid OAuth2Provider: {s}")),
+        }
+    }
 }

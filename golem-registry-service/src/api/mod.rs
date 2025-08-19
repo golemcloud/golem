@@ -31,7 +31,6 @@ pub mod environment_security_schemes;
 pub mod environments;
 pub mod error;
 pub mod login;
-pub mod model;
 pub mod plugin_registration;
 pub mod security_schemes;
 pub mod tokens;
@@ -96,15 +95,15 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
         (
             HealthcheckApi,
             (
-                AccountApplicationsApi {},
+                AccountApplicationsApi::new(services.application_service.clone()),
                 AccountGrantsApi {},
-                AccountTokensApi {},
-                AccountsApi {},
+                AccountTokensApi::new(services.token_service.clone()),
+                AccountsApi::new(services.account_service.clone()),
             ),
             ApiDefinitionsApi {},
             ApiDeploymentsApi {},
             ApiDomainsApi {},
-            ApplicationsApi {},
+            ApplicationsApi::new(services.environment_service.clone()),
             CertificatesApi {},
             ComponentsApi::new(services.component_service.clone()),
             (
@@ -116,10 +115,13 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 EnvironmentsApi {},
                 EnvironmentSecuritySchemesApi {},
             ),
-            LoginApi {},
+            LoginApi::new(
+                services.login_system.clone(),
+                services.token_service.clone(),
+            ),
             PluginRegistrationApi {},
             SecuritySchemesApi {},
-            TokensApi {},
+            TokensApi::new(services.token_service.clone()),
         ),
         "Golem API",
         "1.0",

@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use bincode::Encode;
 use golem_common::model::auth::Namespace;
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerError,
+    DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
 use golem_common::model::public_oplog::{
     CreateParameters, DescribeResourceParameters, ExportedFunctionCompletedParameters,
@@ -34,6 +34,7 @@ use golem_common::model::{
     WorkerMetadata,
 };
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::wasmtime::ResourceTypeId;
 use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor::durable_host::http::serialized::{
     SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
@@ -414,15 +415,30 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::GrowMemory(GrowMemoryParameters { timestamp, delta }) => {
             Ok(OplogEntry::GrowMemory { timestamp, delta })
         }
-        PublicOplogEntry::CreateResource(ResourceParameters { timestamp, id }) => {
-            Ok(OplogEntry::CreateResource { timestamp, id })
-        }
-        PublicOplogEntry::DropResource(ResourceParameters { timestamp, id }) => {
-            Ok(OplogEntry::DropResource { timestamp, id })
-        }
+        PublicOplogEntry::CreateResource(ResourceParameters {
+            timestamp,
+            id,
+            owner,
+            name,
+        }) => Ok(OplogEntry::CreateResource {
+            timestamp,
+            id,
+            resource_type_id: ResourceTypeId { owner, name },
+        }),
+        PublicOplogEntry::DropResource(ResourceParameters {
+            timestamp,
+            id,
+            owner,
+            name,
+        }) => Ok(OplogEntry::DropResource {
+            timestamp,
+            id,
+            resource_type_id: ResourceTypeId { owner, name },
+        }),
         PublicOplogEntry::DescribeResource(DescribeResourceParameters {
             timestamp,
             id,
+            resource_owner,
             resource_name,
             resource_params,
         }) => {
@@ -434,10 +450,11 @@ fn get_oplog_entry_from_public_oplog_entry(
             Ok(OplogEntry::DescribeResource {
                 timestamp,
                 id,
-                indexed_resource: IndexedResourceKey {
-                    resource_name,
-                    resource_params,
+                resource_type_id: ResourceTypeId {
+                    owner: resource_owner,
+                    name: resource_name,
                 },
+                indexed_resource_parameters: resource_params,
             })
         }
         PublicOplogEntry::Log(LogParameters {
@@ -503,6 +520,19 @@ fn get_oplog_entry_from_public_oplog_entry(
             Ok(OplogEntry::ChangePersistenceLevel {
                 timestamp: change_persistence_level.timestamp,
                 level: change_persistence_level.persistence_level,
+            })
+        }
+        PublicOplogEntry::CreateAgentInstance(create_agent_instance) => {
+            Ok(OplogEntry::CreateAgentInstance {
+                timestamp: create_agent_instance.timestamp,
+                key: create_agent_instance.key,
+                parameters: create_agent_instance.parameters,
+            })
+        }
+        PublicOplogEntry::DropAgentInstance(drop_agent_instance) => {
+            Ok(OplogEntry::DropAgentInstance {
+                timestamp: drop_agent_instance.timestamp,
+                key: drop_agent_instance.key,
             })
         }
     }

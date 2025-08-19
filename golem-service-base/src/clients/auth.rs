@@ -12,28 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::authorised_request;
 use super::RemoteServiceConfig;
+use super::authorised_request;
 use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
 use golem_api_grpc::proto::golem::auth::v1::{
-    authorize_account_action_response, get_account_response, AuthorizeAccountActionRequest,
-    GetAccountRequest,
+    AuthorizeAccountActionRequest, GetAccountRequest, authorize_account_action_response,
+    get_account_response,
 };
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::worker::v1::{
-    worker_error, worker_execution_error, UnknownError, WorkerExecutionError,
+    UnknownError, WorkerExecutionError, worker_error, worker_execution_error,
 };
+use golem_common::SafeDisplay;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::AccountAction;
 use golem_common::model::auth::AuthCtx;
-use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
-use golem_common::SafeDisplay;
 use std::fmt::Display;
+use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tonic::Status;
 
 #[derive(Clone)]
 pub struct AuthService {
@@ -68,7 +68,7 @@ impl AuthService {
             "get-account",
             None,
             &self.retry_config,
-            &(self.auth_service_client.clone(), ctx.token_secret.value),
+            &(self.auth_service_client.clone(), ctx.token_secret.0),
             |(client, token)| {
                 Box::pin(async move {
                     let response = client
@@ -110,7 +110,7 @@ impl AuthService {
                 self.auth_service_client.clone(),
                 account_id.clone(),
                 action.clone(),
-                ctx.token_secret.value,
+                ctx.token_secret.0,
             ),
             |(client, account_id, action, token)| {
                 Box::pin(async move {

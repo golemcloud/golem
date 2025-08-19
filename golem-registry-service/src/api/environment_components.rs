@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use super::ApiResult;
-use super::model::CreateComponentRequest;
-use crate::model::component::Component;
 use crate::services::component::ComponentService;
 use golem_common::api::Page;
+use golem_common::api::component::CreateComponentRequestMetadata;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
+use golem_common::model::component::Component;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::ComponentType;
 use golem_common::model::deployment::DeploymentRevisionId;
@@ -26,8 +26,10 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
+use golem_service_base::poem::TempFileUpload;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
+use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -37,7 +39,12 @@ pub struct EnvironmentComponentsApi {
     component_service: Arc<ComponentService>,
 }
 
-#[OpenApi(prefix_path = "/v1/envs", tag = ApiTags::Environment,  tag = ApiTags::Component)]
+#[OpenApi(
+    prefix_path = "/v1/envs",
+    tag = ApiTags::RegistryService,
+    tag = ApiTags::Environment,
+    tag = ApiTags::Component
+)]
 impl EnvironmentComponentsApi {
     pub fn new(component_service: Arc<ComponentService>) -> Self {
         Self { component_service }
@@ -49,7 +56,7 @@ impl EnvironmentComponentsApi {
     #[oai(
         path = "/:environment_id/components",
         method = "post",
-        operation_id = "post_component"
+        operation_id = "create_component"
     )]
     async fn create_component(
         &self,
@@ -86,7 +93,7 @@ impl EnvironmentComponentsApi {
 
         let metadata = payload.metadata.0;
 
-        let response = self
+        let component: Component = self
             .component_service
             .create(
                 &environment_id,
@@ -100,9 +107,10 @@ impl EnvironmentComponentsApi {
                 metadata.agent_types.unwrap_or_default(),
                 &account_id,
             )
-            .await?;
+            .await?
+            .into();
 
-        Ok(Json(response))
+        Ok(Json(component))
     }
 
     /// Get all components in the environment
@@ -136,10 +144,13 @@ impl EnvironmentComponentsApi {
         environment_id: EnvironmentId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<Component>>> {
-        let components = self
+        let components: Vec<Component> = self
             .component_service
             .list_staged_components(&environment_id)
-            .await?;
+            .await?
+            .into_iter()
+            .map(Component::from)
+            .collect();
 
         Ok(Json(Page { values: components }))
     }
@@ -178,10 +189,11 @@ impl EnvironmentComponentsApi {
         component_name: ComponentName,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        let component = self
+        let component: Component = self
             .component_service
             .get_staged_component(environment_id, component_name)
-            .await?;
+            .await?
+            .into();
 
         Ok(Json(component))
     }
@@ -221,10 +233,13 @@ impl EnvironmentComponentsApi {
         deployment_revision_id: DeploymentRevisionId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<Component>>> {
-        let components = self
+        let components: Vec<Component> = self
             .component_service
             .list_deployed_components(&environment_id, deployment_revision_id)
-            .await?;
+            .await?
+            .into_iter()
+            .map(Component::from)
+            .collect();
 
         Ok(Json(Page { values: components }))
     }
@@ -272,10 +287,20 @@ impl EnvironmentComponentsApi {
         component_name: ComponentName,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
-        let component = self
+        let component: Component = self
             .component_service
             .get_deployed_component(environment_id, deployment_revision_id, component_name)
-            .await?;
+            .await?
+            .into();
+
         Ok(Json(component))
     }
+}
+
+#[derive(Multipart)]
+#[oai(rename_all = "camelCase")]
+struct CreateComponentRequest {
+    metadata: JsonField<CreateComponentRequestMetadata>,
+    component_wasm: Upload,
+    files: Option<TempFileUpload>,
 }

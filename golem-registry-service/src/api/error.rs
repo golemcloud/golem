@@ -12,14 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::account::AccountError;
+use crate::services::application::ApplicationError;
 use crate::services::component::ComponentError;
+use crate::services::environment::EnvironmentError;
+use crate::services::oauth2::OAuth2Error;
+use crate::services::plan::PlanError;
+use crate::services::token::TokenError;
 use golem_common::SafeDisplay;
-use golem_common::metrics::api::TraceErrorKind;
+use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
 
-#[derive(ApiResponse, Debug, Clone)]
+#[derive(ApiResponse, Debug)]
 pub enum ApiError {
     /// Invalid request, returning with a list of issues detected in the request
     #[oai(status = 400)]
@@ -43,7 +49,16 @@ pub enum ApiError {
     InternalError(Json<ErrorBody>),
 }
 
-impl TraceErrorKind for ApiError {
+impl ApiError {
+    pub fn bad_request(message: String) -> Self {
+        Self::BadRequest(Json(ErrorsBody {
+            errors: vec![message],
+            cause: None,
+        }))
+    }
+}
+
+impl ApiErrorDetails for ApiError {
     fn trace_error_kind(&self) -> &'static str {
         match &self {
             ApiError::BadRequest(_) => "BadRequest",
@@ -67,30 +82,104 @@ impl TraceErrorKind for ApiError {
             ApiError::LimitExceeded(_) => true,
         }
     }
+
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
+        match self {
+            ApiError::BadRequest(inner) => inner.cause.take(),
+            ApiError::NotFound(inner) => inner.cause.take(),
+            ApiError::Unauthorized(inner) => inner.cause.take(),
+            ApiError::InternalError(inner) => inner.cause.take(),
+            ApiError::Forbidden(inner) => inner.cause.take(),
+            ApiError::Conflict(inner) => inner.cause.take(),
+            ApiError::LimitExceeded(inner) => inner.cause.take(),
+        }
+    }
 }
 
 impl From<std::io::Error> for ApiError {
     fn from(value: std::io::Error) -> Self {
         Self::InternalError(Json(ErrorBody {
-            error: value.to_string(),
+            error: "Internal Error".to_string(),
+            cause: Some(value.into()),
         }))
+    }
+}
+
+impl From<AccountError> for ApiError {
+    fn from(value: AccountError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            AccountError::AccountNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            AccountError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("AccountError")),
+            })),
+        }
+    }
+}
+
+impl From<ApplicationError> for ApiError {
+    fn from(value: ApplicationError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            ApplicationError::ApplicationNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+            ApplicationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("ApplicationError")),
+            })),
+        }
+    }
+}
+
+impl From<EnvironmentError> for ApiError {
+    fn from(value: EnvironmentError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            EnvironmentError::EnvironmentNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            EnvironmentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("EnvironmentError")),
+            })),
+        }
+    }
+}
+
+impl From<PlanError> for ApiError {
+    fn from(value: PlanError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            PlanError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("PlanError")),
+            })),
+        }
     }
 }
 
 impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
+        let error: String = value.to_safe_string();
         match value {
-            ComponentError::Unauthorized(_) => Self::Unauthorized(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
+            ComponentError::Unauthorized(_) => {
+                Self::Unauthorized(Json(ErrorBody { error, cause: None }))
+            }
 
             ComponentError::LimitExceeded { .. } => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![value.to_safe_string()],
+                errors: vec![error],
+                cause: None,
             })),
 
-            ComponentError::AlreadyExists(_) => Self::Conflict(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
+            ComponentError::AlreadyExists(_) => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
 
             ComponentError::ComponentProcessingError(_)
             | ComponentError::InitialComponentFileNotFound { .. }
@@ -102,7 +191,8 @@ impl From<ComponentError> for ApiError {
             | ComponentError::MalformedComponentArchive { .. }
             | ComponentError::PluginInstallationNotFound { .. } => {
                 Self::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_safe_string()],
+                    errors: vec![error],
+                    cause: None,
                 }))
             }
 
@@ -110,13 +200,50 @@ impl From<ComponentError> for ApiError {
             | ComponentError::UnknownVersionedComponentId(_)
             | ComponentError::PluginNotFound { .. }
             | ComponentError::UnknownEnvironmentComponentName { .. } => {
-                Self::NotFound(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
-            ComponentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error: value.to_safe_string(),
+            ComponentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("ComponentError")),
+            })),
+        }
+    }
+}
+
+impl From<TokenError> for ApiError {
+    fn from(value: TokenError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            TokenError::TokenNotFound(_) => Self::NotFound(Json(ErrorBody { error, cause: None })),
+            TokenError::TokenBySecretFound => {
+                Self::InternalError(Json(ErrorBody { error, cause: None }))
+            }
+            TokenError::TokenSecretAlreadyExists => {
+                Self::InternalError(Json(ErrorBody { error, cause: None }))
+            }
+            TokenError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("TokenError")),
+            })),
+        }
+    }
+}
+
+impl From<OAuth2Error> for ApiError {
+    fn from(value: OAuth2Error) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            OAuth2Error::InvalidSession(_) => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            })),
+            OAuth2Error::OAuth2WebflowStateNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+            OAuth2Error::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("OAuth2Error")),
             })),
         }
     }

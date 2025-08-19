@@ -24,48 +24,57 @@ message TypePrimitive {
 message TypeList {
   Type elem = 1;
   optional string name = 2;
+  optional string owner = 3;
 }
 
 message TypeTuple {
   repeated Type elems = 1;
   optional string name = 2;
+  optional string owner = 3;
 }
 
 message TypeRecord {
   repeated NameTypePair fields = 1;
   optional string name = 2;
+  optional string owner = 3;
 }
 
 message TypeFlags {
   repeated string names = 1;
   optional string name = 2;
+  optional string owner = 3;
 }
 
 message TypeEnum {
   repeated string names = 1;
   optional string name = 2;
+  optional string owner = 3;
 }
 
 message TypeOption {
   Type elem = 1;
   optional string name = 2;
+  optional string owner = 3;
 }
 
 message TypeResult {
   optional Type ok = 1;
   optional Type err = 2;
   optional string name = 3;
+  optional string owner = 4;
 }
 
 message TypeVariant {
   repeated NameOptionTypePair cases = 1;
   optional string name = 2;
+  optional string owner = 3;
 }
 
 message TypeHandle {
   uint64 resource_id = 1;
   ResourceMode mode = 2;
   optional string name = 3;
+  optional string owner = 4;
 }
 
 message NameTypePair {

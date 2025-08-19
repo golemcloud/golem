@@ -15,12 +15,19 @@
 use crate::model::component::{Component, FinalizedComponentRevision, PluginInstallation};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use anyhow::anyhow;
+use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentFilePermissions, InitialComponentFile};
+use golem_common::model::component::{
+    ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision,
+    InitialComponentFile, InitialComponentFileKey, VersionedComponentId,
+};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
 };
 use golem_common::model::diff::{self, Hashable};
+use golem_common::model::environment::EnvironmentId;
+use golem_service_base::repo::RepoError;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::Json;
@@ -315,17 +322,7 @@ impl ComponentRevisionRecord {
             audit: DeletableRevisionAuditFields::deletion(created_by),
             component_type: 0,
             size: 0,
-            metadata: ComponentMetadata {
-                exports: vec![],
-                producers: vec![],
-                memories: vec![],
-                binary_wit: Default::default(),
-                root_package_name: None,
-                root_package_version: None,
-                dynamic_linking: Default::default(),
-                agent_types: Default::default(),
-            }
-            .into(),
+            metadata: ComponentMetadata::default().into(),
             env: Default::default(),
             original_env: Default::default(),
             object_store_key: "".to_string(),
@@ -352,7 +349,7 @@ impl ComponentRevisionRecord {
                     .collect(),
                 dynamic_linking_wasm_rpc: self
                     .metadata
-                    .dynamic_linking
+                    .dynamic_linking()
                     .iter()
                     .map(|(name, link)| match link {
                         DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc { targets }) => (
@@ -430,7 +427,7 @@ impl ComponentRevisionRecord {
             revision_id: 0,
             version: value
                 .metadata
-                .root_package_version
+                .root_package_version()
                 .clone()
                 .unwrap_or_default(),
             component_type: value.component_type as i32,
@@ -455,9 +452,44 @@ pub struct ComponentExtRevisionRecord {
     pub revision: ComponentRevisionRecord,
 }
 
-impl From<ComponentExtRevisionRecord> for Component {
-    fn from(_value: ComponentExtRevisionRecord) -> Self {
-        todo!()
+impl TryFrom<ComponentExtRevisionRecord> for Component {
+    type Error = RepoError;
+
+    fn try_from(value: ComponentExtRevisionRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            environment_id: EnvironmentId(value.environment_id),
+            versioned_component_id: VersionedComponentId {
+                component_id: ComponentId(value.revision.component_id),
+                version: ComponentRevision(value.revision.revision_id as u64),
+            },
+            component_name: ComponentName(value.name),
+            component_size: value.revision.size as u64,
+            metadata: value.revision.metadata.into(),
+            created_at: value.revision.audit.created_at.into(),
+            component_type: value
+                .revision
+                .component_type
+                .try_into()
+                .map_err(|e| anyhow!("Failed converting component type: {e}"))?,
+            files: value
+                .revision
+                .files
+                .into_iter()
+                .map(|f| f.try_into())
+                .collect::<Result<_, _>>()?,
+            installed_plugins: vec![], // TODO
+            env: value.revision.env.0,
+            object_store_key: value.revision.object_store_key,
+            wasm_hash: blake3::Hash::from(value.revision.binary_hash).into(),
+            original_files: value
+                .revision
+                .original_files
+                .into_iter()
+                .map(|f| f.try_into())
+                .collect::<Result<_, _>>()?,
+            original_env: value.revision.original_env.0,
+            transformed_object_store_key: value.revision.transformed_object_store_key,
+        })
     }
 }
 
@@ -491,7 +523,7 @@ impl ComponentFileRecord {
         Self {
             component_id,
             revision_id: 0,
-            file_path: file.path.to_string(),
+            file_path: file.path.to_abs_string(),
             file_key: file.key.0.clone(),
             file_permissions: file.permissions.into(),
             audit: RevisionAuditFields::new(actor.0),
@@ -501,15 +533,25 @@ impl ComponentFileRecord {
     }
 }
 
-// TODO: Ext variant with plugin name and version
+impl TryFrom<ComponentFileRecord> for InitialComponentFile {
+    type Error = RepoError;
+    fn try_from(value: ComponentFileRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            key: InitialComponentFileKey(value.file_key),
+            path: ComponentFilePath::from_abs_str(&value.file_path)
+                .map_err(|e| anyhow!("Failed converting component file record to model: {e}"))?,
+            permissions: value.file_permissions.into(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ComponentPluginInstallationRecord {
     pub component_id: Uuid,
-    // Note: Set by repo during insert
-    pub revision_id: i64,
-    pub plugin_id: Uuid,
-    pub plugin_name: String,
-    pub plugin_version: String,
+    pub revision_id: i64,       // NOTE: Set by repo during insert
+    pub plugin_id: Uuid,        // NOTE: required for insert
+    pub plugin_name: String,    // NOTE: returned by repo, not required to set
+    pub plugin_version: String, // NOTE: returned by repo, not required to set
     #[sqlx(flatten)]
     pub audit: RevisionAuditFields,
     pub priority: i32,

@@ -12,22 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::Error;
-use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_registry_service::api::make_open_api_service;
 use golem_registry_service::bootstrap::Services;
 use golem_registry_service::config::{RegistryServiceConfig, make_config_loader};
-use golem_registry_service::metrics;
-use golem_service_base::db;
-use golem_service_base::migration::{Migrations, MigrationsDir};
+use golem_registry_service::{RegistryService, metrics};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use prometheus::Registry;
-use std::path::Path;
-use tracing::error;
+use std::panic;
+use tokio::task::JoinSet;
 
-fn main() -> Result<(), Error> {
+fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -52,13 +48,13 @@ fn main() -> Result<(), Error> {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?
-            .block_on(async_main(&config, prometheus))
+            .block_on(async_main(config, prometheus))
     } else {
         Ok(())
     }
 }
 
-async fn dump_openapi_yaml() -> Result<(), Error> {
+async fn dump_openapi_yaml() -> anyhow::Result<()> {
     let config = RegistryServiceConfig::default();
     let services = Services::new(&config).await?;
 
@@ -68,87 +64,23 @@ async fn dump_openapi_yaml() -> Result<(), Error> {
 }
 
 async fn async_main(
-    config: &RegistryServiceConfig,
-    _prometheus_registry: Registry,
-) -> Result<(), Error> {
-    let _grpc_port = config.grpc_port;
-    let _http_port = config.http_port;
+    config: RegistryServiceConfig,
+    prometheus_registry: Registry,
+) -> anyhow::Result<()> {
+    let bootstrap = RegistryService::new(config, prometheus_registry).await?;
 
-    let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
-    match config.db.clone() {
-        DbConfig::Postgres(c) => {
-            db::postgres::migrate(&c, migrations.postgres_migrations())
-                .await
-                .map_err(|err| {
-                    error!(error = ?err, "DB - postgres - init error: {}", err);
-                    std::io::Error::other(format!("DB - postgres - init error: {err:?}"))
-                })?;
+    let mut join_set = JoinSet::<anyhow::Result<()>>::new();
+
+    bootstrap.start(&mut join_set).await?;
+
+    while let Some(res) = join_set.join_next().await {
+        match res {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => Err(err)?,
+            Err(err) if err.is_panic() => panic::resume_unwind(err.into_panic()),
+            Err(err) => Err(err)?,
         }
-        DbConfig::Sqlite(c) => {
-            db::sqlite::migrate(&c, migrations.sqlite_migrations())
-                .await
-                .map_err(|err| {
-                    error!(error = ?err, "DB - sqlite - init error: {}", err);
-                    std::io::Error::other(format!("DB - sqlite - init error: {err:?}"))
-                })?;
-        }
-    };
-
-    let _services = Services::new(config).await.map_err(|e| {
-        error!("Services - init error: {}", e);
-        std::io::Error::other(e)
-    })?;
-
-    // TODO:
-    // services
-    //         .plan_service
-    //         .create_initial_plan()
-    //         .await
-    //         .map_err(|e| {
-    //             error!("Plan - init error: {}", e);
-    //             std::io::Error::other("Plan Error")
-    //         })?;
-    //
-    // create_all_initial_accounts(
-    //     &config.accounts,
-    //     &services.account_service,
-    //     &services.account_grant_service,
-    //     &services.token_service,
-    // )
-    // .await;
-    //
-    // let http_services = services.clone();
-    // let grpc_services = services.clone();
-    //
-    // let cors = Cors::new()
-    //     .allow_origin_regex(&config.cors_origin_regex)
-    //     .allow_credentials(true);
-    //
-    // let http_server = tokio::spawn(async move {
-    //     let prometheus_registry = Arc::new(prometheus_registry);
-    //     let app = api::combined_routes(prometheus_registry, &http_services)
-    //         .with(CookieJarManager::new())
-    //         .with(cors);
-    //
-    //     poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", http_port)))
-    //         .run(app)
-    //         .await
-    //         .expect("HTTP server failed");
-    // });
-    //
-    // let grpc_server = tokio::spawn(async move {
-    //     grpcapi::start_grpc_server(
-    //         SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), grpc_port).into(),
-    //         &grpc_services,
-    //     )
-    //     .await
-    //     .expect("gRPC server failed");
-    // });
-    //
-    // select! {
-    //     _ = http_server => {},
-    //     _ = grpc_server => {},
-    // }
+    }
 
     Ok(())
 }

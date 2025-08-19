@@ -25,6 +25,14 @@ use std::fmt::Display;
 #[derive(PartialEq, Hash, Eq, Clone, Ord, PartialOrd)]
 pub struct SemVer(pub semver::Version);
 
+impl SemVer {
+    pub fn parse(version: &str) -> Result<Self, String> {
+        semver::Version::parse(version)
+            .map(SemVer)
+            .map_err(|e| format!("Invalid semver string: {e}"))
+    }
+}
+
 impl std::fmt::Debug for SemVer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -130,6 +138,26 @@ impl ParsedFunctionSite {
                 interface,
                 version: Some(version),
             } => Some(format!("{namespace}:{package}/{interface}@{}", version.0)),
+        }
+    }
+
+    pub fn unversioned(&self) -> ParsedFunctionSite {
+        match self {
+            ParsedFunctionSite::Global => ParsedFunctionSite::Global,
+            ParsedFunctionSite::Interface { name } => {
+                ParsedFunctionSite::Interface { name: name.clone() }
+            }
+            ParsedFunctionSite::PackagedInterface {
+                namespace,
+                package,
+                interface,
+                version: _,
+            } => ParsedFunctionSite::PackagedInterface {
+                namespace: namespace.clone(),
+                package: package.clone(),
+                interface: interface.clone(),
+                version: None,
+            },
         }
     }
 }
@@ -316,7 +344,7 @@ impl DynamicParsedFunctionReference {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Encode, Decode)]
 pub enum ParsedFunctionReference {
     Function {
         function: String,
@@ -600,7 +628,7 @@ impl Display for DynamicParsedFunctionName {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Encode, Decode)]
 pub struct ParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: ParsedFunctionReference,
@@ -714,6 +742,13 @@ impl ParsedFunctionName {
                 Some(resource)
             }
             _ => None,
+        }
+    }
+
+    pub fn with_site(&self, site: ParsedFunctionSite) -> Self {
+        Self {
+            site,
+            function: self.function.clone(),
         }
     }
 }

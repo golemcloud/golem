@@ -24,8 +24,8 @@ pub mod http_api_deployment;
 pub mod oauth2_token;
 pub mod oauth2_webflow_state;
 pub mod plan;
-pub mod token;
 pub mod plugin;
+pub mod token;
 
 // Model for SQL records and fields
 pub mod model;

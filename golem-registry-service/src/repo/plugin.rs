@@ -213,7 +213,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                     WHERE account_id = $1 AND deleted = FALSE
                     ORDER BY name, version
                 "#})
-                    .bind(account_id)
+                .bind(account_id),
             )
             .await
     }

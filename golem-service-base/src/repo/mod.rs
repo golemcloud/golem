@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::SafeDisplay;
+use golem_common::{SafeDisplay, into_internal_error};
 use sqlx::error::ErrorKind;
 
-#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+#[derive(Debug, thiserror::Error)]
 pub enum RepoError {
-    #[error("Internal repository error: {0}")]
-    Internal(String),
     #[error("Unique violation repository error: {0}")]
     UniqueViolation(String),
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error),
 }
 
 impl RepoError {
@@ -29,16 +29,16 @@ impl RepoError {
     }
 }
 
+into_internal_error!(RepoError);
+
 impl From<sqlx::Error> for RepoError {
     fn from(error: sqlx::Error) -> Self {
-        if let Some(db_error) = error.as_database_error() {
-            if db_error.kind() == ErrorKind::UniqueViolation {
-                RepoError::UniqueViolation(db_error.to_string())
-            } else {
-                RepoError::Internal(db_error.to_string())
-            }
+        if let Some(db_error) = error.as_database_error()
+            && db_error.kind() == ErrorKind::UniqueViolation
+        {
+            RepoError::UniqueViolation(db_error.to_string())
         } else {
-            RepoError::Internal(error.to_string())
+            RepoError::InternalError(error.into())
         }
     }
 }
@@ -46,7 +46,7 @@ impl From<sqlx::Error> for RepoError {
 impl SafeDisplay for RepoError {
     fn to_safe_string(&self) -> String {
         match self {
-            RepoError::Internal(_) => "Internal repository error".to_string(),
+            RepoError::InternalError(_) => "Internal repository error".to_string(),
             RepoError::UniqueViolation(_) => {
                 "Internal repository error (unique key violation)".to_string()
             }

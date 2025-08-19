@@ -86,6 +86,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                             resource_id: analysed_resource_id,
                             mode: analysed_resource_mode,
                             name: None,
+                            owner: None,
                         },
                     )))
                 }
@@ -152,6 +153,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                 AnalysedType::List(TypeList {
                     inner: Box::new(inferred_type.try_into()?),
                     name: None,
+                    owner: None,
                 }),
             )),
             TypeInternal::Tuple(tuple) => Ok(AnalysedTypeWithUnit::analysed_type(
@@ -161,6 +163,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                         .map(|t| t.try_into())
                         .collect::<Result<Vec<AnalysedType>, String>>()?,
                     name: None,
+                    owner: None,
                 }),
             )),
             TypeInternal::Record(record) => Ok(AnalysedTypeWithUnit::analysed_type(
@@ -175,24 +178,28 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                         })
                         .collect::<Result<Vec<NameTypePair>, String>>()?,
                     name: None,
+                    owner: None,
                 }),
             )),
             TypeInternal::Flags(flags) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Flags(TypeFlags {
                     names: flags.clone(),
                     name: None,
+                    owner: None,
                 }),
             )),
             TypeInternal::Enum(enums) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Enum(TypeEnum {
                     cases: enums.clone(),
                     name: None,
+                    owner: None,
                 }),
             )),
             TypeInternal::Option(option) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Option(TypeOption {
                     inner: Box::new(option.try_into()?),
                     name: None,
+                    owner: None,
                 }),
             )),
             TypeInternal::Result { ok, error } => Ok(AnalysedTypeWithUnit::analysed_type(
@@ -201,6 +208,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                     ok: ok.as_ref().and_then(|t| t.try_into().ok().map(Box::new)),
                     err: error.as_ref().and_then(|t| t.try_into().ok().map(Box::new)),
                     name: None,
+                    owner: None,
                 }),
             )),
             TypeInternal::Variant(variant) => Ok(AnalysedTypeWithUnit::analysed_type(
@@ -215,6 +223,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                         })
                         .collect::<Result<Vec<NameOptionTypePair>, String>>()?,
                     name: None,
+                    owner: None,
                 }),
             )),
             TypeInternal::Resource {
@@ -229,6 +238,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                         AnalysedResourceMode::Borrowed
                     },
                     name: None,
+                    owner: None,
                 },
             ))),
 

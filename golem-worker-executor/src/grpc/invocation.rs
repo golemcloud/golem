@@ -401,7 +401,7 @@ fn resolve_function<'t>(
         ParsedFunctionName::parse(function).map_err(WorkerExecutorError::invalid_request)?;
     let mut functions = Vec::new();
 
-    for export in &component.metadata.exports {
+    for export in component.metadata.exports() {
         match export {
             AnalysedExport::Instance(interface) => {
                 if matches!(parsed.site().interface_name(), Some(name) if name == interface.name) {

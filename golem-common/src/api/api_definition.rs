@@ -20,6 +20,7 @@ use crate::model::api_definition::RouteMethod;
 use crate::{declare_enums, declare_structs};
 use chrono::{DateTime, Utc};
 use rib::{RibInputTypeInfo, RibOutputTypeInfo};
+
 declare_enums! {
     pub enum GatewayBindingType {
         Default,
@@ -31,7 +32,6 @@ declare_enums! {
 }
 
 declare_structs! {
-
     pub struct CreateHttpApiDefinitionRequest {
         pub routes: Vec<RouteRequestView>,
     }

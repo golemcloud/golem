@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::services::account_usage::error::AccountUsageError;
-use golem_common::SafeDisplay;
+use crate::services::application::ApplicationError;
+use crate::services::environment::EnvironmentError;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
     ComponentFilePath, ComponentName, ComponentRevision, InitialComponentFileKey,
@@ -22,6 +23,7 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentId, PluginInstallationId};
+use golem_common::{SafeDisplay, error_forwarders, into_internal_error};
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
@@ -42,7 +44,10 @@ pub enum ComponentError {
     #[error("Malformed component archive: {message}")]
     MalformedComponentArchive { message: String },
     #[error("Provided component file not found: {path} (key: {key})")]
-    InitialComponentFileNotFound { path: String, key: String },
+    InitialComponentFileNotFound {
+        path: ComponentFilePath,
+        key: InitialComponentFileKey,
+    },
     #[error("Invalid file path: {0}")]
     InvalidFilePath(String),
     #[error(
@@ -84,18 +89,6 @@ pub enum ComponentError {
     InternalError(#[from] anyhow::Error),
 }
 
-impl ComponentError {
-    pub fn initial_component_file_not_found(
-        path: &ComponentFilePath,
-        key: &InitialComponentFileKey,
-    ) -> Self {
-        Self::InitialComponentFileNotFound {
-            path: path.to_string(),
-            key: key.to_string(),
-        }
-    }
-}
-
 impl SafeDisplay for ComponentError {
     fn to_safe_string(&self) -> String {
         match self {
@@ -120,11 +113,14 @@ impl SafeDisplay for ComponentError {
     }
 }
 
-impl From<RepoError> for ComponentError {
-    fn from(value: RepoError) -> Self {
-        Self::InternalError(anyhow::Error::new(value).context("from RepoError"))
-    }
-}
+into_internal_error!(ComponentError);
+
+error_forwarders!(
+    ComponentError,
+    RepoError,
+    EnvironmentError,
+    ApplicationError
+);
 
 impl From<AccountUsageError> for ComponentError {
     fn from(value: AccountUsageError) -> Self {
@@ -138,7 +134,10 @@ impl From<AccountUsageError> for ComponentError {
                 limit_value,
                 current_value,
             },
-            _ => Self::InternalError(anyhow::Error::new(value).context("from AccountUsageError")),
+            AccountUsageError::InternalError(inner) => {
+                Self::InternalError(inner.context("AccountUsageError"))
+            }
+            _ => Self::InternalError(anyhow::Error::from(value).context("AccountUsageError")),
         }
     }
 }

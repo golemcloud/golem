@@ -30,6 +30,7 @@ paths:
   /v1/accounts/{account_id}/apps:
     get:
       tags:
+      - RegistryService
       - Account
       - Application
       summary: Get all applications in the account
@@ -98,6 +99,7 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Account
       - Application
       summary: Create an application in the account
@@ -116,7 +118,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/CreateApplicationRequest'
+              $ref: '#/components/schemas/NewApplicationData'
         required: true
       responses:
         '200':
@@ -173,6 +175,7 @@ paths:
   /v1/accounts/{account_id}/apps/{application_name}:
     get:
       tags:
+      - RegistryService
       - Account
       - Application
       summary: Get application in the account by name
@@ -250,6 +253,7 @@ paths:
   /v1/accounts/{account_id}/grants:
     get:
       tags:
+      - RegistryService
       - Account
       - Grant
       operationId: get_account_grants
@@ -320,6 +324,7 @@ paths:
   /v1/accounts/{account_id}/grants/{role}:
     get:
       tags:
+      - RegistryService
       - Account
       - Grant
       operationId: get_account_grant
@@ -395,6 +400,7 @@ paths:
       - Token: []
     put:
       tags:
+      - RegistryService
       - Account
       - Grant
       operationId: create_account_grant
@@ -470,6 +476,7 @@ paths:
       - Token: []
     delete:
       tags:
+      - RegistryService
       - Account
       - Grant
       operationId: delete_account_grant
@@ -546,6 +553,7 @@ paths:
   /v1/accounts/{account_id}/tokens:
     get:
       tags:
+      - RegistryService
       - Account
       - Token
       summary: Get all tokens
@@ -619,6 +627,7 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Account
       - Token
       summary: Create new token
@@ -697,6 +706,7 @@ paths:
   /v1/accounts:
     get:
       tags:
+      - RegistryService
       - Account
       summary: Find accounts
       description: Find matching accounts. Only your own account or accounts you have at least one grant from will be returned
@@ -763,6 +773,7 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Account
       summary: Create account
       description: Create a new account. The response is the created account data.
@@ -771,7 +782,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/AccountData'
+              $ref: '#/components/schemas/NewAccountData'
         required: true
       responses:
         '200':
@@ -828,6 +839,7 @@ paths:
   /v1/accounts/{account_id}:
     get:
       tags:
+      - RegistryService
       - Account
       summary: Get account
       description: Retrieve an account for a given Account ID
@@ -896,6 +908,7 @@ paths:
       - Token: []
     put:
       tags:
+      - RegistryService
       - Account
       summary: Update account
       description: |-
@@ -918,7 +931,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/AccountData'
+              $ref: '#/components/schemas/NewAccountData'
         required: true
       responses:
         '200':
@@ -974,6 +987,7 @@ paths:
       - Token: []
     delete:
       tags:
+      - RegistryService
       - Account
       summary: Delete account
       description: Delete an account.
@@ -1043,6 +1057,7 @@ paths:
   /v1/accounts/{account_id}/plan:
     get:
       tags:
+      - RegistryService
       - Account
       summary: Get account's plan
       operationId: get_account_plan
@@ -1111,6 +1126,7 @@ paths:
   /v1/api-definitions/{api_definition_id}:
     get:
       tags:
+      - RegistryService
       - ApiDefinition
       summary: Get api-definition by id
       operationId: get_api_definition
@@ -1178,6 +1194,7 @@ paths:
       - Token: []
     patch:
       tags:
+      - RegistryService
       - ApiDefinition
       summary: update api-definition
       operationId: update_api_definition
@@ -1252,6 +1269,7 @@ paths:
   /v1/api-definitions/{api_definition_id}/revisions:
     get:
       tags:
+      - RegistryService
       - ApiDefinition
       summary: Get revisions of the api definition
       operationId: get_api_definition_revisions
@@ -1320,6 +1338,7 @@ paths:
   /v1/api-definitions/{api_definition_id}/revisions/{revision}:
     get:
       tags:
+      - RegistryService
       - ApiDefinition
       summary: Get specific revision of an api definition
       operationId: get_api_definition_revision
@@ -1397,6 +1416,7 @@ paths:
   /v1/api-deployments/{api_deployment_id}:
     get:
       tags:
+      - RegistryService
       - ApiDeployment
       summary: Get an api-deployment by id
       operationId: get_api_deployment
@@ -1464,6 +1484,7 @@ paths:
       - Token: []
     patch:
       tags:
+      - RegistryService
       - ApiDeployment
       summary: Update an api-deployment
       operationId: update_api_deployment
@@ -1538,6 +1559,7 @@ paths:
   /v1/api-deployments/{api_deployment_id}/revisions:
     get:
       tags:
+      - RegistryService
       - ApiDeployment
       summary: Get all revisions for an api-deployment
       operationId: get_api_deployment_revisions
@@ -1606,6 +1628,7 @@ paths:
   /v1/api-deployments/{api_deployment_id}/revisions/{revision}:
     get:
       tags:
+      - RegistryService
       - ApiDeployment
       summary: Get specific revision an api-deployment
       operationId: get_api_deployment_revision
@@ -1683,6 +1706,7 @@ paths:
   /v1/domains/{domain_id}:
     get:
       tags:
+      - RegistryService
       - ApiDomain
       summary: Get api domain by id
       operationId: get_domain
@@ -1750,6 +1774,7 @@ paths:
       - Token: []
     patch:
       tags:
+      - RegistryService
       - ApiDomain
       summary: Update an api-domain
       operationId: update_domain
@@ -1824,6 +1849,7 @@ paths:
   /v1/domains/{domain_id}/revisions:
     get:
       tags:
+      - RegistryService
       - ApiDomain
       summary: Get all revisions of an api-domain
       operationId: get_domain_revisions
@@ -1892,6 +1918,7 @@ paths:
   /v1/apps/{application_id}:
     get:
       tags:
+      - RegistryService
       - Application
       summary: Get application by id.
       operationId: get_application
@@ -1959,6 +1986,7 @@ paths:
       - Token: []
     patch:
       tags:
+      - RegistryService
       - Application
       summary: Update application by id.
       operationId: update_application
@@ -2033,6 +2061,7 @@ paths:
   /v1/apps/{application_id}/envs:
     get:
       tags:
+      - RegistryService
       - Application
       - Environment
       summary: List all application environments
@@ -2101,6 +2130,7 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Application
       - Environment
       summary: Create an application environment
@@ -2119,7 +2149,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/CreateEnvironmentRequest'
+              $ref: '#/components/schemas/NewEnvironmentData'
         required: true
       responses:
         '200':
@@ -2176,6 +2206,7 @@ paths:
   /v1/apps/{application_id}/envs/{environment_name}:
     get:
       tags:
+      - RegistryService
       - Application
       - Environment
       summary: Get application environment by name
@@ -2253,6 +2284,7 @@ paths:
   /v1/certificates/{certificate_id}:
     get:
       tags:
+      - RegistryService
       - ApiCertificate
       summary: Get a certificate by id
       operationId: get_certificate
@@ -2320,6 +2352,7 @@ paths:
       - Token: []
     patch:
       tags:
+      - RegistryService
       - ApiCertificate
       summary: Update a certificate
       operationId: update_certificate
@@ -2394,6 +2427,7 @@ paths:
   /v1/certificates/{certificate_id}/revisions:
     get:
       tags:
+      - RegistryService
       - ApiCertificate
       summary: Get all revisions of a certificate
       operationId: get_certificate_revisions
@@ -2462,6 +2496,7 @@ paths:
   /v1/components/{component_id}:
     get:
       tags:
+      - RegistryService
       - Component
       summary: Get a component by id
       operationId: get_component
@@ -2529,6 +2564,7 @@ paths:
       - Token: []
     patch:
       tags:
+      - RegistryService
       - Component
       summary: Update a component
       description: The request body is encoded as multipart/form-data containing metadata and the WASM binary.
@@ -2550,7 +2586,7 @@ paths:
               type: object
               properties:
                 metadata:
-                  $ref: '#/components/schemas/UpdateComponentRequestComponentMetadata'
+                  $ref: '#/components/schemas/UpdateComponentRequestMetadata'
                 newComponentWasm:
                   type: string
                   format: binary
@@ -2615,6 +2651,7 @@ paths:
   /v1/components/{component_id}/revisions:
     get:
       tags:
+      - RegistryService
       - Component
       summary: Get all revisions for a component
       operationId: get_component_revisions
@@ -2683,6 +2720,7 @@ paths:
   /v1/components/{component_id}/revisions/{revision}:
     get:
       tags:
+      - RegistryService
       - Component
       summary: Get specific revision of a component
       operationId: get_component_revision
@@ -2760,6 +2798,7 @@ paths:
   /v1/components/{component_id}/revisions/{revision}/wasm:
     get:
       tags:
+      - RegistryService
       - Component
       summary: Get the component wasm binary of a specific revision
       operationId: get_component_wasm
@@ -2838,6 +2877,7 @@ paths:
   /v1/envs/{environment_id}/api-definitions:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiDefinition
       summary: Get all api-definitions in the environment
@@ -2906,6 +2946,7 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Environment
       - ApiDefinition
       summary: Create a new api-definition in the environment
@@ -2981,6 +3022,7 @@ paths:
   /v1/envs/{environment_id}/api-definitions/{api_definition_name}:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiDefinition
       summary: Get api-definition by name
@@ -3058,6 +3100,7 @@ paths:
   /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-definitions:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiDefinition
       - Deployment
@@ -3137,6 +3180,7 @@ paths:
   /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-definitions/{api_definition_name}:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiDefinition
       - Deployment
@@ -3224,6 +3268,7 @@ paths:
   /v1/envs/{environment_id}/api-deployments:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiDeployment
       summary: Get all api-deployments in the environment
@@ -3292,6 +3337,7 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Environment
       - ApiDeployment
       summary: Create a new api deployment
@@ -3367,6 +3413,7 @@ paths:
   /v1/envs/{environment_id}/api-deployments/{site}:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiDeployment
       summary: Get api-deployment by site
@@ -3444,6 +3491,7 @@ paths:
   /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-deployments:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiDeployment
       - Deployment
@@ -3523,6 +3571,7 @@ paths:
   /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-deployments/{site}:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiDeployment
       - Deployment
@@ -3610,6 +3659,7 @@ paths:
   /v1/envs/{environment_id}/domains:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiDomain
       summary: Get all API domains
@@ -3678,6 +3728,7 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Environment
       - ApiDomain
       summary: Create a new api-domain in the environment
@@ -3753,6 +3804,7 @@ paths:
   /v1/envs/{environment_id}/domains/{domain}:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiDomain
       summary: Get an api-domain in the environment
@@ -3830,6 +3882,7 @@ paths:
   /v1/envs/{environment_id}/certificates:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiCertificate
       summary: Get all certificates in this environment
@@ -3898,6 +3951,7 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Environment
       - ApiCertificate
       summary: Creates a new certificate
@@ -3978,6 +4032,7 @@ paths:
   /v1/envs/{environment_id}/certificates/{certificate_name}:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiCertificate
       summary: Get a certificate in this environment
@@ -4055,6 +4110,7 @@ paths:
   /v1/envs/{environment_id}/components:
     get:
       tags:
+      - RegistryService
       - Environment
       - Component
       summary: Get all components in the environment
@@ -4123,11 +4179,12 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Environment
       - Component
       summary: Create a new component in the environment
       description: The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-      operationId: post_component
+      operationId: create_component
       parameters:
       - in: path
         name: environment_id
@@ -4211,6 +4268,7 @@ paths:
   /v1/envs/{environment_id}/components/{component_name}:
     get:
       tags:
+      - RegistryService
       - Environment
       - Component
       summary: Get a component in the environment by name
@@ -4288,6 +4346,7 @@ paths:
   /v1/envs/{environment_id}/deployments/{deployment_revision_id}/components:
     get:
       tags:
+      - RegistryService
       - Environment
       - Component
       - Deployment
@@ -4367,6 +4426,7 @@ paths:
   /v1/envs/{environment_id}/deployments/{deployment_revision_id}/components/{component_name}:
     get:
       tags:
+      - RegistryService
       - Environment
       - Component
       - Deployment
@@ -4454,6 +4514,7 @@ paths:
   /v1/envs/{environment_id}:
     get:
       tags:
+      - RegistryService
       - Environment
       summary: Get environment by id.
       operationId: get_environment
@@ -4521,6 +4582,7 @@ paths:
       - Token: []
     patch:
       tags:
+      - RegistryService
       - Environment
       summary: Update environment by id.
       operationId: update_environment
@@ -4595,6 +4657,7 @@ paths:
   /v1/envs/{environment_id}/current-deployment/hash:
     get:
       tags:
+      - RegistryService
       - Environment
       summary: Get hash of the currently deployed environment
       operationId: get_deployed_environment_hash
@@ -4663,6 +4726,7 @@ paths:
   /v1/envs/{environment_id}/current-deployment/summary:
     get:
       tags:
+      - RegistryService
       - Environment
       summary: Get summary of the currently deployed environment
       operationId: get_deployed_environment_summary
@@ -4731,6 +4795,7 @@ paths:
   /v1/envs/{environment_id}/plan:
     get:
       tags:
+      - RegistryService
       - Environment
       summary: Get the current deployment plan. This is equivalent to a summary of the current staging area.
       operationId: get_environment_deployment_plan
@@ -4799,6 +4864,7 @@ paths:
   /v1/envs/{environment_id}/deployments:
     get:
       tags:
+      - RegistryService
       - Environment
       - Deployment
       summary: Get all deployments in this environment
@@ -4867,6 +4933,7 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Environment
       - Deployment
       summary: Deploy the current staging area of this environment
@@ -4942,6 +5009,7 @@ paths:
   /v1/envs/{environment_id}/security-schemes:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiSecurity
       summary: Get all security schemes in the environment
@@ -5010,6 +5078,7 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Environment
       - ApiSecurity
       summary: Create a new security scheme in the environment
@@ -5085,6 +5154,7 @@ paths:
   /v1/envs/{environment_id}/security-schemes/{security_scheme_name}:
     get:
       tags:
+      - RegistryService
       - Environment
       - ApiSecurity
       summary: Get a security scheme
@@ -5160,70 +5230,10 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/login/token:
-    get:
-      tags:
-      - Login
-      summary: Get information about a token
-      description: |-
-        Gets information about a token that is selected by the secret key passed in the Authorization header.
-        The JSON is the same as the data object in the oauth2 endpoint's response.
-      operationId: current_login_token
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Token'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/login/oauth2:
+  /v1/login/v1/oauth2:
     post:
       tags:
+      - RegistryService
       - Login
       summary: Acquire token with OAuth2 authorization
       description: |
@@ -5241,7 +5251,7 @@ paths:
         required: true
         deprecated: false
         schema:
-          type: string
+          $ref: '#/components/schemas/OAuth2Provider'
         explode: true
         style: form
       - in: query
@@ -5302,23 +5312,92 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v1/login/oauth2/device/start:
-    post:
+  /v1/login/token:
+    get:
       tags:
+      - RegistryService
       - Login
-      summary: Start GitHub OAuth2 interactive flow
+      summary: Get information about a token
       description: |-
-        Starts an interactive authorization flow.
-        The user must open the returned url and enter the userCode in a form before the expires deadline.
-        Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
-      operationId: start_login_oauth2
+        Gets information about a token that is selected by the secret key passed in the Authorization header.
+        The JSON is the same as the data object in the oauth2 endpoint's response.
+      operationId: current_login_token
       responses:
         '200':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/OAuth2Data'
+                $ref: '#/components/schemas/Token'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/login/oauth2/device/start:
+    post:
+      tags:
+      - RegistryService
+      - Login
+      summary: Start OAuth2 interactive flow
+      description: |-
+        Starts an interactive authorization flow.
+        The user must open the returned url and enter the userCode in a form before the expires deadline.
+        Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
+      operationId: start_oauth2_device_flow
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/OAuth2DeviceFlowStartRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OAuth2DeviceflowData'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5364,12 +5443,13 @@ paths:
   /v1/login/oauth2/device/complete:
     post:
       tags:
+      - RegistryService
       - Login
       summary: Finish GitHub OAuth2 interactive flow
       description: |-
         Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
         Returns a JSON string containing the encodedSession from the start endpoint's response.
-      operationId: complete_login_oauth2
+      operationId: complete_oauth2_device_flow
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -5428,10 +5508,11 @@ paths:
   /v1/login/oauth2/web/authorize:
     get:
       tags:
+      - RegistryService
       - Login
       summary: Initiate OAuth2 Web Flow
       description: Starts the OAuth2 web flow authorization process by returning the authorization URL for the given provider.
-      operationId: oauth2_web_flow_start
+      operationId: start_oauth2_webflow
       parameters:
       - in: query
         name: provider
@@ -5439,7 +5520,7 @@ paths:
         required: true
         deprecated: false
         schema:
-          type: string
+          $ref: '#/components/schemas/OAuth2Provider'
         explode: true
         style: form
       - in: query
@@ -5456,7 +5537,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WebFlowAuthorizeUrlResponse'
+                $ref: '#/components/schemas/OAuth2WebflowData'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5499,15 +5580,16 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v1/login/oauth2/web/callback/github:
+  /v1/login/oauth2/web/callback:
     get:
       tags:
+      - RegistryService
       - Login
-      summary: GitHub OAuth2 Web Flow callback
+      summary: OAuth2 Web Flow callback
       description: |-
-        This endpoint handles the callback from GitHub after the user has authorized the application.
+        This endpoint handles the callback from the provider after the user has authorized the application.
         It exchanges the code for an access token and then uses that to log the user in.
-      operationId: oauth2_web_flow_callback_github
+      operationId: submit_oauth2_webflow_callback
       parameters:
       - in: query
         name: code
@@ -5525,6 +5607,7 @@ paths:
         deprecated: false
         schema:
           type: string
+          format: uuid
         explode: true
         style: form
       responses:
@@ -5592,10 +5675,13 @@ paths:
   /v1/login/oauth2/web/poll:
     get:
       tags:
+      - RegistryService
       - Login
       summary: Poll for OAuth2 Web Flow token
-      description: This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
-      operationId: oauth2_web_flow_poll
+      description: |-
+        This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+        A given state might only be exchanged for a token once. Any further attempts to exchange the state will fail.
+      operationId: poll_oauth2_webflow
       parameters:
       - in: query
         name: state
@@ -5604,6 +5690,7 @@ paths:
         deprecated: false
         schema:
           type: string
+          format: uuid
         explode: true
         style: form
       responses:
@@ -5664,6 +5751,7 @@ paths:
   /v1/plugins:
     get:
       tags:
+      - RegistryService
       - Plugin
       summary: Lists all the registered plugins (including all versions of each).
       operationId: list_plugins
@@ -5730,6 +5818,7 @@ paths:
       - Token: []
     post:
       tags:
+      - RegistryService
       - Plugin
       summary: Registers a new plugin
       operationId: create_plugin
@@ -5794,6 +5883,7 @@ paths:
   /v1/plugins/{plugin_id}:
     get:
       tags:
+      - RegistryService
       - Plugin
       summary: Gets a registered plugin by its id
       operationId: get_plugin
@@ -5861,6 +5951,7 @@ paths:
       - Token: []
     delete:
       tags:
+      - RegistryService
       - Plugin
       summary: Deletes a registered plugin by its id
       operationId: delete_plugin
@@ -5929,6 +6020,7 @@ paths:
   /v1/library-plugins:
     post:
       tags:
+      - RegistryService
       - Plugin
       summary: Registers a new library plugin
       operationId: create_library_plugin
@@ -6006,6 +6098,7 @@ paths:
   /v1/app-plugins:
     post:
       tags:
+      - RegistryService
       - Plugin
       summary: Registers a new app plugin
       operationId: create_app_plugin
@@ -6083,6 +6176,7 @@ paths:
   /v1/security-schemes/{security_scheme_id}:
     get:
       tags:
+      - RegistryService
       - ApiSecurity
       summary: Get api security scheme by id
       operationId: get_security_scheme
@@ -6151,6 +6245,7 @@ paths:
   /v1/security-schemes/{security_scheme_id}/revisions:
     get:
       tags:
+      - RegistryService
       - ApiSecurity
       summary: Get all revisions of the security scheme
       operationId: get_security_scheme_revisions
@@ -6219,6 +6314,7 @@ paths:
   /v1/tokens/{token_id}:
     get:
       tags:
+      - RegistryService
       - Token
       summary: Get token by id
       operationId: get_token
@@ -6238,9 +6334,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Token'
+                $ref: '#/components/schemas/Token'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6288,6 +6382,7 @@ paths:
       - Token: []
     delete:
       tags:
+      - RegistryService
       - Token
       summary: Delete a token
       description: Deletes a previously created token given by its identifier.
@@ -6375,17 +6470,6 @@ components:
       - name
       - email
       - planId
-    AccountData:
-      title: AccountData
-      type: object
-      properties:
-        name:
-          type: string
-        email:
-          type: string
-      required:
-      - name
-      - email
     AgentConstructor:
       title: AgentConstructor
       type: object
@@ -7018,7 +7102,6 @@ components:
           additionalProperties:
             type: string
         wasmHash:
-          description: Hash of the wasm before any transformations
           type: string
           format: hash
       required:
@@ -7192,14 +7275,6 @@ components:
       - description
       - homepage
       - scope
-    CreateApplicationRequest:
-      title: CreateApplicationRequest
-      type: object
-      properties:
-        name:
-          type: string
-      required:
-      - name
     CreateCertificateRequest:
       title: CreateCertificateRequest
       type: object
@@ -7243,14 +7318,6 @@ components:
             $ref: '#/components/schemas/AgentType'
       required:
       - componentName
-    CreateEnvironmentRequest:
-      title: CreateEnvironmentRequest
-      type: object
-      properties:
-        name:
-          type: string
-      required:
-      - name
     CreateHttpApiDefinitionRequest:
       title: CreateHttpApiDefinitionRequest
       type: object
@@ -7476,10 +7543,19 @@ components:
           format: uuid
         name:
           type: string
+        compatibilityCheck:
+          type: boolean
+        versionCheck:
+          type: boolean
+        securityOverrides:
+          type: boolean
       required:
       - id
       - applicationId
       - name
+      - compatibilityCheck
+      - versionCheck
+      - securityOverrides
     EnvironmentHash:
       title: EnvironmentHash
       type: object
@@ -7657,8 +7733,52 @@ components:
             $ref: '#/components/schemas/NamedElementSchema'
       required:
       - elements
-    OAuth2Data:
-      title: OAuth2Data
+    NewAccountData:
+      title: NewAccountData
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+      required:
+      - name
+      - email
+    NewApplicationData:
+      title: NewApplicationData
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+      - name
+    NewEnvironmentData:
+      title: NewEnvironmentData
+      type: object
+      properties:
+        name:
+          type: string
+        compatibilityCheck:
+          type: boolean
+        versionCheck:
+          type: boolean
+        securityOverrides:
+          type: boolean
+      required:
+      - name
+      - compatibilityCheck
+      - versionCheck
+      - securityOverrides
+    OAuth2DeviceFlowStartRequest:
+      title: OAuth2DeviceFlowStartRequest
+      type: object
+      properties:
+        provider:
+          $ref: '#/components/schemas/OAuth2Provider'
+      required:
+      - provider
+    OAuth2DeviceflowData:
+      title: OAuth2DeviceflowData
       type: object
       properties:
         url:
@@ -7675,6 +7795,22 @@ components:
       - userCode
       - expires
       - encodedSession
+    OAuth2Provider:
+      type: string
+      enum:
+      - github
+    OAuth2WebflowData:
+      title: OAuth2WebflowData
+      type: object
+      properties:
+        url:
+          type: string
+        state:
+          type: string
+          format: uuid
+      required:
+      - url
+      - state
     OplogProcessorDefinition:
       title: OplogProcessorDefinition
       type: object
@@ -7805,35 +7941,31 @@ components:
         planId:
           type: string
           format: uuid
-        planData:
-          $ref: '#/components/schemas/PlanData'
-      required:
-      - planId
-      - planData
-    PlanData:
-      title: PlanData
-      type: object
-      properties:
-        projectLimit:
+        appLimit:
           type: integer
-          format: int32
+          format: int64
+        envLimit:
+          type: integer
+          format: int64
         componentLimit:
           type: integer
-          format: int32
+          format: int64
         workerLimit:
           type: integer
-          format: int32
+          format: int64
         storageLimit:
           type: integer
-          format: int32
+          format: int64
         monthlyGasLimit:
           type: integer
           format: int64
         monthlyUploadLimit:
           type: integer
-          format: int32
+          format: int64
       required:
-      - projectLimit
+      - planId
+      - appLimit
+      - envLimit
       - componentLimit
       - workerLimit
       - storageLimit
@@ -7886,11 +8018,11 @@ components:
         id:
           type: string
           format: uuid
-        pluginName:
+        name:
           type: string
-        pluginVersion:
+        version:
           type: string
-        pluginRegistered:
+        registered:
           description: Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
           type: boolean
         priority:
@@ -7902,9 +8034,9 @@ components:
             type: string
       required:
       - id
-      - pluginName
-      - pluginVersion
-      - pluginRegistered
+      - name
+      - version
+      - registered
       - priority
       - parameters
     PluginInstallationAction:
@@ -8323,13 +8455,27 @@ components:
       title: TokenWithSecret
       type: object
       properties:
-        data:
-          $ref: '#/components/schemas/Token'
+        id:
+          type: string
+          format: uuid
         secret:
           type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
       required:
-      - data
+      - id
       - secret
+      - accountId
+      - createdAt
+      - expiresAt
     TypeBool:
       title: TypeBool
       type: object
@@ -8341,6 +8487,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         cases:
           type: array
@@ -8360,6 +8508,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         names:
           type: array
           items:
@@ -8371,6 +8521,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         resource_id:
           type: integer
@@ -8386,6 +8538,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -8396,6 +8550,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -8405,6 +8561,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         fields:
           type: array
@@ -8417,6 +8575,8 @@ components:
       type: object
       properties:
         name:
+          type: string
+        owner:
           type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
@@ -8443,6 +8603,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         items:
           type: array
           items:
@@ -8467,6 +8629,8 @@ components:
       properties:
         name:
           type: string
+        owner:
+          type: string
         cases:
           type: array
           items:
@@ -8490,12 +8654,6 @@ components:
     UpdateApplicationRequest:
       title: UpdateApplicationRequest
       type: object
-      properties:
-        previousRevision:
-          type: integer
-          format: uint64
-      required:
-      - previousRevision
     UpdateCertificateRequest:
       title: UpdateCertificateRequest
       type: object
@@ -8507,8 +8665,8 @@ components:
       required:
       - certificateBody
       - certificatePrivateKey
-    UpdateComponentRequestComponentMetadata:
-      title: UpdateComponentRequestComponentMetadata
+    UpdateComponentRequestMetadata:
+      title: UpdateComponentRequestMetadata
       type: object
       properties:
         previousVersion:
@@ -8608,17 +8766,6 @@ components:
       - interfaceName
       - componentName
       - componentType
-    WebFlowAuthorizeUrlResponse:
-      title: WebFlowAuthorizeUrlResponse
-      type: object
-      properties:
-        url:
-          type: string
-        state:
-          type: string
-      required:
-      - url
-      - state
   securitySchemes:
     Cookie:
       type: apiKey
@@ -8660,6 +8807,7 @@ tags:
     The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
 - name: ProjectPolicy
   description: Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
+- name: RegistryService
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
 - name: Worker
