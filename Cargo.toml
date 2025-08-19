@@ -21,9 +21,9 @@ members = [
     "wasm-ast",
     "wasm-rpc",
     "wasm-rpc-derive",
-    "cli/golem",
-    "cli/golem-cli",
-    "cli/golem-templates",
+    # "cli/golem",
+    # "cli/golem-cli",
+    # "cli/golem-templates",
 ]
 
 exclude = [

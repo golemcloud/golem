@@ -136,9 +136,6 @@ wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 wit-parser = { workspace = true, optional = true }
 
-[dependencies.bytes]
-workspace = true
-
 [dev-dependencies]
 anyhow = { workspace = true }
 test-r = { workspace = true }
