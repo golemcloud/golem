@@ -60,22 +60,15 @@ dependencies = [
 # WIT DEPENDENCIES
 [tasks.wit]
 description = "Fetches the WIT dependencies based on wit/deps.toml"
-condition = { files_modified = { input = [
-    "wit/deps.toml",
-], output = [
-    "wit/deps.done",
-] } }
 run_task = [
     { name = [
         "remove-wit-deps",
-        "wit-host",
         "wit-wasm-rpc",
         "wit-golem-common",
         "wit-golem-cli",
         "wit-template-golem-agent-ts",
         "wit-test-components",
         "wit-golem-templates",
-        "wit-done",
     ] },
 ]
 
@@ -126,12 +119,6 @@ cp wit/deps/golem-rpc cli/golem-cli/wit/deps
 cp wit/deps/golem-agent cli/golem-cli/wit/deps
 """
 
-[tasks.wit-host]
-private = true
-install_crate = { crate_name = "wit-deps-cli", binary = "wit-deps", test_arg = "--help" }
-command = "wit-deps"
-args = ["update"]
-
 [tasks.wit-template-golem-agent-ts]
 private = true
 script_runner = "@duckscript"
@@ -155,16 +142,10 @@ for component in ${components}
 end
 """
 
-[tasks.wit-done]
-private = true
-script_runner = "@duckscript"
-script = "touch wit/deps.done"
-
 [tasks.remove-wit-deps]
 private = true
 script_runner = "@duckscript"
 script = """
-rm -rf wit/deps.done
 rm -rf wasm-rpc/wit/deps
 rm -rf golem-common/wit/deps
 rm -rf cli/golem-cli/wit/deps
