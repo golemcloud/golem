@@ -255,15 +255,29 @@ fn resolve_function_name(
                     interface_name,
                     resource_name: constructor,
                     method_name: method,
+                    static_function: false,
                 }))
             }
-            Ok(None) => Ok(FunctionName::Function(FullyQualifiedFunctionName {
-                package_name,
-                interface_name,
-                function_name: function_name.to_string(),
-            })),
+            Ok(None) => match get_resource_static_method_name(function_name) {
+                Ok(Some((constructor, method))) => {
+                    Ok(FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                        package_name,
+                        interface_name,
+                        resource_name: constructor,
+                        method_name: method,
+                        static_function: true,
+                    }))
+                }
+                Ok(None) => Ok(FunctionName::Function(FullyQualifiedFunctionName {
+                    package_name,
+                    interface_name,
+                    function_name: function_name.to_string(),
+                })),
 
-            Err(e) => Err(format!("invalid function call. {e}")),
+                Err(e) => Err(format!("invalid resource static method call. {e}")),
+            },
+
+            Err(e) => Err(format!("invalid resource method call. {e}")),
         },
     }
 }
@@ -277,6 +291,26 @@ fn get_resource_name(function_name: &str) -> Option<String> {
         )
     } else {
         None
+    }
+}
+
+fn get_resource_static_method_name(
+    function_name: &str,
+) -> Result<Option<(String, String)>, String> {
+    if function_name.starts_with("[static]") {
+        let constructor_and_method = function_name.trim_start_matches("[static]").to_string();
+        let mut constructor_and_method = constructor_and_method.split('.');
+        let constructor = constructor_and_method.next();
+        let method = constructor_and_method.next();
+
+        match (constructor, method) {
+            (Some(constructor), Some(method)) => {
+                Ok(Some((constructor.to_string(), method.to_string())))
+            }
+            _ => Err(format!("Invalid resource method name: {function_name}")),
+        }
+    } else {
+        Ok(None)
     }
 }
 
@@ -370,6 +404,7 @@ impl FunctionName {
                     interface_name,
                     resource_name: resource.clone(),
                     method_name: "drop".to_string(),
+                    static_function: false,
                 })
             }
             DynamicParsedFunctionReference::RawResourceMethod { resource, method } => {
@@ -378,6 +413,7 @@ impl FunctionName {
                     interface_name,
                     resource_name: resource.clone(),
                     method_name: method.clone(),
+                    static_function: false,
                 })
             }
             DynamicParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
@@ -386,6 +422,7 @@ impl FunctionName {
                     interface_name,
                     resource_name: resource.clone(),
                     method_name: method.clone(),
+                    static_function: true,
                 })
             }
             DynamicParsedFunctionReference::IndexedResourceConstructor { resource, .. } => {
@@ -402,6 +439,7 @@ impl FunctionName {
                 interface_name,
                 resource_name: resource.clone(),
                 method_name: method.clone(),
+                static_function: false,
             }),
             DynamicParsedFunctionReference::IndexedResourceStaticMethod {
                 resource,
@@ -412,6 +450,7 @@ impl FunctionName {
                 interface_name,
                 resource_name: resource.clone(),
                 method_name: method.clone(),
+                static_function: true,
             }),
             DynamicParsedFunctionReference::IndexedResourceDrop { resource, .. } => {
                 FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
@@ -419,6 +458,7 @@ impl FunctionName {
                     interface_name,
                     resource_name: resource.clone(),
                     method_name: "drop".to_string(),
+                    static_function: false,
                 })
             }
         }
@@ -514,6 +554,7 @@ pub struct FullyQualifiedResourceMethod {
     pub interface_name: Option<InterfaceName>,
     pub resource_name: String,
     pub method_name: String,
+    pub static_function: bool,
 }
 
 impl FullyQualifiedResourceMethod {
@@ -525,7 +566,8 @@ impl FullyQualifiedResourceMethod {
         }
     }
 
-    // We rely on the fully parsed function name itself to retrieve the original function name
+    // TODO; Remove this conversion inside Rib.
+    // FunctionName (the structure used by rib) can be used in all places of usage of DynamicParsedFunctionName
     pub fn dynamic_parsed_function_name(&self) -> Result<DynamicParsedFunctionName, String> {
         let mut dynamic_parsed_str = String::new();
 
@@ -542,6 +584,11 @@ impl FullyQualifiedResourceMethod {
 
         // Start the dynamic function name with resource
         dynamic_parsed_str.push('{');
+        if self.static_function {
+            dynamic_parsed_str.push_str("[static]");
+        } else {
+            dynamic_parsed_str.push_str("[method]");
+        }
         dynamic_parsed_str.push_str(&self.resource_name);
         dynamic_parsed_str.push('.');
         dynamic_parsed_str.push_str(&self.method_name);

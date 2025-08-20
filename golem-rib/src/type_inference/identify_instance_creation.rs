@@ -24,10 +24,10 @@ use crate::{ComponentDependencies, Expr};
 // instance[foo]("worker-name")
 pub fn identify_instance_creation(
     expr: &mut Expr,
-    function_type_registry: &ComponentDependencies,
+    component_dependencies: &ComponentDependencies,
 ) -> Result<(), RibTypeErrorInternal> {
     internal::search_for_invalid_instance_declarations(expr)?;
-    internal::identify_instance_creation_with_worker(expr, function_type_registry)
+    internal::identify_instance_creation_with_worker(expr, component_dependencies)
 }
 
 mod internal {

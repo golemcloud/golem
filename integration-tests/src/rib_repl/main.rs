@@ -4,11 +4,11 @@ use golem_test_framework::config::{
 };
 use integration_tests::rib_repl::bootstrap::*;
 use std::sync::Arc;
+
 #[tokio::main]
 async fn main() {
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig::new()).await;
 
-    // component name from args
     let component_name = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "shopping-cart".to_string());
@@ -30,5 +30,5 @@ async fn main() {
     .await
     .expect("Failed to bootstrap REPL");
 
-    rib_repl.run().await
+    rib_repl.run().await;
 }
