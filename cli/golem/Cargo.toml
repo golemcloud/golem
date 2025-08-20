@@ -52,6 +52,8 @@ tempfile = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+webbrowser = { workspace = true }
+warp = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }

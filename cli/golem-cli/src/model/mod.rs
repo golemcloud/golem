@@ -845,3 +845,32 @@ impl Display for ProjectId {
         write!(f, "{}", self.0)
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenApiDefinitionOutputFormat {
+    Json,
+    Yaml,
+}
+
+impl FromStr for OpenApiDefinitionOutputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "json" => Ok(OpenApiDefinitionOutputFormat::Json),
+            "yaml" | "yml" => Ok(OpenApiDefinitionOutputFormat::Yaml),
+            _ => Err(format!(
+                "Invalid API definition format: {s}. Expected one of \"json\", \"yaml\""
+            )),
+        }
+    }
+}
+
+impl Display for OpenApiDefinitionOutputFormat {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenApiDefinitionOutputFormat::Json => write!(f, "json"),
+            OpenApiDefinitionOutputFormat::Yaml => write!(f, "yaml"),
+        }
+    }
+}
