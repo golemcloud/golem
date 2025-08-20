@@ -411,20 +411,7 @@ fn generate_agent_stub(
 ) -> anyhow::Result<String> {
     let mut result = String::new();
 
-    for agent in &ctx.agent_types {
-        let original_agent_name = &agent.type_name;
-        let agent_name = agent.type_name.to_upper_camel_case();
-        let constructor_name = agent_name.to_snake_case();
-        let wrapped_agents = format!("Wrapped{agent_name}s");
-        let wrapped_agents_var = wrapped_agents.to_snake_case();
-
-        writeln!(
-            result,
-            "impl Hash for {agent_name} with hash_combine(self, hasher) {{"
-        )?;
-        writeln!(result, "  hasher.combine(self.rep())")?;
-        writeln!(result, "}}")?;
-        writeln!(result)?;
+    let original_agent_name = &agent.type_name;
 
     let constructor_params =
         to_moonbit_parameter_list(ctx, &agent.constructor.input_schema, "constructor", false)?;
@@ -484,8 +471,7 @@ fn generate_agent_stub(
         extract_data_value(
             &mut result,
             ctx,
-            &ctx,
-                &method.output_schema,
+            &method.output_schema,
             "    ",
             original_method_name,
         )?;
@@ -493,7 +479,6 @@ fn generate_agent_stub(
         writeln!(result, "  }})")?;
         writeln!(result, "}}")?;
         writeln!(result)?;
-    }
     }
 
     Ok(result)

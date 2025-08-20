@@ -26,8 +26,6 @@ use std::path::Path;
 use wit_component::WitPrinter;
 use wit_parser::{PackageId, Resolve, SourceMap};
 
-const STATIC_WRAPPER_INTERFACE_NAME: &str = "agent";
-
 pub fn generate_agent_wrapper_wit(
     component_name: &AppComponentName,
     agent_types: &[AgentType],
@@ -86,15 +84,8 @@ impl AgentWrapperGeneratorContextState {
             )
         }
 
-        let interface_name = STATIC_WRAPPER_INTERFACE_NAME;
-
         writeln!(result, "package {package_name};")?;
         writeln!(result)?;
-        writeln!(result, "interface {interface_name} {{")?;
-        writeln!(
-            result,
-            "  use golem:agent/common.{{agent-error, agent-type, binary-reference, text-reference}};"
-        )?;
 
         let mut interface_names = Vec::new();
         let agent_types = self.agent_types.clone();
@@ -119,11 +110,13 @@ impl AgentWrapperGeneratorContextState {
             writeln!(
                 result,
                 "    use golem:agent/common.{{text-reference, binary-reference}};"
-            )?;for (typ, name) in types {
-            self.generate_type_definition(&mut result, &typ, &name)?;
+            )?;
+            for (typ, name) in types {
+                self.generate_type_definition(&mut result, &typ, &name)?;
+            }
+            writeln!(result, "  }}")?;
         }
 
-        writeln!(result, "}}")?;}
         writeln!(result)?;
         writeln!(result, "world agent-wrapper {{")?;
         writeln!(result, "  import golem:agent/guest;")?;
@@ -196,7 +189,6 @@ impl AgentWrapperGeneratorContextState {
         writeln!(result, ") -> result<_, agent-error>;")?;
 
         writeln!(result)?;
-        writeln!(result, "    get-id: func() -> string;")?;
         writeln!(result, "  get-definition: func() -> agent-type;")?;
         writeln!(result)?;
 
@@ -719,9 +711,6 @@ mod tests {
         assert!(wit.contains(indoc!(
             r#"package example:empty;
 
-            interface agent {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
-            }
             world agent-wrapper {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
@@ -730,7 +719,6 @@ mod tests {
               import golem:agent/guest;
 
               export golem:agent/guest;
-              export agent;
             }
             "#
         )));
@@ -805,26 +793,20 @@ mod tests {
         assert!(wit.contains(indoc!(
             r#"package example:single1;
 
-            interface agent {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
-
-              /// An example agent
-              resource agent1 {
-                constructor(agent-id: string);
+            /// An example agent
             interface agent1 {
               use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
 
               /// Creates an example agent instance
               initialize: func(a: u32, b: option<string>) -> result<_, agent-error>;
 
-              create: static func(a: u32, b: option<string>) -> result<agent1, agent-error>;
-                get-id: func() -> string;
-                get-definition: func() -> agent-type;
-                /// returns a random string
-                f1: func() -> result<string, agent-error>;
-                /// adds two numbers
-                f2: func(x: u32, y: u32) -> result<u32, agent-error>;
-              }
+              get-definition: func() -> agent-type;
+
+              /// returns a random string
+              f1: func() -> result<string, agent-error>;
+
+              /// adds two numbers
+              f2: func(x: u32, y: u32) -> result<u32, agent-error>;
             }
 
             world agent-wrapper {
