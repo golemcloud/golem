@@ -64,6 +64,16 @@ pub struct AccountRevisionRecord {
     pub roles: Vec<AccountRoleRecord>,
 }
 
+impl AccountRevisionRecord {
+    pub fn ensure_first(self) -> Self {
+        Self {
+            revision_id: 0,
+            audit: self.audit.ensure_new(),
+            ..self
+        }
+    }
+}
+
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountExtRevisionRecord {
     pub entity_created_at: SqlDateTime,
@@ -99,6 +109,14 @@ pub struct AccountRoleRecord {
 }
 
 impl AccountRoleRecord {
+    pub fn ensure_account(self, account_id: Uuid, revision_id: i64) -> Self {
+        Self {
+            account_id,
+            revision_id,
+            ..self
+        }
+    }
+
     pub fn from_model(account: AccountId, revision: AccountRevision, value: AccountRole) -> Self {
         Self {
             account_id: account.0,

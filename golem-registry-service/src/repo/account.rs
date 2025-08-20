@@ -199,6 +199,7 @@ impl DbAccountRepo<PostgresPool> {
         revision.roles = {
             let mut inserted_roles = Vec::with_capacity(revision.roles.len());
             for role in original_roles {
+                let role = role.ensure_account(revision.account_id, revision.revision_id);
                 inserted_roles.push(Self::insert_one_role(tx, role).await?);
             }
             inserted_roles
@@ -215,6 +216,8 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
         &self,
         revision: AccountRevisionRecord,
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+        let revision = revision.ensure_first();
+
         self.db_pool.with_tx_custom_error(METRICS_SVC_NAME, "create", |tx| {
             async move {
                 let account_record: AccountRecord = tx

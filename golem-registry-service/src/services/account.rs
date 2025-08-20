@@ -127,7 +127,7 @@ impl AccountService {
             .await
     }
 
-    /// create account with the account being the user creating it
+    /// create account with the account itself being the user creating it
     pub async fn create_bootstrapped(
         &self,
         account: NewAccountData,
