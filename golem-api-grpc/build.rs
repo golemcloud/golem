@@ -44,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/component/plugin_definition.proto",
                 "proto/golem/component/producer_field.proto",
                 "proto/golem/component/producers.proto",
+                "proto/golem/component/v1/agent_types_service.proto",
                 "proto/golem/component/v1/component_error.proto",
                 "proto/golem/component/v1/component_service.proto",
                 "proto/golem/component/v1/plugin_service.proto",

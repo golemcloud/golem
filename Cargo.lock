@@ -4272,6 +4272,7 @@ dependencies = [
  "conditional-trait-gen",
  "console-subscriber",
  "darling 0.20.11",
+ "dashmap",
  "figment",
  "futures",
  "golem-api-grpc",

@@ -22,6 +22,7 @@ use crate::model::{
 };
 use crate::repo::component::ComponentRecord;
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
+use crate::service::agent_types::AgentTypesService;
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_object_store::ComponentObjectStore;
 use async_trait::async_trait;
@@ -638,6 +639,7 @@ pub struct ComponentServiceDefault {
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     transformer_plugin_caller: Arc<dyn TransformerPluginCaller>,
     limit_service: Arc<dyn LimitService>,
+    agent_types_service: Arc<dyn AgentTypesService>,
 }
 
 impl ComponentServiceDefault {
@@ -650,6 +652,7 @@ impl ComponentServiceDefault {
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
         transformer_plugin_caller: Arc<dyn TransformerPluginCaller>,
         limit_service: Arc<dyn LimitService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Self {
         Self {
             component_repo,
@@ -660,6 +663,7 @@ impl ComponentServiceDefault {
             plugin_wasm_files_service,
             transformer_plugin_caller,
             limit_service,
+            agent_types_service,
         }
     }
 
@@ -925,6 +929,10 @@ impl ComponentServiceDefault {
             )
             .await;
 
+        self.agent_types_service
+            .project_changed(&owner.project_id)
+            .await;
+
         Ok(component)
     }
 
@@ -1016,6 +1024,10 @@ impl ComponentServiceDefault {
                 component_id,
                 component.versioned_component_id.version,
             )
+            .await;
+
+        self.agent_types_service
+            .project_changed(&owner.project_id)
             .await;
 
         Ok(component)
@@ -1738,6 +1750,11 @@ impl ComponentService for ComponentServiceDefault {
             self.component_repo
                 .delete(&owner.to_string(), component_id.0)
                 .await?;
+
+            self.agent_types_service
+                .project_changed(&owner.project_id)
+                .await;
+
             Ok(())
         } else {
             Err(ComponentError::UnknownComponentId(component_id.clone()))

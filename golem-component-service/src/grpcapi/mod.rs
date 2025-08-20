@@ -14,6 +14,7 @@
 
 mod component;
 mod plugin;
+mod agent_types;
 
 use crate::bootstrap::Services;
 use crate::grpcapi::component::ComponentGrpcApi;
@@ -21,6 +22,7 @@ use crate::grpcapi::plugin::PluginGrpcApi;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::component::v1::agent_types_service_server::AgentTypesServiceServer;
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentServiceServer;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginServiceServer;
 use golem_api_grpc::proto::golem::component::v1::{component_error, ComponentError};
@@ -35,6 +37,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Server;
 use tracing::Instrument;
+use crate::grpcapi::agent_types::AgentTypesGrpcApi;
 
 pub async fn start_grpc_server(
     addr: SocketAddr,
@@ -70,6 +73,13 @@ pub async fn start_grpc_server(
                 PluginServiceServer::new(PluginGrpcApi::new(services.plugin_service.clone()))
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip),
+            )
+            .add_service(
+                AgentTypesServiceServer::new(AgentTypesGrpcApi::new(
+                    services.agent_types_service.clone(),
+                ))
+                .send_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Gzip),
             )
             .serve_with_incoming(TcpListenerStream::new(listener))
             .map_err(anyhow::Error::from)

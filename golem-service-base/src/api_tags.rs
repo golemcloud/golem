@@ -46,4 +46,6 @@ pub enum ApiTags {
     /// The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
     Token,
     Worker,
+    /// API working on registered agent types
+    AgentTypes
 }

@@ -13,9 +13,13 @@
 // limitations under the License.
 
 use crate::api::dto::ApiMapper;
+use crate::authed::agent_types::AuthedAgentTypesService;
+use crate::authed::component::AuthedComponentService;
+use crate::authed::plugin::AuthedPluginService;
 use crate::config::{ComponentCompilationConfig, ComponentServiceConfig};
 use crate::repo::component::{ComponentRepo, DbComponentRepo, LoggedComponentRepo};
 use crate::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
+use crate::service::agent_types::AgentTypesService;
 use crate::service::component::ComponentServiceDefault;
 use crate::service::component::LazyComponentService;
 use crate::service::component_compilation::{
@@ -25,6 +29,8 @@ use crate::service::component_compilation::{
 use crate::service::component_object_store::{
     BlobStorageComponentObjectStore, ComponentObjectStore,
 };
+use crate::service::plugin::PluginService;
+use crate::service::transformer_plugin_caller::TransformerPluginCallerDefault;
 use golem_common::config::DbConfig;
 use golem_service_base::clients::auth::AuthService;
 use golem_service_base::clients::limit::{LimitService, LimitServiceDefault};
@@ -37,17 +43,13 @@ use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use std::sync::Arc;
-// use self::plugin::{PluginServiceDefault};
-use crate::authed::component::AuthedComponentService;
-use crate::authed::plugin::AuthedPluginService;
-use crate::service::plugin::PluginService;
-use crate::service::transformer_plugin_caller::TransformerPluginCallerDefault;
 
 #[derive(Clone)]
 pub struct Services {
     pub component_service: Arc<AuthedComponentService>,
     pub compilation_service: Arc<dyn ComponentCompilationService>,
     pub plugin_service: Arc<AuthedPluginService>,
+    pub agent_types_service: Arc<AuthedAgentTypesService>,
     pub api_mapper: Arc<ApiMapper>,
 }
 
@@ -145,6 +147,10 @@ impl Services {
             config.plugin_transformations.clone(),
         ));
 
+        let agent_types: Arc<dyn AgentTypesService> = Arc::new(
+            crate::service::agent_types::AgentTypesServiceDefault::new(component_service.clone()),
+        );
+
         component_service
             .set_implementation(ComponentServiceDefault::new(
                 component_repo.clone(),
@@ -155,6 +161,7 @@ impl Services {
                 plugin_wasm_files_service.clone(),
                 transformer_plugin_caller.clone(),
                 limit_service.clone(),
+                agent_types.clone(),
             ))
             .await;
 
@@ -168,8 +175,15 @@ impl Services {
         let authed_plugin_service: Arc<AuthedPluginService> = Arc::new(AuthedPluginService::new(
             plugin_service.clone(),
             auth_service.clone(),
-            component_service,
+            component_service.clone(),
         ));
+
+        let authed_agent_types_service: Arc<AuthedAgentTypesService> =
+            Arc::new(AuthedAgentTypesService::new(
+                agent_types,
+                auth_service.clone(),
+                project_service.clone(),
+            ));
 
         let api_mapper: Arc<ApiMapper> = Arc::new(ApiMapper::new(plugin_service.clone()));
 
@@ -177,6 +191,7 @@ impl Services {
             component_service: authed_component_service,
             compilation_service,
             plugin_service: authed_plugin_service,
+            agent_types_service: authed_agent_types_service,
             api_mapper,
         })
     }
