@@ -170,6 +170,7 @@ impl TypeRefinement for StringType {
     }
 }
 
+#[allow(dead_code)]
 impl TypeRefinement for NumberType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| match inferred_type
@@ -191,6 +192,7 @@ impl TypeRefinement for NumberType {
     }
 }
 
+#[allow(dead_code)]
 impl TypeRefinement for BoolType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
@@ -203,6 +205,7 @@ impl TypeRefinement for BoolType {
     }
 }
 
+#[allow(dead_code)]
 impl TypeRefinement for CharType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
@@ -215,6 +218,7 @@ impl TypeRefinement for CharType {
     }
 }
 
+#[allow(dead_code)]
 impl TypeRefinement for FlagsType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
@@ -227,6 +231,7 @@ impl TypeRefinement for FlagsType {
     }
 }
 
+#[allow(dead_code)]
 impl TypeRefinement for EnumType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {

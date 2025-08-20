@@ -427,7 +427,7 @@ impl<DB: Database> Debug for SqlxDbTransactionConnection<DB> {
 }
 
 #[derive(Clone)]
-pub struct SqlxDbTransaction<T: RdbmsType, DB: Database> {
+pub(crate) struct SqlxDbTransaction<T: RdbmsType, DB: Database> {
     rdbms_type: T,
     pool_key: RdbmsPoolKey,
     tx_connection: SqlxDbTransactionConnection<DB>,

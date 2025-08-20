@@ -321,11 +321,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|exit| exit.0)
     }
 
-    pub fn as_wasi_view(&mut self) -> WasiImpl<DurableWorkerCtxWasiView<Ctx>> {
+    pub fn as_wasi_view(&mut self) -> WasiImpl<DurableWorkerCtxWasiView<'_, Ctx>> {
         WasiImpl(IoImpl(DurableWorkerCtxWasiView(self)))
     }
 
-    pub fn as_wasi_http_view(&mut self) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<Ctx>> {
+    pub fn as_wasi_http_view(&mut self) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<'_, Ctx>> {
         WasiHttpImpl(IoImpl(DurableWorkerCtxWasiHttpView(self)))
     }
 

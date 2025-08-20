@@ -169,7 +169,7 @@ impl WasmValue for ValueAndType {
         val.into_value_and_type()
     }
 
-    fn make_string(val: Cow<str>) -> Self {
+    fn make_string(val: Cow<'_, str>) -> Self {
         val.to_string().into_value_and_type()
     }
 
@@ -376,14 +376,14 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_string(&self) -> Cow<str> {
+    fn unwrap_string(&self) -> Cow<'_, str> {
         match &self.value {
             Value::String(val) => Cow::Borrowed(val),
             _ => panic!("Expected string, found {self:?}"),
         }
     }
 
-    fn unwrap_list(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
+    fn unwrap_list(&self) -> Box<dyn Iterator<Item = Cow<'_, Self>> + '_> {
         match (&self.value, &self.typ) {
             (Value::List(vals), AnalysedType::List(typ)) => Box::new(vals.iter().map(|v| {
                 Cow::Owned(ValueAndType {
@@ -395,7 +395,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_record(&self) -> Box<dyn Iterator<Item = (Cow<str>, Cow<Self>)> + '_> {
+    fn unwrap_record(&self) -> Box<dyn Iterator<Item = (Cow<'_, str>, Cow<'_, Self>)> + '_> {
         match (&self.value, &self.typ) {
             (Value::Record(vals), AnalysedType::Record(typ)) => {
                 Box::new(vals.iter().zip(typ.fields.iter()).map(|(v, f)| {
@@ -412,7 +412,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_tuple(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
+    fn unwrap_tuple(&self) -> Box<dyn Iterator<Item = Cow<'_, Self>> + '_> {
         match (&self.value, &self.typ) {
             (Value::Tuple(vals), AnalysedType::Tuple(typ)) => {
                 Box::new(vals.iter().zip(typ.items.iter()).map(|(v, t)| {
@@ -426,7 +426,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_variant(&self) -> (Cow<str>, Option<Cow<Self>>) {
+    fn unwrap_variant(&self) -> (Cow<'_, str>, Option<Cow<'_, Self>>) {
         match (&self.value, &self.typ) {
             (
                 Value::Variant {
@@ -454,7 +454,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_enum(&self) -> Cow<str> {
+    fn unwrap_enum(&self) -> Cow<'_, str> {
         match (&self.value, &self.typ) {
             (Value::Enum(case_idx), AnalysedType::Enum(typ)) => {
                 Cow::Borrowed(&typ.cases[*case_idx as usize])
@@ -463,7 +463,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_option(&self) -> Option<Cow<Self>> {
+    fn unwrap_option(&self) -> Option<Cow<'_, Self>> {
         match (&self.value, &self.typ) {
             (Value::Option(Some(val)), AnalysedType::Option(typ)) => {
                 Some(Cow::Owned(ValueAndType {
@@ -476,7 +476,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_result(&self) -> Result<Option<Cow<Self>>, Option<Cow<Self>>> {
+    fn unwrap_result(&self) -> Result<Option<Cow<'_, Self>>, Option<Cow<'_, Self>>> {
         match (&self.value, &self.typ) {
             (Value::Result(Ok(Some(val))), AnalysedType::Result(typ)) => {
                 Ok(Some(Cow::Owned(ValueAndType {
@@ -504,7 +504,7 @@ impl WasmValue for ValueAndType {
         }
     }
 
-    fn unwrap_flags(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
+    fn unwrap_flags(&self) -> Box<dyn Iterator<Item = Cow<'_, str>> + '_> {
         match (&self.value, &self.typ) {
             (Value::Flags(bitmap), AnalysedType::Flags(typ)) => Box::new(
                 bitmap
@@ -814,7 +814,7 @@ mod type_annotated_value {
             TypeAnnotatedValuePrintable(TypeAnnotatedValue::Char(val as i32))
         }
 
-        fn make_string(val: Cow<str>) -> Self {
+        fn make_string(val: Cow<'_, str>) -> Self {
             TypeAnnotatedValuePrintable(TypeAnnotatedValue::Str(val.to_string()))
         }
 
@@ -1136,14 +1136,14 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_string(&self) -> Cow<str> {
+        fn unwrap_string(&self) -> Cow<'_, str> {
             match &self.0 {
                 TypeAnnotatedValue::Str(value) => Cow::Borrowed(value),
                 _ => panic!("Expected string, found {self:?}"),
             }
         }
 
-        fn unwrap_list(&self) -> Box<dyn Iterator<Item=Cow<Self>> + '_> {
+        fn unwrap_list(&self) -> Box<dyn Iterator<Item=Cow<'_, Self>> + '_> {
             match &self.0 {
                 TypeAnnotatedValue::List(TypedList { typ: _, values }) => {
                     Box::new(values.iter().map(|v| {
@@ -1156,7 +1156,7 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_record(&self) -> Box<dyn Iterator<Item=(Cow<str>, Cow<Self>)> + '_> {
+        fn unwrap_record(&self) -> Box<dyn Iterator<Item=(Cow<'_, str>, Cow<'_, Self>)> + '_> {
             match &self.0 {
                 TypeAnnotatedValue::Record(TypedRecord { typ: _, value }) => {
                     Box::new(value.iter().map(|name_value| {
@@ -1173,7 +1173,7 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_tuple(&self) -> Box<dyn Iterator<Item=Cow<Self>> + '_> {
+        fn unwrap_tuple(&self) -> Box<dyn Iterator<Item=Cow<'_, Self>> + '_> {
             match &self.0 {
                 TypeAnnotatedValue::Tuple(TypedTuple { typ: _, value }) => {
                     Box::new(value.iter().map(|x| {
@@ -1188,7 +1188,7 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_variant(&self) -> (Cow<str>, Option<Cow<Self>>) {
+        fn unwrap_variant(&self) -> (Cow<'_, str>, Option<Cow<'_, Self>>) {
             match &self.0 {
                 TypeAnnotatedValue::Variant(variant) => {
                     let case_name = Cow::Borrowed(variant.case_name.as_str());
@@ -1201,14 +1201,14 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_enum(&self) -> Cow<str> {
+        fn unwrap_enum(&self) -> Cow<'_, str> {
             match &self.0 {
                 TypeAnnotatedValue::Enum(TypedEnum { typ: _, value }) => Cow::Borrowed(value),
                 _ => panic!("Expected enum, found {self:?}"),
             }
         }
 
-        fn unwrap_option(&self) -> Option<Cow<Self>> {
+        fn unwrap_option(&self) -> Option<Cow<'_, Self>> {
             match &self.0 {
                 TypeAnnotatedValue::Option(option) => option.value.as_ref().and_then(|v| {
                     v.type_annotated_value
@@ -1219,7 +1219,7 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_result(&self) -> Result<Option<Cow<Self>>, Option<Cow<Self>>> {
+        fn unwrap_result(&self) -> Result<Option<Cow<'_, Self>>, Option<Cow<'_, Self>>> {
             match &self.0 {
                 TypeAnnotatedValue::Result(result0) => match result0.result_value.as_ref() {
                     Some(result) => match result {
@@ -1242,7 +1242,7 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_flags(&self) -> Box<dyn Iterator<Item=Cow<str>> + '_> {
+        fn unwrap_flags(&self) -> Box<dyn Iterator<Item=Cow<'_, str>> + '_> {
             match &self.0 {
                 TypeAnnotatedValue::Flags(TypedFlags { typ: _, values }) => {
                     Box::new(values.iter().map(|s| Cow::Borrowed(s.as_str())))

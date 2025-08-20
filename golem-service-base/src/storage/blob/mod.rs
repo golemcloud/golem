@@ -194,11 +194,11 @@ pub trait BlobStorage: Debug + Send + Sync {
 }
 
 pub trait BlobStorageLabelledApi<S: BlobStorage + ?Sized + Sync> {
-    fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledBlobStorage<S>;
+    fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledBlobStorage<'_, S>;
 }
 
 impl<S: BlobStorage + ?Sized + Sync> BlobStorageLabelledApi<S> for S {
-    fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledBlobStorage<Self> {
+    fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledBlobStorage<'_, Self> {
         LabelledBlobStorage::new(svc_name, api_name, self)
     }
 }
