@@ -784,25 +784,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         }
     }
-
-    // async fn get_agent_component(&mut self, agent_type: String) ->anyhow::Result<Option<golem_api_1_x::host::ComponentId>> {
-    //     self.observe_function_call("golem::api", "get_agent_component");
-    //
-    //
-    //     let account_id = self.owned_worker_id.account_id();
-    //
-    //     let _ = agent_type;
-    //
-    //     // NOTE!!!! THis is just a sample implementation.
-    //     // Ideally, get_all and filter the component that has an agent_type == "agent_type"
-    //     // but currently get_all service simply returns the component-id that definitely iunclude the `agent_type` component.
-    //     // This work is not part of the prototype and hence sample implementation to prove things
-    //     let component_id = self.component_service().get_all(&account_id)
-    //         .await?;
-    //
-    //     Ok(Some(component_id.into()))
-    //
-    // }
 }
 
 impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
