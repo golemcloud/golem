@@ -14,8 +14,8 @@
 
 use crate::api::ComponentError;
 use crate::authed::agent_types::AuthedAgentTypesService;
-use crate::model::agent_types::RegisteredAgentType;
 use golem_common::base_model::ProjectId;
+use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::error::ErrorBody;
 use golem_common::recorded_http_api_request;
@@ -93,7 +93,7 @@ impl AgentTypesApi {
         match result {
             Some(agent_type) => Ok(Json(agent_type)),
             None => Err(ComponentError::NotFound(Json(ErrorBody {
-                error: format!("Agent type '{}' not found", agent_type),
+                error: format!("Agent type '{agent_type}' not found"),
             }))),
         }
     }

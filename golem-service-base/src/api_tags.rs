@@ -47,5 +47,5 @@ pub enum ApiTags {
     Token,
     Worker,
     /// API working on registered agent types
-    AgentTypes
+    AgentTypes,
 }

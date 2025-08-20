@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod agent_types;
 mod component;
 mod plugin;
-mod agent_types;
 
 use crate::bootstrap::Services;
+use crate::grpcapi::agent_types::AgentTypesGrpcApi;
 use crate::grpcapi::component::ComponentGrpcApi;
 use crate::grpcapi::plugin::PluginGrpcApi;
 use futures::TryFutureExt;
@@ -37,7 +38,6 @@ use tonic::codec::CompressionEncoding;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Server;
 use tracing::Instrument;
-use crate::grpcapi::agent_types::AgentTypesGrpcApi;
 
 pub async fn start_grpc_server(
     addr: SocketAddr,

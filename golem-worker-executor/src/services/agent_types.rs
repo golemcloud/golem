@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::component::ComponentService;
 use crate::services::golem_config::AgentTypesServiceConfig;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -35,7 +36,10 @@ pub trait AgentTypesService: Send + Sync {
     ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError>;
 }
 
-pub fn configured(config: &AgentTypesServiceConfig) -> Arc<dyn AgentTypesService> {
+pub fn configured(
+    config: &AgentTypesServiceConfig,
+    component_service: Arc<dyn ComponentService>,
+) -> Arc<dyn AgentTypesService> {
     match config {
         AgentTypesServiceConfig::Grpc(config) => {
             let client = CachedAgentTypes::new(
@@ -52,7 +56,9 @@ pub fn configured(config: &AgentTypesServiceConfig) -> Arc<dyn AgentTypesService
             );
             Arc::new(client)
         }
-        AgentTypesServiceConfig::Local(_) => Arc::new(local::AgentTypesServiceLocal::new()),
+        AgentTypesServiceConfig::Local(_) => {
+            Arc::new(local::AgentTypesServiceLocal::new(component_service))
+        }
     }
 }
 
@@ -256,27 +262,47 @@ mod grpc {
 
 mod local {
     use crate::services::agent_types::AgentTypesService;
+    use crate::services::component::ComponentService;
     use async_trait::async_trait;
     use golem_common::base_model::ProjectId;
     use golem_common::model::agent::RegisteredAgentType;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use std::sync::Arc;
 
-    pub struct AgentTypesServiceLocal {}
+    pub struct AgentTypesServiceLocal {
+        component_service: Arc<dyn ComponentService>,
+    }
 
     impl AgentTypesServiceLocal {
-        pub fn new() -> Self {
-            Self {}
+        pub fn new(component_service: Arc<dyn ComponentService>) -> Self {
+            Self { component_service }
         }
     }
 
-    // TODO: use ComponentServiceLocalFileSystem to search in the cached metadata
     #[async_trait]
     impl AgentTypesService for AgentTypesServiceLocal {
         async fn get_all(
             &self,
             owner_project: &ProjectId,
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
-            todo!()
+            Ok(self
+                .component_service
+                .all_cached_metadata()
+                .await
+                .iter()
+                .filter(|component| &component.owner.project_id == owner_project)
+                .flat_map(|component| {
+                    component
+                        .metadata
+                        .agent_types()
+                        .iter()
+                        .map(|agent_type| RegisteredAgentType {
+                            agent_type: agent_type.clone(),
+                            implemented_by: component.versioned_component_id.component_id.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect())
         }
 
         async fn get(
@@ -284,7 +310,12 @@ mod local {
             owner_project: &ProjectId,
             name: &str,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
-            todo!()
+            Ok(self
+                .get_all(owner_project)
+                .await?
+                .iter()
+                .find(|r| r.agent_type.type_name == name)
+                .cloned())
         }
     }
 }

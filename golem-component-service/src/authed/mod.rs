@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use crate::error::ComponentError;
 use crate::service::component::ComponentService;
 use golem_common::base_model::{ComponentId, ProjectId};
@@ -20,6 +19,7 @@ use golem_common::model::auth::{AuthCtx, ProjectAction};
 use golem_common::model::component::ComponentOwner;
 use golem_service_base::clients::auth::AuthService;
 use golem_service_base::clients::project::ProjectService;
+use std::sync::Arc;
 
 pub mod agent_types;
 pub mod component;

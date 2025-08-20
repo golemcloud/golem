@@ -423,8 +423,7 @@ impl AgentTypesServiceGrpcConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AgentTypesServiceLocalConfig {
-}
+pub struct AgentTypesServiceLocalConfig {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]

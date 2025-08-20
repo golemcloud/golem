@@ -22,7 +22,6 @@ use crate::model::{
 };
 use crate::repo::component::ComponentRecord;
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
-use crate::service::agent_types::AgentTypesService;
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_object_store::ComponentObjectStore;
 use async_trait::async_trait;

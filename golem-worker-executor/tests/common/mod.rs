@@ -45,15 +45,17 @@ use golem_worker_executor::model::{
 use golem_worker_executor::preview2::golem::durability;
 use golem_worker_executor::preview2::{golem_agent, golem_api_1_x};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
-    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
-    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig,
-    ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    AgentTypesServiceConfig, AgentTypesServiceLocalConfig, CompiledComponentServiceConfig,
+    CompiledComponentServiceEnabledConfig, ComponentServiceConfig, ComponentServiceLocalConfig,
+    GolemConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig,
+    MemoryConfig, ProjectServiceConfig, ProjectServiceDisabledConfig, ShardManagerServiceConfig,
+    ShardManagerServiceSingleShardConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -293,6 +295,7 @@ pub async fn start_customized(
             project_id: admin_project_id,
             project_name: admin_project_name,
         }),
+        agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
         ..Default::default()
     };
     if let Some(retry) = retry_override {
@@ -695,6 +698,7 @@ impl WorkerCtx for TestWorkerCtx {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -719,6 +723,7 @@ impl WorkerCtx for TestWorkerCtx {
             plugins,
             worker_fork,
             project_service,
+            agent_types_service,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -1050,6 +1055,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);
         let worker_fork = Arc::new(DefaultWorkerFork::new(
@@ -1082,6 +1088,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             project_service.clone(),
+            agent_types_service.clone(),
             (),
         ));
 
@@ -1115,10 +1122,12 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             project_service.clone(),
+            agent_types_service.clone(),
             (),
         ));
         Ok(All::new(
             active_workers,
+            agent_types_service,
             engine,
             linker,
             runtime,

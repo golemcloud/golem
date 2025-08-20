@@ -403,13 +403,16 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
 
     let project_service = services::projects::configured(&golem_config.project_service);
 
-    let agent_type_service = services::agent_types::configured(&golem_config.agent_types_service);
-
     let component_service = bootstrap.create_component_service(
         &golem_config,
         blob_storage.clone(),
         plugins_observations,
         project_service.clone(),
+    );
+
+    let agent_type_service = services::agent_types::configured(
+        &golem_config.agent_types_service,
+        component_service.clone(),
     );
 
     let golem_config = Arc::new(golem_config.clone());

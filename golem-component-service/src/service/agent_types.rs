@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::error::ComponentError;
-use crate::model::agent_types::RegisteredAgentType;
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
+use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::component::ComponentOwner;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -42,7 +42,7 @@ pub trait AgentTypesService: Debug + Send + Sync {
     }
 }
 
-// NOTE: we cannot cache on this level currently, because changes to the set of components
+// NOTE: we cannot cache on this level currently because changes to the set of components
 // can happen on other omponent-service nodes too. This should be revisited after the
 // atomic deployment changes.
 #[derive(Debug)]

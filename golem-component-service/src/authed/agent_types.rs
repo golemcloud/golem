@@ -14,8 +14,8 @@
 
 use crate::authed::is_authorized_by_project_or_default;
 use crate::error::ComponentError;
-use crate::model::agent_types::RegisteredAgentType;
 use crate::service::agent_types::AgentTypesService;
+use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::auth::{AuthCtx, ProjectAction};
 use golem_common::model::ProjectId;
 use golem_service_base::clients::auth::AuthService;
