@@ -18,6 +18,7 @@ mod environment;
 mod hash;
 mod http_api_definition;
 mod http_api_deployment;
+mod plugin;
 mod ser;
 
 pub use component::*;
@@ -26,6 +27,7 @@ pub use environment::*;
 pub use hash::*;
 pub use http_api_definition::*;
 pub use http_api_deployment::*;
+pub use plugin::*;
 pub use ser::*;
 
 use serde::{Serialize, Serializer};

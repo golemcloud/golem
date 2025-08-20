@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::diff::{hash_from_serialized_value, Diffable, Hash, Hashable};
+use crate::model::diff::{
+    hash_from_serialized_value, Diffable, Hash, Hashable, PluginInstallation,
+};
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +53,33 @@ impl Diffable for Environment {
 }
 
 impl Hashable for Environment {
+    fn hash(&self) -> Hash {
+        hash_from_serialized_value(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentPluginInstallations {
+    pub plugins_by_priority: BTreeMap<String, PluginInstallation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentPluginInstallationsDiff {
+    pub plugins_changed: bool,
+}
+
+impl Diffable for EnvironmentPluginInstallations {
+    type DiffResult = EnvironmentPluginInstallationsDiff;
+
+    fn diff(local: &Self, server: &Self) -> Option<Self::DiffResult> {
+        let plugins_changed = local.plugins_by_priority != server.plugins_by_priority;
+        plugins_changed.then_some(EnvironmentPluginInstallationsDiff { plugins_changed })
+    }
+}
+
+impl Hashable for EnvironmentPluginInstallations {
     fn hash(&self) -> Hash {
         hash_from_serialized_value(self)
     }

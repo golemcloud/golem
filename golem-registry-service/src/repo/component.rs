@@ -998,9 +998,9 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         self.with_ro("get_component_plugins")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT cpi.component_id, cpi.revision_id, cpi.plugin_id,
-                           p.name as plugin_name, p.version as plugin_version,
-                           cpi.created_at, cpi.created_by, cpi.priority, cpi.parameters
+                    SELECT cpi.component_id, cpi.revision_id, cpi.priority,
+                           cpi.plugin_id, p.name as plugin_name, p.version as plugin_version,
+                           cpi.created_at, cpi.created_by, cpi.parameters
                     FROM component_plugin_installations cpi
                     JOIN plugins p ON p.plugin_id = cpi.plugin_id
                     WHERE cpi.component_id = $1 AND cpi.revision_id = $2
@@ -1019,9 +1019,9 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
     ) -> RepoResult<Vec<ComponentPluginInstallationRecord>> {
         tx.fetch_all_as(
             sqlx::query_as(indoc! { r#"
-                SELECT cpi.component_id, cpi.revision_id, cpi.plugin_id,
-                       p.name as plugin_name, p.version as plugin_version,
-                       cpi.created_at, cpi.created_by, cpi.priority, cpi.parameters
+                SELECT cpi.component_id, cpi.revision_id, cpi.priority,
+                       cpi.plugin_id, p.name as plugin_name, p.version as plugin_version,
+                       cpi.created_at, cpi.created_by, cpi.parameters
                 FROM component_plugin_installations cpi
                 JOIN plugins p ON p.plugin_id = cpi.plugin_id
                 WHERE cpi.component_id = $1 AND cpi.revision_id = $2
@@ -1218,15 +1218,15 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                 INSERT INTO component_plugin_installations
-                (component_id, revision_id, plugin_id, created_at, created_by, priority, parameters)
+                (component_id, revision_id, priority, created_at, created_by, plugin_id, parameters)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING component_id, revision_id, plugin_id, created_at, created_by, priority, parameters
+                RETURNING component_id, revision_id, priority, created_at, created_by, plugin_id, parameters
             "#})
                 .bind(plugin.component_id)
                 .bind(plugin.revision_id)
-                .bind(plugin.plugin_id)
-                .bind_revision_audit(plugin.audit)
                 .bind(plugin.priority)
+                .bind_revision_audit(plugin.audit)
+                .bind(plugin.plugin_id)
                 .bind(plugin.parameters)
         ).await
     }
