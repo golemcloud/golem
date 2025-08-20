@@ -53,8 +53,7 @@ impl SqliteDb {
 
         db::sqlite::migrate(
             &db_config,
-            // NOTE: for now we are using the POSTGRES migrations (until they become incompatible)
-            MigrationsDir::new("db/migration".into()).postgres_migrations(),
+            MigrationsDir::new("db/migration".into()).sqlite_migrations(),
         )
         .await
         .unwrap();
