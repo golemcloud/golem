@@ -34,9 +34,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
         if let Expr::SelectField {
             expr: lhs,
             field,
-            type_annotation,
-            inferred_type,
             source_span,
+            ..
         } = expr
         {
             let lhs_inferred_type = lhs.inferred_type().internal_type().clone();
@@ -62,8 +61,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 TypeInternal::Resource {
                                     resource_id,
                                     resource_mode,
-                                    owner,
-                                    name,
+                                    ..
                                 } => (*resource_id, *resource_mode),
                                 _ => return Err(RibTypeErrorInternal::from(CustomError::new(
                                     expr.source_span(),
@@ -191,7 +189,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                         FunctionName::ResourceConstructor(fully_qualified_resource_constructor) => {
                             let (resource_id, resource_mode) = match function.function_type.return_type {
                                 Some(return_type) => match return_type.internal_type()  {
-                                    TypeInternal::Resource {resource_id, resource_mode, owner, name} =>  {
+                                    TypeInternal::Resource {resource_id, resource_mode, ..} =>  {
                                         (*resource_id, *resource_mode)
                                     }
                                     _ => return Err(RibTypeErrorInternal::from(CustomError::new(expr.source_span(), "expected resource type as return type of resource constructor"))),

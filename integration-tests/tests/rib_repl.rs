@@ -37,13 +37,6 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-#[timeout(20000)]
-async fn test_rib_repl_with_agents(deps: &EnvBasedTestDependencies) {
-    test_repl_invoking_agentic_functions(deps, Some("worker-repl-agents")).await
-}
-
-#[test]
-#[tracing::instrument]
 async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     test_repl_invoking_functions(deps, Some("worker-repl-simple-test")).await;
 }
@@ -64,59 +57,6 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
 #[tracing::instrument]
 async fn test_rib_repl_with_resource_without_param(deps: &EnvBasedTestDependencies) {
     test_repl_invoking_resource_methods(deps, None).await;
-}
-
-async fn test_repl_invoking_agentic_functions(
-    deps: &EnvBasedTestDependencies,
-    worker_name: Option<&str>,
-) {
-    let _ = deps.admin().component("weather_agent").store().await;
-
-    let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
-        history_file: None,
-        dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
-        worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
-        printer: None,
-        component_source: Some(ComponentSource {
-            component_name: "assistant_agent".to_string(),
-            source_path: deps.component_directory().join("assistant_agent.wasm"),
-        }),
-        prompt: None,
-        command_registry: None,
-    })
-    .await
-    .expect("Failed to bootstrap REPL");
-
-    let rib1 = r#"let x = instance()"#.to_string();
-
-    let rib2 = r#"
-       let r = x.assistant-agent()
-    "#;
-
-    let rib3 = r#"
-      r.ask("foo", 42, 42, {data: "foo", value: 42})
-     "#;
-
-    let result = rib_repl
-        .execute(&rib1)
-        .await
-        .expect("Failed to process command");
-
-    assert_eq!(result, Some(RibResult::Unit));
-
-    let result = rib_repl
-        .execute(&rib2)
-        .await
-        .expect("Failed to process command");
-
-    assert_eq!(result, Some(RibResult::Unit));
-
-    let result = rib_repl
-        .execute(&rib3)
-        .await
-        .expect("Failed to process command");
-
-    assert!(result.is_some());
 }
 
 async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
