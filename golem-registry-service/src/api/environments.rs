@@ -25,8 +25,13 @@ use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use tracing::Instrument;
+use crate::services::environment::EnvironmentService;
+use std::sync::Arc;
+use golem_common::model::environment_share::{EnvironmentShare, NewEnvironmentShare};
 
-pub struct EnvironmentsApi {}
+pub struct EnvironmentsApi {
+    environment_service: Arc<EnvironmentService>
+}
 
 #[OpenApi(
     prefix_path = "/v1/envs",
@@ -34,6 +39,14 @@ pub struct EnvironmentsApi {}
     tag = ApiTags::Environment
 )]
 impl EnvironmentsApi {
+    pub fn new(
+        environment_service: Arc<EnvironmentService>
+    ) -> Self {
+        Self {
+            environment_service
+        }
+    }
+
     /// Get environment by id.
     #[oai(
         path = "/:environment_id",
@@ -62,10 +75,11 @@ impl EnvironmentsApi {
 
     async fn get_environment_internal(
         &self,
-        _environment_id: EnvironmentId,
+        environment_id: EnvironmentId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
-        todo!()
+        let environment = self.environment_service.get(&environment_id).await?;
+        Ok(Json(environment))
     }
 
     /// Update environment by id.
@@ -275,6 +289,43 @@ impl EnvironmentsApi {
         _payload: DeployEnvironmentRequest,
         _token: AuthCtx,
     ) -> ApiResult<Json<Deployment>> {
+        todo!()
+    }
+
+    /// Deploy the current staging area of this environment
+    #[oai(
+        path = "/:environment_id/shares",
+        method = "post",
+        operation_id = "create_environment_share",
+        tag = ApiTags::EnvironmentShares
+    )]
+    async fn create_environment_share(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        payload: Json<NewEnvironmentShare>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<EnvironmentShare>> {
+        let record = recorded_http_api_request!(
+            "create_environment_share",
+            environment_id = environment_id.0.to_string(),
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .create_environment_share_internal(environment_id.0, payload.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn create_environment_share_internal(
+        &self,
+        _environment_id: EnvironmentId,
+        _payload: NewEnvironmentShare,
+        _token: AuthCtx,
+    ) -> ApiResult<Json<EnvironmentShare>> {
         todo!()
     }
 }

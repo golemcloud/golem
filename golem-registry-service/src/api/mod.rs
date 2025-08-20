@@ -107,7 +107,9 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 EnvironmentApiDomainsApi {},
                 EnvironmentCertificatesApi {},
                 EnvironmentComponentsApi::new(services.component_service.clone()),
-                EnvironmentsApi {},
+                EnvironmentsApi::new(
+                    services.environment_service.clone()
+                ),
                 EnvironmentSecuritySchemesApi {},
             ),
             LoginApi::new(
