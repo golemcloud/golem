@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
+use crate::components::docker::ContainerHandle;
 use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
@@ -33,7 +33,7 @@ impl DockerPostgresRdb {
     const DEFAULT_PASSWORD: &'static str = "postgres";
     const DEFAULT_DATABASE: &'static str = "postgres";
 
-    pub async fn new(unique_network_id: &str) -> Self {
+    pub async fn new(_unique_network_id: &str) -> Self {
         info!("Starting Postgres container");
 
         let database = Self::DEFAULT_DATABASE;

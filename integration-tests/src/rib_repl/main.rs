@@ -2,10 +2,10 @@ use golem_rib_repl::{ComponentSource, RibRepl, RibReplConfig};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
+use golem_test_framework::dsl::TestDslUnsafe;
 use integration_tests::rib_repl::bootstrap::*;
 use std::sync::Arc;
 use uuid::Uuid;
-use golem_test_framework::dsl::TestDslUnsafe;
 
 #[tokio::main]
 async fn main() {

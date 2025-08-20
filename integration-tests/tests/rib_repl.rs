@@ -70,11 +70,7 @@ async fn test_repl_invoking_agentic_functions(
     deps: &EnvBasedTestDependencies,
     worker_name: Option<&str>,
 ) {
-    let _ = deps
-        .admin()
-        .component("weather_agent")
-        .store()
-        .await;
+    let _ = deps.admin().component("weather_agent").store().await;
 
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
@@ -83,9 +79,7 @@ async fn test_repl_invoking_agentic_functions(
         printer: None,
         component_source: Some(ComponentSource {
             component_name: "assistant_agent".to_string(),
-            source_path: deps
-                .component_directory()
-                .join("assistant_agent.wasm"),
+            source_path: deps.component_directory().join("assistant_agent.wasm"),
         }),
         prompt: None,
         command_registry: None,

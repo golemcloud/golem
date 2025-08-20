@@ -16,10 +16,11 @@ use crate::call_type::{CallType, InstanceCreationType, InstanceIdentifier};
 use crate::rib_type_error::RibTypeErrorInternal;
 use crate::type_parameter::TypeParameter;
 use crate::{
-    CustomError, DynamicParsedFunctionName, Expr, FullyQualifiedResourceConstructor,
+    function_name, CustomError, DynamicParsedFunctionName, Expr, FullyQualifiedResourceConstructor,
     FunctionCallError, InferredType, TypeInternal, TypeOrigin,
 };
 use crate::{FunctionName, InstanceType};
+use combine::parser::function;
 use std::collections::VecDeque;
 
 // This phase is responsible for identifying the worker function invocations
@@ -40,82 +41,77 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
         {
             let lhs_inferred_type = lhs.inferred_type().internal_type().clone();
 
-            match lhs_inferred_type {
-                TypeInternal::Instance { instance_type } => {
-                    let (component, function) =
-                        instance_type.get_function(field, None).map_err(|err| {
-                            FunctionCallError::invalid_function_call(
-                                field,
-                                source_span.clone(),
-                                err,
-                            )
-                        })?;
+            if let TypeInternal::Instance { instance_type } = lhs_inferred_type {
+                let (component, function) =
+                    instance_type.get_function(field, None).map_err(|err| {
+                        FunctionCallError::invalid_function_call(field, source_span.clone(), err)
+                    })?;
 
-                    let module = get_instance_identifier(&instance_type, lhs);
+                let module = get_instance_identifier(&instance_type, lhs);
 
-                    lhs.inferred_type_mut()
-                        .internal_type_mut()
-                        .narrow_to_single_component(&component);
+                lhs.inferred_type_mut()
+                    .internal_type_mut()
+                    .narrow_to_single_component(&component);
 
-                    match function.function_name {
-                        // If resource method is called, we could convert to strict call
-                        // however it can only be possible if the instance type of LHS is
-                        // a resource type
-                        FunctionName::ResourceConstructor(fully_qualified_resource_constructor) => {
-                            let (resource_id, resource_mode) = match function.function_type.return_type {
-                                Some(return_type) => match return_type.internal_type()  {
-                                    TypeInternal::Resource {resource_id, resource_mode, owner, name} =>  {
-                                        (*resource_id, *resource_mode)
-                                    }
-                                    _ => return Err(RibTypeErrorInternal::from(CustomError::new(expr.source_span(), "expected resource type as return type of resource constructor"))),
-                                }
-
-                                None => {
-                                    return Err(RibTypeErrorInternal::from(CustomError::new(
-                                        expr.source_span(),
-                                        "resource constructor must have a return type",
-                                    )));
-                                }
-                            };
-
-                            let resource_instance_type = instance_type
-                                .get_resource_instance_type(
-                                    fully_qualified_resource_constructor.clone(),
-                                    vec![],
-                                    instance_type.worker_name(),
+                if let FunctionName::ResourceConstructor(fully_qualified_resource_constructor) =
+                    function.function_name
+                {
+                    let (resource_id, resource_mode) =
+                        match function.function_type.return_type {
+                            Some(return_type) => match return_type.internal_type() {
+                                TypeInternal::Resource {
                                     resource_id,
                                     resource_mode,
-                                )
-                                .map_err(|err| {
-                                    RibTypeErrorInternal::from(CustomError::new(
-                                        lhs.source_span(),
-                                        format!("Failed to get resource instance type: {err}"),
-                                    ))
-                                })?;
+                                    owner,
+                                    name,
+                                } => (*resource_id, *resource_mode),
+                                _ => return Err(RibTypeErrorInternal::from(CustomError::new(
+                                    expr.source_span(),
+                                    "expected resource type as return type of resource constructor",
+                                ))),
+                            },
 
-                            let new_inferred_type = InferredType::new(
-                                TypeInternal::Instance {
-                                    instance_type: Box::new(resource_instance_type),
-                                },
-                                TypeOrigin::NoOrigin,
-                            );
+                            None => {
+                                return Err(RibTypeErrorInternal::from(CustomError::new(
+                                    expr.source_span(),
+                                    "resource constructor must have a return type",
+                                )));
+                            }
+                        };
 
-                            let new_call_type =
-                                CallType::InstanceCreation(InstanceCreationType::WitResource {
-                                    component_info: Some(component.clone()),
-                                    module: Some(module),
-                                    resource_name: fully_qualified_resource_constructor.clone(),
-                                });
+                    let resource_instance_type = instance_type
+                        .get_resource_instance_type(
+                            fully_qualified_resource_constructor.clone(),
+                            vec![],
+                            instance_type.worker_name(),
+                            resource_id,
+                            resource_mode,
+                        )
+                        .map_err(|err| {
+                            RibTypeErrorInternal::from(CustomError::new(
+                                lhs.source_span(),
+                                format!("Failed to get resource instance type: {err}"),
+                            ))
+                        })?;
 
-                            *expr = Expr::call(new_call_type, None, vec![])
-                                .with_inferred_type(new_inferred_type)
-                                .with_source_span(source_span.clone());
-                        }
-                        _ => {}
-                    }
+                    let new_inferred_type = InferredType::new(
+                        TypeInternal::Instance {
+                            instance_type: Box::new(resource_instance_type),
+                        },
+                        TypeOrigin::NoOrigin,
+                    );
+
+                    let new_call_type =
+                        CallType::InstanceCreation(InstanceCreationType::WitResource {
+                            component_info: Some(component.clone()),
+                            module: Some(module),
+                            resource_name: fully_qualified_resource_constructor.clone(),
+                        });
+
+                    *expr = Expr::call(new_call_type, None, vec![])
+                        .with_inferred_type(new_inferred_type)
+                        .with_source_span(source_span.clone());
                 }
-
-                _ => {}
             }
         } else if let Expr::InvokeMethodLazy {
             lhs,
@@ -297,14 +293,12 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                             ))
                                         })?;
 
-                                    let rr = InferredType::new(
+                                    InferredType::new(
                                         TypeInternal::Instance {
                                             instance_type: Box::new(resource_instance_type),
                                         },
                                         TypeOrigin::NoOrigin,
-                                    );
-
-                                    rr
+                                    )
                                 }
 
                                 _ => InferredType::unknown(),

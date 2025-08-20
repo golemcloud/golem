@@ -1149,7 +1149,7 @@ impl Expr {
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
         self.infer_function_call_types(component_dependency)?;
         type_inference::type_inference_fix_point(
-            |x| Self::inference_scan(x, &component_dependency),
+            |x| Self::inference_scan(x, component_dependency),
             self,
         )?;
         self.check_types(component_dependency)?;
@@ -1206,7 +1206,7 @@ impl Expr {
         self.infer_all_identifiers();
         self.pull_types_up(component_dependencies)?;
         self.infer_global_inputs();
-        self.infer_function_call_types(&component_dependencies)?;
+        self.infer_function_call_types(component_dependencies)?;
         Ok(())
     }
 

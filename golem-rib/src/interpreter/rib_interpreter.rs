@@ -4856,7 +4856,6 @@ mod tests {
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
-            TypeResult,
         };
         use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;

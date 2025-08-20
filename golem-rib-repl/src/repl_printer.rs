@@ -568,12 +568,12 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
                     );
 
                     let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
-                    format!("{}({})", case_name, inner_value_and_type)
+                    format!("{case_name}({inner_value_and_type})")
                 }
 
                 None => {
                     // If the case has no value, just return the case name
-                    format!("{}", case_name)
+                    case_name.to_string()
                 }
             }
         }
@@ -587,9 +587,9 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
                 .cases
                 .get(*case_index as usize)
                 .unwrap_or_else(|| {
-                    panic!("Enum case index out of bounds: {}", case_index);
+                    panic!("Enum case index out of bounds: {case_index}");
                 });
-            format!("{}", case_name)
+            case_name.to_string()
         }
         Value::Flags(bool_list) => {
             let flags_type = match &value_and_type.typ {
@@ -603,7 +603,7 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
                     string.push_str(", ");
                 }
                 let flag_name = flags_type.names.get(i).unwrap_or_else(|| {
-                    panic!("Flags index out of bounds: {}", i);
+                    panic!("Flags index out of bounds: {i}");
                 });
 
                 if *value {
@@ -625,7 +625,7 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
                     let inner_value_and_type =
                         ValueAndType::new(value.as_ref().clone(), inner_type.clone());
                     let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
-                    format!("some({})", inner_value_and_type)
+                    format!("some({inner_value_and_type})")
                 }
                 None => "none".to_string(),
             }
@@ -650,7 +650,7 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
                         ok_inner_type.unwrap().as_ref().clone(),
                     );
                     let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
-                    format!("ok({})", inner_value_and_type)
+                    format!("ok({inner_value_and_type})")
                 }
                 Ok(None) => "ok".to_string(),
                 Err(Some(value)) => {
@@ -659,7 +659,7 @@ fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
                         err_inner_type.unwrap().as_ref().clone(),
                     );
                     let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
-                    format!("err({})", inner_value_and_type)
+                    format!("err({inner_value_and_type})")
                 }
                 Err(None) => "err".to_string(),
             }

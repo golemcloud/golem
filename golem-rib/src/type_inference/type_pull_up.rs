@@ -448,7 +448,7 @@ fn handle_residual_method_invokes(
             let fully_qualified_resource_method = if let Some(owner) = owner {
                 let owner_string : String = owner;
                 let parts: Vec<&str> = owner_string.split('/').collect();
-                let namespace_and_package = parts.get(0).map(|s| s.to_string());
+                let namespace_and_package = parts.first().map(|s| s.to_string());
 
                 let namespace = namespace_and_package
                     .as_ref()
@@ -511,7 +511,7 @@ fn handle_residual_method_invokes(
                     worker_name: None,
                     resource_name: name.unwrap().to_string()
                 }),
-                args.clone().to_vec(),
+                args.to_vec(),
                 Some(key)
             )
                 .with_inferred_type(inferred_type)

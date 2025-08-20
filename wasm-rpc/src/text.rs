@@ -461,7 +461,7 @@ mod tests {
 
         let s = print_value_and_type(&typed_value).unwrap();
         let round_trip_value: ValueAndType = parse_value_and_type(&typ, &s).unwrap();
-        let result: Value = (round_trip_value);
+        let result: Value = Value::from(round_trip_value);
         assert_eq!(value, result);
     }
 
