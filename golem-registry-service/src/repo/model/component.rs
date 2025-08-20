@@ -390,7 +390,15 @@ impl ComponentRevisionRecord {
             plugins_by_priority: self
                 .plugins
                 .iter()
-                .map(|plugin| (plugin.priority.to_string(), plugin.plugin_id))
+                .map(|plugin| {
+                    (
+                        plugin.priority.to_string(),
+                        diff::PluginInstallation {
+                            plugin_id: plugin.plugin_id,
+                            parameters: plugin.parameters.0.clone(),
+                        },
+                    )
+                })
                 .collect(),
         }
     }
@@ -547,14 +555,14 @@ impl TryFrom<ComponentFileRecord> for InitialComponentFile {
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ComponentPluginInstallationRecord {
-    pub component_id: Uuid,
-    pub revision_id: i64,       // NOTE: Set by repo during insert
+    pub component_id: Uuid, // NOTE: set by repo during insert
+    pub revision_id: i64,   // NOTE: set by repo during insert
+    pub priority: i32,
+    #[sqlx(flatten)]
+    pub audit: RevisionAuditFields,
     pub plugin_id: Uuid,        // NOTE: required for insert
     pub plugin_name: String,    // NOTE: returned by repo, not required to set
     pub plugin_version: String, // NOTE: returned by repo, not required to set
-    #[sqlx(flatten)]
-    pub audit: RevisionAuditFields,
-    pub priority: i32,
     pub parameters: Json<BTreeMap<String, String>>,
 }
 

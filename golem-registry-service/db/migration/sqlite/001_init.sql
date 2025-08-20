@@ -580,22 +580,20 @@ CREATE TABLE component_plugin_installations
 (
     component_id UUID      NOT NULL,
     revision_id  BIGINT    NOT NULL,
-    plugin_id    UUID      NOT NULL,
+    priority     INT       NOT NULL,
 
     created_at   TIMESTAMP NOT NULL,
     created_by   UUID      NOT NULL,
 
-    priority     INT       NOT NULL,
+    plugin_id    UUID      NOT NULL,
     parameters   JSONB     NOT NULL,
 
     CONSTRAINT component_plugin_installations_pk
-        PRIMARY KEY (component_id, revision_id, plugin_id),
+        PRIMARY KEY (component_id, revision_id, priority),
     CONSTRAINT component_plugin_installations_components_fk
         FOREIGN KEY (component_id, revision_id) REFERENCES component_revisions,
     CONSTRAINT component_plugin_installations_plugins_fk
-        FOREIGN KEY (plugin_id) REFERENCES plugins,
-    CONSTRAINT component_plugin_installations_priority_uk
-        UNIQUE (component_id, revision_id, priority)
+        FOREIGN KEY (plugin_id) REFERENCES plugins
 );
 
 CREATE INDEX component_plugin_installations_plugin_idx ON component_plugin_installations (plugin_id);
@@ -625,19 +623,22 @@ CREATE TABLE environment_plugin_installation_revisions
 (
     environment_id UUID      NOT NULL,
     revision_id    BIGINT    NOT NULL,
-    plugin_id      UUID      NOT NULL,
+    priority       INT       NOT NULL,
 
     created_at     TIMESTAMP NOT NULL,
     created_by     UUID      NOT NULL,
 
-    priority       INT       NOT NULL,
+    plugin_id      UUID      NOT NULL,
     parameters     JSONB     NOT NULL,
 
     CONSTRAINT environment_plugin_installation_revisions_pk
-        PRIMARY KEY (environment_id, revision_id, plugin_id),
+        PRIMARY KEY (environment_id, revision_id, priority),
     CONSTRAINT environment_plugin_installation_revisions_environment_fk
         FOREIGN KEY (environment_id) REFERENCES environment_plugin_installations,
     CONSTRAINT environment_plugin_installation_revisions_plugins_fk
         FOREIGN KEY (plugin_id) REFERENCES plugins
 );
+
+CREATE INDEX environment_plugin_installation_revisions_plugin_idx
+    ON environment_plugin_installation_revisions (plugin_id);
 

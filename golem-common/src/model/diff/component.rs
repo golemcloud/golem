@@ -14,11 +14,11 @@
 
 use crate::model::component::{ComponentFilePermissions, ComponentType};
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
+use crate::model::diff::plugin::PluginInstallation;
 use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use serde::Serialize;
 use std::collections::BTreeMap;
-use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,7 +94,7 @@ pub struct Component {
     #[serde(serialize_with = "serialize_with_mode")]
     pub files_by_path: BTreeMap<String, HashOf<ComponentFile>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub plugins_by_priority: BTreeMap<String, Uuid>,
+    pub plugins_by_priority: BTreeMap<String, PluginInstallation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
