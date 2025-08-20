@@ -7,6 +7,8 @@ tags:
 - name: Account
   description: The account API allows users to query and manipulate their own account data.
 - name: AccountSummary
+- name: AgentTypes
+  description: API working on registered agent types
 - name: ApiCertificate
 - name: ApiDefinition
 - name: ApiDeployment
@@ -1570,6 +1572,135 @@ paths:
       - Cookie: []
       - Token: []
       operationId: create_app_plugin
+  /v1/agent-types:
+    get:
+      tags:
+      - AgentTypes
+      parameters:
+      - name: project-id
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RegisteredAgentType'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_all_agent_types
+  /v1/agent-types/{agent-type}:
+    get:
+      tags:
+      - AgentTypes
+      parameters:
+      - name: agent-type
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: project-id
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RegisteredAgentType'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_agent_type
 components:
   schemas:
     AgentConstructor:
@@ -2896,6 +3027,18 @@ components:
       - projectId
       properties:
         projectId:
+          type: string
+          format: uuid
+    RegisteredAgentType:
+      type: object
+      title: RegisteredAgentType
+      required:
+      - agentType
+      - implementedBy
+      properties:
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        implementedBy:
           type: string
           format: uuid
     TextDescriptor:

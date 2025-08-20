@@ -32,6 +32,7 @@ pub mod bindings {
     });
 }
 
+use crate::model::ComponentId;
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::analysed_type::{case, variant};
 use golem_wasm_ast::analysis::AnalysedType;
@@ -281,4 +282,13 @@ pub struct TextType {
 #[serde(rename_all = "camelCase")]
 pub struct AgentTypes {
     pub types: Vec<AgentType>,
+}
+
+#[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredAgentType {
+    pub agent_type: AgentType,
+    pub implemented_by: ComponentId,
 }

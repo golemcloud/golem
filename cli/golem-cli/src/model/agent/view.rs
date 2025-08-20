@@ -12,10 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod extraction;
-pub mod moonbit;
-pub mod view;
-pub mod wit;
+use cli_table::Table;
+use golem_common::model::agent::RegisteredAgentType;
+use serde_derive::{Deserialize, Serialize};
 
-#[cfg(test)]
-pub mod test;
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize, Table)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTypeView {
+    pub agent_type: String,
+    pub description: String,
+}
+
+impl AgentTypeView {
+    pub fn new(value: &RegisteredAgentType) -> Self {
+        Self {
+            agent_type: value.agent_type.type_name.clone(),
+            description: value.agent_type.description.clone(),
+        }
+    }
+}

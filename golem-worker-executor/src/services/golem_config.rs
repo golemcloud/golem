@@ -53,6 +53,7 @@ pub struct GolemConfig {
     pub component_service: ComponentServiceConfig,
     pub component_cache: ComponentCacheConfig,
     pub project_service: ProjectServiceConfig,
+    pub agent_types_service: AgentTypesServiceConfig,
     pub grpc_address: String,
     pub port: u16,
     pub http_address: String,
@@ -394,6 +395,38 @@ pub struct ProjectServiceDisabledConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
+pub enum AgentTypesServiceConfig {
+    Grpc(AgentTypesServiceGrpcConfig),
+    Local(AgentTypesServiceLocalConfig),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentTypesServiceGrpcConfig {
+    pub host: String,
+    pub port: u16,
+    pub access_token: String,
+    pub retries: RetryConfig,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
+    #[serde(with = "humantime_serde")]
+    pub cache_time_to_idle: Duration,
+}
+
+impl AgentTypesServiceGrpcConfig {
+    pub fn url(&self) -> Url {
+        build_url("agent_types", &self.host, self.port)
+    }
+
+    pub fn uri(&self) -> Uri {
+        build_uri("agent_types", &self.host, self.port)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentTypesServiceLocalConfig {}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
 pub enum ComponentServiceConfig {
     Local(ComponentServiceLocalConfig),
     Grpc(ComponentServiceGrpcConfig),
@@ -449,6 +482,7 @@ impl Default for GolemConfig {
             component_service: ComponentServiceConfig::default(),
             component_cache: ComponentCacheConfig::default(),
             project_service: ProjectServiceConfig::default(),
+            agent_types_service: AgentTypesServiceConfig::default(),
             grpc_address: "0.0.0.0".to_string(),
             port: 9000,
             http_address: "0.0.0.0".to_string(),
@@ -719,6 +753,25 @@ impl Default for ProjectServiceGrpcConfig {
             connect_timeout: Duration::from_secs(30),
             max_resolved_project_cache_capacity: 1024,
             cache_time_to_idle: Duration::from_secs(12 * 60 * 60),
+        }
+    }
+}
+
+impl Default for AgentTypesServiceConfig {
+    fn default() -> Self {
+        Self::Grpc(AgentTypesServiceGrpcConfig::default())
+    }
+}
+
+impl Default for AgentTypesServiceGrpcConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 9092,
+            access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
+            retries: RetryConfig::max_attempts_3(),
+            connect_timeout: Duration::from_secs(30),
+            cache_time_to_idle: Duration::from_secs(60),
         }
     }
 }
