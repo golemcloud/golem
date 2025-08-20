@@ -1125,7 +1125,7 @@ impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
     }
 }
 
-async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
+pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_worker_id: TargetWorkerId,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
