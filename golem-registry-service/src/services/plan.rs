@@ -28,6 +28,8 @@ use tracing::{debug, info};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlanError {
+    #[error("Plan not found for id {0}")]
+    PlanNotFound(PlanId),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -35,6 +37,7 @@ pub enum PlanError {
 impl SafeDisplay for PlanError {
     fn to_safe_string(&self) -> String {
         match self {
+            Self::PlanNotFound(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -62,14 +65,10 @@ impl PlanService {
     pub async fn create_initial_plans(&self) -> Result<(), PlanError> {
         for (name, plan) in &self.config.plans {
             let plan_id = PlanId(plan.plan_id);
-            let existing_plan = self.get(&plan_id).await?;
+            let existing_plan = self.get(&plan_id).await;
 
             let needs_update = match existing_plan {
-                None => {
-                    info!("Creating initial plan {} with id {}", name, plan.plan_id);
-                    true
-                }
-                Some(existing_plan) => {
+                Ok(existing_plan) => {
                     let needs_update = existing_plan.app_limit != plan.app_limit
                         || existing_plan.env_limit != plan.env_limit
                         || existing_plan.component_limit != plan.component_limit
@@ -84,6 +83,11 @@ impl PlanService {
 
                     needs_update
                 }
+                Err(PlanError::PlanNotFound(_)) => {
+                    info!("Creating initial plan {} with id {}", name, plan.plan_id);
+                    true
+                }
+                Err(other) => Err(other)?,
             };
 
             if needs_update {
@@ -127,9 +131,15 @@ impl PlanService {
         }
     }
 
-    pub async fn get(&self, plan_id: &PlanId) -> Result<Option<Plan>, PlanError> {
+    pub async fn get(&self, plan_id: &PlanId) -> Result<Plan, PlanError> {
         debug!("Getting plan {}", plan_id);
-        let result = self.plan_repo.get_by_id(&plan_id.0).await?;
-        Ok(result.map(|p| p.try_into()).transpose()?)
+
+        let result = self
+            .plan_repo
+            .get_by_id(&plan_id.0)
+            .await?
+            .ok_or(PlanError::PlanNotFound(plan_id.clone()))?;
+
+        Ok(result.try_into()?)
     }
 }

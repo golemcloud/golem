@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod account_applications;
-pub mod account_grants;
 pub mod account_tokens;
 pub mod accounts;
 pub mod api_definitions;
@@ -36,7 +35,6 @@ pub mod security_schemes;
 pub mod tokens;
 
 use self::account_applications::AccountApplicationsApi;
-use self::account_grants::AccountGrantsApi;
 use self::account_tokens::AccountTokensApi;
 use self::accounts::AccountsApi;
 use self::api_definitions::ApiDefinitionsApi;
@@ -63,12 +61,7 @@ use poem_openapi::OpenApiService;
 
 pub type Apis = (
     HealthcheckApi,
-    (
-        AccountApplicationsApi,
-        AccountGrantsApi,
-        AccountTokensApi,
-        AccountsApi,
-    ),
+    (AccountApplicationsApi, AccountTokensApi, AccountsApi),
     ApiDefinitionsApi,
     ApiDeploymentsApi,
     ApiDomainsApi,
@@ -96,9 +89,11 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
             HealthcheckApi,
             (
                 AccountApplicationsApi::new(services.application_service.clone()),
-                AccountGrantsApi {},
                 AccountTokensApi::new(services.token_service.clone()),
-                AccountsApi::new(services.account_service.clone()),
+                AccountsApi::new(
+                    services.account_service.clone(),
+                    services.plan_service.clone(),
+                ),
             ),
             ApiDefinitionsApi {},
             ApiDeploymentsApi {},

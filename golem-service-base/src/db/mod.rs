@@ -199,6 +199,43 @@ pub trait Pool: Debug + Sync + Clone {
             }
         }
     }
+
+    /// A simplified version of with_tx_err in which a custom error type is used that can absorb repo errors.
+    async fn with_tx_custom_error<R, E, F>(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        f: F,
+    ) -> Result<R, E>
+    where
+        R: Send,
+        E: Debug + Send + From<RepoError>,
+        F: for<'f> FnOnce(
+                &'f mut <Self::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+            ) -> BoxFuture<'f, Result<R, E>>
+            + Send,
+    {
+        let mut tx = self.with_rw(svc_name, api_name).begin().await?;
+        match f(&mut tx).await {
+            Ok(result) => {
+                tx.commit().await?;
+                Ok(result)
+            }
+            Err(err) => {
+                warn!(
+                    svc_name, api_name, error = ?err,
+                    "Rolling back, transaction failed with repo error",
+                );
+
+                // If rollback fails, we still return the original error, but log the rollback error
+                if let Err(rollback_error) = tx.rollback().await {
+                    error!(svc_name, api_name, rollback_error = %rollback_error, "Rollback failed");
+                }
+
+                Err(err)
+            }
+        }
+    }
 }
 
 #[async_trait]

@@ -18,11 +18,13 @@ use chrono::Utc;
 use futures::future::join_all;
 use golem_common::model::component::ComponentFilePermissions;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_registry_service::repo::account::AccountRecord;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
+use golem_registry_service::repo::model::account::{
+    AccountRepoError, AccountRevisionRecord, JoinedAccountRecord,
+};
 use golem_registry_service::repo::model::account_usage::{UsageTracking, UsageType};
 use golem_registry_service::repo::model::audit::{
-    AuditFields, DeletableRevisionAuditFields, RevisionAuditFields,
+    DeletableRevisionAuditFields, RevisionAuditFields,
 };
 use golem_registry_service::repo::model::component::{
     ComponentFileRecord, ComponentPluginInstallationRecord, ComponentRevisionRecord,
@@ -44,30 +46,32 @@ use strum::IntoEnumIterator;
 // Common test cases -------------------------------------------------------------------------------
 
 pub async fn test_create_and_get_account(deps: &Deps) {
-    let account = AccountRecord {
+    let account = AccountRevisionRecord {
         account_id: new_repo_uuid(),
+        revision_id: 0,
         email: new_repo_uuid().to_string(),
-        audit: AuditFields::new(new_repo_uuid()),
+        audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
         name: new_repo_uuid().to_string(),
+        roles: Vec::new(),
         plan_id: deps.test_plan_id(),
     };
 
     let created_account = deps.account_repo.create(account.clone()).await.unwrap();
-    let_assert!(Some(created_account) = created_account);
-    assert!(account == created_account);
+    compare_created_to_requested_account(&account, &created_account);
 
     let result_for_same_email = deps
         .account_repo
-        .create(AccountRecord {
+        .create(AccountRevisionRecord {
             account_id: new_repo_uuid(),
+            revision_id: 0,
             email: account.email.clone(),
-            audit: AuditFields::new(new_repo_uuid()),
+            audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
             name: new_repo_uuid().to_string(),
+            roles: Vec::new(),
             plan_id: deps.test_plan_id(),
         })
-        .await
-        .unwrap();
-    let_assert!(None = result_for_same_email);
+        .await;
+    let_assert!(Err(AccountRepoError::AccountViolatesUniqueness) = result_for_same_email);
 
     let requested_account = deps
         .account_repo
@@ -75,7 +79,7 @@ pub async fn test_create_and_get_account(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(requested_account) = requested_account);
-    assert!(account == requested_account);
+    compare_created_to_requested_account(&account, &requested_account);
 
     let requested_account = deps
         .account_repo
@@ -83,7 +87,36 @@ pub async fn test_create_and_get_account(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(requested_account) = requested_account);
-    assert!(account == requested_account);
+    compare_created_to_requested_account(&account, &requested_account);
+}
+
+pub async fn test_update(deps: &Deps) {
+    let account = AccountRevisionRecord {
+        account_id: new_repo_uuid(),
+        revision_id: 0,
+        email: new_repo_uuid().to_string(),
+        audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
+        name: new_repo_uuid().to_string(),
+        roles: Vec::new(),
+        plan_id: deps.test_plan_id(),
+    };
+
+    let created_account = deps.account_repo.create(account.clone()).await.unwrap();
+    compare_created_to_requested_account(&account, &created_account);
+
+    let updated_account = AccountRevisionRecord {
+        revision_id: 1,
+        name: "Updated name".to_string(),
+        ..account
+    };
+
+    let created_updated_account = deps
+        .account_repo
+        .update(updated_account.clone())
+        .await
+        .unwrap();
+
+    compare_created_to_requested_account(&updated_account, &created_updated_account);
 }
 
 pub async fn test_application_ensure(deps: &Deps) {
@@ -1332,4 +1365,14 @@ pub async fn test_account_usage(deps: &Deps) {
         check!(usage.usage(UsageType::TotalEnvCount) == 1);
         check!(usage.usage(UsageType::TotalComponentCount) == 1);
     }
+}
+
+fn compare_created_to_requested_account(
+    requested: &AccountRevisionRecord,
+    created: &JoinedAccountRecord,
+) {
+    assert!(created.account_id == requested.account_id);
+    assert!(created.name == requested.name);
+    assert!(created.email == requested.email);
+    assert!(created.roles == requested.roles)
 }

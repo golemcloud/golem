@@ -15,15 +15,16 @@
 use super::plan::{PlanError, PlanService};
 use super::token::{TokenError, TokenService};
 use crate::config::AccountsConfig;
-use crate::repo::account::{AccountRecord, AccountRepo};
-use crate::repo::model::audit::AuditFields;
-use anyhow::anyhow;
+use crate::repo::account::AccountRepo;
+use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord, AccountRoleRecord};
+use crate::repo::model::audit::DeletableRevisionAuditFields;
 use chrono::{DateTime, Utc};
 use golem_common::model::PlanId;
-use golem_common::model::account::{Account, AccountId, NewAccountData};
-use golem_common::model::auth::TokenSecret;
+use golem_common::model::account::{
+    Account, AccountId, AccountRevision, NewAccountData, UpdatedAccountData,
+};
+use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::{SafeDisplay, error_forwarders, into_internal_error};
-use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -32,6 +33,10 @@ use tracing::{error, info};
 pub enum AccountError {
     #[error("Account Not Found: {0}")]
     AccountNotFound(AccountId),
+    #[error("Email already in use")]
+    EmailAlreadyInUse,
+    #[error("Concurrent update")]
+    ConcurrentUpdate,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -40,6 +45,8 @@ impl SafeDisplay for AccountError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::AccountNotFound(_) => self.to_string(),
+            Self::EmailAlreadyInUse => self.to_string(),
+            Self::ConcurrentUpdate => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -47,7 +54,7 @@ impl SafeDisplay for AccountError {
 
 into_internal_error!(AccountError);
 
-error_forwarders!(AccountError, RepoError, PlanError, TokenError,);
+error_forwarders!(AccountError, PlanError, TokenError, AccountRepoError);
 
 pub struct AccountService {
     account_repo: Arc<dyn AccountRepo>,
@@ -85,7 +92,9 @@ impl AccountService {
                             name: account.name.clone(),
                             email: account.email.clone(),
                         },
+                        vec![account.role.clone()],
                         PlanId(account.plan_id),
+                        account_id.clone(),
                     )
                     .await?;
                     // TODO: Deal with failure here
@@ -106,11 +115,69 @@ impl AccountService {
         Ok(())
     }
 
-    pub async fn create(&self, account: NewAccountData) -> Result<Account, AccountError> {
+    pub async fn create(
+        &self,
+        account: NewAccountData,
+        actor: AccountId,
+    ) -> Result<Account, AccountError> {
         let id = AccountId::new_v4();
         let plan_id = self.get_default_plan_id().await?;
         info!("Creating account: {}", id);
-        self.create_internal(id, account, plan_id).await
+        self.create_internal(id, account, Vec::new(), plan_id, actor)
+            .await
+    }
+
+    /// create account with the account being the user creating it
+    pub async fn create_bootstrapped(
+        &self,
+        account: NewAccountData,
+    ) -> Result<Account, AccountError> {
+        let id = AccountId::new_v4();
+        info!("Creating account: {}", id);
+        let plan_id = self.get_default_plan_id().await?;
+        self.create_internal(id.clone(), account, Vec::new(), plan_id, id)
+            .await
+    }
+
+    pub async fn update(
+        &self,
+        account_id: &AccountId,
+        update: UpdatedAccountData,
+        actor: AccountId,
+    ) -> Result<Account, AccountError> {
+        info!("Updating account: {}", account_id);
+
+        let mut account: Account = self
+            .account_repo
+            .get_by_id(&account_id.0)
+            .await?
+            .ok_or(AccountError::AccountNotFound(account_id.clone()))?
+            .try_into()?;
+
+        account.name = update.name;
+        account.email = update.email;
+
+        self.update_internal(account, actor).await
+    }
+
+    pub async fn set_roles(
+        &self,
+        account_id: &AccountId,
+        roles: Vec<AccountRole>,
+        actor: AccountId,
+    ) -> Result<Account, AccountError> {
+        info!("Updating account: {}", account_id);
+
+        let mut account: Account = self
+            .account_repo
+            .get_by_id(&account_id.0)
+            .await?
+            .ok_or(AccountError::AccountNotFound(account_id.clone()))?
+            .try_into()?;
+
+        account.roles = roles;
+
+        self.update_internal(account, actor).await
     }
 
     pub async fn get(&self, account_id: &AccountId) -> Result<Account, AccountError> {
@@ -119,129 +186,81 @@ impl AccountService {
             .ok_or(AccountError::AccountNotFound(account_id.clone()))
     }
 
-    // pub async fn update(
-    //     &self,
-    //     account_id: &AccountId,
-    //     account: &AccountData,
-    // ) -> Result<Account, AccountError> {
-    //     info!("Updating account: {}", account_id);
-    //     let current_account = self.account_repo.get_by_id(&account_id.0).await?;
-    //     let plan_id = match current_account {
-    //         Some(current_account) => current_account.plan_id,
-    //         None => self.get_default_plan_id().await?.0,
-    //     };
-
-    //     let result = self
-    //         .account_repo
-    //         .update(&AccountRecord {
-    //             id: account_id.value.clone(),
-    //             name: account.name.clone(),
-    //             email: account.email.clone(),
-    //             plan_id,
-    //         })
-    //         .await;
-
-    //     match result {
-    //         Ok(account_record) => Ok(account_record.into()),
-    //         Err(err) => {
-    //             error!("DB call failed. {}", err);
-    //             Err(err.into())
-    //         }
-    //     }
-    // }
-
-    // /// Get all users
-    // pub async fn find(
-    //     &self,
-    //     email: Option<&str>,
-    //     viewable_accounts: ViewableAccounts,
-    // ) -> Result<Vec<Account>, AccountError> {
-    //     let results = match viewable_accounts {
-    //         ViewableAccounts::All => self.account_repo.find_all(email).await?,
-    //         ViewableAccounts::Limited { account_ids } => {
-    //             let ids = account_ids
-    //                 .into_iter()
-    //                 .map(|ai| ai.value)
-    //                 .collect::<Vec<_>>();
-    //             self.account_repo.find(&ids, email).await?
-    //         }
-    //     };
-
-    //     Ok(results.into_iter().map(|v| v.into()).collect())
-    // }
-
-    // pub async fn get_plan(&self, account_id: &AccountId) -> Result<Plan, AccountError> {
-    //     info!("Get plan: {}", account_id);
-
-    //     let result = self.account_repo.get(&account_id.value).await;
-    //     match result {
-    //         Ok(Some(account_record)) => {
-    //             match self.plan_service.get(&PlanId(account_record.plan_id)).await {
-    //                 Ok(Some(plan)) => Ok(plan),
-    //                 Ok(None) => Err(format!(
-    //                     "Could not find plan with id: {}",
-    //                     account_record.plan_id
-    //                 )
-    //                 .into()),
-    //                 Err(err) => {
-    //                     error!("DB call failed. {:?}", err);
-    //                     Err(err.into())
-    //                 }
-    //             }
-    //         }
-    //         Ok(None) => Err(AccountError::AccountNotFound(account_id.clone())),
-    //         Err(err) => {
-    //             error!("DB call failed. {}", err);
-    //             Err(err.into())
-    //         }
-    //     }
-    // }
-
-    // pub async fn delete(&self, account_id: &AccountId) -> Result<(), AccountError> {
-    //     let result = self.account_repo.delete(&account_id.value).await;
-    //     match result {
-    //         Ok(_) => Ok(()),
-    //         Err(err) => {
-    //             error!("DB call failed. {}", err);
-    //             Err(err.into())
-    //         }
-    //     }
-    // }
-
     async fn create_internal(
         &self,
         id: AccountId,
         account: NewAccountData,
+        roles: Vec<AccountRole>,
         plan_id: PlanId,
+        actor: AccountId,
     ) -> Result<Account, AccountError> {
-        let record = self
+        let revision = AccountRevision::INITIAL;
+        let result = self
             .account_repo
-            .create(AccountRecord {
+            .create(AccountRevisionRecord {
                 account_id: id.0,
+                revision_id: revision.0 as i64,
                 name: account.name,
                 email: account.email,
                 plan_id: plan_id.0,
-                audit: AuditFields::new(id.0),
+                audit: DeletableRevisionAuditFields::new(actor.0),
+                roles: roles
+                    .into_iter()
+                    .map(|role| AccountRoleRecord::from_model(id.clone(), revision, role))
+                    .collect(),
             })
-            .await?
-            .ok_or(anyhow!("Duplicated account on fresh id: {id}"))?;
+            .await;
 
-        Ok(record.into())
+        match result {
+            Ok(record) => Ok(record.try_into()?),
+            Err(AccountRepoError::AccountViolatesUniqueness) => {
+                Err(AccountError::EmailAlreadyInUse)?
+            }
+            Err(other) => Err(other)?,
+        }
+    }
+
+    async fn update_internal(
+        &self,
+        account: Account,
+        actor: AccountId,
+    ) -> Result<Account, AccountError> {
+        let revision = account.revision.next()?;
+        let result = self
+            .account_repo
+            .update(AccountRevisionRecord {
+                account_id: account.id.0,
+                revision_id: revision.0 as i64,
+                name: account.name,
+                email: account.email,
+                plan_id: account.plan_id.0,
+                audit: DeletableRevisionAuditFields::new(actor.0),
+                roles: account
+                    .roles
+                    .into_iter()
+                    .map(|role| AccountRoleRecord::from_model(account.id.clone(), revision, role))
+                    .collect(),
+            })
+            .await;
+
+        match result {
+            Ok(record) => Ok(record.try_into()?),
+            Err(AccountRepoError::AccountViolatesUniqueness) => {
+                Err(AccountError::EmailAlreadyInUse)?
+            }
+            Err(AccountRepoError::VersionAlreadyExists { .. }) => {
+                Err(AccountError::ConcurrentUpdate)?
+            }
+            Err(other) => Err(other)?,
+        }
     }
 
     pub async fn get_optional(
         &self,
         account_id: &AccountId,
     ) -> Result<Option<Account>, AccountError> {
-        info!("Get account: {}", account_id);
-
-        let result = self
-            .account_repo
-            .get_by_id(&account_id.0)
-            .await?
-            .map(|a| a.into());
-
-        Ok(result)
+        let record = self.account_repo.get_by_id(&account_id.0).await?;
+        Ok(record.map(|r| r.try_into()).transpose()?)
     }
 
     async fn get_default_plan_id(&self) -> Result<PlanId, AccountError> {

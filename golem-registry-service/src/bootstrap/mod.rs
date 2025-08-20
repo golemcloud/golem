@@ -35,6 +35,7 @@ use crate::services::environment::EnvironmentService;
 use crate::services::plan::PlanService;
 use crate::services::token::TokenService;
 use anyhow::{Context, anyhow};
+use golem_common::IntoInternalError;
 use golem_common::config::DbConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db;
@@ -56,9 +57,9 @@ pub struct Services {
     pub application_service: Arc<ApplicationService>,
     pub component_service: Arc<ComponentService>,
     pub environment_service: Arc<EnvironmentService>,
-    pub token_service: Arc<TokenService>,
-
     pub login_system: LoginSystem,
+    pub plan_service: Arc<PlanService>,
+    pub token_service: Arc<TokenService>,
 }
 
 struct Repos {
@@ -89,7 +90,10 @@ impl Services {
         let account_usage_service = Arc::new(AccountUsageService::new(repos.account_usage_repo));
 
         let plan_service = Arc::new(PlanService::new(repos.plan_repo, config.plans.clone()));
-        plan_service.create_initial_plans().await?;
+        plan_service
+            .create_initial_plans()
+            .await
+            .map_err(|e| e.into_internal())?;
 
         let token_service = Arc::new(TokenService::new(repos.token_repo));
 
@@ -99,7 +103,10 @@ impl Services {
             token_service.clone(),
             config.accounts.clone(),
         ));
-        account_service.create_initial_accounts().await?;
+        account_service
+            .create_initial_accounts()
+            .await
+            .map_err(|e| e.into_internal())?;
 
         let application_service = Arc::new(ApplicationService::new(repos.application_repo.clone()));
 
@@ -131,6 +138,7 @@ impl Services {
             environment_service,
             token_service,
             login_system,
+            plan_service,
         })
     }
 }
@@ -171,7 +179,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
         DbConfig::Sqlite(sqlite_config) => {
             db::sqlite::migrate(sqlite_config, migrations.postgres_migrations())
                 .await
-                .context("Postgres DB migration")?;
+                .context("Sqlite DB migration")?;
 
             let db_pool = SqlitePool::configured(sqlite_config).await?;
 
