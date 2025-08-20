@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::account::{AccountRevisionRecord, AccountRoleRecord, JoinedAccountRecord};
+use super::model::account::{AccountExtRevisionRecord, AccountRevisionRecord, AccountRoleRecord};
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::account::AccountRepoError;
@@ -32,22 +32,22 @@ pub trait AccountRepo: Send + Sync {
     async fn create(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<JoinedAccountRecord, AccountRepoError>;
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
 
     async fn update(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<JoinedAccountRecord, AccountRepoError>;
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
 
     async fn get_by_id(
         &self,
         account_id: &Uuid,
-    ) -> Result<Option<JoinedAccountRecord>, AccountRepoError>;
+    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError>;
 
     async fn get_by_email(
         &self,
         email: &str,
-    ) -> Result<Option<JoinedAccountRecord>, AccountRepoError>;
+    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError>;
 }
 
 pub struct LoggedAccountRepo<Repo: AccountRepo> {
@@ -75,7 +75,7 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn create(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<JoinedAccountRecord, AccountRepoError> {
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         let span = Self::span_account_id(&revision.account_id);
         self.repo.create(revision).instrument(span).await
     }
@@ -83,7 +83,7 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn update(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<JoinedAccountRecord, AccountRepoError> {
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         let span = Self::span_account_id(&revision.account_id);
         self.repo.update(revision).instrument(span).await
     }
@@ -91,7 +91,7 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn get_by_id(
         &self,
         account_id: &Uuid,
-    ) -> Result<Option<JoinedAccountRecord>, AccountRepoError> {
+    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
         self.repo
             .get_by_id(account_id)
             .instrument(Self::span_account_id(account_id))
@@ -101,7 +101,7 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn get_by_email(
         &self,
         email: &str,
-    ) -> Result<Option<JoinedAccountRecord>, AccountRepoError> {
+    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
         let span = Self::span_email(email);
         self.repo.get_by_email(email).instrument(span).await
     }
@@ -214,7 +214,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn create(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<JoinedAccountRecord, AccountRepoError> {
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         self.db_pool.with_tx_custom_error(METRICS_SVC_NAME, "create", |tx| {
             async move {
                 let account_record: AccountRecord = tx
@@ -236,14 +236,9 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
 
                 let revision_record = Self::insert_revision(tx, revision).await?;
 
-                Ok(JoinedAccountRecord {
-                    account_id: account_record.account_id,
-                    current_revision_id: account_record.current_revision_id,
-                    email: account_record.email,
-                    name: revision_record.name,
-                    plan_id: revision_record.plan_id,
-                    audit: account_record.audit,
-                    roles: revision_record.roles
+                Ok(AccountExtRevisionRecord {
+                    entity_created_at: account_record.audit.created_at,
+                    revision: revision_record
                 })
             }.boxed()
         }).await
@@ -252,7 +247,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn update(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<JoinedAccountRecord, AccountRepoError> {
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         self.db_pool.with_tx_custom_error(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision_record = Self::insert_revision(tx, revision.clone()).await?;
@@ -273,14 +268,9 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                     ).await
                     .to_custom_result_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?;
 
-                Ok(JoinedAccountRecord {
-                    account_id: account_record.account_id,
-                    current_revision_id: account_record.current_revision_id,
-                    email: account_record.email,
-                    name: revision_record.name,
-                    plan_id: revision_record.plan_id,
-                    audit: account_record.audit,
-                    roles: revision_record.roles
+                Ok(AccountExtRevisionRecord {
+                    entity_created_at: account_record.audit.created_at,
+                    revision: revision_record
                 })
             }.boxed()
         }).await
@@ -289,11 +279,11 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         account_id: &Uuid,
-    ) -> Result<Option<JoinedAccountRecord>, AccountRepoError> {
-        let mut result: Option<JoinedAccountRecord> = self.with_ro("get_by_id")
+    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
+        let mut result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT a.account_id, a.current_revision_id, a.email, a.created_at, a.updated_at, a.deleted_at, a.modified_by, ar.name, ar.plan_id
+                    SELECT a.created_at AS entity_created_at, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.created_at, ar.created_by, ar.deleted
                     FROM accounts a
                     JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
                     WHERE a.account_id = $1 AND a.deleted_at IS NULL
@@ -303,8 +293,8 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
             .await?;
 
         if let Some(result) = &mut result {
-            result.roles = self
-                .get_roles(&result.account_id, result.current_revision_id)
+            result.revision.roles = self
+                .get_roles(&result.revision.account_id, result.revision.revision_id)
                 .await?;
         };
 
@@ -314,11 +304,11 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn get_by_email(
         &self,
         email: &str,
-    ) -> Result<Option<JoinedAccountRecord>, AccountRepoError> {
-        let mut result: Option<JoinedAccountRecord> = self.with_ro("get_by_email")
+    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
+        let mut result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_email")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT a.account_id, a.current_revision_id, a.email, a.created_at, a.updated_at, a.deleted_at, a.modified_by, ar.name, ar.plan_id
+                    SELECT a.created_at AS entity_created_at, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.created_at, ar.created_by, ar.deleted
                     FROM accounts a
                     JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
                     WHERE a.email = $1 AND a.deleted_at IS NULL
@@ -328,8 +318,8 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
             .await?;
 
         if let Some(result) = &mut result {
-            result.roles = self
-                .get_roles(&result.account_id, result.current_revision_id)
+            result.revision.roles = self
+                .get_roles(&result.revision.account_id, result.revision.revision_id)
                 .await?;
         };
 

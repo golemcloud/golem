@@ -63,6 +63,7 @@ CREATE TABLE account_revisions
 (
     account_id  UUID      NOT NULL,
     revision_id BIGINT    NOT NULL,
+
     name        TEXT      NOT NULL,
     email       TEXT      NOT NULL,
     plan_id     UUID      NOT NULL,

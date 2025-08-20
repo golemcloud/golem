@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::datetime::SqlDateTime;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use anyhow::anyhow;
 use golem_common::model::PlanId;
@@ -39,6 +40,7 @@ error_forwarders!(AccountRepoError, RepoError);
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountRecord {
     pub account_id: Uuid,
+
     pub email: String,
 
     #[sqlx(flatten)]
@@ -51,8 +53,9 @@ pub struct AccountRecord {
 pub struct AccountRevisionRecord {
     pub account_id: Uuid,
     pub revision_id: i64,
-    pub email: String,
+
     pub name: String,
+    pub email: String,
     pub plan_id: Uuid,
 
     #[sqlx(flatten)]
@@ -62,29 +65,24 @@ pub struct AccountRevisionRecord {
 }
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
-pub struct JoinedAccountRecord {
-    pub account_id: Uuid,
-    pub current_revision_id: i64,
-    pub email: String,
-    pub name: String,
-    pub plan_id: Uuid,
+pub struct AccountExtRevisionRecord {
+    pub entity_created_at: SqlDateTime,
 
     #[sqlx(flatten)]
-    pub audit: AuditFields,
-    #[sqlx(skip)]
-    pub roles: Vec<AccountRoleRecord>,
+    pub revision: AccountRevisionRecord,
 }
 
-impl TryFrom<JoinedAccountRecord> for Account {
+impl TryFrom<AccountExtRevisionRecord> for Account {
     type Error = AccountRepoError;
-    fn try_from(value: JoinedAccountRecord) -> Result<Self, Self::Error> {
+    fn try_from(value: AccountExtRevisionRecord) -> Result<Self, Self::Error> {
         Ok(Self {
-            id: AccountId(value.account_id),
-            revision: value.current_revision_id.into(),
-            name: value.name,
-            email: value.email,
-            plan_id: PlanId(value.plan_id),
+            id: AccountId(value.revision.account_id),
+            revision: value.revision.revision_id.into(),
+            name: value.revision.name,
+            email: value.revision.email,
+            plan_id: PlanId(value.revision.plan_id),
             roles: value
+                .revision
                 .roles
                 .into_iter()
                 .map(AccountRole::try_from)

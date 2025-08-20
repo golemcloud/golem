@@ -20,7 +20,9 @@ use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
 use golem_registry_service::repo::http_api_definition::HttpApiDefinitionRepo;
 use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
-use golem_registry_service::repo::model::account::{AccountRevisionRecord, JoinedAccountRecord};
+use golem_registry_service::repo::model::account::{
+    AccountExtRevisionRecord, AccountRevisionRecord,
+};
 use golem_registry_service::repo::model::account_usage::UsageType;
 use golem_registry_service::repo::model::application::ApplicationRecord;
 use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
@@ -82,7 +84,7 @@ impl Deps {
         Uuid::from_str("e449dca1-cf07-4270-a8a2-6bcfc6528038").unwrap()
     }
 
-    pub async fn create_account(&self) -> JoinedAccountRecord {
+    pub async fn create_account(&self) -> AccountExtRevisionRecord {
         let account_id = new_repo_uuid();
         self.account_repo
             .create(AccountRevisionRecord {
@@ -104,7 +106,11 @@ impl Deps {
         let app_name = format!("app-name-{}", new_repo_uuid());
 
         self.application_repo
-            .ensure(&user.account_id, &owner.account_id, &app_name)
+            .ensure(
+                &user.revision.account_id,
+                &owner.revision.account_id,
+                &app_name,
+            )
             .await
             .unwrap()
     }
