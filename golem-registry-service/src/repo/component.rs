@@ -410,7 +410,8 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by),
                 )
-                .await?;
+                .await
+                .to_error_on_unique_violation(ComponentRepoError::ConcurrentModification)?;
 
                 let revision = Self::insert_revision(
                     tx,
@@ -1097,7 +1098,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 .bind(revision.transformed_object_store_key),
             )
             .await
-            .to_custom_result_on_unique_violation(
+            .to_error_on_unique_violation(
                 ComponentRepoError::VersionAlreadyExists {
                     version: requested_version.clone(),
                 },

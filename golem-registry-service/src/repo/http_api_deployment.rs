@@ -410,9 +410,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                     .bind(revision.audit.created_by),
                 )
                 .await
-                .to_custom_result_on_unique_violation(
-                    HttpApiDeploymentRepoError::ConcurrentModification,
-                )?;
+                .to_error_on_unique_violation(HttpApiDeploymentRepoError::ConcurrentModification)?;
 
                 let revision = Self::insert_revision(tx, &environment_id, revision).await?;
 
@@ -993,9 +991,7 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
                 .bind_deletable_revision_audit(revision.audit),
             )
             .await
-            .to_custom_result_on_unique_violation(
-                HttpApiDeploymentRepoError::ConcurrentModification,
-            )?;
+            .to_error_on_unique_violation(HttpApiDeploymentRepoError::ConcurrentModification)?;
 
         revision.http_api_definitions = {
             let mut inserted_definitions = Vec::with_capacity(definitions_ids.len());

@@ -755,12 +755,10 @@ pub async fn test_component_stage(deps: &Deps) {
         .await;
     let_assert!(Err(ComponentRepoError::ConcurrentModification) = delete_with_old_revision);
 
-    let delete_with_current_revision = deps
-        .component_repo
+    deps.component_repo
         .delete(&user.revision.account_id, &component_id, 1)
         .await
         .unwrap();
-    assert!(delete_with_current_revision == ());
 
     let components = deps
         .component_repo
@@ -934,12 +932,10 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
         .await;
     let_assert!(Err(HttpApiDefinitionRepoError::ConcurrentModification) = delete_with_old_revision);
 
-    let delete_with_current_revision = deps
-        .http_api_definition_repo
+    deps.http_api_definition_repo
         .delete(&user.revision.account_id, &definition_id, 1)
         .await
         .unwrap();
-    assert!(delete_with_current_revision == ());
 
     let definitions = deps
         .http_api_definition_repo
@@ -1145,12 +1141,10 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
 
     let_assert!(Err(HttpApiDeploymentRepoError::ConcurrentModification) = delete_with_old_revision);
 
-    let delete_with_current_revision = deps
-        .http_api_deployment_repo
+    deps.http_api_deployment_repo
         .delete(&user.revision.account_id, &deployment_id, 1)
         .await
         .unwrap();
-    assert!(delete_with_current_revision == ());
 
     let deployments = deps
         .http_api_deployment_repo

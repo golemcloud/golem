@@ -381,9 +381,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                     .bind(revision.audit.created_by),
                 )
                 .await
-                .to_custom_result_on_unique_violation(
-                    HttpApiDefinitionRepoError::ConcurrentModification,
-                )?;
+                .to_error_on_unique_violation(HttpApiDefinitionRepoError::ConcurrentModification)?;
 
                 let revision = Self::insert_revision(
                     tx,
@@ -822,9 +820,7 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
                 .bind(revision.definition),
             )
             .await
-            .to_custom_result_on_unique_violation(
-                HttpApiDefinitionRepoError::ConcurrentModification,
-            )?;
+            .to_error_on_unique_violation(HttpApiDefinitionRepoError::ConcurrentModification)?;
 
         Ok(revision)
     }

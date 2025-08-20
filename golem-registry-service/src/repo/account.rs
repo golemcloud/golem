@@ -198,7 +198,7 @@ impl DbAccountRepo<PostgresPool> {
                 .bind_deletable_revision_audit(revision.audit),
             )
             .await
-            .to_custom_result_on_unique_violation(AccountRepoError::RevisionAlreadyExists {
+            .to_error_on_unique_violation(AccountRepoError::RevisionAlreadyExists {
                 revision_id: revision.revision_id,
             })?;
 
@@ -246,7 +246,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                             .bind(revision.revision_id)
                     )
                     .await
-                    .to_custom_result_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?;
+                    .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?;
 
                 let revision_record = Self::insert_revision(tx, revision).await?;
 
@@ -283,7 +283,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                             .bind(revision.account_id)
                             .bind(current_revision_id)
                     ).await
-                    .to_custom_result_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?
+                    .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?
                     .ok_or(AccountRepoError::RevisionForUpdateNotFound { current_revision_id })?;
 
                 Ok(AccountExtRevisionRecord {

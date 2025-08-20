@@ -512,7 +512,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     &deployment_revision.version,
                 )
                 .await
-                .to_custom_result_on_unique_violation(DeployRepoError::ConcurrentModification)
+                .to_error_on_unique_violation(DeployRepoError::ConcurrentModification)
             }
             .boxed()
         })
@@ -552,7 +552,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     &deployment_revision.version,
                 )
                 .await
-                .to_custom_result_on_unique_violation(DeployRepoError::ConcurrentModification)
+                .to_error_on_unique_violation(DeployRepoError::ConcurrentModification)
             }
             .boxed()
         })
@@ -773,7 +773,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .bind_revision_audit(revision.audit),
         )
         .await
-        .to_custom_result_on_unique_violation(DeployRepoError::ConcurrentModification)
+        .to_error_on_unique_violation(DeployRepoError::ConcurrentModification)
     }
 
     async fn get_staged_deployment(
