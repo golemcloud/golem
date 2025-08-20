@@ -15,9 +15,8 @@
 use crate::repo::environment::{EnvironmentSharedRepo, EnvironmentSharedRepoDefault};
 use crate::repo::model::BindFields;
 use crate::repo::model::http_api_definition::{
-    HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRecord,
+    HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRecord, HttpApiDefinitionRepoError,
     HttpApiDefinitionRevisionIdentityRecord, HttpApiDefinitionRevisionRecord,
-    HttpApiDefinitionRevisionRepoError,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -25,13 +24,11 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{
-    LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi, ToBusiness, TxError, TxResult,
-};
-use golem_service_base::repo::{BusinessResult, RepoResult};
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
+use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
-use std::fmt::Display;
+use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -42,20 +39,20 @@ pub trait HttpApiDefinitionRepo: Send + Sync {
         environment_id: &Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> BusinessResult<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRevisionRepoError>;
+    ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError>;
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> BusinessResult<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRevisionRepoError>;
+    ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError>;
 
     async fn delete(
         &self,
         user_account_id: &Uuid,
         http_api_definition_id: &Uuid,
         current_revision_id: i64,
-    ) -> BusinessResult<(), HttpApiDefinitionRevisionRepoError>;
+    ) -> Result<(), HttpApiDefinitionRepoError>;
 
     async fn get_staged_by_id(
         &self,
@@ -152,8 +149,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
         environment_id: &Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> BusinessResult<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRevisionRepoError>
-    {
+    ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError> {
         self.repo
             .create(environment_id, name, revision)
             .instrument(Self::span_name(environment_id, name))
@@ -164,8 +160,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
         &self,
         current_revision_id: i64,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> BusinessResult<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRevisionRepoError>
-    {
+    ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError> {
         let span = Self::span_id(&revision.http_api_definition_id);
         self.repo
             .update(current_revision_id, revision)
@@ -178,7 +173,7 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
         user_account_id: &Uuid,
         http_api_definition_id: &Uuid,
         current_revision_id: i64,
-    ) -> BusinessResult<(), HttpApiDefinitionRevisionRepoError> {
+    ) -> Result<(), HttpApiDefinitionRepoError> {
         self.repo
             .delete(user_account_id, http_api_definition_id, current_revision_id)
             .instrument(Self::span_id(http_api_definition_id))
@@ -317,13 +312,13 @@ impl<DBP: Pool> DbHttpApiDefinitionRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> TxResult<R, E>
+    async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> Result<R, E>
     where
         R: Send,
-        E: Display + Send,
+        E: Debug + Send + From<RepoError>,
         F: for<'f> FnOnce(
                 &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, TxResult<R, E>>
+            ) -> BoxFuture<'f, Result<R, E>>
             + Send,
     {
         self.db_pool
@@ -340,8 +335,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         environment_id: &Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> BusinessResult<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRevisionRepoError>
-    {
+    ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError> {
         let opt_deleted_revision: Option<HttpApiDefinitionRevisionIdentityRecord> =
             self.with_ro("create - get opt deleted").fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -386,7 +380,10 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by),
                 )
-                .await?;
+                .await
+                .to_custom_result_on_unique_violation(
+                    HttpApiDefinitionRepoError::ConcurrentModification,
+                )?;
 
                 let revision = Self::insert_revision(
                     tx,
@@ -405,24 +402,18 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .to_business_result_on_unique_violation(|| {
-            HttpApiDefinitionRevisionRepoError::ConcurrentModification
-        })
     }
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> BusinessResult<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRevisionRepoError>
-    {
+    ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError> {
         let Some(checked_current) = self
             .check_current_revision(&revision.http_api_definition_id, current_revision_id)
             .await?
         else {
-            return Ok(Err(
-                HttpApiDefinitionRevisionRepoError::ConcurrentModification,
-            ));
+            return Err(HttpApiDefinitionRepoError::ConcurrentModification);
         };
 
         let environment = self
@@ -456,17 +447,14 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                     .await?;
 
                 Ok(HttpApiDefinitionExtRevisionRecord {
-                    name: ext.try_get("name")?,
-                    environment_id: ext.try_get("environment_id")?,
+                    name: ext.try_get("name").map_err(RepoError::from)?,
+                    environment_id: ext.try_get("environment_id").map_err(RepoError::from)?,
                     revision,
                 })
             }
             .boxed()
         })
         .await
-        .to_business_result_on_unique_violation(|| {
-            HttpApiDefinitionRevisionRepoError::ConcurrentModification
-        })
     }
 
     async fn delete(
@@ -474,7 +462,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         user_account_id: &Uuid,
         http_api_definition_id: &Uuid,
         current_revision_id: i64,
-    ) -> BusinessResult<(), HttpApiDefinitionRevisionRepoError> {
+    ) -> Result<(), HttpApiDefinitionRepoError> {
         let user_account_id = *user_account_id;
         let http_api_definition_id = *http_api_definition_id;
 
@@ -482,9 +470,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
             .check_current_revision(&http_api_definition_id, current_revision_id)
             .await?
         else {
-            return Ok(Err(
-                HttpApiDefinitionRevisionRepoError::ConcurrentModification,
-            ));
+            return Err(HttpApiDefinitionRepoError::ConcurrentModification);
         };
 
         self.with_tx_err("delete", |tx| {
@@ -519,9 +505,6 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .to_business_result_on_unique_violation(|| {
-            HttpApiDefinitionRevisionRepoError::ConcurrentModification
-        })
     }
 
     async fn get_staged_by_id(
@@ -761,7 +744,7 @@ trait HttpApiDefinitionRepoInternal: HttpApiDefinitionRepo {
         environment_id: &Uuid,
         version_check: bool,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> TxResult<HttpApiDefinitionRevisionRecord, HttpApiDefinitionRevisionRepoError>;
+    ) -> Result<HttpApiDefinitionRevisionRecord, HttpApiDefinitionRepoError>;
 
     async fn version_exists(
         tx: &mut Self::Tx,
@@ -802,7 +785,7 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
         environment_id: &Uuid,
         version_check: bool,
         revision: HttpApiDefinitionRevisionRecord,
-    ) -> TxResult<HttpApiDefinitionRevisionRecord, HttpApiDefinitionRevisionRepoError> {
+    ) -> Result<HttpApiDefinitionRevisionRecord, HttpApiDefinitionRepoError> {
         if version_check
             && Self::version_exists(
                 tx,
@@ -812,11 +795,9 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
             )
             .await?
         {
-            return Err(TxError::Business(
-                HttpApiDefinitionRevisionRepoError::VersionAlreadyExists {
-                    version: revision.version,
-                },
-            ));
+            return Err(HttpApiDefinitionRepoError::VersionAlreadyExists {
+                version: revision.version,
+            });
         }
 
         let revision = revision.with_updated_hash();
@@ -840,7 +821,10 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
                 .bind_deletable_revision_audit(revision.audit)
                 .bind(revision.definition),
             )
-            .await?;
+            .await
+            .to_custom_result_on_unique_violation(
+                HttpApiDefinitionRepoError::ConcurrentModification,
+            )?;
 
         Ok(revision)
     }

@@ -17,11 +17,13 @@ use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
+use golem_common::error_forwarders;
 use golem_common::model::diff;
+use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+#[derive(Debug, thiserror::Error)]
 pub enum DeployRepoError {
     #[error("Concurrent modification")]
     ConcurrentModification,
@@ -42,7 +44,11 @@ pub enum DeployRepoError {
     DeploymentNotfoundByVersion { version: String },
     #[error("Deployment is not unique by version: {version}")]
     DeploymentIsNotUniqueByVersion { version: String },
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error),
 }
+
+error_forwarders!(DeployRepoError, RepoError);
 
 fn format_validation_errors(errors: &[DeployValidationError]) -> String {
     errors

@@ -17,7 +17,7 @@ use anyhow::anyhow;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::environment::{Environment, EnvironmentId, NewEnvironmentData};
-use golem_common::{SafeDisplay, error_forwarders, into_internal_error};
+use golem_common::{SafeDisplay, error_forwarders};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -39,8 +39,6 @@ impl SafeDisplay for EnvironmentError {
         }
     }
 }
-
-into_internal_error!(EnvironmentError);
 
 error_forwarders!(EnvironmentError, RepoError);
 

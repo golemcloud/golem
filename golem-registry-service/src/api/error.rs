@@ -197,13 +197,17 @@ impl From<ComponentError> for ApiError {
             | ComponentError::InvalidComponentName { .. }
             | ComponentError::InvalidOplogProcessorPlugin
             | ComponentError::InvalidPluginScope { .. }
-            | ComponentError::ConcurrentUpdate { .. }
+            | ComponentError::InvalidCurrentRevision
             | ComponentError::MalformedComponentArchive { .. }
             | ComponentError::PluginInstallationNotFound { .. } => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],
                     cause: None,
                 }))
+            }
+
+            ComponentError::ConcurrentUpdate => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
             ComponentError::UnknownComponentId(_)

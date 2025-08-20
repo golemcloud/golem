@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::{SafeDisplay, into_internal_error};
+use golem_common::{SafeDisplay, error_forwarders};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -28,7 +28,7 @@ impl SafeDisplay for AuthError {
     }
 }
 
-into_internal_error!(AuthError);
+error_forwarders!(AuthError);
 
 pub struct AuthService {}
 

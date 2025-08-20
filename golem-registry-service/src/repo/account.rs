@@ -229,7 +229,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         let revision = revision.ensure_first();
 
-        self.db_pool.with_tx_custom_error(METRICS_SVC_NAME, "create", |tx| {
+        self.db_pool.with_tx_err(METRICS_SVC_NAME, "create", |tx| {
             async move {
                 let account_record: AccountRecord = tx
                     .fetch_one_as(
@@ -264,7 +264,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
         revision: AccountRevisionRecord,
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         let revision = revision.ensure_new(current_revision_id);
-        self.db_pool.with_tx_custom_error(METRICS_SVC_NAME, "update", |tx| {
+        self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision_record = Self::insert_revision(tx, revision.clone()).await?;
 

@@ -273,11 +273,9 @@ macro_rules! declare_transparent_newtypes {
     )* }
 }
 
-// Could be a derive macro
-// Can be removed and inlined into error_forwarders once https://github.com/rust-lang/rust/issues/86935 is stable.
 #[macro_export]
-macro_rules! into_internal_error {
-    ($target:ty) => {
+macro_rules! error_forwarders {
+    ($target:ty $(, $sub:ty )* $(,)?) => {
         impl $crate::IntoInternalError for $target {
             fn into_internal(self) -> ::anyhow::Error {
                 // Note converting self into an anyhow::Error (via std::error::Error) loses the backtrace.
@@ -288,12 +286,7 @@ macro_rules! into_internal_error {
                 }
             }
         }
-    };
-}
 
-#[macro_export]
-macro_rules! error_forwarders {
-    ($target:ty, $( $sub:ty ),* $(,)?) => {
         $(
             impl From<$sub> for $target {
                 fn from(value: $sub) -> Self {

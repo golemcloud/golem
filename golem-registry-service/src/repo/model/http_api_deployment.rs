@@ -15,18 +15,24 @@
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
+use golem_common::error_forwarders;
 use golem_common::model::diff;
 use golem_common::model::diff::Hashable;
+use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, thiserror::Error, PartialEq)]
-pub enum HttpApiDeploymentRevisionRepoError {
+#[derive(Debug, thiserror::Error)]
+pub enum HttpApiDeploymentRepoError {
     #[error("Missing definitions: {missing_definitions:?}")]
     MissingDefinitions { missing_definitions: Vec<String> },
     #[error("Concurrent modification")]
     ConcurrentModification,
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error),
 }
+
+error_forwarders!(HttpApiDeploymentRepoError, RepoError);
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDeploymentRecord {
