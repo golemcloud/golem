@@ -4134,6 +4134,7 @@ dependencies = [
  "toml 0.9.5",
  "toml_edit 0.23.3",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
  "url",
  "uuid",
@@ -6612,9 +6613,7 @@ dependencies = [
 
 [[package]]
 name = "moonbit-component-generator"
-version = "0.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cf4e2e9ca0ad1576e0096e62057c1bf083b2902f963efdd46d9ea59283ad487"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "camino",

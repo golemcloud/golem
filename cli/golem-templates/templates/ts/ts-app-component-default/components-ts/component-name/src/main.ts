@@ -12,16 +12,12 @@ class AssistantAgent extends BaseAgent {
     async ask(name: string): Promise<string> {
         const customData = { data: "Sample data", value: 42 };
 
-        const remoteWeatherClient = WeatherAgent.createRemote("");
+        const remoteWeatherClient = WeatherAgent.get("my-user");
         const remoteWeather = await remoteWeatherClient.getWeather(name, customData);
-
-        const localWeatherClient = WeatherAgent.createLocal("afsal");
-        const localWeather = await localWeatherClient.getWeather(name, customData);
 
         return (
             `Hello! I'm the assistant agent (${this.getId()}) reporting on the weather in ${name}. ` +
-            `Here’s what the weather agent says: "\n${localWeather}\n". ` +
-            `Info retrieved using weather agent (${localWeatherClient.getId()}).`
+            `Here’s what the weather agent says: "\n${remoteWeather}\n". `
         );
     }
 }
