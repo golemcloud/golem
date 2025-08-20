@@ -548,27 +548,9 @@ dependencies = [
 ]
 description = "Generates openapi spec from the code and saves it to the openapi directory"
 
-[tasks.generate-worker-service-openapi]
-description = "Generates openapi spec for worker service"
-dependencies = ["build-worker-service-non-ci"]
-cwd = "./target/debug"
-script = '''
-mkdir -pv ../data
-./golem-worker-service --dump-openapi-yaml > ../golem-worker-service.yaml
-'''
-
-[tasks.generate-component-service-openapi]
-description = "Generates openapi spec for component service"
-dependencies = ["build-component-service-non-ci"]
-cwd = "./target/debug"
-script = '''
-mkdir -pv ../data
-./golem-component-service --dump-openapi-yaml > ../golem-component-service.yaml
-'''
-
-[tasks.generate-cloud-service-openapi]
-description = "Generates openapi spec for cloud service"
-dependencies = ["build-cloud-service-non-ci"]
+[tasks.generate-registry-service-openapi]
+description = "Generates openapi spec for registry service"
+dependencies = ["build-registry-service"]
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
