@@ -33,6 +33,7 @@ use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::{ComponentName, WorkerUpdateMode};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
+use golem_client::api::AgentTypesClient;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
     ComposableAppGroupName, GuestLanguage, PackageName, Template, TemplateName,
@@ -84,6 +85,7 @@ impl AppCommandHandler {
                     .await
             }
             AppSubcommand::Diagnose { component_name } => self.cmd_diagnose(component_name).await,
+            AppSubcommand::ListAgentTypes {} => self.cmd_list_agent_types().await,
             AppSubcommand::CustomCommand(command) => self.cmd_custom_command(command).await,
         }
     }
@@ -376,6 +378,24 @@ impl AppCommandHandler {
             .component_handler()
             .redeploy_workers_by_components(&components)
             .await?;
+
+        Ok(())
+    }
+
+    async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .opt_select_project(None)
+            .await?;
+
+        let clients = self.ctx.golem_clients().await?;
+        let result = clients
+            .agent_types
+            .get_all_agent_types(project.as_ref().map(|p| &p.project_id.0))
+            .await?;
+
+        self.ctx.log_handler().log_view(&result);
 
         Ok(())
     }

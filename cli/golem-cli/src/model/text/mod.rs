@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod account;
+mod agent;
 pub mod api_definition;
 pub mod api_deployment;
 pub mod api_domain;

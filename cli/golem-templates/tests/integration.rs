@@ -23,7 +23,6 @@ mod app {
     use test_r::test;
 
     #[test]
-    #[ignore] // TODO: TEMPORARILY IGNORED UNTIL THE AGENT SDK IS SYNCED WITH THE CHANGES
     fn app_with_all_lang() {
         let status = Command::new("../../target/debug/golem-templates-test-cli")
             .args(["app"])

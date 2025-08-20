@@ -19,6 +19,7 @@ use crate::model::{
     CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
 use crate::services::file_loader::FileLoader;
@@ -700,6 +701,7 @@ impl WorkerCtx for Context {
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id.clone(),
@@ -724,6 +726,7 @@ impl WorkerCtx for Context {
             plugins,
             worker_fork,
             project_service,
+            agent_types_service,
         )
         .await?;
         Ok(Self::new(golem_ctx, config, account_id, resource_limits))
