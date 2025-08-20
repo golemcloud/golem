@@ -1146,10 +1146,12 @@ impl Expr {
         // worker function invocations as this forms the foundation for the rest of the
         // compilation. This is compiler doing its best to infer all the calls such
         // as worker invokes or instance calls etc.
-        self.resolve_method_calls()?;
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
         self.infer_function_call_types(component_dependency)?;
-        type_inference::type_inference_fix_point(Self::inference_scan, self)?;
+        type_inference::type_inference_fix_point(
+            |x| Self::inference_scan(x, component_dependency),
+            self,
+        )?;
         self.check_types(component_dependency)?;
         self.unify_types()?;
         Ok(())
@@ -1195,12 +1197,16 @@ impl Expr {
     // An inference is a single cycle of to-and-fro scanning of Rib expression, that it takes part in fix point of inference.
     // Not all phases of compilation will be part of this scan.
     // Example: function call argument inference based on the worker function hardly needs to be part of the scan.
-    pub fn inference_scan(&mut self) -> Result<(), RibTypeErrorInternal> {
+    pub fn inference_scan(
+        &mut self,
+        component_dependencies: &ComponentDependencies,
+    ) -> Result<(), RibTypeErrorInternal> {
         self.infer_all_identifiers();
         self.push_types_down()?;
         self.infer_all_identifiers();
-        self.pull_types_up()?;
+        self.pull_types_up(component_dependencies)?;
         self.infer_global_inputs();
+        self.infer_function_call_types(component_dependencies)?;
         Ok(())
     }
 
@@ -1257,8 +1263,11 @@ impl Expr {
         type_inference::infer_all_identifiers(self)
     }
 
-    pub fn pull_types_up(&mut self) -> Result<(), RibTypeErrorInternal> {
-        type_inference::type_pull_up(self)
+    pub fn pull_types_up(
+        &mut self,
+        component_dependencies: &ComponentDependencies,
+    ) -> Result<(), RibTypeErrorInternal> {
+        type_inference::type_pull_up(self, component_dependencies)
     }
 
     pub fn infer_global_inputs(&mut self) {

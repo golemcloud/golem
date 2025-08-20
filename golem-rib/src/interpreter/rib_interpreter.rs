@@ -1393,6 +1393,31 @@ mod internal {
                 }
             }
 
+            InstanceVariable::WitResource(variable_id)
+                if variable_id == VariableId::global("___STATIC_WIT_RESOURCE".to_string()) =>
+            {
+                let result = interpreter_env
+                    .invoke_worker_function_async(
+                        component_info,
+                        instruction_id,
+                        None,
+                        function_name_cloned,
+                        parameter_values,
+                        expected_result_type.clone(),
+                    )
+                    .await
+                    .map_err(|err| function_invoke_fail(function_name.as_str(), err))?;
+
+                match result {
+                    None => {
+                        interpreter_stack.push(RibInterpreterStackValue::Unit);
+                    }
+                    Some(result) => {
+                        interpreter_stack.push(RibInterpreterStackValue::Val(result));
+                    }
+                }
+            }
+
             InstanceVariable::WitResource(variable_id) => {
                 let mut final_args = vec![];
 
@@ -2821,6 +2846,72 @@ mod tests {
            let cart = worker.cart(user_id);
            let result = cart.checkout();
            result
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+        let compiler = RibCompiler::new(compiler_config);
+
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_executor = test_deps.interpreter;
+        let result = rib_executor.run(compiled.byte_code).await.unwrap();
+
+        let expected_value = Value::Variant {
+            case_idx: 1,
+            case_value: Some(Box::new(Value::Record(vec![Value::String(
+                "foo".to_string(),
+            )]))),
+        };
+
+        assert_eq!(result.get_val().unwrap().value, expected_value);
+    }
+
+    #[test]
+    async fn test_interpreter_with_indexed_resources_static_functions_1() {
+        let expr = r#"
+           let worker = instance();
+           let result = worker.cart.create("afsal");
+           result.checkout()
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+        let compiler = RibCompiler::new(compiler_config);
+
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_executor = test_deps.interpreter;
+        let result = rib_executor.run(compiled.byte_code).await.unwrap();
+
+        let expected_value = Value::Variant {
+            case_idx: 1,
+            case_value: Some(Box::new(Value::Record(vec![Value::String(
+                "foo".to_string(),
+            )]))),
+        };
+
+        assert_eq!(result.get_val().unwrap().value, expected_value);
+    }
+
+    #[test]
+    async fn test_interpreter_with_indexed_resources_static_functions_2() {
+        let expr = r#"
+           let worker = instance();
+           let default-cart = worker.cart("default");
+           let alternate-cart = worker.cart.create-safe("afsal");
+           match alternate-cart {
+             ok(alt) => alt.checkout(),
+             err(_) => default-cart.checkout()
+           }
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
@@ -4764,7 +4855,7 @@ mod tests {
         };
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
+            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
         };
         use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
@@ -4989,6 +5080,39 @@ mod tests {
                         parameters: resource_constructor_params,
                         result: Some(AnalysedFunctionResult {
                             typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                        }),
+                    },
+                    AnalysedFunction {
+                        name: "[static]cart.create".to_string(),
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "item-name".to_string(),
+                            typ: str(),
+                        }],
+                        result: Some(AnalysedFunctionResult {
+                            typ: AnalysedType::Handle(TypeHandle {
+                                name: Some("cart".to_string()),
+                                owner: Some("golem:it/api".to_string()),
+                                resource_id: AnalysedResourceId(0),
+                                mode: AnalysedResourceMode::Owned,
+                            }),
+                        }),
+                    },
+                    AnalysedFunction {
+                        name: "[static]cart.create-safe".to_string(),
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "item-name".to_string(),
+                            typ: str(),
+                        }],
+                        result: Some(AnalysedFunctionResult {
+                            typ: result(
+                                AnalysedType::Handle(TypeHandle {
+                                    name: Some("cart".to_string()),
+                                    owner: Some("golem:it/api".to_string()),
+                                    resource_id: AnalysedResourceId(0),
+                                    mode: AnalysedResourceMode::Owned,
+                                }),
+                                str(),
+                            ),
                         }),
                     },
                     AnalysedFunction {
@@ -5291,6 +5415,45 @@ mod tests {
                         ]);
 
                         Ok(Some(ValueAndType::new(Value::List(vec![value]), typ)))
+                    }
+
+                    "golem:it/api.{[static]cart.create}" => {
+                        let uri = format!(
+                            "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
+                            worker_name.map(|x| x.0).unwrap_or_default()
+                        );
+
+                        let value = Value::Handle {
+                            uri,
+                            resource_id: 0,
+                        };
+
+                        Ok(Some(ValueAndType::new(
+                            value,
+                            handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                        )))
+                    }
+
+                    "golem:it/api.{[static]cart.create-safe}" => {
+                        let uri = format!(
+                            "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
+                            worker_name.map(|x| x.0).unwrap_or_default()
+                        );
+
+                        let resource = Value::Handle {
+                            uri,
+                            resource_id: 0,
+                        };
+
+                        let value = Value::Result(Ok(Some(Box::new(resource))));
+
+                        Ok(Some(ValueAndType::new(
+                            value,
+                            result(
+                                handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                                str(),
+                            ),
+                        )))
                     }
 
                     "golem:it/api.{cart.pass-through}" => {

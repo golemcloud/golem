@@ -165,3 +165,16 @@ impl TextView for Vec<HttpApiDefinitionResponseData> {
         log_table::<_, HttpApiDefinitionTableView>(self);
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiDefinitionExportView(pub String);
+
+impl MessageWithFields for ApiDefinitionExportView {
+    fn message(&self) -> String {
+        self.0.clone()
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        vec![]
+    }
+}

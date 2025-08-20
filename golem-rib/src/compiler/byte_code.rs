@@ -469,9 +469,9 @@ mod internal {
 
                         let instance_variable = match module.as_ref() {
                             InstanceIdentifier::WitResource { variable_id, .. } => {
-                                let variable_id = variable_id.clone().ok_or({
-                                    RibByteCodeGenerationError::UnresolvedResourceVariable
-                                })?;
+                                let variable_id = variable_id.clone().unwrap_or_else(|| {
+                                    VariableId::global("___STATIC_WIT_RESOURCE".to_string())
+                                });
                                 InstanceVariable::WitResource(variable_id)
                             }
                             InstanceIdentifier::WitWorker { variable_id, .. } => {

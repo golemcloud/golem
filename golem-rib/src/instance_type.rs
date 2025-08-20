@@ -170,8 +170,6 @@ impl InstanceType {
         }
     }
 
-    // Get InstanceType::Resource from the fully qualified resource constructor
-    // from an existing instance type
     pub fn get_resource_instance_type(
         &self,
         fully_qualified_resource_constructor: FullyQualifiedResourceConstructor,
@@ -617,6 +615,7 @@ fn search_function_in_instance(
                     _ => {
                         let function =
                             search_function_in_multiple_packages(function_name, package_map)?;
+
                         component_info_functions.push((info.clone(), function));
                     }
                 }
@@ -765,6 +764,7 @@ mod protobuf {
                 method_name: proto.method_name,
                 package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
                 interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
+                static_function: false, //FIXME
             })
         }
     }

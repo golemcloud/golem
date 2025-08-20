@@ -58,7 +58,7 @@ fn get_missing_record_keys(
             message: "invalid function call type".to_string(),
         })?;
 
-    let function_type = component_dependency
+    let (_, function_type) = component_dependency
         .get_function_type(&None, &function_name)
         .map_err(|err| FunctionCallError::InvalidFunctionCall {
             function_name: call_type.to_string(),

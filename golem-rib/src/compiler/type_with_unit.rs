@@ -229,6 +229,8 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             TypeInternal::Resource {
                 resource_id,
                 resource_mode,
+                name: _,
+                owner: _,
             } => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Handle(
                 TypeHandle {
                     resource_id: AnalysedResourceId(*resource_id),
