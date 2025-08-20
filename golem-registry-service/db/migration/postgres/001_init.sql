@@ -691,14 +691,14 @@ CREATE TABLE environment_share_revisions
         FOREIGN KEY (environment_share_id) REFERENCES environment_shares
 );
 
-CREATE TABLE environment_share_revisions_roles
+CREATE TABLE environment_share_revision_roles
 (
     environment_share_id  UUID      NOT NULL,
     revision_id BIGINT    NOT NULL,
     role            INT      NOT NULL,
 
-    CONSTRAINT environment_share_revisions_roles_pk
+    CONSTRAINT environment_share_revision_roles_pk
         PRIMARY KEY (environment_share_id, revision_id, role),
-    CONSTRAINT environment_share_revisions_roles_environment_share_revisions_fk
+    CONSTRAINT environment_share_revision_roles_environment_share_revisions_fk
         FOREIGN KEY (environment_share_id, revision_id) REFERENCES environment_share_revisions
 );

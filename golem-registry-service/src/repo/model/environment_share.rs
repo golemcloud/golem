@@ -29,6 +29,8 @@ use golem_common::model::auth::EnvironmentRole;
 pub enum EnvironmentShareRepoError {
     #[error("There is already a share for this account in this environment")]
     ShareViolatesUniqueness,
+    #[error("Revision already exists: {revision_id}")]
+    RevisionAlreadyExists { revision_id: i64 },
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }

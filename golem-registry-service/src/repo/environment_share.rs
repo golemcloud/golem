@@ -26,108 +26,116 @@ use golem_service_base::repo::{RepoResult, ResultExt};
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
+use super::model::environment_share::{EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError, EnvironmentShareRevisionRecord, EnvironmentShareRoleRecord};
+use crate::repo::model::environment_share::EnvironmentShareRecord;
 
 #[async_trait]
-pub trait AccountRepo: Send + Sync {
+pub trait EnvironmentShareRepo: Send + Sync {
     async fn create(
         &self,
-        revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
+        environment_id: Uuid,
+        revision: EnvironmentShareRevisionRecord,
+        grantee_account_id: Uuid,
+    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError>;
 
-    async fn update(
-        &self,
-        current_revision_id: i64,
-        revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
+    // async fn update(
+    //     &self,
+    //     current_revision_id: i64,
+    //     revision: EnvironmentShareRevisionRecord,
+    // ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError>;
 
-    async fn get_by_id(
-        &self,
-        account_id: &Uuid,
-    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError>;
+    // async fn get_by_id(
+    //     &self,
+    //     environment_share_id: &Uuid,
+    // ) -> Result<Option<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError>;
 
-    async fn get_by_email(
-        &self,
-        email: &str,
-    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError>;
+    // async fn get_for_environment(
+    //     &self,
+    //     environment_id: &Uuid,
+    // ) -> Result<Vec<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError>;
 }
 
-pub struct LoggedAccountRepo<Repo: AccountRepo> {
+pub struct LoggedEnvironmentShareRepo<Repo: EnvironmentShareRepo> {
     repo: Repo,
 }
 
-static SPAN_NAME: &str = "account repository";
+static SPAN_NAME: &str = "environment share repository";
 
-impl<Repo: AccountRepo> LoggedAccountRepo<Repo> {
+impl<Repo: EnvironmentShareRepo> LoggedEnvironmentShareRepo<Repo> {
     pub fn new(repo: Repo) -> Self {
         Self { repo }
     }
 
-    fn span_account_id(account_id: &Uuid) -> Span {
-        info_span!(SPAN_NAME, account_id=%account_id)
+    fn span_environment_id(environment_id: &Uuid) -> Span {
+        info_span!(SPAN_NAME, environment_id=%environment_id)
     }
 
-    fn span_email(email: &str) -> Span {
-        info_span!(SPAN_NAME, email)
+    fn span_environment_share_id(environment_share_id: &Uuid) -> Span {
+        info_span!(SPAN_NAME, environment_share_id=%environment_share_id)
     }
 }
 
 #[async_trait]
-impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
+impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShareRepo<Repo> {
     async fn create(
         &self,
-        revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
-        let span = Self::span_account_id(&revision.account_id);
-        self.repo.create(revision).instrument(span).await
+        environment_id: Uuid,
+        revision: EnvironmentShareRevisionRecord,
+        grantee_account_id: Uuid,
+    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
+        let span = Self::span_environment_id(&environment_id);
+        self.repo.create(environment_id, revision, grantee_account_id).instrument(span).await
     }
 
-    async fn update(
-        &self,
-        current_revision_id: i64,
-        revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
-        let span = Self::span_account_id(&revision.account_id);
-        self.repo
-            .update(current_revision_id, revision)
-            .instrument(span)
-            .await
-    }
+    // async fn update(
+    //     &self,
+    //     current_revision_id: i64,
+    //     revision: EnvironmentShareRevisionRecord,
+    // ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
+    //     let span = Self::span_environment_share_id(&revision.environment_share_id);
+    //     self.repo
+    //         .update(current_revision_id, revision)
+    //         .instrument(span)
+    //         .await
+    // }
 
-    async fn get_by_id(
-        &self,
-        account_id: &Uuid,
-    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
-        self.repo
-            .get_by_id(account_id)
-            .instrument(Self::span_account_id(account_id))
-            .await
-    }
+    // async fn get_by_id(
+    //     &self,
+    //     environment_share_id: &Uuid,
+    // ) -> Result<Option<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
+    //     self.repo
+    //         .get_by_id(environment_share_id)
+    //         .instrument(Self::span_environment_share_id(environment_share_id))
+    //         .await
+    // }
 
-    async fn get_by_email(
-        &self,
-        email: &str,
-    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
-        let span = Self::span_email(email);
-        self.repo.get_by_email(email).instrument(span).await
-    }
+    // async fn get_for_environment(
+    //     &self,
+    //     environment_id: &Uuid,
+    // ) -> Result<Vec<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
+    //     self.repo
+    //         .get_by_id(environment_share_id)
+    //         .instrument(Self::span_environment_id(environment_id))
+    //         .await
+    // }
 }
 
-pub struct DbAccountRepo<DBP: Pool> {
+pub struct DbEnvironmentShareRepo<DBP: Pool> {
     db_pool: DBP,
 }
 
-static METRICS_SVC_NAME: &str = "account";
+static METRICS_SVC_NAME: &str = "environment-share";
 
-impl<DBP: Pool> DbAccountRepo<DBP> {
+impl<DBP: Pool> DbEnvironmentShareRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
     }
 
-    pub fn logged(db_pool: DBP) -> LoggedAccountRepo<Self>
+    pub fn logged(db_pool: DBP) -> LoggedEnvironmentShareRepo<Self>
     where
-        Self: AccountRepo,
+        Self: EnvironmentShareRepo,
     {
-        LoggedAccountRepo::new(Self::new(db_pool))
+        LoggedEnvironmentShareRepo::new(Self::new(db_pool))
     }
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
@@ -136,18 +144,18 @@ impl<DBP: Pool> DbAccountRepo<DBP> {
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
-impl DbAccountRepo<PostgresPool> {
+impl DbEnvironmentShareRepo<PostgresPool> {
     async fn insert_one_role(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        record: AccountRoleRecord,
-    ) -> RepoResult<AccountRoleRecord> {
+        record: EnvironmentShareRoleRecord,
+    ) -> RepoResult<EnvironmentShareRoleRecord> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! {r#"
-                    INSERT INTO account_revision_roles (account_id, revision_id, role)
+                    INSERT INTO environment_share_revision_roles (environment_share_id, revision_id, role)
                     VALUES ($1, $2, $3)
-                    RETURNING account_id, revision_id, role
+                    RETURNING environment_share_id, revision_id, role
                 "#})
-            .bind(record.account_id)
+            .bind(record.environment_share_id)
             .bind(record.revision_id)
             .bind(record.role),
         )
@@ -156,18 +164,18 @@ impl DbAccountRepo<PostgresPool> {
 
     async fn get_roles(
         &self,
-        account_id: &Uuid,
+        environment_share_id: &Uuid,
         revision_id: i64,
-    ) -> RepoResult<Vec<AccountRoleRecord>> {
+    ) -> RepoResult<Vec<EnvironmentShareRoleRecord>> {
         self.with_ro("get_roles")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT account_id, revision_id, role
-                    FROM account_revision_roles
-                    WHERE account_id = $1 AND revision_id = $2
+                    SELECT environment_share_id, revision_id, role
+                    FROM environment_share_revision_roles
+                    WHERE environment_share_id = $1 AND revision_id = $2
                     ORDER BY role
                 "#})
-                .bind(account_id)
+                .bind(environment_share_id)
                 .bind(revision_id),
             )
             .await
@@ -175,30 +183,24 @@ impl DbAccountRepo<PostgresPool> {
 
     async fn insert_revision(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        revision: AccountRevisionRecord,
-    ) -> Result<AccountRevisionRecord, AccountRepoError> {
+        revision: EnvironmentShareRevisionRecord,
+    ) -> Result<EnvironmentShareRevisionRecord, EnvironmentShareRepoError> {
         let original_roles = revision.roles;
 
-        let mut revision: AccountRevisionRecord = tx
+        let mut revision: EnvironmentShareRevisionRecord = tx
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"
-                    INSERT INTO account_revisions
-                    (account_id, revision_id, name, email, plan_id,
-                        created_at, created_by, deleted)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    RETURNING account_id, revision_id, name, email,
-                        plan_id, created_at, created_by,
-                        deleted
+                    INSERT INTO environment_share_revisions
+                    (environment_share_id, revision_id, created_at, created_by, deleted)
+                    VALUES ($1, $2, $3, $4, $5)
+                    RETURNING environment_share_id, revision_id, created_at, created_by, deleted
                 "# })
-                .bind(revision.account_id)
+                .bind(revision.environment_share_id)
                 .bind(revision.revision_id)
-                .bind(revision.name)
-                .bind(revision.email)
-                .bind(revision.plan_id)
                 .bind_deletable_revision_audit(revision.audit),
             )
             .await
-            .to_error_on_unique_violation(AccountRepoError::RevisionAlreadyExists {
+            .to_error_on_unique_violation(EnvironmentShareRepoError::RevisionAlreadyExists {
                 revision_id: revision.revision_id,
             })?;
 
@@ -206,7 +208,7 @@ impl DbAccountRepo<PostgresPool> {
             let mut inserted_roles = Vec::with_capacity(revision.roles.len());
 
             for role in original_roles {
-                let role = role.ensure_account(revision.account_id, revision.revision_id);
+                let role = role.ensure_environment_share(revision.environment_share_id, revision.revision_id);
                 inserted_roles.push(Self::insert_one_role(tx, role).await?);
             }
 
@@ -222,125 +224,164 @@ impl DbAccountRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
-impl AccountRepo for DbAccountRepo<PostgresPool> {
+impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
     async fn create(
         &self,
-        revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+        environment_id: Uuid,
+        revision: EnvironmentShareRevisionRecord,
+        grantee_account_id: Uuid,
+    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
         let revision = revision.ensure_first();
 
         self.db_pool.with_tx_err(METRICS_SVC_NAME, "create", |tx| {
             async move {
-                let account_record: AccountRecord = tx
+                let environment_share_record: EnvironmentShareRecord = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! {r#"
-                            INSERT INTO accounts (account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id)
-                            VALUES ($1, $2, $3, $4, NULL, $5, $6)
-                            RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            INSERT INTO environment_shares (environment_id, envionment_share_id, grantee_account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                            VALUES ($1, $2, $3, $4, $4, NULL, $5, $6)
+                            RETURNING environment_id, envionment_share_id, grantee_account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
-                            .bind(revision.account_id)
-                            .bind(&revision.email)
-                            .bind(&revision.audit.created_at)
+                            .bind(&environment_id)
+                            .bind(&revision.environment_share_id)
+                            .bind(&grantee_account_id)
                             .bind(&revision.audit.created_at)
                             .bind(revision.audit.created_by)
                             .bind(revision.revision_id)
                     )
                     .await
-                    .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?;
+                    .to_error_on_unique_violation(EnvironmentShareRepoError::ShareViolatesUniqueness)?;
 
                 let revision_record = Self::insert_revision(tx, revision).await?;
 
-                Ok(AccountExtRevisionRecord {
-                    entity_created_at: account_record.audit.created_at,
+                Ok(EnvironmentShareExtRevisionRecord {
+                    environment_id: environment_share_record.environment_id,
+                    grantee_account_id: environment_share_record.grantee_account_id,
+                    entity_created_at: environment_share_record.audit.created_at,
                     revision: revision_record
                 })
             }.boxed()
         }).await
     }
 
-    async fn update(
-        &self,
-        current_revision_id: i64,
-        revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
-        let revision = revision.ensure_new(current_revision_id);
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
-            async move {
-                let revision_record = Self::insert_revision(tx, revision.clone()).await?;
+    // async fn create(
+    //     &self,
+    //     revision: AccountRevisionRecord,
+    // ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+    //     let revision = revision.ensure_first();
 
-                let account_record: AccountRecord = tx
-                    .fetch_optional_as(
-                        sqlx::query_as(indoc! {r#"
-                            UPDATE accounts
-                            SET updated_at = $1, modified_by = $2, current_revision_id = $3, email = $4
-                            WHERE account_id = $5 AND current_revision_id = $6
-                            RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                        "#})
-                            .bind(&revision.audit.created_at)
-                            .bind(revision.audit.created_by)
-                            .bind(revision.revision_id)
-                            .bind(&revision.email)
-                            .bind(revision.account_id)
-                            .bind(current_revision_id)
-                    ).await
-                    .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?
-                    .ok_or(AccountRepoError::RevisionForUpdateNotFound { current_revision_id })?;
+    //     self.db_pool.with_tx_err(METRICS_SVC_NAME, "create", |tx| {
+    //         async move {
+    //             let account_record: AccountRecord = tx
+    //                 .fetch_one_as(
+    //                     sqlx::query_as(indoc! {r#"
+    //                         INSERT INTO accounts (account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+    //                         VALUES ($1, $2, $3, $4, NULL, $5, $6)
+    //                         RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id
+    //                     "#})
+    //                         .bind(revision.account_id)
+    //                         .bind(&revision.email)
+    //                         .bind(&revision.audit.created_at)
+    //                         .bind(&revision.audit.created_at)
+    //                         .bind(revision.audit.created_by)
+    //                         .bind(revision.revision_id)
+    //                 )
+    //                 .await
+    //                 .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?;
 
-                Ok(AccountExtRevisionRecord {
-                    entity_created_at: account_record.audit.created_at,
-                    revision: revision_record
-                })
-            }.boxed()
-        }).await
-    }
+    //             let revision_record = Self::insert_revision(tx, revision).await?;
 
-    async fn get_by_id(
-        &self,
-        account_id: &Uuid,
-    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
-        let mut result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_id")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! {r#"
-                    SELECT a.created_at AS entity_created_at, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.created_at, ar.created_by, ar.deleted
-                    FROM accounts a
-                    JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
-                    WHERE a.account_id = $1 AND a.deleted_at IS NULL
-                "#})
-                    .bind(account_id),
-            )
-            .await?;
+    //             Ok(AccountExtRevisionRecord {
+    //                 entity_created_at: account_record.audit.created_at,
+    //                 revision: revision_record
+    //             })
+    //         }.boxed()
+    //     }).await
+    // }
 
-        if let Some(result) = &mut result {
-            result.revision.roles = self
-                .get_roles(&result.revision.account_id, result.revision.revision_id)
-                .await?;
-        };
+    // async fn update(
+    //     &self,
+    //     current_revision_id: i64,
+    //     revision: AccountRevisionRecord,
+    // ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+    //     let revision = revision.ensure_new(current_revision_id);
+    //     self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
+    //         async move {
+    //             let revision_record = Self::insert_revision(tx, revision.clone()).await?;
 
-        Ok(result)
-    }
+    //             let account_record: AccountRecord = tx
+    //                 .fetch_optional_as(
+    //                     sqlx::query_as(indoc! {r#"
+    //                         UPDATE accounts
+    //                         SET updated_at = $1, modified_by = $2, current_revision_id = $3, email = $4
+    //                         WHERE account_id = $5 AND current_revision_id = $6
+    //                         RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id
+    //                     "#})
+    //                         .bind(&revision.audit.created_at)
+    //                         .bind(revision.audit.created_by)
+    //                         .bind(revision.revision_id)
+    //                         .bind(&revision.email)
+    //                         .bind(revision.account_id)
+    //                         .bind(current_revision_id)
+    //                 ).await
+    //                 .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?
+    //                 .ok_or(AccountRepoError::RevisionForUpdateNotFound { current_revision_id })?;
 
-    async fn get_by_email(
-        &self,
-        email: &str,
-    ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
-        let mut result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_email")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! {r#"
-                    SELECT a.created_at AS entity_created_at, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.created_at, ar.created_by, ar.deleted
-                    FROM accounts a
-                    JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
-                    WHERE a.email = $1 AND a.deleted_at IS NULL
-                "#})
-                    .bind(email),
-            )
-            .await?;
+    //             Ok(AccountExtRevisionRecord {
+    //                 entity_created_at: account_record.audit.created_at,
+    //                 revision: revision_record
+    //             })
+    //         }.boxed()
+    //     }).await
+    // }
 
-        if let Some(result) = &mut result {
-            result.revision.roles = self
-                .get_roles(&result.revision.account_id, result.revision.revision_id)
-                .await?;
-        };
+    // async fn get_by_id(
+    //     &self,
+    //     account_id: &Uuid,
+    // ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
+    //     let mut result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_id")
+    //         .fetch_optional_as(
+    //             sqlx::query_as(indoc! {r#"
+    //                 SELECT a.created_at AS entity_created_at, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.created_at, ar.created_by, ar.deleted
+    //                 FROM accounts a
+    //                 JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
+    //                 WHERE a.account_id = $1 AND a.deleted_at IS NULL
+    //             "#})
+    //                 .bind(account_id),
+    //         )
+    //         .await?;
 
-        Ok(result)
-    }
+    //     if let Some(result) = &mut result {
+    //         result.revision.roles = self
+    //             .get_roles(&result.revision.account_id, result.revision.revision_id)
+    //             .await?;
+    //     };
+
+    //     Ok(result)
+    // }
+
+    // async fn get_by_email(
+    //     &self,
+    //     email: &str,
+    // ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
+    //     let mut result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_email")
+    //         .fetch_optional_as(
+    //             sqlx::query_as(indoc! {r#"
+    //                 SELECT a.created_at AS entity_created_at, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.created_at, ar.created_by, ar.deleted
+    //                 FROM accounts a
+    //                 JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
+    //                 WHERE a.email = $1 AND a.deleted_at IS NULL
+    //             "#})
+    //                 .bind(email),
+    //         )
+    //         .await?;
+
+    //     if let Some(result) = &mut result {
+    //         result.revision.roles = self
+    //             .get_roles(&result.revision.account_id, result.revision.revision_id)
+    //             .await?;
+    //     };
+
+    //     Ok(result)
+    // }
 }
