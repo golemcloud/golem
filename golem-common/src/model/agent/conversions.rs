@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::agent::bindings::golem::agent::host;
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentType, BinaryDescriptor,
     BinaryReference, BinarySource, BinaryType, DataSchema, DataValue, ElementSchema, ElementValue,
     ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    TextDescriptor, TextReference, TextSource, TextType, Url,
+    RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, Url,
 };
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -531,6 +532,24 @@ impl From<TextType> for super::bindings::golem::agent::common::TextType {
     fn from(value: TextType) -> Self {
         Self {
             language_code: value.language_code,
+        }
+    }
+}
+
+impl From<RegisteredAgentType> for host::RegisteredAgentType {
+    fn from(value: RegisteredAgentType) -> Self {
+        host::RegisteredAgentType {
+            agent_type: value.agent_type.into(),
+            implemented_by: value.implemented_by.into(),
+        }
+    }
+}
+
+impl From<host::RegisteredAgentType> for RegisteredAgentType {
+    fn from(value: host::RegisteredAgentType) -> Self {
+        RegisteredAgentType {
+            agent_type: value.agent_type.into(),
+            implemented_by: value.implemented_by.into(),
         }
     }
 }

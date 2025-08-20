@@ -161,7 +161,6 @@ impl Services {
                 plugin_wasm_files_service.clone(),
                 transformer_plugin_caller.clone(),
                 limit_service.clone(),
-                agent_types.clone(),
             ))
             .await;
 

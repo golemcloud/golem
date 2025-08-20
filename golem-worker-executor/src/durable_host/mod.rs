@@ -44,6 +44,7 @@ use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
     WorkerConfig,
 };
+use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -168,6 +169,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -250,6 +252,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 blob_store_service,
                 rdbms_service,
                 component_service,
+                agent_types_service,
                 plugins,
                 config.clone(),
                 owned_worker_id.clone(),
@@ -395,6 +398,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn component_service(&self) -> Arc<dyn ComponentService> {
         self.state.component_service.clone()
+    }
+
+    pub fn agent_types_service(&self) -> Arc<dyn AgentTypesService> {
+        self.state.agent_types_service.clone()
     }
 
     pub fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
@@ -2482,6 +2489,7 @@ struct PrivateDurableWorkerState {
     blob_store_service: Arc<dyn BlobStoreService>,
     rdbms_service: Arc<dyn RdbmsService>,
     component_service: Arc<dyn ComponentService>,
+    agent_types_service: Arc<dyn AgentTypesService>,
     plugins: Arc<dyn Plugins>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
@@ -2539,6 +2547,7 @@ impl PrivateDurableWorkerState {
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
         component_service: Arc<dyn ComponentService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
         plugins: Arc<dyn Plugins>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
@@ -2578,6 +2587,7 @@ impl PrivateDurableWorkerState {
             blob_store_service,
             rdbms_service,
             component_service,
+            agent_types_service,
             plugins,
             config,
             owned_worker_id,

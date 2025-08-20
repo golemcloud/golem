@@ -49,8 +49,8 @@ pub trait ComponentService: Send + Sync {
         forced_version: Option<ComponentVersion>,
     ) -> Result<golem_service_base::model::Component, WorkerExecutorError>;
 
-    /// Resolve a component given a user provided string. The syntax of the provided string is allowed to vary between implementations.
-    /// Resolving component is the component in whoose context the resolution is being performed
+    /// Resolve a component given a user-provided string. The syntax of the provided string is allowed to vary between implementations.
+    /// Resolving component is the component in whose context the resolution is being performed
     async fn resolve_component(
         &self,
         component_reference: String,
