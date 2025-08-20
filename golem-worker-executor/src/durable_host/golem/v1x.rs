@@ -38,7 +38,6 @@ use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use std::future::Future;
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
@@ -102,11 +101,6 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    // async fn discover_agent_types(
-    //     &mut self,
-    // ) -> anyhow::Result<Vec<crate::preview2::golem_api_1_x::host::AgentType>> {
-    //     Ok(vec![])
-    // }
     async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
         self.observe_function_call("golem::api", "create_promise");
 

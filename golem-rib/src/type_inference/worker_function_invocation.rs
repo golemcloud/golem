@@ -16,11 +16,10 @@ use crate::call_type::{CallType, InstanceCreationType, InstanceIdentifier};
 use crate::rib_type_error::RibTypeErrorInternal;
 use crate::type_parameter::TypeParameter;
 use crate::{
-    function_name, CustomError, DynamicParsedFunctionName, Expr, FullyQualifiedResourceConstructor,
+    CustomError, DynamicParsedFunctionName, Expr, FullyQualifiedResourceConstructor,
     FunctionCallError, InferredType, TypeInternal, TypeOrigin,
 };
 use crate::{FunctionName, InstanceType};
-use combine::parser::function;
 use std::collections::VecDeque;
 
 // This phase is responsible for identifying the worker function invocations
