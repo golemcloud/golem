@@ -165,6 +165,7 @@ impl DbAccountRepo<PostgresPool> {
                     SELECT account_id, revision_id, role
                     FROM account_revision_roles
                     WHERE account_id = $1 AND revision_id = $2
+                    ORDER BY role
                 "#})
                 .bind(account_id)
                 .bind(revision_id),
@@ -203,10 +204,15 @@ impl DbAccountRepo<PostgresPool> {
 
         revision.roles = {
             let mut inserted_roles = Vec::with_capacity(revision.roles.len());
+
             for role in original_roles {
                 let role = role.ensure_account(revision.account_id, revision.revision_id);
                 inserted_roles.push(Self::insert_one_role(tx, role).await?);
             }
+
+            // sort roles so they are consistent with get_roles ordering
+            inserted_roles.sort_by_key(|r| r.role);
+
             inserted_roles
         };
 

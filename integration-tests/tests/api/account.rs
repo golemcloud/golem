@@ -83,10 +83,11 @@ async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         let account = client
             .set_account_roles(
                 &user.account_id.0,
-                &[AccountRole::Admin, AccountRole::MarketingAdmin],
+                &[AccountRole::MarketingAdmin, AccountRole::Admin],
             )
             .await?;
 
+        // We always reorder the roles so they are consistent
         assert!(account.roles == vec![AccountRole::Admin, AccountRole::MarketingAdmin]);
         assert!(account.revision == AccountRevision(1));
     }
