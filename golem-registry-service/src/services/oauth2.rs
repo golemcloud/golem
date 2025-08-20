@@ -346,7 +346,7 @@ impl OAuth2Service {
 
         let account = self
             .account_service
-            .create(NewAccountData { name, email })
+            .create_bootstrapped(NewAccountData { name, email })
             .await?;
 
         Ok(account.id)

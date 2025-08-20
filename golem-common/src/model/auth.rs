@@ -13,14 +13,8 @@
 // limitations under the License.
 
 use crate::model::account::AccountId;
-use crate::model::ProjectId;
-use crate::{declare_structs, newtype_uuid};
+use crate::{declare_enums, declare_structs, newtype_uuid};
 use chrono::Utc;
-use std::collections::HashSet;
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
-use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, FromRepr};
 
 newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
@@ -45,9 +39,19 @@ declare_structs! {
         pub expires_at: chrono::DateTime<Utc>,
     }
 
+    pub struct AuthCtx {
+        pub token_secret: TokenSecret,
+    }
+
     pub struct AccountAuthorisation {
         pub token: Token,
-        pub roles: Vec<Role>,
+        pub roles: Vec<AccountRole>,
+    }
+}
+
+impl AuthCtx {
+    pub fn new(token_secret: TokenSecret) -> Self {
+        Self { token_secret }
     }
 }
 
@@ -62,69 +66,48 @@ impl TokenWithSecret {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    serde::Serialize,
-    serde::Deserialize,
-    EnumIter,
-    FromRepr,
-)]
-#[repr(i32)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
-pub enum Role {
-    Admin = 0,
-    MarketingAdmin = 1,
+declare_enums! {
+    #[derive(FromRepr, EnumIter)]
+    #[repr(i32)]
+    pub enum AccountRole {
+        Admin = 0,
+        MarketingAdmin = 1,
+    }
+
+    #[derive(FromRepr, EnumIter)]
+    #[repr(i32)]
+    pub enum EnvironmentRole {
+        Admin = 0,
+        Viewer = 1,
+        Deployer = 2,
+    }
 }
 
-impl From<Role> for i32 {
-    fn from(value: Role) -> Self {
+impl From<AccountRole> for i32 {
+    fn from(value: AccountRole) -> Self {
         value as i32
     }
 }
 
-impl TryFrom<i32> for Role {
+impl TryFrom<i32> for AccountRole {
     type Error = String;
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
-        Role::from_repr(value).ok_or_else(|| format!("Invalid role: {value}"))
+        AccountRole::from_repr(value).ok_or_else(|| format!("Invalid role: {value}"))
     }
 }
 
-impl FromStr for Role {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Admin" => Ok(Role::Admin),
-            "MarketingAdmin" => Ok(Role::MarketingAdmin),
-            _ => Err(format!("Unknown role id: {s}")),
-        }
+impl From<EnvironmentRole> for i32 {
+    fn from(value: EnvironmentRole) -> Self {
+        value as i32
     }
 }
 
-impl Display for Role {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            Role::Admin => write!(f, "Admin"),
-            Role::MarketingAdmin => write!(f, "MarketingAdmin"),
-        }
-    }
-}
+impl TryFrom<i32> for EnvironmentRole {
+    type Error = String;
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub struct AuthCtx {
-    pub token_secret: TokenSecret,
-}
-
-impl AuthCtx {
-    pub fn new(token_secret: TokenSecret) -> Self {
-        Self { token_secret }
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        EnvironmentRole::from_repr(value).ok_or_else(|| format!("Invalid role: {value}"))
     }
 }
 
@@ -164,36 +147,9 @@ impl TryFrom<i32> for AccountAction {
         AccountAction::from_repr(value).ok_or_else(|| format!("Invalid account action: {value}"))
     }
 }
-
-impl Display for AccountAction {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::ViewAccount => write!(f, "ViewAccount"),
-            Self::UpdateAccount => write!(f, "UpdateAccount"),
-            Self::ViewPlan => write!(f, "ViewPlan"),
-            Self::CreateProject => write!(f, "CreateProject"),
-            Self::DeleteAccount => write!(f, "DeleteAccount"),
-            Self::ViewAccountGrants => write!(f, "ViewAccountGrants"),
-            Self::CreateAccountGrant => write!(f, "CreateAccountGrant"),
-            Self::DeleteAccountGrant => write!(f, "DeleteAccountGrant"),
-            Self::ViewDefaultProject => write!(f, "ViewDefaultProject"),
-            Self::ListProjectGrants => write!(f, "ListProjectGrants"),
-            Self::ViewLimits => write!(f, "ViewLimits"),
-            Self::UpdateLimits => write!(f, "UpdateLimits"),
-            Self::ViewTokens => write!(f, "ViewTokens"),
-            Self::CreateToken => write!(f, "CreateToken"),
-            Self::DeleteToken => write!(f, "DeleteToken"),
-            Self::ViewGlobalPlugins => write!(f, "ViewGlobalPlugin"),
-            Self::CreateGlobalPlugin => write!(f, "CreateGlobalPlugin"),
-            Self::UpdateGlobalPlugin => write!(f, "UpdateGlobalPlugin"),
-            Self::DeleteGlobalPlugin => write!(f, "DeleteGlobalPlugin"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, EnumIter, FromRepr)]
 #[repr(i32)]
-pub enum ProjectAction {
+pub enum EnvironmentAction {
     ViewComponent = 0,
     CreateComponent = 1,
     UpdateComponent = 2,
@@ -229,261 +185,18 @@ pub enum ProjectAction {
     ExportApiDefinition = 32,
 }
 
-impl From<ProjectAction> for i32 {
-    fn from(value: ProjectAction) -> Self {
+impl From<EnvironmentAction> for i32 {
+    fn from(value: EnvironmentAction) -> Self {
         value as i32
     }
 }
 
-impl TryFrom<i32> for ProjectAction {
+impl TryFrom<i32> for EnvironmentAction {
     type Error = String;
     fn try_from(value: i32) -> Result<Self, Self::Error> {
-        ProjectAction::from_repr(value).ok_or_else(|| format!("Invalid project action: {value}"))
+        EnvironmentAction::from_repr(value)
+            .ok_or_else(|| format!("Invalid project action: {value}"))
     }
-}
-
-impl Display for ProjectAction {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::ViewComponent => write!(f, "ViewComponent"),
-            Self::CreateComponent => write!(f, "CreateComponent"),
-            Self::UpdateComponent => write!(f, "UpdateComponent"),
-            Self::DeleteComponent => write!(f, "DeleteComponent"),
-            Self::ViewWorker => write!(f, "ViewWorker"),
-            Self::CreateWorker => write!(f, "CreateWorker"),
-            Self::UpdateWorker => write!(f, "UpdateWorker"),
-            Self::DeleteWorker => write!(f, "DeleteWorker"),
-            Self::ViewProjectGrants => write!(f, "ViewProjectGrants"),
-            Self::CreateProjectGrants => write!(f, "CreateProjectGrants"),
-            Self::DeleteProjectGrants => write!(f, "DeleteProjectGrants"),
-            Self::ViewApiDefinition => write!(f, "ViewApiDefinition"),
-            Self::CreateApiDefinition => write!(f, "CreateApiDefinition"),
-            Self::UpdateApiDefinition => write!(f, "UpdateApiDefinition"),
-            Self::DeleteApiDefinition => write!(f, "DeleteApiDefinition"),
-            Self::DeleteProject => write!(f, "DeleteProject"),
-            Self::ViewPluginInstallations => write!(f, "ViewPluginInstallations"),
-            Self::CreatePluginInstallation => write!(f, "CreatePluginInstallation"),
-            Self::UpdatePluginInstallation => write!(f, "UpdatePluginInstallation"),
-            Self::DeletePluginInstallation => write!(f, "DeletePluginInstallation"),
-            Self::UpsertApiDeployment => write!(f, "UpsertApiDeployment"),
-            Self::ViewApiDeployment => write!(f, "ViewApiDeployment"),
-            Self::DeleteApiDeployment => write!(f, "DeleteApiDeployment"),
-            Self::UpsertApiDomain => write!(f, "UpsertApiDomain"),
-            Self::ViewApiDomain => write!(f, "ViewApiDomain"),
-            Self::DeleteApiDomain => write!(f, "DeleteApiDomain"),
-            Self::ViewProject => write!(f, "ViewProject"),
-            Self::BatchUpdatePluginInstallations => write!(f, "BatchUpdatePluginInstallations"),
-            Self::ViewPluginDefinition => write!(f, "ViewPluginDefinition"),
-            Self::CreatePluginDefinition => write!(f, "CreatePluginDefinition"),
-            Self::UpdatePluginDefinition => write!(f, "UpdatePluginDefinition"),
-            Self::DeletePluginDefinition => write!(f, "DeletePluginDefinition"),
-            Self::ExportApiDefinition => write!(f, "ExportApiDefinition"),
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    serde::Serialize,
-    serde::Deserialize,
-    EnumIter,
-)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
-pub enum ProjectPermission {
-    ViewComponent,
-    CreateComponent,
-    UpdateComponent,
-    DeleteComponent,
-    ViewWorker,
-    CreateWorker,
-    UpdateWorker,
-    DeleteWorker,
-    ViewProjectGrants,
-    CreateProjectGrants,
-    DeleteProjectGrants,
-    ViewApiDefinition,
-    CreateApiDefinition,
-    UpdateApiDefinition,
-    DeleteApiDefinition,
-    DeleteProject,
-    ViewPluginInstallations,
-    CreatePluginInstallation,
-    UpdatePluginInstallation,
-    DeletePluginInstallation,
-    UpsertApiDeployment,
-    ViewApiDeployment,
-    DeleteApiDeployment,
-    UpsertApiDomain,
-    ViewApiDomain,
-    DeleteApiDomain,
-    ViewPluginDefinition,
-    CreatePluginDefinition,
-    UpdatePluginDefinition,
-    DeletePluginDefinition,
-    ExportApiDefinition,
-}
-
-impl TryFrom<ProjectAction> for ProjectPermission {
-    type Error = String;
-
-    fn try_from(value: ProjectAction) -> Result<Self, Self::Error> {
-        match value {
-            ProjectAction::ViewComponent => Ok(Self::ViewComponent),
-            ProjectAction::CreateComponent => Ok(Self::CreateComponent),
-            ProjectAction::UpdateComponent => Ok(Self::UpdateComponent),
-            ProjectAction::DeleteComponent => Ok(Self::DeleteComponent),
-            ProjectAction::ViewWorker => Ok(Self::ViewWorker),
-            ProjectAction::CreateWorker => Ok(Self::CreateWorker),
-            ProjectAction::UpdateWorker => Ok(Self::UpdateWorker),
-            ProjectAction::DeleteWorker => Ok(Self::DeleteWorker),
-            ProjectAction::ViewProjectGrants => Ok(Self::ViewProjectGrants),
-            ProjectAction::CreateProjectGrants => Ok(Self::CreateProjectGrants),
-            ProjectAction::DeleteProjectGrants => Ok(Self::DeleteProjectGrants),
-            ProjectAction::ViewApiDefinition => Ok(Self::ViewApiDefinition),
-            ProjectAction::CreateApiDefinition => Ok(Self::CreateApiDefinition),
-            ProjectAction::UpdateApiDefinition => Ok(Self::UpdateApiDefinition),
-            ProjectAction::DeleteApiDefinition => Ok(Self::DeleteApiDefinition),
-            ProjectAction::DeleteProject => Ok(Self::DeleteProject),
-            ProjectAction::ViewPluginInstallations => Ok(Self::ViewPluginInstallations),
-            ProjectAction::CreatePluginInstallation => Ok(Self::CreatePluginInstallation),
-            ProjectAction::UpdatePluginInstallation => Ok(Self::UpdatePluginInstallation),
-            ProjectAction::DeletePluginInstallation => Ok(Self::DeletePluginInstallation),
-            ProjectAction::UpsertApiDeployment => Ok(Self::UpsertApiDeployment),
-            ProjectAction::ViewApiDeployment => Ok(Self::ViewApiDeployment),
-            ProjectAction::DeleteApiDeployment => Ok(Self::DeleteApiDeployment),
-            ProjectAction::UpsertApiDomain => Ok(Self::UpsertApiDomain),
-            ProjectAction::ViewApiDomain => Ok(Self::ViewApiDomain),
-            ProjectAction::DeleteApiDomain => Ok(Self::DeleteApiDomain),
-            ProjectAction::ViewPluginDefinition => Ok(Self::ViewPluginDefinition),
-            ProjectAction::CreatePluginDefinition => Ok(Self::CreatePluginDefinition),
-            ProjectAction::UpdatePluginDefinition => Ok(Self::UpdatePluginDefinition),
-            ProjectAction::DeletePluginDefinition => Ok(Self::DeletePluginDefinition),
-            ProjectAction::ViewProject | ProjectAction::BatchUpdatePluginInstallations => {
-                Err(format!("Unknown project permission: {value:?}"))
-            }
-            ProjectAction::ExportApiDefinition => Ok(Self::ExportApiDefinition),
-        }
-    }
-}
-
-impl From<ProjectPermission> for i32 {
-    fn from(value: ProjectPermission) -> Self {
-        value as i32
-    }
-}
-
-impl Display for ProjectPermission {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::ViewComponent => write!(f, "ViewComponent"),
-            Self::CreateComponent => write!(f, "CreateComponent"),
-            Self::UpdateComponent => write!(f, "UpdateComponent"),
-            Self::DeleteComponent => write!(f, "DeleteComponent"),
-            Self::ViewWorker => write!(f, "ViewWorker"),
-            Self::CreateWorker => write!(f, "CreateWorker"),
-            Self::UpdateWorker => write!(f, "UpdateWorker"),
-            Self::DeleteWorker => write!(f, "DeleteWorker"),
-            Self::ViewProjectGrants => write!(f, "ViewProjectGrants"),
-            Self::CreateProjectGrants => write!(f, "CreateProjectGrants"),
-            Self::DeleteProjectGrants => write!(f, "DeleteProjectGrants"),
-            Self::ViewApiDefinition => write!(f, "ViewApiDefinition"),
-            Self::CreateApiDefinition => write!(f, "CreateApiDefinition"),
-            Self::UpdateApiDefinition => write!(f, "UpdateApiDefinition"),
-            Self::DeleteApiDefinition => write!(f, "DeleteApiDefinition"),
-            Self::DeleteProject => write!(f, "DeleteProject"),
-            Self::ViewPluginInstallations => write!(f, "ViewPluginInstallations"),
-            Self::CreatePluginInstallation => write!(f, "CreatePluginInstallation"),
-            Self::UpdatePluginInstallation => write!(f, "UpdatePluginInstallation"),
-            Self::DeletePluginInstallation => write!(f, "DeletePluginInstallation"),
-            Self::UpsertApiDeployment => write!(f, "UpsertApiDeployment"),
-            Self::ViewApiDeployment => write!(f, "ViewApiDeployment"),
-            Self::DeleteApiDeployment => write!(f, "DeleteApiDeployment"),
-            Self::UpsertApiDomain => write!(f, "UpsertApiDomain"),
-            Self::ViewApiDomain => write!(f, "ViewApiDomain"),
-            Self::DeleteApiDomain => write!(f, "DeleteApiDomain"),
-            Self::ViewPluginDefinition => write!(f, "ViewPluginDefinition"),
-            Self::CreatePluginDefinition => write!(f, "CreatePluginDefinition"),
-            Self::UpdatePluginDefinition => write!(f, "UpdatePluginDefinition"),
-            Self::DeletePluginDefinition => write!(f, "DeletePluginDefinition"),
-            Self::ExportApiDefinition => write!(f, "ExportApiDefinition"),
-        }
-    }
-}
-
-impl FromStr for ProjectPermission {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ViewComponent" => Ok(Self::ViewComponent),
-            "CreateComponent" => Ok(Self::CreateComponent),
-            "UpdateComponent" => Ok(Self::UpdateComponent),
-            "DeleteComponent" => Ok(Self::DeleteComponent),
-            "ViewWorker" => Ok(Self::ViewWorker),
-            "CreateWorker" => Ok(Self::CreateWorker),
-            "UpdateWorker" => Ok(Self::UpdateWorker),
-            "DeleteWorker" => Ok(Self::DeleteWorker),
-            "ViewProjectGrants" => Ok(Self::ViewProjectGrants),
-            "CreateProjectGrants" => Ok(Self::CreateProjectGrants),
-            "DeleteProjectGrants" => Ok(Self::DeleteProjectGrants),
-            "ViewApiDefinition" => Ok(Self::ViewApiDefinition),
-            "CreateApiDefinition" => Ok(Self::CreateApiDefinition),
-            "UpdateApiDefinition" => Ok(Self::UpdateApiDefinition),
-            "DeleteApiDefinition" => Ok(Self::DeleteApiDefinition),
-            "DeleteProject" => Ok(Self::DeleteProject),
-            "ViewPluginInstallations" => Ok(Self::ViewPluginInstallations),
-            "CreatePluginInstallation" => Ok(Self::CreatePluginInstallation),
-            "UpdatePluginInstallation" => Ok(Self::UpdatePluginInstallation),
-            "DeletePluginInstallation" => Ok(Self::DeletePluginInstallation),
-            "UpsertApiDeployment" => Ok(Self::UpsertApiDeployment),
-            "ViewApiDeployment" => Ok(Self::ViewApiDeployment),
-            "DeleteApiDeployment" => Ok(Self::DeleteApiDeployment),
-            "UpsertApiDomain" => Ok(Self::UpsertApiDomain),
-            "ViewApiDomain" => Ok(Self::ViewApiDomain),
-            "DeleteApiDomain" => Ok(Self::DeleteApiDomain),
-            "ViewPluginDefinition" => Ok(Self::ViewPluginDefinition),
-            "CreatePluginDefinition" => Ok(Self::CreatePluginDefinition),
-            "UpdatePluginDefinition" => Ok(Self::UpdatePluginDefinition),
-            "DeletePluginDefinition" => Ok(Self::DeletePluginDefinition),
-            "ExportApiDefinition" => Ok(Self::ExportApiDefinition),
-            _ => Err(format!("Unknown project permission: {s}")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-pub struct ProjectActions {
-    pub actions: HashSet<ProjectPermission>,
-}
-
-impl ProjectActions {
-    pub fn empty() -> ProjectActions {
-        ProjectActions {
-            actions: HashSet::new(),
-        }
-    }
-
-    pub fn all() -> ProjectActions {
-        let actions: HashSet<ProjectPermission> =
-            ProjectPermission::iter().collect::<HashSet<ProjectPermission>>();
-        ProjectActions { actions }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct ProjectAuthorisedActions {
-    pub project_id: ProjectId,
-    pub owner_account_id: AccountId,
-    pub actions: ProjectActions,
 }
 
 #[cfg(feature = "protobuf")]
@@ -509,41 +222,26 @@ mod protobuf {
 
 #[cfg(test)]
 mod test {
-    use super::Role;
-    use super::{ProjectAction, ProjectPermission};
-    use std::str::FromStr;
+    use super::AccountRole;
+    use super::EnvironmentAction;
     use strum::IntoEnumIterator;
     use test_r::test;
 
     #[test]
     fn role_to_from() {
-        for role in Role::iter() {
+        for role in AccountRole::iter() {
             let role_as_i32: i32 = role.clone().into();
-            let deserialized_role = Role::try_from(role_as_i32).unwrap();
-            assert_eq!(role, deserialized_role);
-
-            let role_as_str = role.to_string();
-            let deserialized_role = Role::from_str(&role_as_str).unwrap();
-            assert_eq!(role, deserialized_role);
+            let deserialized_role = AccountRole::try_from(role_as_i32).unwrap();
             assert_eq!(role, deserialized_role);
         }
     }
 
     #[test]
     fn project_action_to_from() {
-        for action in ProjectAction::iter() {
+        for action in EnvironmentAction::iter() {
             let action_as_i32: i32 = action.clone().into();
-            let deserialized_action = ProjectAction::try_from(action_as_i32).unwrap();
+            let deserialized_action = EnvironmentAction::try_from(action_as_i32).unwrap();
             assert_eq!(action, deserialized_action);
-        }
-    }
-
-    #[test]
-    fn project_permission_to_from() {
-        for permission in ProjectPermission::iter() {
-            let permission_as_str = permission.to_string();
-            let deserialized_permission = ProjectPermission::from_str(&permission_as_str).unwrap();
-            assert_eq!(permission, deserialized_permission);
         }
     }
 }

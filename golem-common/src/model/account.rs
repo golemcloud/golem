@@ -13,19 +13,29 @@
 // limitations under the License.
 
 use super::PlanId;
-use crate::{declare_structs, newtype_uuid};
+use crate::model::auth::AccountRole;
+use crate::{declare_revision, declare_structs, newtype_uuid};
 
 newtype_uuid!(AccountId, golem_api_grpc::proto::golem::common::AccountId);
+
+declare_revision!(AccountRevision);
 
 declare_structs! {
     pub struct Account {
         pub id: AccountId,
+        pub revision: AccountRevision,
         pub name: String,
         pub email: String,
         pub plan_id: PlanId,
+        pub roles: Vec<AccountRole>
     }
 
     pub struct NewAccountData {
+        pub name: String,
+        pub email: String,
+    }
+
+    pub struct UpdatedAccountData {
         pub name: String,
         pub email: String,
     }

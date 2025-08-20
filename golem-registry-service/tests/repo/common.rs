@@ -18,11 +18,13 @@ use chrono::Utc;
 use futures::future::join_all;
 use golem_common::model::component::ComponentFilePermissions;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_registry_service::repo::account::AccountRecord;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
+use golem_registry_service::repo::model::account::{
+    AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
+};
 use golem_registry_service::repo::model::account_usage::{UsageTracking, UsageType};
 use golem_registry_service::repo::model::audit::{
-    AuditFields, DeletableRevisionAuditFields, RevisionAuditFields,
+    DeletableRevisionAuditFields, RevisionAuditFields,
 };
 use golem_registry_service::repo::model::component::{
     ComponentFileRecord, ComponentPluginInstallationRecord, ComponentRevisionRecord,
@@ -44,30 +46,32 @@ use strum::IntoEnumIterator;
 // Common test cases -------------------------------------------------------------------------------
 
 pub async fn test_create_and_get_account(deps: &Deps) {
-    let account = AccountRecord {
+    let account = AccountRevisionRecord {
         account_id: new_repo_uuid(),
+        revision_id: 0,
         email: new_repo_uuid().to_string(),
-        audit: AuditFields::new(new_repo_uuid()),
+        audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
         name: new_repo_uuid().to_string(),
+        roles: Vec::new(),
         plan_id: deps.test_plan_id(),
     };
 
     let created_account = deps.account_repo.create(account.clone()).await.unwrap();
-    let_assert!(Some(created_account) = created_account);
-    assert!(account == created_account);
+    compare_created_to_requested_account(&account, &created_account);
 
     let result_for_same_email = deps
         .account_repo
-        .create(AccountRecord {
+        .create(AccountRevisionRecord {
             account_id: new_repo_uuid(),
+            revision_id: 0,
             email: account.email.clone(),
-            audit: AuditFields::new(new_repo_uuid()),
+            audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
             name: new_repo_uuid().to_string(),
+            roles: Vec::new(),
             plan_id: deps.test_plan_id(),
         })
-        .await
-        .unwrap();
-    let_assert!(None = result_for_same_email);
+        .await;
+    let_assert!(Err(AccountRepoError::AccountViolatesUniqueness) = result_for_same_email);
 
     let requested_account = deps
         .account_repo
@@ -75,7 +79,7 @@ pub async fn test_create_and_get_account(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(requested_account) = requested_account);
-    assert!(account == requested_account);
+    compare_created_to_requested_account(&account, &requested_account);
 
     let requested_account = deps
         .account_repo
@@ -83,7 +87,36 @@ pub async fn test_create_and_get_account(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(requested_account) = requested_account);
-    assert!(account == requested_account);
+    compare_created_to_requested_account(&account, &requested_account);
+}
+
+pub async fn test_update(deps: &Deps) {
+    let account = AccountRevisionRecord {
+        account_id: new_repo_uuid(),
+        revision_id: 0,
+        email: new_repo_uuid().to_string(),
+        audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
+        name: new_repo_uuid().to_string(),
+        roles: Vec::new(),
+        plan_id: deps.test_plan_id(),
+    };
+
+    let created_account = deps.account_repo.create(account.clone()).await.unwrap();
+    compare_created_to_requested_account(&account, &created_account);
+
+    let updated_account = AccountRevisionRecord {
+        revision_id: 1,
+        name: "Updated name".to_string(),
+        ..account
+    };
+
+    let created_updated_account = deps
+        .account_repo
+        .update(account.revision_id, updated_account.clone())
+        .await
+        .unwrap();
+
+    compare_created_to_requested_account(&updated_account, &created_updated_account);
 }
 
 pub async fn test_application_ensure(deps: &Deps) {
@@ -94,27 +127,35 @@ pub async fn test_application_ensure(deps: &Deps) {
 
     let app = deps
         .application_repo
-        .get_by_name(&owner.account_id, &app_name)
+        .get_by_name(&owner.revision.account_id, &app_name)
         .await
         .unwrap();
     assert!(app.is_none());
 
     let app = deps
         .application_repo
-        .ensure(&user.account_id, &owner.account_id, &app_name)
+        .ensure(
+            &user.revision.account_id,
+            &owner.revision.account_id,
+            &app_name,
+        )
         .await
         .unwrap();
 
     check!(app.name == app_name);
-    check!(app.account_id == owner.account_id);
-    check!(app.audit.modified_by == user.account_id);
+    check!(app.account_id == owner.revision.account_id);
+    check!(app.audit.modified_by == user.revision.account_id);
     check!(app.audit.created_at.as_utc() >= &now);
     check!(app.audit.created_at == app.audit.updated_at);
     check!(app.audit.deleted_at.is_none());
 
     let app_2 = deps
         .application_repo
-        .ensure(&user.account_id, &owner.account_id, &app_name)
+        .ensure(
+            &user.revision.account_id,
+            &owner.revision.account_id,
+            &app_name,
+        )
         .await
         .unwrap();
 
@@ -122,7 +163,7 @@ pub async fn test_application_ensure(deps: &Deps) {
 
     let app_3 = deps
         .application_repo
-        .get_by_name(&owner.account_id, &app_name)
+        .get_by_name(&owner.revision.account_id, &app_name)
         .await
         .unwrap();
     let_assert!(Some(app_3) = app_3);
@@ -142,7 +183,11 @@ pub async fn test_application_ensure_concurrent(deps: &Deps) {
                 let app_name = app_name.clone();
                 async move {
                     deps.application_repo
-                        .ensure(&user.account_id, &owner.account_id, &app_name)
+                        .ensure(
+                            &user.revision.account_id,
+                            &owner.revision.account_id,
+                            &app_name,
+                        )
                         .await
                 }
             })
@@ -164,7 +209,7 @@ pub async fn test_application_delete(deps: &Deps) {
     let user = deps.create_account().await;
 
     deps.application_repo
-        .delete(&user.account_id, &app.application_id)
+        .delete(&user.revision.account_id, &app.application_id)
         .await
         .unwrap();
 
@@ -176,20 +221,20 @@ pub async fn test_application_delete(deps: &Deps) {
     assert!(get_by_id.is_none());
     let get_by_name = deps
         .application_repo
-        .get_by_name(&user.account_id, &app.name)
+        .get_by_name(&user.revision.account_id, &app.name)
         .await
         .unwrap();
     assert!(get_by_name.is_none());
 
     // Delete app again, should not fail
     deps.application_repo
-        .delete(&user.account_id, &app.application_id)
+        .delete(&user.revision.account_id, &app.application_id)
         .await
         .unwrap();
 
     let new_app_with_same_name = deps
         .application_repo
-        .ensure(&user.account_id, &app.account_id, &app.name)
+        .ensure(&user.revision.account_id, &app.account_id, &app.name)
         .await
         .unwrap();
 
@@ -213,7 +258,7 @@ pub async fn test_environment_create(deps: &Deps) {
     let revision_0 = EnvironmentRevisionRecord {
         environment_id: new_repo_uuid(),
         revision_id: 0,
-        audit: DeletableRevisionAuditFields::new(user.account_id),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: false,
         version_check: false,
         security_overrides: false,
@@ -265,7 +310,7 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
                         EnvironmentRevisionRecord {
                             environment_id: new_repo_uuid(),
                             revision_id: 0,
-                            audit: DeletableRevisionAuditFields::new(user.account_id),
+                            audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                             compatibility_check: false,
                             version_check: false,
                             security_overrides: false,
@@ -298,7 +343,7 @@ pub async fn test_environment_update(deps: &Deps) {
     let env_rev_1 = EnvironmentRevisionRecord {
         environment_id: env_rev_0.revision.environment_id,
         revision_id: 1,
-        audit: DeletableRevisionAuditFields::new(user.account_id),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: true,
         version_check: true,
         security_overrides: false,
@@ -346,7 +391,7 @@ pub async fn test_environment_update(deps: &Deps) {
     let env_rev_2 = EnvironmentRevisionRecord {
         environment_id: env_rev_0.revision.environment_id,
         revision_id: 2,
-        audit: DeletableRevisionAuditFields::new(user.account_id),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: true,
         version_check: true,
         security_overrides: false,
@@ -413,7 +458,7 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
                         EnvironmentRevisionRecord {
                             environment_id: env_rev_0.revision.environment_id,
                             revision_id: 0,
-                            audit: DeletableRevisionAuditFields::new(user.account_id),
+                            audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                             compatibility_check: false,
                             version_check: false,
                             security_overrides: false,
@@ -457,7 +502,7 @@ pub async fn test_component_stage(deps: &Deps) {
             account_id: app.account_id,
             name: "a".to_string(),
             version: "1.0.0".to_string(),
-            audit: DeletableRevisionAuditFields::new(user.account_id),
+            audit: DeletableRevisionAuditFields::new(user.revision.account_id),
             description: "".to_string(),
             icon: vec![],
             homepage: "".to_string(),
@@ -481,7 +526,7 @@ pub async fn test_component_stage(deps: &Deps) {
             account_id: app.account_id,
             name: "b".to_string(),
             version: "1.0.0".to_string(),
-            audit: DeletableRevisionAuditFields::new(user.account_id),
+            audit: DeletableRevisionAuditFields::new(user.revision.account_id),
             description: "".to_string(),
             icon: vec![],
             homepage: "".to_string(),
@@ -503,7 +548,7 @@ pub async fn test_component_stage(deps: &Deps) {
         revision_id: 0,
         version: "1.0".to_string(),
         hash: SqlBlake3Hash::empty(),
-        audit: DeletableRevisionAuditFields::new(user.account_id),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         component_type: 0,
         size: 10,
         metadata: ComponentMetadata::from_parts(
@@ -525,7 +570,7 @@ pub async fn test_component_stage(deps: &Deps) {
             revision_id: 0,
             file_path: "file1".to_string(),
             hash: blake3::hash("test-2".as_bytes()).into(),
-            audit: RevisionAuditFields::new(user.account_id),
+            audit: RevisionAuditFields::new(user.revision.account_id),
             file_key: "xdxd".to_string(),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
         }],
@@ -534,7 +579,7 @@ pub async fn test_component_stage(deps: &Deps) {
                 component_id,
                 revision_id: 0,
                 priority: 1,
-                audit: RevisionAuditFields::new(user.account_id),
+                audit: RevisionAuditFields::new(user.revision.account_id),
                 plugin_id: plugin_a.plugin_id,
                 plugin_name: plugin_a.name.clone(),
                 plugin_version: plugin_a.version.clone(),
@@ -544,7 +589,7 @@ pub async fn test_component_stage(deps: &Deps) {
                 component_id,
                 revision_id: 0,
                 priority: 2,
-                audit: RevisionAuditFields::new(user.account_id),
+                audit: RevisionAuditFields::new(user.revision.account_id),
                 plugin_id: plugin_b.plugin_id,
                 plugin_name: plugin_b.name.clone(),
                 plugin_version: plugin_b.version.clone(),
@@ -556,7 +601,7 @@ pub async fn test_component_stage(deps: &Deps) {
             revision_id: 0,
             file_path: "file".to_string(),
             hash: blake3::hash("test-2".as_bytes()).into(),
-            audit: RevisionAuditFields::new(user.account_id),
+            audit: RevisionAuditFields::new(user.revision.account_id),
             file_key: "xdxd".to_string(),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
         }],
@@ -712,14 +757,14 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let delete_with_old_revision = deps
         .component_repo
-        .delete(&user.account_id, &component_id, 0)
+        .delete(&user.revision.account_id, &component_id, 0)
         .await
         .unwrap();
     let_assert!(Err(ComponentRevisionRepoError::ConcurrentModification) = delete_with_old_revision);
 
     let delete_with_current_revision = deps
         .component_repo
-        .delete(&user.account_id, &component_id, 1)
+        .delete(&user.revision.account_id, &component_id, 1)
         .await
         .unwrap();
     let_assert!(Ok(()) = delete_with_current_revision);
@@ -770,7 +815,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
         revision_id: 0,
         version: "1.0".to_string(),
         hash: SqlBlake3Hash::empty(),
-        audit: DeletableRevisionAuditFields::new(user.account_id),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         definition: "test-definition".as_bytes().to_vec(),
     }
     .with_updated_hash();
@@ -897,7 +942,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
     let delete_with_old_revision = deps
         .http_api_definition_repo
-        .delete(&user.account_id, &definition_id, 0)
+        .delete(&user.revision.account_id, &definition_id, 0)
         .await
         .unwrap();
     let_assert!(
@@ -906,7 +951,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
     let delete_with_current_revision = deps
         .http_api_definition_repo
-        .delete(&user.account_id, &definition_id, 1)
+        .delete(&user.revision.account_id, &definition_id, 1)
         .await
         .unwrap();
     let_assert!(Ok(()) = delete_with_current_revision);
@@ -963,7 +1008,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         revision_id: 0,
         version: "1.0".to_string(),
         hash: SqlBlake3Hash::empty(),
-        audit: DeletableRevisionAuditFields::new(user.account_id),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         definition: "test-definition".as_bytes().to_vec(),
     };
 
@@ -982,7 +1027,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         http_api_deployment_id: deployment_id,
         revision_id: 0,
         hash: SqlBlake3Hash::empty(),
-        audit: DeletableRevisionAuditFields::new(user.account_id),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         http_api_definitions: vec![created_definition.to_identity()],
     }
     .with_updated_hash();
@@ -1117,7 +1162,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
 
     let delete_with_old_revision = deps
         .http_api_deployment_repo
-        .delete(&user.account_id, &deployment_id, 0)
+        .delete(&user.revision.account_id, &deployment_id, 0)
         .await
         .unwrap();
     let_assert!(
@@ -1126,7 +1171,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
 
     let delete_with_current_revision = deps
         .http_api_deployment_repo
-        .delete(&user.account_id, &deployment_id, 1)
+        .delete(&user.revision.account_id, &deployment_id, 1)
         .await
         .unwrap();
     let_assert!(Ok(()) = delete_with_current_revision);
@@ -1169,7 +1214,7 @@ pub async fn test_account_usage(deps: &Deps) {
 
     let mut usage = deps
         .account_usage_repo
-        .get(&user.account_id, &now)
+        .get(&user.revision.account_id, &now)
         .await
         .unwrap()
         .unwrap();
@@ -1198,7 +1243,7 @@ pub async fn test_account_usage(deps: &Deps) {
         deps.account_usage_repo.add(&increased_usage).await.unwrap();
         let usage = deps
             .account_usage_repo
-            .get(&user.account_id, &now)
+            .get(&user.revision.account_id, &now)
             .await
             .unwrap()
             .unwrap();
@@ -1219,7 +1264,7 @@ pub async fn test_account_usage(deps: &Deps) {
             .unwrap();
         let usage = deps
             .account_usage_repo
-            .get(&user.account_id, &now)
+            .get(&user.revision.account_id, &now)
             .await
             .unwrap()
             .unwrap();
@@ -1234,7 +1279,7 @@ pub async fn test_account_usage(deps: &Deps) {
         deps.account_usage_repo.add(&increased_usage).await.unwrap();
         let usage = deps
             .account_usage_repo
-            .get(&user.account_id, &now)
+            .get(&user.revision.account_id, &now)
             .await
             .unwrap()
             .unwrap();
@@ -1252,7 +1297,7 @@ pub async fn test_account_usage(deps: &Deps) {
     {
         let mut usage = deps
             .account_usage_repo
-            .get(&user.account_id, &now)
+            .get(&user.revision.account_id, &now)
             .await
             .unwrap()
             .unwrap();
@@ -1265,7 +1310,11 @@ pub async fn test_account_usage(deps: &Deps) {
     {
         let app = deps
             .application_repo
-            .ensure(&user.account_id, &user.account_id, "test-app")
+            .ensure(
+                &user.revision.account_id,
+                &user.revision.account_id,
+                "test-app",
+            )
             .await
             .unwrap();
         let env = deps
@@ -1277,7 +1326,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     environment_id: new_repo_uuid(),
                     revision_id: 0,
                     hash: SqlBlake3Hash::empty(),
-                    audit: DeletableRevisionAuditFields::new(user.account_id),
+                    audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     compatibility_check: false,
                     version_check: false,
                     security_overrides: false,
@@ -1296,7 +1345,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     revision_id: 0,
                     version: "".to_string(),
                     hash: SqlBlake3Hash::empty(),
-                    audit: DeletableRevisionAuditFields::new(user.account_id),
+                    audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     component_type: 0,
                     size: 0,
                     metadata: ComponentMetadata::from_parts(
@@ -1324,7 +1373,7 @@ pub async fn test_account_usage(deps: &Deps) {
 
         let usage = deps
             .account_usage_repo
-            .get(&user.account_id, &now)
+            .get(&user.revision.account_id, &now)
             .await
             .unwrap()
             .unwrap();
@@ -1332,4 +1381,14 @@ pub async fn test_account_usage(deps: &Deps) {
         check!(usage.usage(UsageType::TotalEnvCount) == 1);
         check!(usage.usage(UsageType::TotalComponentCount) == 1);
     }
+}
+
+fn compare_created_to_requested_account(
+    requested: &AccountRevisionRecord,
+    created: &AccountExtRevisionRecord,
+) {
+    assert!(created.revision.account_id == requested.account_id);
+    assert!(created.revision.name == requested.name);
+    assert!(created.revision.email == requested.email);
+    assert!(created.revision.roles == requested.roles)
 }

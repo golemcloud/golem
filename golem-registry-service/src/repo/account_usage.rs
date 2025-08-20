@@ -320,8 +320,9 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                 SELECT p.plan_id, p.name
-                FROM plans p
-                JOIN accounts a ON a.plan_id = p.plan_id
+                FROM accounts a
+                JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
+                JOIN plans p ON p.plan_id = ar.plan_id
                 WHERE a.account_id = $1
             "#})
                 .bind(account_id),

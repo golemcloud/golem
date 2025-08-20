@@ -14,10 +14,11 @@
 
 use super::ApiResult;
 use crate::services::account::AccountService;
+use crate::services::plan::PlanService;
 use golem_common::api::Page;
 use golem_common::model::Empty;
-use golem_common::model::account::{Account, AccountId, NewAccountData, Plan};
-use golem_common::model::auth::AuthCtx;
+use golem_common::model::account::{Account, AccountId, NewAccountData, Plan, UpdatedAccountData};
+use golem_common::model::auth::{AccountRole, AuthCtx};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -27,9 +28,11 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
+use uuid::Uuid;
 
 pub struct AccountsApi {
     account_service: Arc<AccountService>,
+    plan_service: Arc<PlanService>,
 }
 
 #[OpenApi(
@@ -38,8 +41,11 @@ pub struct AccountsApi {
     tag = ApiTags::Account
 )]
 impl AccountsApi {
-    pub fn new(account_service: Arc<AccountService>) -> Self {
-        Self { account_service }
+    pub fn new(account_service: Arc<AccountService>, plan_service: Arc<PlanService>) -> Self {
+        Self {
+            account_service,
+            plan_service,
+        }
     }
 
     /// Find accounts
@@ -97,7 +103,9 @@ impl AccountsApi {
         data: NewAccountData,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        let result = self.account_service.create(data).await?;
+        let actor = AccountId(Uuid::nil());
+
+        let result = self.account_service.create(data, actor).await?;
         Ok(Json(result))
     }
 
@@ -158,10 +166,13 @@ impl AccountsApi {
 
     async fn get_account_plan_internal(
         &self,
-        _account_id: AccountId,
+        account_id: AccountId,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Plan>> {
-        todo!()
+        let account = self.account_service.get(&account_id).await?;
+        let plan = self.plan_service.get(&account.plan_id).await?;
+
+        Ok(Json(plan))
     }
 
     /// Update account
@@ -174,7 +185,7 @@ impl AccountsApi {
     async fn put_account(
         &self,
         account_id: Path<AccountId>,
-        data: Json<NewAccountData>,
+        data: Json<UpdatedAccountData>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Account>> {
         let record =
@@ -192,11 +203,55 @@ impl AccountsApi {
 
     async fn put_account_internal(
         &self,
-        _account_id: AccountId,
-        _data: NewAccountData,
+        account_id: AccountId,
+        data: UpdatedAccountData,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        todo!()
+        let actor = AccountId(Uuid::nil());
+        let result = self
+            .account_service
+            .update(&account_id, data, actor)
+            .await?;
+        Ok(Json(result))
+    }
+
+    /// Update roles of an accout
+    #[oai(
+        path = "/:account_id/roles",
+        method = "put",
+        operation_id = "set_account_roles"
+    )]
+    async fn set_account_roles(
+        &self,
+        account_id: Path<AccountId>,
+        roles: Json<Vec<AccountRole>>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Account>> {
+        let record =
+            recorded_http_api_request!("set_account_roles", account_id = account_id.0.to_string());
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .set_account_roles_internal(account_id.0, roles.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn set_account_roles_internal(
+        &self,
+        account_id: AccountId,
+        roles: Vec<AccountRole>,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<Account>> {
+        let actor = AccountId(Uuid::nil());
+        let result = self
+            .account_service
+            .set_roles(&account_id, roles, actor)
+            .await?;
+        Ok(Json(result))
     }
 
     /// Delete account

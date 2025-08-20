@@ -113,6 +113,15 @@ impl From<AccountError> for ApiError {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
+            AccountError::ConcurrentUpdate => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            })),
+
+            AccountError::EmailAlreadyInUse => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
             AccountError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("AccountError")),
@@ -156,6 +165,7 @@ impl From<PlanError> for ApiError {
     fn from(value: PlanError) -> Self {
         let error: String = value.to_safe_string();
         match value {
+            PlanError::PlanNotFound(_) => Self::NotFound(Json(ErrorBody { error, cause: None })),
             PlanError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("PlanError")),
