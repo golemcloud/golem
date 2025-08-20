@@ -113,11 +113,13 @@ impl From<AccountError> for ApiError {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
-            AccountError::ConcurrentUpdate | AccountError::EmailAlreadyInUse => {
-                Self::BadRequest(Json(ErrorsBody {
-                    errors: vec![error],
-                    cause: None,
-                }))
+            AccountError::ConcurrentUpdate => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            })),
+
+            AccountError::EmailAlreadyInUse => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
             AccountError::InternalError(inner) => Self::InternalError(Json(ErrorBody {

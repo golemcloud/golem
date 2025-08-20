@@ -27,8 +27,10 @@ use uuid::Uuid;
 pub enum AccountRepoError {
     #[error("Account for this email already exists")]
     AccountViolatesUniqueness,
-    #[error("Version already exists: {version}")]
-    VersionAlreadyExists { version: i64 },
+    #[error("Version already exists: {revision_id}")]
+    RevisionAlreadyExists { revision_id: i64 },
+    #[error("Current revision for update not found: {current_revision_id}")]
+    RevisionForUpdateNotFound { current_revision_id: i64 },
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -68,6 +70,14 @@ impl AccountRevisionRecord {
     pub fn ensure_first(self) -> Self {
         Self {
             revision_id: 0,
+            audit: self.audit.ensure_new(),
+            ..self
+        }
+    }
+
+    pub fn ensure_new(self, current_revision_id: i64) -> Self {
+        Self {
+            revision_id: current_revision_id + 1,
             audit: self.audit.ensure_new(),
             ..self
         }

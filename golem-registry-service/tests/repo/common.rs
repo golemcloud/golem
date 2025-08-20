@@ -112,7 +112,7 @@ pub async fn test_update(deps: &Deps) {
 
     let created_updated_account = deps
         .account_repo
-        .update(updated_account.clone())
+        .update(account.revision_id, updated_account.clone())
         .await
         .unwrap();
 

@@ -36,6 +36,7 @@ pub trait AccountRepo: Send + Sync {
 
     async fn update(
         &self,
+        current_revision_id: i64,
         revision: AccountRevisionRecord,
     ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
 
@@ -82,10 +83,14 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
 
     async fn update(
         &self,
+        current_revision_id: i64,
         revision: AccountRevisionRecord,
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         let span = Self::span_account_id(&revision.account_id);
-        self.repo.update(revision).instrument(span).await
+        self.repo
+            .update(current_revision_id, revision)
+            .instrument(span)
+            .await
     }
 
     async fn get_by_id(
@@ -192,8 +197,8 @@ impl DbAccountRepo<PostgresPool> {
                 .bind_deletable_revision_audit(revision.audit),
             )
             .await
-            .to_custom_result_on_unique_violation(AccountRepoError::VersionAlreadyExists {
-                version: revision.revision_id,
+            .to_custom_result_on_unique_violation(AccountRepoError::RevisionAlreadyExists {
+                revision_id: revision.revision_id,
             })?;
 
         revision.roles = {
@@ -249,18 +254,20 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
 
     async fn update(
         &self,
+        current_revision_id: i64,
         revision: AccountRevisionRecord,
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+        let revision = revision.ensure_new(current_revision_id);
         self.db_pool.with_tx_custom_error(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision_record = Self::insert_revision(tx, revision.clone()).await?;
 
                 let account_record: AccountRecord = tx
-                    .fetch_one_as(
+                    .fetch_optional_as(
                         sqlx::query_as(indoc! {r#"
                             UPDATE accounts
                             SET updated_at = $1, modified_by = $2, current_revision_id = $3, email = $4
-                            WHERE account_id = $5
+                            WHERE account_id = $5 AND current_revision_id = $6
                             RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                             .bind(&revision.audit.created_at)
@@ -268,8 +275,10 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                             .bind(revision.revision_id)
                             .bind(&revision.email)
                             .bind(revision.account_id)
+                            .bind(current_revision_id)
                     ).await
-                    .to_custom_result_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?;
+                    .to_custom_result_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?
+                    .ok_or(AccountRepoError::RevisionForUpdateNotFound { current_revision_id })?;
 
                 Ok(AccountExtRevisionRecord {
                     entity_created_at: account_record.audit.created_at,

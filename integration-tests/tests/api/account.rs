@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use super::Tracing;
-use assert2::assert;
-use golem_client::api::RegistryServiceClient;
+use assert2::{assert, let_assert};
+use golem_client::api::{
+    RegistryServiceClient, RegistryServiceCreateAccountError, RegistryServiceUpdateAccountError,
+};
 use golem_client::model::AccountRole;
 use golem_client::model::UpdatedAccountData;
-use golem_common::model::account::AccountRevision;
+use golem_common::model::account::{AccountRevision, NewAccountData};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
@@ -97,5 +99,141 @@ async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         assert!(account.roles == vec![AccountRole::Admin]);
         assert!(account.revision == AccountRevision(2));
     }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn create_account_with_duplicate_email_fails(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let admin = deps.admin().await;
+    let client = deps.registry_service().client(&admin.token).await;
+
+    let email = format!("{}@golem.cloud", Uuid::new_v4());
+
+    {
+        let account = client
+            .create_account(&NewAccountData {
+                name: Uuid::new_v4().to_string(),
+                email: email.clone(),
+            })
+            .await?;
+
+        assert!(account.email == email);
+    }
+
+    {
+        let failed_account_creation = client
+            .create_account(&NewAccountData {
+                name: Uuid::new_v4().to_string(),
+                email: email.clone(),
+            })
+            .await;
+
+        let_assert!(
+            Err(golem_client::Error::Item(
+                RegistryServiceCreateAccountError::Error409(_)
+            )) = failed_account_creation
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn update_account_with_duplicate_email_fails(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let admin = deps.admin().await;
+    let client = deps.registry_service().client(&admin.token).await;
+
+    let conflicting_email = format!("{}@golem.cloud", Uuid::new_v4());
+
+    {
+        let account = client
+            .create_account(&NewAccountData {
+                name: Uuid::new_v4().to_string(),
+                email: conflicting_email.clone(),
+            })
+            .await?;
+
+        assert!(account.email == conflicting_email);
+    }
+
+    {
+        let account = client
+            .create_account(&NewAccountData {
+                name: Uuid::new_v4().to_string(),
+                email: format!("{}@golem.cloud", Uuid::new_v4()),
+            })
+            .await?;
+
+        let failed_account_update = client
+            .update_account(
+                &account.id.0,
+                &UpdatedAccountData {
+                    name: account.name,
+                    email: conflicting_email.clone(),
+                },
+            )
+            .await;
+
+        let_assert!(
+            Err(golem_client::Error::Item(
+                RegistryServiceUpdateAccountError::Error409(_)
+            )) = failed_account_update
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn emails_can_be_reused(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let admin = deps.admin().await;
+    let client = deps.registry_service().client(&admin.token).await;
+
+    let conflicting_email = format!("{}@golem.cloud", Uuid::new_v4());
+
+    let account_1 = client
+        .create_account(&NewAccountData {
+            name: Uuid::new_v4().to_string(),
+            email: conflicting_email.clone(),
+        })
+        .await?;
+
+    let account_2 = client
+        .create_account(&NewAccountData {
+            name: Uuid::new_v4().to_string(),
+            email: format!("{}@golem.cloud", Uuid::new_v4()),
+        })
+        .await?;
+
+    let account_1 = client
+        .update_account(
+            &account_1.id.0,
+            &UpdatedAccountData {
+                name: account_1.name,
+                email: format!("{}@golem.cloud", Uuid::new_v4()),
+            },
+        )
+        .await?;
+
+    let account_2 = client
+        .update_account(
+            &account_2.id.0,
+            &UpdatedAccountData {
+                name: account_2.name,
+                email: conflicting_email.clone(),
+            },
+        )
+        .await?;
+
+    assert!(account_1.email != conflicting_email);
+    assert!(account_2.email == conflicting_email);
+
     Ok(())
 }

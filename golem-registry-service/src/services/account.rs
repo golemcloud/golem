@@ -225,22 +225,27 @@ impl AccountService {
         account: Account,
         actor: AccountId,
     ) -> Result<Account, AccountError> {
-        let revision = account.revision.next()?;
+        let new_revision = account.revision.next()?;
         let result = self
             .account_repo
-            .update(AccountRevisionRecord {
-                account_id: account.id.0,
-                revision_id: revision.0 as i64,
-                name: account.name,
-                email: account.email,
-                plan_id: account.plan_id.0,
-                audit: DeletableRevisionAuditFields::new(actor.0),
-                roles: account
-                    .roles
-                    .into_iter()
-                    .map(|role| AccountRoleRecord::from_model(account.id.clone(), revision, role))
-                    .collect(),
-            })
+            .update(
+                account.revision.into(),
+                AccountRevisionRecord {
+                    account_id: account.id.0,
+                    revision_id: new_revision.into(),
+                    name: account.name,
+                    email: account.email,
+                    plan_id: account.plan_id.0,
+                    audit: DeletableRevisionAuditFields::new(actor.0),
+                    roles: account
+                        .roles
+                        .into_iter()
+                        .map(|role| {
+                            AccountRoleRecord::from_model(account.id.clone(), new_revision, role)
+                        })
+                        .collect(),
+                },
+            )
             .await;
 
         match result {
@@ -248,7 +253,7 @@ impl AccountService {
             Err(AccountRepoError::AccountViolatesUniqueness) => {
                 Err(AccountError::EmailAlreadyInUse)?
             }
-            Err(AccountRepoError::VersionAlreadyExists { .. }) => {
+            Err(AccountRepoError::RevisionAlreadyExists { .. }) => {
                 Err(AccountError::ConcurrentUpdate)?
             }
             Err(other) => Err(other)?,
