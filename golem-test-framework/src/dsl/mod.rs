@@ -566,7 +566,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                 &source_path,
                 &component_name.0,
             )
-                .expect("Failed to verify and change component metadata")
+            .expect("Failed to verify and change component metadata")
         } else {
             source_path
         };
