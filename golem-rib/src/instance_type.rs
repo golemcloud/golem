@@ -177,7 +177,6 @@ impl InstanceType {
         worker_name: Option<Box<Expr>>,
         analysed_resource_id: u64,
         analysed_resource_mode: u8,
-        hello: bool
     ) -> Result<InstanceType, String> {
         let interface_name = fully_qualified_resource_constructor.interface_name.clone();
         let package_name = fully_qualified_resource_constructor.package_name.clone();
@@ -229,7 +228,6 @@ impl InstanceType {
             ))
         }
     }
-
 
     pub fn interface_name(&self) -> Option<InterfaceName> {
         match self {
@@ -586,9 +584,7 @@ fn search_function_in_instance(
                 let functions = function_dictionary
                     .name_and_types
                     .iter()
-                    .filter(|(f, _)| {
-                        f.name() == function_name
-                    })
+                    .filter(|(f, _)| f.name() == function_name)
                     .collect::<Vec<_>>();
 
                 if functions.is_empty() {

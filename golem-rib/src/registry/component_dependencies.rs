@@ -87,7 +87,6 @@ impl ComponentDependencies {
                 } else {
                     let (key, types) = function_types_in_component.pop().unwrap();
 
-
                     if types.is_empty() {
                         Err("unknown function".to_string())
                     } else {

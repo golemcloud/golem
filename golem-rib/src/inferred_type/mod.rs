@@ -319,13 +319,18 @@ impl InferredType {
         }
     }
 
-    pub fn resource(resource_id: u64, resource_mode: u8, owner: Option<String>, name: Option<String>) -> InferredType {
+    pub fn resource(
+        resource_id: u64,
+        resource_mode: u8,
+        owner: Option<String>,
+        name: Option<String>,
+    ) -> InferredType {
         InferredType {
             inner: Box::new(TypeInternal::Resource {
                 resource_id,
                 resource_mode,
                 owner,
-                name
+                name,
             }),
             origin: TypeOrigin::NoOrigin,
         }
@@ -693,7 +698,10 @@ impl From<&AnalysedType> for InferredType {
             }
             AnalysedType::Variant(vs) => InferredType::from_type_variant(vs),
             AnalysedType::Handle(TypeHandle {
-                resource_id, mode, name, owner
+                resource_id,
+                mode,
+                name,
+                owner,
             }) => InferredType::resource(
                 resource_id.0,
                 match mode {
@@ -701,7 +709,7 @@ impl From<&AnalysedType> for InferredType {
                     AnalysedResourceMode::Borrowed => 1,
                 },
                 owner.clone(),
-                name.clone()
+                name.clone(),
             ),
         }
     }

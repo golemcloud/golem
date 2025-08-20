@@ -120,7 +120,7 @@ pub fn try_unify_type(
             resource_id,
             resource_mode,
             name,
-            owner
+            owner,
         } => Ok(InferredType::resolved(TypeInternal::Resource {
             resource_id: *resource_id,
             resource_mode: *resource_mode,
@@ -441,10 +441,10 @@ pub fn unify_both_inferred_types(
                 resource_id: b_id,
                 resource_mode: b_mode,
                 name: b_name,
-                owner: b_owner
+                owner: b_owner,
             },
         ) => {
-            if a_id != b_id || a_mode != b_mode || a_owner != b_owner  || a_name != b_name {
+            if a_id != b_id || a_mode != b_mode || a_owner != b_owner || a_name != b_name {
                 return Err(UnificationFailureInternal::conflicting_types(
                     vec![left_inferred_type.clone(), right_inferred_type.clone()],
                     vec![format!(
@@ -454,7 +454,12 @@ pub fn unify_both_inferred_types(
                 ));
             }
 
-            Ok(InferredType::resource(*a_id, *a_mode, a_owner.clone(), a_name.clone()))
+            Ok(InferredType::resource(
+                *a_id,
+                *a_mode,
+                a_owner.clone(),
+                a_name.clone(),
+            ))
         }
 
         (TypeInternal::AllOf(types), _) => {

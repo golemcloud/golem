@@ -1148,7 +1148,10 @@ impl Expr {
         // as worker invokes or instance calls etc.
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
         self.infer_function_call_types(component_dependency)?;
-        type_inference::type_inference_fix_point(|x| Self::inference_scan(x, &component_dependency), self)?;
+        type_inference::type_inference_fix_point(
+            |x| Self::inference_scan(x, &component_dependency),
+            self,
+        )?;
         self.check_types(component_dependency)?;
         self.unify_types()?;
         Ok(())
@@ -1194,7 +1197,10 @@ impl Expr {
     // An inference is a single cycle of to-and-fro scanning of Rib expression, that it takes part in fix point of inference.
     // Not all phases of compilation will be part of this scan.
     // Example: function call argument inference based on the worker function hardly needs to be part of the scan.
-    pub fn inference_scan(&mut self, component_dependencies: &ComponentDependencies) -> Result<(), RibTypeErrorInternal> {
+    pub fn inference_scan(
+        &mut self,
+        component_dependencies: &ComponentDependencies,
+    ) -> Result<(), RibTypeErrorInternal> {
         self.infer_all_identifiers();
         self.push_types_down()?;
         self.infer_all_identifiers();
@@ -1257,7 +1263,10 @@ impl Expr {
         type_inference::infer_all_identifiers(self)
     }
 
-    pub fn pull_types_up(&mut self, component_dependencies: &ComponentDependencies) -> Result<(), RibTypeErrorInternal> {
+    pub fn pull_types_up(
+        &mut self,
+        component_dependencies: &ComponentDependencies,
+    ) -> Result<(), RibTypeErrorInternal> {
         type_inference::type_pull_up(self, component_dependencies)
     }
 

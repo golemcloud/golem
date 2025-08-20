@@ -1393,6 +1393,31 @@ mod internal {
                 }
             }
 
+            InstanceVariable::WitResource(variable_id)
+                if variable_id == VariableId::global("___STATIC_WIT_RESOURCE".to_string()) =>
+            {
+                let result = interpreter_env
+                    .invoke_worker_function_async(
+                        component_info,
+                        instruction_id,
+                        None,
+                        function_name_cloned,
+                        parameter_values,
+                        expected_result_type.clone(),
+                    )
+                    .await
+                    .map_err(|err| function_invoke_fail(function_name.as_str(), err))?;
+
+                match result {
+                    None => {
+                        interpreter_stack.push(RibInterpreterStackValue::Unit);
+                    }
+                    Some(result) => {
+                        interpreter_stack.push(RibInterpreterStackValue::Val(result));
+                    }
+                }
+            }
+
             InstanceVariable::WitResource(variable_id) => {
                 let mut final_args = vec![];
 
@@ -2850,8 +2875,7 @@ mod tests {
     async fn test_interpreter_with_indexed_resources_static_functions_1() {
         let expr = r#"
            let worker = instance();
-           let cart = worker.cart("hello");
-           let result = cart.create("afsal");
+           let result = worker.cart.create("afsal");
            result.checkout()
         "#;
 
@@ -2882,11 +2906,11 @@ mod tests {
     async fn test_interpreter_with_indexed_resources_static_functions_2() {
         let expr = r#"
            let worker = instance();
-           let cart = worker.cart("hello");
-           let result = cart.create-safe("afsal");
-           match result {
-             ok(x) => x.checkout(),
-             err(x) => cart.checkout()
+           let default-cart = worker.cart("default");
+           let alternate-cart = worker.cart.create-safe("afsal");
+           match alternate-cart {
+             ok(alt) => alt.checkout(),
+             err(_) => default-cart.checkout()
            }
         "#;
 
@@ -2912,7 +2936,6 @@ mod tests {
 
         assert_eq!(result.get_val().unwrap().value, expected_value);
     }
-
 
     #[test]
     async fn test_interpreter_with_indexed_resource_get_cart_contents() {
@@ -4830,7 +4853,11 @@ mod tests {
             case, f32, field, handle, list, option, r#enum, record, result, s32, str, tuple, u32,
             u64, unit_case, variant,
         };
-        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle, TypeResult};
+        use golem_wasm_ast::analysis::{
+            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
+            TypeResult,
+        };
         use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
         use uuid::Uuid;
@@ -5058,29 +5085,25 @@ mod tests {
                     },
                     AnalysedFunction {
                         name: "[static]cart.create".to_string(),
-                        parameters: vec![
-                            AnalysedFunctionParameter {
-                                name: "item-name".to_string(),
-                                typ: str(),
-                            },
-                        ],
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "item-name".to_string(),
+                            typ: str(),
+                        }],
                         result: Some(AnalysedFunctionResult {
                             typ: AnalysedType::Handle(TypeHandle {
                                 name: Some("cart".to_string()),
                                 owner: Some("golem:it/api".to_string()),
                                 resource_id: AnalysedResourceId(0),
                                 mode: AnalysedResourceMode::Owned,
-                            })
+                            }),
                         }),
                     },
                     AnalysedFunction {
                         name: "[static]cart.create-safe".to_string(),
-                        parameters: vec![
-                            AnalysedFunctionParameter {
-                                name: "item-name".to_string(),
-                                typ: str(),
-                            },
-                        ],
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "item-name".to_string(),
+                            typ: str(),
+                        }],
                         result: Some(AnalysedFunctionResult {
                             typ: result(
                                 AnalysedType::Handle(TypeHandle {
@@ -5090,7 +5113,7 @@ mod tests {
                                     mode: AnalysedResourceMode::Owned,
                                 }),
                                 str(),
-                            )
+                            ),
                         }),
                     },
                     AnalysedFunction {
@@ -5396,14 +5419,6 @@ mod tests {
                     }
 
                     "golem:it/api.{[static]cart.create}" => {
-                        let function_args = args.0[1..].to_vec();
-
-                        if function_args.len() != 1 {
-                            return Err("expected exactly one argument for cart.create".into());
-                        }
-
-                        let item_name = function_args[0].value.clone();
-
                         let uri = format!(
                             "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
                             worker_name.map(|x| x.0).unwrap_or_default()
@@ -5414,21 +5429,13 @@ mod tests {
                             resource_id: 0,
                         };
 
-                        Ok(Some(ValueAndType::new(value, handle(
-                            AnalysedResourceId(0),
-                            AnalysedResourceMode::Owned,
-                        ))))
+                        Ok(Some(ValueAndType::new(
+                            value,
+                            handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                        )))
                     }
 
                     "golem:it/api.{[static]cart.create-safe}" => {
-                        let function_args = args.0[1..].to_vec();
-
-                        if function_args.len() != 1 {
-                            return Err("expected exactly one argument for cart.create".into());
-                        }
-
-                        let item_name = function_args[0].value.clone();
-
                         let uri = format!(
                             "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
                             worker_name.map(|x| x.0).unwrap_or_default()
@@ -5441,10 +5448,13 @@ mod tests {
 
                         let value = Value::Result(Ok(Some(Box::new(resource))));
 
-                        Ok(Some(ValueAndType::new(value, result(handle(
-                            AnalysedResourceId(0),
-                            AnalysedResourceMode::Owned,
-                        ), str()))))
+                        Ok(Some(ValueAndType::new(
+                            value,
+                            result(
+                                handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                                str(),
+                            ),
+                        )))
                     }
 
                     "golem:it/api.{cart.pass-through}" => {
@@ -5482,8 +5492,6 @@ mod tests {
 
                         Ok(Some(value_and_type))
                     }
-
-
 
                     _ => Err(format!("unexpected function name: {}", function_name.0).into()),
                 }

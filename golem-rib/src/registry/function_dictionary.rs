@@ -255,7 +255,7 @@ fn resolve_function_name(
                     interface_name,
                     resource_name: constructor,
                     method_name: method,
-                    static_function: false
+                    static_function: false,
                 }))
             }
             Ok(None) => match get_resource_static_method_name(function_name) {
@@ -265,7 +265,7 @@ fn resolve_function_name(
                         interface_name,
                         resource_name: constructor,
                         method_name: method,
-                        static_function: true
+                        static_function: true,
                     }))
                 }
                 Ok(None) => Ok(FunctionName::Function(FullyQualifiedFunctionName {
@@ -275,7 +275,7 @@ fn resolve_function_name(
                 })),
 
                 Err(e) => Err(format!("invalid resource static method call. {e}")),
-            }
+            },
 
             Err(e) => Err(format!("invalid resource method call. {e}")),
         },
@@ -294,7 +294,9 @@ fn get_resource_name(function_name: &str) -> Option<String> {
     }
 }
 
-fn get_resource_static_method_name(function_name: &str) -> Result<Option<(String, String)>, String> {
+fn get_resource_static_method_name(
+    function_name: &str,
+) -> Result<Option<(String, String)>, String> {
     if function_name.starts_with("[static]") {
         let constructor_and_method = function_name.trim_start_matches("[static]").to_string();
         let mut constructor_and_method = constructor_and_method.split('.');
@@ -402,7 +404,7 @@ impl FunctionName {
                     interface_name,
                     resource_name: resource.clone(),
                     method_name: "drop".to_string(),
-                    static_function: false
+                    static_function: false,
                 })
             }
             DynamicParsedFunctionReference::RawResourceMethod { resource, method } => {
@@ -411,7 +413,7 @@ impl FunctionName {
                     interface_name,
                     resource_name: resource.clone(),
                     method_name: method.clone(),
-                    static_function: false
+                    static_function: false,
                 })
             }
             DynamicParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
@@ -420,7 +422,7 @@ impl FunctionName {
                     interface_name,
                     resource_name: resource.clone(),
                     method_name: method.clone(),
-                    static_function: true
+                    static_function: true,
                 })
             }
             DynamicParsedFunctionReference::IndexedResourceConstructor { resource, .. } => {
@@ -456,7 +458,7 @@ impl FunctionName {
                     interface_name,
                     resource_name: resource.clone(),
                     method_name: "drop".to_string(),
-                    static_function: false
+                    static_function: false,
                 })
             }
         }
@@ -552,7 +554,7 @@ pub struct FullyQualifiedResourceMethod {
     pub interface_name: Option<InterfaceName>,
     pub resource_name: String,
     pub method_name: String,
-    pub static_function: bool
+    pub static_function: bool,
 }
 
 impl FullyQualifiedResourceMethod {
