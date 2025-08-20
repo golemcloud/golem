@@ -13,15 +13,19 @@
 // limitations under the License.
 
 use super::application::ApplicationId;
-use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
+use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use super::auth::EnvironmentRole;
 use super::environment::EnvironmentId;
 use super::account::AccountId;
+
 newtype_uuid!(EnvironmentShareId);
+
+declare_revision!(EnvironmentShareRevision);
 
 declare_structs! {
     pub struct EnvironmentShare {
         pub id: EnvironmentShareId,
+        pub revision: EnvironmentShareRevision,
         pub environment_id: EnvironmentId,
         pub grantee_account_id: AccountId,
         pub roles: Vec<EnvironmentRole>
