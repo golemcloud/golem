@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::account::{AccountExtRevisionRecord, AccountRevisionRecord, AccountRoleRecord};
+use super::model::environment_share::{
+    EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError, EnvironmentShareRevisionRecord,
+    EnvironmentShareRoleRecord,
+};
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
-use crate::repo::model::account::AccountRepoError;
+use crate::repo::model::environment_share::EnvironmentShareRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -26,8 +29,6 @@ use golem_service_base::repo::{RepoResult, ResultExt};
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
-use super::model::environment_share::{EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError, EnvironmentShareRevisionRecord, EnvironmentShareRoleRecord};
-use crate::repo::model::environment_share::EnvironmentShareRecord;
 
 #[async_trait]
 pub trait EnvironmentShareRepo: Send + Sync {
@@ -90,7 +91,10 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
         grantee_account_id: Uuid,
     ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
         let span = Self::span_environment_id(&environment_id);
-        self.repo.create(environment_id, revision, grantee_account_id).instrument(span).await
+        self.repo
+            .create(environment_id, revision, grantee_account_id)
+            .instrument(span)
+            .await
     }
 
     async fn update(
@@ -226,7 +230,8 @@ impl DbEnvironmentShareRepo<PostgresPool> {
             let mut inserted_roles = Vec::with_capacity(revision.roles.len());
 
             for role in original_roles {
-                let role = role.ensure_environment_share(revision.environment_share_id, revision.revision_id);
+                let role = role
+                    .ensure_environment_share(revision.environment_share_id, revision.revision_id);
                 inserted_roles.push(Self::insert_one_role(tx, role).await?);
             }
 
@@ -260,9 +265,9 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                             VALUES ($1, $2, $3, $4, $4, NULL, $5, $6)
                             RETURNING environment_id, environment_share_id, grantee_account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
-                            .bind(&environment_id)
-                            .bind(&revision.environment_share_id)
-                            .bind(&grantee_account_id)
+                            .bind(environment_id)
+                            .bind(revision.environment_share_id)
+                            .bind(grantee_account_id)
                             .bind(&revision.audit.created_at)
                             .bind(revision.audit.created_by)
                             .bind(revision.revision_id)
@@ -286,7 +291,7 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
         &self,
         current_revision_id: i64,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError>  {
+    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
         let revision = revision.ensure_new(current_revision_id);
         self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
@@ -322,7 +327,7 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
         &self,
         current_revision_id: i64,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError>  {
+    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
         let revision = revision.ensure_deleted(current_revision_id);
         self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
@@ -372,7 +377,10 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
 
         if let Some(result) = &mut result {
             result.revision.roles = self
-                .get_roles(&result.revision.environment_share_id, result.revision.revision_id)
+                .get_roles(
+                    &result.revision.environment_share_id,
+                    result.revision.revision_id,
+                )
                 .await?;
         };
 
@@ -397,10 +405,12 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
 
         for result in results.iter_mut() {
             result.revision.roles = self
-                .get_roles(&result.revision.environment_share_id, result.revision.revision_id)
+                .get_roles(
+                    &result.revision.environment_share_id,
+                    result.revision.revision_id,
+                )
                 .await?;
-        };
-
+        }
 
         Ok(results)
     }

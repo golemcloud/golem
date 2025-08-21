@@ -15,17 +15,18 @@
 use super::Tracing;
 use assert2::{assert, let_assert};
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceCreateAccountError, RegistryServiceGetEnvironmentShareError, RegistryServiceUpdateAccountError
+    RegistryServiceClient, RegistryServiceCreateAccountError,
+    RegistryServiceGetEnvironmentShareError, RegistryServiceUpdateAccountError,
 };
 use golem_client::model::AccountRole;
 use golem_client::model::UpdatedAccountData;
 use golem_common::model::account::{AccountRevision, NewAccountData};
+use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::environment_share::{NewEnvironmentShare, UpdateEnvironmentShare};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::TestDsl;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
-use golem_test_framework::dsl::TestDsl;
-use golem_common::model::environment_share::{NewEnvironmentShare, UpdateEnvironmentShare};
-use golem_common::model::auth::EnvironmentRole;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -39,10 +40,15 @@ async fn share_environment_with_other_user(deps: &EnvBasedTestDependencies) -> a
 
     let client_1 = deps.registry_service().client(&user_1.token).await;
 
-    let share = client_1.create_environment_share(&env.0, &NewEnvironmentShare {
-        grantee_account_id: user_2.account_id.clone(),
-        roles: vec![EnvironmentRole::Admin]
-    }).await?;
+    let share = client_1
+        .create_environment_share(
+            &env.0,
+            &NewEnvironmentShare {
+                grantee_account_id: user_2.account_id.clone(),
+                roles: vec![EnvironmentRole::Admin],
+            },
+        )
+        .await?;
 
     assert!(share.grantee_account_id == user_2.account_id);
     assert!(share.roles == vec![EnvironmentRole::Admin]);
@@ -69,16 +75,25 @@ async fn delete_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
 
     let client_1 = deps.registry_service().client(&user_1.token).await;
 
-    let share = client_1.create_environment_share(&env.0, &NewEnvironmentShare {
-        grantee_account_id: user_2.account_id.clone(),
-        roles: vec![EnvironmentRole::Admin]
-    }).await?;
+    let share = client_1
+        .create_environment_share(
+            &env.0,
+            &NewEnvironmentShare {
+                grantee_account_id: user_2.account_id.clone(),
+                roles: vec![EnvironmentRole::Admin],
+            },
+        )
+        .await?;
 
     client_1.delete_environment_share(&share.id.0).await?;
 
     {
         let result = client_1.get_environment_share(&share.id.0).await;
-        let_assert!(Err(golem_client::Error::Item(RegistryServiceGetEnvironmentShareError::Error404(_))) = result);
+        let_assert!(
+            Err(golem_client::Error::Item(
+                RegistryServiceGetEnvironmentShareError::Error404(_)
+            )) = result
+        );
     }
 
     {
@@ -98,17 +113,24 @@ async fn update_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
 
     let client_1 = deps.registry_service().client(&user_1.token).await;
 
-    let share = client_1.create_environment_share(&env.0, &NewEnvironmentShare {
-        grantee_account_id: user_2.account_id.clone(),
-        roles: vec![EnvironmentRole::Admin]
-    }).await?;
+    let share = client_1
+        .create_environment_share(
+            &env.0,
+            &NewEnvironmentShare {
+                grantee_account_id: user_2.account_id.clone(),
+                roles: vec![EnvironmentRole::Admin],
+            },
+        )
+        .await?;
 
-    let updated_share = client_1.update_environment_share(
-        &share.id.0,
-        &UpdateEnvironmentShare {
-            new_roles: vec![EnvironmentRole::Viewer]
-        }
-    ).await?;
+    let updated_share = client_1
+        .update_environment_share(
+            &share.id.0,
+            &UpdateEnvironmentShare {
+                new_roles: vec![EnvironmentRole::Viewer],
+            },
+        )
+        .await?;
 
     assert!(updated_share.roles == vec![EnvironmentRole::Viewer]);
 

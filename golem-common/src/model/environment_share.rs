@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::application::ApplicationId;
-use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use super::account::AccountId;
 use super::auth::EnvironmentRole;
 use super::environment::EnvironmentId;
-use super::account::AccountId;
+use crate::{declare_revision, declare_structs, newtype_uuid};
 
 newtype_uuid!(EnvironmentShareId);
 

@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
-use anyhow::anyhow;
+use crate::repo::environment_share::EnvironmentShareRepo;
+use crate::repo::model::audit::DeletableRevisionAuditFields;
+use crate::repo::model::environment_share::{
+    EnvironmentShareRepoError, EnvironmentShareRevisionRecord, EnvironmentShareRoleRecord,
+};
 use golem_common::model::account::AccountId;
-use golem_common::model::application::ApplicationId;
-use golem_common::model::environment::{Environment, EnvironmentId, NewEnvironmentData};
-use golem_common::{SafeDisplay, error_forwarders};
-use golem_service_base::repo::RepoError;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment_share::{
+    EnvironmentShare, EnvironmentShareId, EnvironmentShareRevision, NewEnvironmentShare,
+    UpdateEnvironmentShare,
+};
+use golem_common::{SafeDisplay, error_forwarding};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::error;
-use crate::repo::model::environment_share::{EnvironmentShareRecord, EnvironmentShareRepoError, EnvironmentShareRevisionRecord, EnvironmentShareRoleRecord};
-use crate::repo::environment_share::EnvironmentShareRepo;
-use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareId, EnvironmentShareRevision, NewEnvironmentShare, UpdateEnvironmentShare};
-use crate::repo::model::audit::DeletableRevisionAuditFields;
-use golem_common::model::auth::EnvironmentRole;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentShareError {
@@ -51,7 +51,7 @@ impl SafeDisplay for EnvironmentShareError {
     }
 }
 
-error_forwarders!(EnvironmentShareError, EnvironmentShareRepoError);
+error_forwarding!(EnvironmentShareError, EnvironmentShareRepoError);
 
 pub struct EnvironmentShareService {
     environment_share_repo: Arc<dyn EnvironmentShareRepo>,
@@ -59,7 +59,9 @@ pub struct EnvironmentShareService {
 
 impl EnvironmentShareService {
     pub fn new(environment_share_repo: Arc<dyn EnvironmentShareRepo>) -> Self {
-        Self { environment_share_repo }
+        Self {
+            environment_share_repo,
+        }
     }
 
     pub async fn create(
@@ -75,19 +77,25 @@ impl EnvironmentShareService {
             .create(
                 environment_id.0,
                 EnvironmentShareRevisionRecord {
-                    environment_share_id: id.0.into(),
+                    environment_share_id: id.0,
                     revision_id: EnvironmentShareRevision::INITIAL.into(),
                     audit: DeletableRevisionAuditFields::new(actor.0),
-                    roles: data.roles.into_iter().map(|r| EnvironmentShareRoleRecord::from_model(id.clone(), revision.clone(), r)).collect()
+                    roles: data
+                        .roles
+                        .into_iter()
+                        .map(|r| EnvironmentShareRoleRecord::from_model(id.clone(), revision, r))
+                        .collect(),
                 },
-                data.grantee_account_id.0
+                data.grantee_account_id.0,
             )
             .await;
 
         match result {
             Ok(record) => Ok(record.try_into()?),
-            Err(EnvironmentShareRepoError::ShareViolatesUniqueness) => Err(EnvironmentShareError::ShareForAccountAlreadyExists),
-            Err(other) => Err(other.into())
+            Err(EnvironmentShareRepoError::ShareViolatesUniqueness) => {
+                Err(EnvironmentShareError::ShareForAccountAlreadyExists)
+            }
+            Err(other) => Err(other.into()),
         }
     }
 
@@ -97,28 +105,35 @@ impl EnvironmentShareService {
         update: UpdateEnvironmentShare,
         actor: AccountId,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
-        let mut environment_share: EnvironmentShare = self.environment_share_repo
-            .get_by_id(&environment_share_id.0).await?
-            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone()))?
+        let mut environment_share: EnvironmentShare = self
+            .environment_share_repo
+            .get_by_id(&environment_share_id.0)
+            .await?
+            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(
+                environment_share_id.clone(),
+            ))?
             .try_into()?;
 
         let current_revision = environment_share.revision;
 
-        environment_share.revision = current_revision.clone().next()?;
+        environment_share.revision = current_revision.next()?;
         environment_share.roles = update.new_roles;
 
         let result = self
             .environment_share_repo
             .update(
                 current_revision.into(),
-                EnvironmentShareRevisionRecord::from_model(environment_share, actor)
+                EnvironmentShareRevisionRecord::from_model(environment_share, actor),
             )
             .await;
 
         match result {
             Ok(record) => Ok(record.try_into()?),
-            Err(EnvironmentShareRepoError::RevisionAlreadyExists { .. } | EnvironmentShareRepoError::RevisionForUpdateNotFound { .. }) => Err(EnvironmentShareError::ConcurrentModification),
-            Err(other) => Err(other.into())
+            Err(
+                EnvironmentShareRepoError::RevisionAlreadyExists { .. }
+                | EnvironmentShareRepoError::RevisionForUpdateNotFound { .. },
+            ) => Err(EnvironmentShareError::ConcurrentModification),
+            Err(other) => Err(other.into()),
         }
     }
 
@@ -127,38 +142,48 @@ impl EnvironmentShareService {
         environment_share_id: &EnvironmentShareId,
         actor: AccountId,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
-        let mut environment_share: EnvironmentShare = self.environment_share_repo
-            .get_by_id(&environment_share_id.0).await?
-            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone()))?
+        let mut environment_share: EnvironmentShare = self
+            .environment_share_repo
+            .get_by_id(&environment_share_id.0)
+            .await?
+            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(
+                environment_share_id.clone(),
+            ))?
             .try_into()?;
 
         let current_revision = environment_share.revision;
 
-        environment_share.revision = current_revision.clone().next()?;
+        environment_share.revision = current_revision.next()?;
 
         let result = self
             .environment_share_repo
             .delete(
                 current_revision.into(),
-                EnvironmentShareRevisionRecord::from_model(environment_share, actor)
+                EnvironmentShareRevisionRecord::from_model(environment_share, actor),
             )
             .await;
 
         match result {
             Ok(record) => Ok(record.try_into()?),
-            Err(EnvironmentShareRepoError::RevisionAlreadyExists { .. } | EnvironmentShareRepoError::RevisionForUpdateNotFound { .. }) => Err(EnvironmentShareError::ConcurrentModification),
-            Err(other) => Err(other.into())
+            Err(
+                EnvironmentShareRepoError::RevisionAlreadyExists { .. }
+                | EnvironmentShareRepoError::RevisionForUpdateNotFound { .. },
+            ) => Err(EnvironmentShareError::ConcurrentModification),
+            Err(other) => Err(other.into()),
         }
     }
-
 
     pub async fn get(
         &self,
         environment_share_id: &EnvironmentShareId,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
-        let result = self.environment_share_repo
-            .get_by_id(&environment_share_id.0).await?
-            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone()))?
+        let result = self
+            .environment_share_repo
+            .get_by_id(&environment_share_id.0)
+            .await?
+            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(
+                environment_share_id.clone(),
+            ))?
             .try_into()?;
 
         Ok(result)
@@ -168,8 +193,10 @@ impl EnvironmentShareService {
         &self,
         environment_id: EnvironmentId,
     ) -> Result<Vec<EnvironmentShare>, EnvironmentShareError> {
-        let result = self.environment_share_repo
-            .get_for_environment(&environment_id.0).await?
+        let result = self
+            .environment_share_repo
+            .get_for_environment(&environment_id.0)
+            .await?
             .into_iter()
             .map(|r| r.try_into())
             .collect::<Result<_, _>>()?;

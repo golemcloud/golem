@@ -274,16 +274,17 @@ macro_rules! declare_transparent_newtypes {
 }
 
 #[macro_export]
-macro_rules! error_forwarders {
+macro_rules! error_forwarding {
     ($target:ty $(, $sub:ty )* $(,)?) => {
-        impl $crate::IntoInternalError for $target {
-            fn into_internal(self) -> ::anyhow::Error {
+        impl $crate::IntoAnyhow for $target {
+            fn into_anyhow(self) -> ::anyhow::Error {
                 // Note converting self into an anyhow::Error (via std::error::Error) loses the backtrace.
                 // Explicitly unwrap the inner error to preserve it.
-                match self {
+                let converted = match self {
                     Self::InternalError(inner) => inner,
-                    _ => anyhow::Error::from(self),
-                }
+                    _ => ::anyhow::Error::from(self),
+                };
+                converted.context(stringify!($target))
             }
         }
 
@@ -292,8 +293,7 @@ macro_rules! error_forwarders {
                 fn from(value: $sub) -> Self {
                     // No need for special handling of anyhow::Error once backtraces are preserved when going to std::err::Error
                     // https://github.com/rust-lang/rust/issues/99301
-                    let converted = <$sub as $crate::IntoInternalError>::into_internal(value);
-                    Self::InternalError(converted.context(stringify!($sub)))
+                    Self::InternalError(<$sub as $crate::IntoAnyhow>::into_anyhow(value))
                 }
             }
         )*

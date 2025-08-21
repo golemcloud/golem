@@ -14,7 +14,7 @@
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
-use golem_common::error_forwarders;
+use golem_common::error_forwarding;
 use golem_common::model::diff;
 use golem_common::model::diff::Hashable;
 use golem_service_base::repo::RepoError;
@@ -31,7 +31,7 @@ pub enum HttpApiDefinitionRepoError {
     InternalError(#[from] anyhow::Error),
 }
 
-error_forwarders!(HttpApiDefinitionRepoError, RepoError);
+error_forwarding!(HttpApiDefinitionRepoError, RepoError);
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDefinitionRecord {

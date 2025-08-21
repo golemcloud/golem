@@ -23,7 +23,7 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentId, PluginInstallationId};
-use golem_common::{SafeDisplay, error_forwarders};
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
@@ -113,7 +113,7 @@ impl SafeDisplay for ComponentError {
     }
 }
 
-error_forwarders!(
+error_forwarding!(
     ComponentError,
     RepoError,
     EnvironmentError,

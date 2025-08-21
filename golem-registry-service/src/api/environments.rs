@@ -13,28 +13,28 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::services::environment::EnvironmentService;
+use crate::services::environment_share::EnvironmentShareService;
 use golem_common::api::Page;
 use golem_common::api::environment::{DeployEnvironmentRequest, UpdateEnvironmentRequest};
+use golem_common::model::account::AccountId;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::deployment::Deployment;
 use golem_common::model::environment::*;
+use golem_common::model::environment_share::{EnvironmentShare, NewEnvironmentShare};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
-use tracing::Instrument;
-use crate::services::environment::EnvironmentService;
 use std::sync::Arc;
-use golem_common::model::environment_share::{EnvironmentShare, NewEnvironmentShare};
-use crate::services::environment_share::EnvironmentShareService;
-use golem_common::model::account::AccountId;
+use tracing::Instrument;
 use uuid::Uuid;
 
 pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
-    environment_share_service: Arc<EnvironmentShareService>
+    environment_share_service: Arc<EnvironmentShareService>,
 }
 
 #[OpenApi(
@@ -45,11 +45,11 @@ pub struct EnvironmentsApi {
 impl EnvironmentsApi {
     pub fn new(
         environment_service: Arc<EnvironmentService>,
-        environment_share_service: Arc<EnvironmentShareService>
+        environment_share_service: Arc<EnvironmentShareService>,
     ) -> Self {
         Self {
             environment_service,
-            environment_share_service
+            environment_share_service,
         }
     }
 
@@ -334,7 +334,8 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<EnvironmentShare>> {
         let actor = AccountId(Uuid::new_v4());
 
-        let result = self.environment_share_service
+        let result = self
+            .environment_share_service
             .create(environment_id, payload, actor)
             .await?;
 
@@ -373,7 +374,8 @@ impl EnvironmentsApi {
         environment_id: EnvironmentId,
         _token: AuthCtx,
     ) -> ApiResult<Json<Page<EnvironmentShare>>> {
-        let result = self.environment_share_service
+        let result = self
+            .environment_share_service
             .get_shares_in_environment(environment_id)
             .await?;
 

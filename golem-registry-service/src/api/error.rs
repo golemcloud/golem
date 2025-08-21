@@ -16,6 +16,7 @@ use crate::services::account::AccountError;
 use crate::services::application::ApplicationError;
 use crate::services::component::ComponentError;
 use crate::services::environment::EnvironmentError;
+use crate::services::environment_share::EnvironmentShareError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
 use crate::services::token::TokenError;
@@ -24,7 +25,6 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
-use crate::services::environment_share::EnvironmentShareError;
 
 #[derive(ApiResponse, Debug)]
 pub enum ApiError {
@@ -268,14 +268,13 @@ impl From<EnvironmentShareError> for ApiError {
     fn from(value: EnvironmentShareError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            EnvironmentShareError::ConcurrentModification | EnvironmentShareError::ShareForAccountAlreadyExists => Self::Conflict(Json(ErrorBody {
-                error,
-                cause: None
-             })),
-             EnvironmentShareError::EnvironmentShareNotFound(_) => Self::NotFound(Json(ErrorBody {
-                error,
-                cause: None
-             })),
+            EnvironmentShareError::ConcurrentModification
+            | EnvironmentShareError::ShareForAccountAlreadyExists => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+            EnvironmentShareError::EnvironmentShareNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
             EnvironmentShareError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("EnvironmentShareError")),

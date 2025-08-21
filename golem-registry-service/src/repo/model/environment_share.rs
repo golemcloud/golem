@@ -15,16 +15,16 @@
 use super::datetime::SqlDateTime;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use anyhow::anyhow;
-use golem_common::error_forwarders;
-use golem_common::model::PlanId;
-use golem_common::model::account::{Account, AccountId, AccountRevision};
-use golem_common::model::auth::AccountRole;
+use golem_common::error_forwarding;
+use golem_common::model::account::AccountId;
+use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment_share::{
+    EnvironmentShare, EnvironmentShareId, EnvironmentShareRevision,
+};
 use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
 use uuid::Uuid;
-use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareId, EnvironmentShareRevision};
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::auth::EnvironmentRole;
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentShareRepoError {
     #[error("There is already a share for this account in this environment")]
@@ -37,7 +37,7 @@ pub enum EnvironmentShareRepoError {
     InternalError(#[from] anyhow::Error),
 }
 
-error_forwarders!(EnvironmentShareRepoError, RepoError);
+error_forwarding!(EnvironmentShareRepoError, RepoError);
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct EnvironmentShareRecord {
@@ -66,7 +66,13 @@ pub struct EnvironmentShareRevisionRecord {
 impl EnvironmentShareRevisionRecord {
     pub fn from_model(value: EnvironmentShare, actor: AccountId) -> Self {
         Self {
-            roles: value.roles.into_iter().map(|r| EnvironmentShareRoleRecord::from_model(value.id.clone(), value.revision.clone(), r)).collect(),
+            roles: value
+                .roles
+                .into_iter()
+                .map(|r| {
+                    EnvironmentShareRoleRecord::from_model(value.id.clone(), value.revision, r)
+                })
+                .collect(),
             environment_share_id: value.id.0,
             revision_id: value.revision.into(),
             audit: DeletableRevisionAuditFields::new(actor.0),
@@ -142,7 +148,11 @@ impl EnvironmentShareRoleRecord {
         }
     }
 
-    pub fn from_model(environment_share_id: EnvironmentShareId, revision: EnvironmentShareRevision, value: EnvironmentRole) -> Self {
+    pub fn from_model(
+        environment_share_id: EnvironmentShareId,
+        revision: EnvironmentShareRevision,
+        value: EnvironmentRole,
+    ) -> Self {
         Self {
             environment_share_id: environment_share_id.0,
             revision_id: revision.into(),

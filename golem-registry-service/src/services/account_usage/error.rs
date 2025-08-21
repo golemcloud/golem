@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::account::AccountId;
-use golem_common::{SafeDisplay, error_forwarders};
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
@@ -40,4 +40,4 @@ impl SafeDisplay for AccountUsageError {
     }
 }
 
-error_forwarders!(AccountUsageError, RepoError);
+error_forwarding!(AccountUsageError, RepoError);

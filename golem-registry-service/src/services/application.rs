@@ -15,7 +15,7 @@
 use crate::repo::application::ApplicationRepo;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{Application, ApplicationId, NewApplicationData};
-use golem_common::{SafeDisplay, error_forwarders};
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -38,7 +38,7 @@ impl SafeDisplay for ApplicationError {
     }
 }
 
-error_forwarders!(ApplicationError, RepoError);
+error_forwarding!(ApplicationError, RepoError);
 
 pub struct ApplicationService {
     application_repo: Arc<dyn ApplicationRepo>,
