@@ -1,11 +1,9 @@
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::agent::DataValue;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::UpdateDescription;
-use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
     OwnedWorkerId, PluginInstallationId, ProjectId, TargetWorkerId, WorkerId, WorkerMetadata,
@@ -47,9 +45,9 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{HasAll, HasConfig, HasOplogService};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    AgentStore, DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
-    IndexedResourceStore, InvocationContextManagement, InvocationHooks, InvocationManagement,
-    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx,
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
@@ -377,66 +375,6 @@ impl FuelManagement for TestWorkerCtx {
 
     async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, WorkerExecutorError> {
         Ok(0)
-    }
-}
-
-#[async_trait]
-impl IndexedResourceStore for TestWorkerCtx {
-    fn get_indexed_resource(
-        &self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) -> Option<WorkerResourceId> {
-        self.durable_ctx
-            .get_indexed_resource(resource_owner, resource_name, resource_params)
-    }
-
-    async fn store_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-        resource: WorkerResourceId,
-    ) {
-        self.durable_ctx
-            .store_indexed_resource(resource_owner, resource_name, resource_params, resource)
-            .await
-    }
-
-    fn drop_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) {
-        self.durable_ctx
-            .drop_indexed_resource(resource_owner, resource_name, resource_params)
-    }
-}
-
-#[async_trait]
-impl AgentStore for TestWorkerCtx {
-    async fn store_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: DataValue,
-    ) {
-        self.durable_ctx
-            .store_agent_instance(agent_type, agent_id, parameters)
-            .await;
-    }
-
-    async fn remove_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: DataValue,
-    ) {
-        self.durable_ctx
-            .remove_agent_instance(agent_type, agent_id, parameters)
-            .await;
     }
 }
 

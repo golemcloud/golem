@@ -450,14 +450,9 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
             Some(assumed_component_version),
         )
         .await?;
-    let (function, parsed) = resolve_function(&component_metadata, function_name)?;
+    let (function, _parsed) = resolve_function(&component_metadata, function_name)?;
 
-    let expected_params: Vec<&AnalysedFunctionParameter> =
-        if parsed.function().is_indexed_resource() {
-            function.parameters.iter().skip(1).collect()
-        } else {
-            function.parameters.iter().collect()
-        };
+    let expected_params: Vec<&AnalysedFunctionParameter> = function.parameters.iter().collect();
 
     let mut input = Vec::new();
     for (json_string, param) in input_json_strings.iter().zip(expected_params) {

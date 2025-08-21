@@ -25,9 +25,9 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    ComponentId, ComponentType, ExportedResourceInstanceDescription, FilterComparator,
-    IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, TargetWorkerId, Timestamp,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
+    StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
@@ -2721,21 +2721,26 @@ async fn counter_resource_test_1(
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
         .collect::<Vec<_>>();
     resources1.sort_by_key(|(k, _v)| k.clone());
     check!(
         resources1
             == vec![(
                 "resource(0)".to_string(),
-                WorkerResourceDescription::ExportedResourceInstance(
-                    ExportedResourceInstanceDescription {
-                        created_at: ts,
-                        resource_owner: "rpc:counters-exports/api".to_string(),
-                        resource_name: "counter".to_string(),
-                        resource_params: None
-                    }
-                )
+                WorkerResourceDescription {
+                    created_at: ts,
+                    resource_owner: "rpc:counters-exports/api".to_string(),
+                    resource_name: "counter".to_string()
+                }
             ),]
     );
 
@@ -2743,150 +2748,11 @@ async fn counter_resource_test_1(
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
+        .map(|(k, v)| (k.to_string(), WorkerResourceDescription { created_at: ts, ..v.clone() }))
         .collect::<Vec<_>>();
     check!(resources2 == vec![]);
 
     executor.check_oplog_is_queryable(&worker_id).await;
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
-async fn counter_resource_test_2(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
-
-    let component_id = executor.component("counters").store().await;
-    let worker_id = executor.start_worker(&component_id, "counters-2").await;
-    executor.log_output(&worker_id).await;
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![5u64.into_value_and_type()],
-        )
-        .await;
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![1u64.into_value_and_type()],
-        )
-        .await;
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![2u64.into_value_and_type()],
-        )
-        .await;
-
-    let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
-        )
-        .await;
-    let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").get-value}",
-            vec![],
-        )
-        .await;
-
-    let (metadata1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").drop}",
-            vec![],
-        )
-        .await;
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").drop}",
-            vec![],
-        )
-        .await;
-
-    let result3 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{get-all-dropped}",
-            vec![],
-        )
-        .await;
-
-    let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
-
-    let _oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-
-    drop(executor);
-
-    check!(result1 == Ok(vec![Value::U64(5)]));
-    check!(result2 == Ok(vec![Value::U64(3)]));
-    check!(
-        result3
-            == Ok(vec![Value::List(vec![
-                Value::Tuple(vec![Value::String("counter1".to_string()), Value::U64(5)]),
-                Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)])
-            ])])
-    );
-
-    let ts = Timestamp::now_utc();
-    let mut resources1 = metadata1
-        .last_known_status
-        .owned_resources
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
-        .collect::<Vec<_>>();
-    resources1.sort_by_key(|(k, _v)| k.clone());
-    assert_eq!(
-        resources1,
-        vec![
-            (
-                "resource(0)".to_string(),
-                WorkerResourceDescription::ExportedResourceInstance(
-                    ExportedResourceInstanceDescription {
-                        created_at: ts,
-                        resource_owner: "rpc:counters-exports/api".to_string(),
-                        resource_name: "counter".to_string(),
-                        resource_params: Some(vec!["\"counter1\"".to_string()])
-                    }
-                )
-            ),
-            (
-                "resource(1)".to_string(),
-                WorkerResourceDescription::ExportedResourceInstance(
-                    ExportedResourceInstanceDescription {
-                        created_at: ts,
-                        resource_owner: "rpc:counters-exports/api".to_string(),
-                        resource_name: "counter".to_string(),
-                        resource_params: Some(vec!["\"counter2\"".to_string()])
-                    }
-                )
-            )
-        ]
-    );
-
-    let resources2 = metadata2
-        .last_known_status
-        .owned_resources
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
-        .collect::<Vec<_>>();
-
-    check!(resources2 == vec![]);
 }
 
 #[test]

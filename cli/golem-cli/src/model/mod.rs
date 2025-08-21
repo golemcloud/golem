@@ -40,9 +40,7 @@ use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::PluginTypeSpecificDefinition;
 use golem_common::model::trim_date::TrimDateTime;
-use golem_common::model::{
-    AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
-};
+use golem_common::model::WorkerResourceDescription;
 use golem_templates::model::{
     GuestLanguage, GuestLanguageTier, PackageName, Template, TemplateName,
 };
@@ -465,8 +463,7 @@ pub struct WorkerMetadataView {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub exported_resource_instances: HashMap<String, ExportedResourceInstanceDescription>,
-    pub agent_instances: HashMap<AgentInstanceKey, AgentInstanceDescription>,
+    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
 }
 
 impl TrimDateTime for WorkerMetadataView {
@@ -497,7 +494,6 @@ impl From<WorkerMetadata> for WorkerMetadataView {
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
             exported_resource_instances: value.exported_resource_instances,
-            agent_instances: value.agent_instances,
         }
     }
 }
@@ -519,8 +515,7 @@ pub struct WorkerMetadata {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub exported_resource_instances: HashMap<String, ExportedResourceInstanceDescription>,
-    pub agent_instances: HashMap<AgentInstanceKey, AgentInstanceDescription>,
+    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
 }
 
 impl WorkerMetadata {
@@ -543,15 +538,9 @@ impl WorkerMetadata {
             total_linear_memory_size: value.total_linear_memory_size,
             exported_resource_instances: HashMap::from_iter(
                 value.exported_resource_instances.into_iter().map(|desc| {
-                    let key = desc.key.resource_id.to_string();
+                    let key = desc.key.to_string();
                     (key, desc.description)
                 }),
-            ),
-            agent_instances: HashMap::from_iter(
-                value
-                    .agent_instances
-                    .into_iter()
-                    .map(|desc| (desc.key, desc.description)),
             ),
         }
     }

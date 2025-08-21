@@ -1741,11 +1741,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let mut owned_resources = Vec::new();
         for (resource_id, resource) in latest_status.owned_resources {
-            owned_resources.push(
-                to_protobuf_resource_description(resource_id, resource).map_err(|err| {
-                    WorkerExecutorError::unknown(format!("Failed to create worker metadata: {err}"))
-                })?,
-            );
+            owned_resources.push(to_protobuf_resource_description(resource_id, resource));
         }
 
         let active_plugins = latest_status.active_plugins;

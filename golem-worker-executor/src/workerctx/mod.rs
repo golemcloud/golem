@@ -45,7 +45,6 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::UpdateDescription;
-use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
     OwnedWorkerId, PluginInstallationId, ProjectId, TargetWorkerId, WorkerId, WorkerMetadata,
@@ -72,12 +71,10 @@ pub trait WorkerCtx:
     + InvocationHooks
     + ExternalOperations<Self>
     + ResourceStore
-    + IndexedResourceStore
     + UpdateManagement
     + FileSystemReading
     + DynamicLinking<Self>
     + InvocationContextManagement
-    + AgentStore
     + Send
     + Sync
     + Sized
@@ -337,55 +334,6 @@ pub trait UpdateManagement {
         update: &UpdateDescription,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
-    );
-}
-
-/// Stores resources created within the worker indexed by their constructor parameters
-///
-/// This is a secondary mapping on top of `ResourceStore`, which handles the mapping between
-/// resource identifiers to actual wasmtime `ResourceAny` instances.
-///
-/// Note that the parameters are passed as unparsed WAVE strings instead of their parsed `Value`
-/// representation - the string representation is easier to hash and allows us to reduce the number
-/// of times we need to parse the parameters.
-#[async_trait]
-pub trait IndexedResourceStore {
-    fn get_indexed_resource(
-        &self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) -> Option<WorkerResourceId>;
-    async fn store_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-        resource: WorkerResourceId,
-    );
-    fn drop_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    );
-}
-
-/// Stores information about living agent instances
-#[async_trait]
-pub trait AgentStore {
-    async fn store_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: golem_common::model::agent::DataValue,
-    );
-
-    async fn remove_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: golem_common::model::agent::DataValue,
     );
 }
 

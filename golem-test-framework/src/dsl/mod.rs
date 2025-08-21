@@ -50,9 +50,8 @@ use golem_common::model::plugin::PluginWasmFileKey;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AccountId, AgentInstanceDescription, AgentInstanceKey, ComponentFilePermissions,
-    ExportedResourceInstanceDescription, ExportedResourceInstanceKey, PluginInstallationId,
-    ProjectId, WorkerResourceDescription, WorkerResourceKey, WorkerStatus,
+    AccountId, ComponentFilePermissions, PluginInstallationId, ProjectId,
+    WorkerResourceDescription, WorkerStatus,
 };
 use golem_common::model::{
     ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
@@ -2093,7 +2092,7 @@ pub fn to_worker_metadata(
                                 .timestamp
                                 .as_ref()
                                 .expect("no timestamp on update record"))
-                                .into(),
+                            .into(),
                             oplog_index: OplogIndex::from_u64(0),
                             description: UpdateDescription::Automatic {
                                 target_version: u.target_version,
@@ -2111,7 +2110,7 @@ pub fn to_worker_metadata(
                                 .timestamp
                                 .as_ref()
                                 .expect("no timestamp on update record"))
-                                .into(),
+                            .into(),
                             target_version: u.target_version,
                             details: failed_update.details.clone(),
                         }),
@@ -2127,7 +2126,7 @@ pub fn to_worker_metadata(
                                 .timestamp
                                 .as_ref()
                                 .expect("no timestamp on update record"))
-                                .into(),
+                            .into(),
                             target_version: u.target_version,
                         }),
                         _ => None,
@@ -2141,39 +2140,15 @@ pub fn to_worker_metadata(
                 owned_resources: metadata
                     .owned_resources
                     .iter()
-                    .map(|description| {
-                        match &description.description {
-                            Some(golem_api_grpc::proto::golem::worker::resource_description::Description::ExportedResourceInstance(desc)) => {
-                                (
-                                    WorkerResourceKey::ExportedResourceInstanceKey(ExportedResourceInstanceKey { resource_id: WorkerResourceId(desc.resource_id) }),
-                                    WorkerResourceDescription::ExportedResourceInstance(ExportedResourceInstanceDescription {
-                                        created_at: desc.created_at.expect("Missing created_at").into(),
-                                        resource_name: desc.resource_name.clone(),
-                                        resource_owner: desc.resource_owner.clone(),
-                                        resource_params: if desc.is_indexed {
-                                            Some(desc.resource_params.clone())
-                                        } else {
-                                            None
-                                        },
-                                    })
-                                )
-                            }
-                            Some(golem_api_grpc::proto::golem::worker::resource_description::Description::AgentInstance(desc)) => {
-                                (
-                                    WorkerResourceKey::AgentInstanceKey(AgentInstanceKey {
-                                        agent_type: desc.agent_type.clone(),
-                                        agent_id: desc.agent_id.clone(),
-                                    }),
-                                    WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
-                                        created_at: desc.created_at.expect("Missing created_at").into(),
-                                        agent_parameters: desc.clone().agent_parameters.expect("Missing agent_parameters").try_into().expect("invalid agent_parameters"),
-                                    })
-                                )
-                            }
-                            None => {
-                                panic!("Invalid resource description: {description:?}");
-                            }
-                        }
+                    .map(|desc| {
+                        (
+                            WorkerResourceId(desc.resource_id),
+                            WorkerResourceDescription {
+                                created_at: desc.created_at.expect("Missing created_at").into(),
+                                resource_name: desc.resource_name.clone(),
+                                resource_owner: desc.resource_owner.clone(),
+                            },
+                        )
                     })
                     .collect(),
                 active_plugins: HashSet::from_iter(
@@ -2339,10 +2314,7 @@ pub trait TestDslUnsafe {
     async fn capture_output_forever(
         &self,
         worker_id: &WorkerId,
-    ) -> (
-        UnboundedReceiver<Option<LogEvent>>,
-        tokio::sync::oneshot::Sender<()>,
-    );
+    ) -> (UnboundedReceiver<Option<LogEvent>>, Sender<()>);
     async fn capture_output_with_termination(
         &self,
         worker_id: &WorkerId,
@@ -2463,12 +2435,6 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to get latest component metadata")
     }
 
-    async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey {
-        <T as TestDsl>::add_plugin_wasm(self, name)
-            .await
-            .expect("Failed to add plugin wasm")
-    }
-
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
         <T as TestDsl>::update_component(self, component_id, name).await
     }
@@ -2500,6 +2466,12 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         files: &[(&str, &str, ComponentFilePermissions)],
     ) -> Vec<(PathBuf, InitialComponentFile)> {
         <T as TestDsl>::add_initial_component_files(self, files).await
+    }
+
+    async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey {
+        <T as TestDsl>::add_plugin_wasm(self, name)
+            .await
+            .expect("Failed to add plugin wasm")
     }
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId {
@@ -2551,6 +2523,28 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::get_worker_metadata(self, worker_id)
             .await
             .expect("Failed to get worker metadata")
+    }
+
+    async fn wait_for_status(
+        &self,
+        worker_id: &WorkerId,
+        status: WorkerStatus,
+        timeout: Duration,
+    ) -> WorkerMetadata {
+        <T as TestDsl>::wait_for_status(self, worker_id, status, timeout)
+            .await
+            .expect("Failed to wait for status")
+    }
+
+    async fn wait_for_statuses(
+        &self,
+        worker_id: &WorkerId,
+        statuses: &[WorkerStatus],
+        timeout: Duration,
+    ) -> WorkerMetadata {
+        <T as TestDsl>::wait_for_statuses(self, worker_id, statuses, timeout)
+            .await
+            .expect("Failed to wait for status")
     }
 
     async fn get_workers_metadata(
@@ -2605,18 +2599,6 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .await
             .expect("Failed to invoke function")
     }
-
-    async fn invoke_and_await_json(
-        &self,
-        worker_id: impl Into<TargetWorkerId> + Send + Sync,
-        function_name: &str,
-        params: Vec<serde_json::Value>,
-    ) -> Result<serde_json::Value, Error> {
-        <T as TestDsl>::invoke_and_await_json(self, worker_id, function_name, params)
-            .await
-            .expect("Failed to invoke function")
-    }
-
     async fn invoke_and_await_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
@@ -2661,6 +2643,18 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         .await
         .expect("Failed to invoke function")
     }
+
+    async fn invoke_and_await_json(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        function_name: &str,
+        params: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value, Error> {
+        <T as TestDsl>::invoke_and_await_json(self, worker_id, function_name, params)
+            .await
+            .expect("Failed to invoke function")
+    }
+
     async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent> {
         <T as TestDsl>::capture_output(self, worker_id).await
     }
@@ -2732,7 +2726,6 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .await
             .expect("Failed to search oplog")
     }
-
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> () {
         <T as TestDsl>::check_oplog_is_queryable(self, worker_id)
             .await
@@ -2748,6 +2741,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .await
             .expect("Failed to get file system node")
     }
+
     async fn get_file_contents(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
@@ -2788,28 +2782,6 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         )
         .await
         .expect("Failed to install plugin")
-    }
-
-    async fn wait_for_status(
-        &self,
-        worker_id: &WorkerId,
-        status: WorkerStatus,
-        timeout: Duration,
-    ) -> WorkerMetadata {
-        <T as TestDsl>::wait_for_status(self, worker_id, status, timeout)
-            .await
-            .expect("Failed to wait for status")
-    }
-
-    async fn wait_for_statuses(
-        &self,
-        worker_id: &WorkerId,
-        statuses: &[WorkerStatus],
-        timeout: Duration,
-    ) -> WorkerMetadata {
-        <T as TestDsl>::wait_for_statuses(self, worker_id, statuses, timeout)
-            .await
-            .expect("Failed to wait for status")
     }
 
     async fn fork_worker(
