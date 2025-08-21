@@ -1396,6 +1396,24 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     admin.delete_worker(&worker_id).await;
 
     // Invoking again should create a new worker
+    let counter1 = admin
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{[constructor]counter}",
+            vec!["counter1".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let counter1 = ValueAndType::new(
+        counter1[0].clone(),
+        AnalysedType::Handle(TypeHandle {
+            name: None,
+            owner: None,
+            resource_id: AnalysedResourceId(0),
+            mode: AnalysedResourceMode::Borrowed,
+        }),
+    );
+
     let _ = admin
         .invoke_and_await(
             &worker_id,
@@ -1418,6 +1436,24 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     let worker_id = admin
         .start_worker(&component_id, "counters-recreation")
         .await;
+
+    let counter1 = admin
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{[constructor]counter}",
+            vec!["counter1".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let counter1 = ValueAndType::new(
+        counter1[0].clone(),
+        AnalysedType::Handle(TypeHandle {
+            name: None,
+            owner: None,
+            resource_id: AnalysedResourceId(0),
+            mode: AnalysedResourceMode::Borrowed,
+        }),
+    );
 
     let result3 = admin
         .invoke_and_await(
