@@ -27,6 +27,1745 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/VersionInfo'
+  /v1/components/{component_id}/workers:
+    get:
+      tags:
+      - Worker
+      summary: Get metadata of multiple workers
+      description: |-
+        ### Filters
+
+        | Property    | Comparator             | Description                    | Example                         |
+        |-------------|------------------------|--------------------------------|----------------------------------|
+        | name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
+        | version     | FilterComparator       | Version of worker              | `version >= 0`                   |
+        | status      | FilterComparator       | Status of worker               | `status = Running`               |
+        | env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
+        | createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
+
+
+        ### Comparators
+
+        - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+        - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+
+        Returns metadata about an existing component workers:
+        - `workers` list of workers metadata
+        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
+      operationId: get_workers_metadata
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: query
+        name: filter
+        description: Filter for worker metadata in form of `property op value`. Can be used multiple times (AND condition is applied between them)
+        deprecated: false
+        schema:
+          type: array
+          items:
+            type: string
+        explode: true
+        style: form
+      - in: query
+        name: cursor
+        description: 'Count of listed values, default: 50'
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      - in: query
+        name: count
+        description: Position where to start listing, if not provided, starts from the beginning. It is used to get the next page of results. To get next page, use the cursor returned in the response
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      - in: query
+        name: precise
+        description: Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
+        deprecated: false
+        schema:
+          type: boolean
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkersMetadataResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+    post:
+      tags:
+      - Worker
+      summary: Launch a new worker.
+      description: |-
+        Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
+
+        The parameters in the request are the following:
+        - `name` is the name of the created worker. This has to be unique, but only for a given component
+        - `args` is a list of strings which appear as command line arguments for the worker
+        - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
+      operationId: launch_new_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/WorkerCreationRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerCreationResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}:
+    get:
+      tags:
+      - Worker
+      summary: Get metadata of a worker
+      description: |-
+        Returns metadata about an existing worker:
+        - `workerId` is a combination of the used component and the worker's user specified name
+        - `accountId` the account the worker is created by
+        - `args` is the provided command line arguments passed to the worker
+        - `env` is the provided map of environment variables passed to the worker
+        - `componentVersion` is the version of the component used by the worker
+        - `retryCount` is the number of retries the worker did in case of a failure
+        - `status` is the worker's current status, one of the following:
+        - `Running` if the worker is currently executing
+        - `Idle` if the worker is waiting for an invocation
+        - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+        - `Interrupted` if the worker was interrupted by the user
+        - `Retrying` if the worker failed, and an automatic retry was scheduled for it
+        - `Failed` if the worker failed and there are no more retries scheduled for it
+        - `Exited` if the worker explicitly exited using the exit WASI function
+      operationId: get_worker_metadata
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerMetadata'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - Worker
+      summary: Delete a worker
+      description: Interrupts and deletes an existing worker.
+      operationId: delete_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeleteWorkerResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/invoke-and-await:
+    post:
+      tags:
+      - Worker
+      summary: Invoke a function and await its resolution
+      description: Supply the parameters in the request body as JSON.
+      operationId: invoke_and_await_function
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: header
+        name: Idempotency-Key
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: function
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/InvokeParameters'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvokeResult'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/invoke-and-await:
+    post:
+      tags:
+      - Worker
+      summary: Invoke a function and await its resolution on a new worker with a random generated name
+      description: |-
+        Ideal for invoking ephemeral components, but works with durable ones as well.
+        Supply the parameters in the request body as JSON.
+      operationId: invoke_and_await_function_without_name
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: header
+        name: Idempotency-Key
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: function
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/InvokeParameters'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvokeResult'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/invoke:
+    post:
+      tags:
+      - Worker
+      summary: Invoke a function
+      description: A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
+      operationId: invoke_function
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: header
+        name: Idempotency-Key
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: function
+        description: name of the exported function to be invoked
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/InvokeParameters'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvokeResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/invoke:
+    post:
+      tags:
+      - Worker
+      summary: Invoke a function on a new worker with a random generated name
+      description: |-
+        Ideal for invoking ephemeral components, but works with durable ones as well.
+        A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
+      operationId: invoke_function_without_name
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: header
+        name: Idempotency-Key
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: function
+        description: name of the exported function to be invoked
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/InvokeParameters'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvokeResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/complete:
+    post:
+      tags:
+      - Worker
+      summary: Complete a promise
+      description: |-
+        Completes a promise with a given custom array of bytes.
+        The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+        The data field is sent back to the worker, and it has no predefined meaning.
+      operationId: complete_promise
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/CompleteParameters'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: boolean
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/interrupt:
+    post:
+      tags:
+      - Worker
+      summary: Interrupt a worker
+      description: |-
+        Interrupts the execution of a worker.
+        The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
+        An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
+        For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
+      operationId: interrupt_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: recovery-immediately
+        description: if true will simulate a worker recovery. Defaults to false.
+        deprecated: false
+        schema:
+          type: boolean
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InterruptResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/find:
+    post:
+      tags:
+      - Worker
+      summary: Advanced search for workers
+      description: |-
+        ### Filter types
+        | Type      | Comparator             | Description                    | Example                                                                                       |
+        |-----------|------------------------|--------------------------------|-----------------------------------------------------------------------------------------------|
+        | Name      | StringFilterComparator | Name of worker                 | `{ "type": "Name", "comparator": "Equal", "value": "worker-name" }`                           |
+        | Version   | FilterComparator       | Version of worker              | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                             |
+        | Status    | FilterComparator       | Status of worker               | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                             |
+        | Env       | StringFilterComparator | Environment variable of worker | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`                  |
+        | CreatedAt | FilterComparator       | Creation time of worker        | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`           |
+        | And       |                        | And filter combinator          | `{ "type": "And", "filters": [ ... ] }`                                                       |
+        | Or        |                        | Or filter combinator           | `{ "type": "Or", "filters": [ ... ] }`                                                        |
+        | Not       |                        | Negates the specified filter   | `{ "type": "Not", "filter": { "type": "Version", "comparator": "GreaterEqual", "value": 0 } }`|
+
+        ### Comparators
+        - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
+        - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+
+        Returns metadata about an existing component workers:
+        - `workers` list of workers metadata
+        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
+      operationId: find_workers_metadata
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/WorkersMetadataRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkersMetadataResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/resume:
+    post:
+      tags:
+      - Worker
+      summary: Resume a worker
+      operationId: resume_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ResumeResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/update:
+    post:
+      tags:
+      - Worker
+      summary: Update a worker
+      operationId: update_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/UpdateWorkerRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UpdateWorkerResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/oplog:
+    get:
+      tags:
+      - Worker
+      summary: Get the oplog of a worker
+      operationId: get_oplog
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: from
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      - in: query
+        name: count
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      - in: query
+        name: cursor
+        deprecated: false
+        schema:
+          $ref: '#/components/schemas/OplogCursor'
+        explode: true
+        style: form
+      - in: query
+        name: query
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GetOplogResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/files/{file_name}:
+    get:
+      tags:
+      - Worker
+      summary: List files in a worker
+      operationId: get_files
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: file_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GetFilesResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/file-contents/{file_name}:
+    get:
+      tags:
+      - Worker
+      summary: Get contents of a file in a worker
+      operationId: get_file_content
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: file_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/activate-plugin:
+    post:
+      tags:
+      - Worker
+      summary: Activate a plugin
+      description: The plugin must be one of the installed plugins for the worker's current component version.
+      operationId: activate_plugin
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: plugin-installation-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ActivatePluginResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/deactivate-plugin:
+    post:
+      tags:
+      - Worker
+      summary: Deactivate a plugin
+      description: The plugin must be one of the installed plugins for the worker's current component version.
+      operationId: deactivate_plugin
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: plugin-installation-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeactivatePluginResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/revert:
+    post:
+      tags:
+      - Worker
+      summary: Revert a worker
+      description: Reverts a worker by undoing either the last few invocations or the last few recorded oplog entries.
+      operationId: revert_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/RevertWorkerTarget'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RevertWorkerResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/invocations/{idempotency_key}:
+    delete:
+      tags:
+      - Worker
+      summary: Cancels a pending invocation if it has not started yet
+      description: The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
+      operationId: cancel_invocation
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: idempotency_key
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/CancelInvocationResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/connect:
+    get:
+      tags:
+      - Worker
+      summary: Connect to a worker using a websocket and stream events
+      operationId: worker_connect
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '101':
+          description: A websocket response
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
   /v1/accounts/{account_id}/apps:
     get:
       tags:
@@ -6451,182 +8190,55 @@ paths:
       - Token: []
 components:
   schemas:
-    Account:
-      title: Account
+    ActivatePluginParameters:
+      title: ActivatePluginParameters
       type: object
       properties:
-        id:
+        timestamp:
           type: string
-          format: uuid
-        name:
-          type: string
-        email:
-          type: string
-        planId:
-          type: string
-          format: uuid
+          format: date-time
+        plugin:
+          $ref: '#/components/schemas/PluginInstallationDescription'
       required:
-      - id
-      - name
-      - email
-      - planId
-    AgentConstructor:
-      title: AgentConstructor
+      - timestamp
+      - plugin
+    ActivatePluginResponse:
+      title: ActivatePluginResponse
+      type: object
+    AgentInstanceDescription:
+      title: AgentInstanceDescription
       type: object
       properties:
-        name:
+        createdAt:
           type: string
+          format: date-time
+        agentParameters:
+          $ref: '#/components/schemas/DataValue'
+      required:
+      - createdAt
+      - agentParameters
+    AgentInstanceKey:
+      title: AgentInstanceKey
+      type: object
+      properties:
+        agentType:
+          type: string
+        agentId:
+          type: string
+      required:
+      - agentType
+      - agentId
+    AgentInstanceMetadata:
+      title: AgentInstanceMetadata
+      type: object
+      properties:
+        key:
+          $ref: '#/components/schemas/AgentInstanceKey'
         description:
-          type: string
-        promptHint:
-          type: string
-        inputSchema:
-          $ref: '#/components/schemas/DataSchema'
+          $ref: '#/components/schemas/AgentInstanceDescription'
       required:
+      - key
       - description
-      - inputSchema
-    AgentDependency:
-      title: AgentDependency
-      type: object
-      properties:
-        typeName:
-          type: string
-        description:
-          type: string
-        constructor:
-          $ref: '#/components/schemas/AgentConstructor'
-        methods:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentMethod'
-      required:
-      - typeName
-      - constructor
-      - methods
-    AgentMethod:
-      title: AgentMethod
-      type: object
-      properties:
-        name:
-          type: string
-        description:
-          type: string
-        promptHint:
-          type: string
-        inputSchema:
-          $ref: '#/components/schemas/DataSchema'
-        outputSchema:
-          $ref: '#/components/schemas/DataSchema'
-      required:
-      - name
-      - description
-      - inputSchema
-      - outputSchema
-    AgentType:
-      title: AgentType
-      type: object
-      properties:
-        typeName:
-          type: string
-        description:
-          type: string
-        constructor:
-          $ref: '#/components/schemas/AgentConstructor'
-        methods:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentMethod'
-        dependencies:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentDependency'
-      required:
-      - typeName
-      - description
-      - constructor
-      - methods
-      - dependencies
-    AnalysedExport:
-      discriminator:
-        propertyName: type
-        mapping:
-          Function: '#/components/schemas/AnalysedExport_AnalysedFunction'
-          Instance: '#/components/schemas/AnalysedExport_AnalysedInstance'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/AnalysedExport_AnalysedFunction'
-      - $ref: '#/components/schemas/AnalysedExport_AnalysedInstance'
-    AnalysedExport_AnalysedFunction:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Function
-            type: string
-            enum:
-            - Function
-        required:
-        - type
-      - $ref: '#/components/schemas/AnalysedFunction'
-    AnalysedExport_AnalysedInstance:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Instance
-            type: string
-            enum:
-            - Instance
-        required:
-        - type
-      - $ref: '#/components/schemas/AnalysedInstance'
-    AnalysedFunction:
-      title: AnalysedFunction
-      type: object
-      properties:
-        name:
-          type: string
-        parameters:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedFunctionParameter'
-        result:
-          $ref: '#/components/schemas/AnalysedFunctionResult'
-      required:
-      - name
-      - parameters
-    AnalysedFunctionParameter:
-      title: AnalysedFunctionParameter
-      type: object
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - name
-      - typ
-    AnalysedFunctionResult:
-      title: AnalysedFunctionResult
-      type: object
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - typ
-    AnalysedInstance:
-      title: AnalysedInstance
-      type: object
-      properties:
-        name:
-          type: string
-        functions:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedFunction'
-      required:
-      - name
-      - functions
     AnalysedResourceMode:
       type: string
       enum:
@@ -6946,6 +8558,3223 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/TypeVariant'
+    ApiDefinitionInfo:
+      title: ApiDefinitionInfo
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+      required:
+      - id
+      - version
+    BinaryReference:
+      discriminator:
+        propertyName: type
+        mapping:
+          Url: '#/components/schemas/BinaryReference_Url'
+          Inline: '#/components/schemas/BinaryReference_BinarySource'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/BinaryReference_Url'
+      - $ref: '#/components/schemas/BinaryReference_BinarySource'
+    BinaryReference_BinarySource:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Inline
+            type: string
+            enum:
+            - Inline
+        required:
+        - type
+      - $ref: '#/components/schemas/BinarySource'
+    BinaryReference_Url:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Url
+            type: string
+            enum:
+            - Url
+        required:
+        - type
+      - $ref: '#/components/schemas/Url'
+    BinarySource:
+      title: BinarySource
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        binaryType:
+          $ref: '#/components/schemas/BinaryType'
+      required:
+      - data
+      - binaryType
+    BinaryType:
+      title: BinaryType
+      type: object
+      properties:
+        mimeType:
+          type: string
+      required:
+      - mimeType
+    CancelInvocationParameters:
+      title: CancelInvocationParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        idempotencyKey:
+          type: string
+      required:
+      - timestamp
+      - idempotencyKey
+    CancelInvocationResponse:
+      title: CancelInvocationResponse
+      type: object
+      properties:
+        canceled:
+          type: boolean
+      required:
+      - canceled
+    Certificate:
+      title: Certificate
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        domainName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - projectId
+      - domainName
+    CertificateRequest:
+      title: CertificateRequest
+      type: object
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        domainName:
+          type: string
+        certificateBody:
+          type: string
+        certificatePrivateKey:
+          type: string
+      required:
+      - projectId
+      - domainName
+      - certificateBody
+      - certificatePrivateKey
+    ChangePersistenceLevelParameters:
+      title: ChangePersistenceLevelParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        persistenceLevel:
+          $ref: '#/components/schemas/PersistenceLevel'
+      required:
+      - timestamp
+      - persistenceLevel
+    ChangeRetryPolicyParameters:
+      title: ChangeRetryPolicyParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        newPolicy:
+          $ref: '#/components/schemas/PublicRetryConfig'
+      required:
+      - timestamp
+      - newPolicy
+    CompleteParameters:
+      title: CompleteParameters
+      type: object
+      properties:
+        oplogIdx:
+          type: integer
+          format: uint64
+        data:
+          type: array
+          items:
+            type: integer
+            format: uint8
+      required:
+      - oplogIdx
+      - data
+    ComponentFilePermissions:
+      type: string
+      enum:
+      - read-only
+      - read-write
+    CreateAgentInstanceParameters:
+      title: CreateAgentInstanceParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        key:
+          $ref: '#/components/schemas/AgentInstanceKey'
+        parameters:
+          $ref: '#/components/schemas/DataValue'
+      required:
+      - timestamp
+      - key
+      - parameters
+    CreateParameters:
+      title: CreateParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        componentVersion:
+          type: integer
+          format: uint64
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        projectId:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        parent:
+          $ref: '#/components/schemas/WorkerId'
+        componentSize:
+          type: integer
+          format: uint64
+        initialTotalLinearMemorySize:
+          type: integer
+          format: uint64
+        initialActivePlugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationDescription'
+      required:
+      - timestamp
+      - workerId
+      - componentVersion
+      - args
+      - env
+      - projectId
+      - createdBy
+      - wasiConfigVars
+      - componentSize
+      - initialTotalLinearMemorySize
+      - initialActivePlugins
+    DataValue:
+      discriminator:
+        propertyName: type
+        mapping:
+          Tuple: '#/components/schemas/DataValue_ElementValues'
+          Multimodal: '#/components/schemas/DataValue_NamedElementValues'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DataValue_ElementValues'
+      - $ref: '#/components/schemas/DataValue_NamedElementValues'
+    DataValue_ElementValues:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Tuple
+            type: string
+            enum:
+            - Tuple
+        required:
+        - type
+      - $ref: '#/components/schemas/ElementValues'
+    DataValue_NamedElementValues:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Multimodal
+            type: string
+            enum:
+            - Multimodal
+        required:
+        - type
+      - $ref: '#/components/schemas/NamedElementValues'
+    DeactivatePluginParameters:
+      title: DeactivatePluginParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        plugin:
+          $ref: '#/components/schemas/PluginInstallationDescription'
+      required:
+      - timestamp
+      - plugin
+    DeactivatePluginResponse:
+      title: DeactivatePluginResponse
+      type: object
+    DeleteWorkerResponse:
+      title: DeleteWorkerResponse
+      type: object
+    DescribeResourceParameters:
+      title: DescribeResourceParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        id:
+          type: integer
+          format: uint64
+        resourceOwner:
+          type: string
+        resourceName:
+          type: string
+        resourceParams:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValueAndType'
+      required:
+      - timestamp
+      - id
+      - resourceOwner
+      - resourceName
+      - resourceParams
+    DomainRequest:
+      title: DomainRequest
+      type: object
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        domainName:
+          type: string
+      required:
+      - projectId
+      - domainName
+    DropAgentInstanceParameters:
+      title: DropAgentInstanceParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        key:
+          $ref: '#/components/schemas/AgentInstanceKey'
+      required:
+      - timestamp
+      - key
+    ElementValue:
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentModel: '#/components/schemas/ElementValue_ValueAndType'
+          UnstructuredText: '#/components/schemas/ElementValue_TextReference'
+          UnstructuredBinary: '#/components/schemas/ElementValue_BinaryReference'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ElementValue_ValueAndType'
+      - $ref: '#/components/schemas/ElementValue_TextReference'
+      - $ref: '#/components/schemas/ElementValue_BinaryReference'
+    ElementValue_BinaryReference:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredBinary
+            type: string
+            enum:
+            - UnstructuredBinary
+        required:
+        - type
+      - $ref: '#/components/schemas/BinaryReference'
+    ElementValue_TextReference:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredText
+            type: string
+            enum:
+            - UnstructuredText
+        required:
+        - type
+      - $ref: '#/components/schemas/TextReference'
+    ElementValue_ValueAndType:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentModel
+            type: string
+            enum:
+            - ComponentModel
+        required:
+        - type
+      - $ref: '#/components/schemas/ValueAndType'
+    ElementValues:
+      title: ElementValues
+      type: object
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/ElementValue'
+      required:
+      - elements
+    Empty:
+      title: Empty
+      type: object
+    EndRegionParameters:
+      title: EndRegionParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        beginIndex:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - beginIndex
+    ErrorBody:
+      title: ErrorBody
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+      - error
+    ErrorBodyWithOptionalWorkerError:
+      title: ErrorBodyWithOptionalWorkerError
+      type: object
+      properties:
+        error:
+          type: string
+        workerError:
+          $ref: '#/components/schemas/WorkerErrorDetails'
+      required:
+      - error
+    ErrorParameters:
+      title: ErrorParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        error:
+          type: string
+      required:
+      - timestamp
+      - error
+    ErrorsBody:
+      title: ErrorsBody
+      type: object
+      properties:
+        errors:
+          type: array
+          items:
+            type: string
+      required:
+      - errors
+    ExportedFunctionCompletedParameters:
+      title: ExportedFunctionCompletedParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        response:
+          $ref: '#/components/schemas/ValueAndType'
+        consumedFuel:
+          type: integer
+          format: int64
+      required:
+      - timestamp
+      - consumedFuel
+    ExportedFunctionInvokedParameters:
+      title: ExportedFunctionInvokedParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        functionName:
+          type: string
+        request:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValueAndType'
+        idempotencyKey:
+          type: string
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        invocationContext:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
+      required:
+      - timestamp
+      - functionName
+      - request
+      - idempotencyKey
+      - traceId
+      - traceStates
+      - invocationContext
+    ExportedFunctionParameters:
+      title: ExportedFunctionParameters
+      type: object
+      properties:
+        idempotencyKey:
+          type: string
+        fullFunctionName:
+          type: string
+        functionInput:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValueAndType'
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        invocationContext:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
+      required:
+      - idempotencyKey
+      - fullFunctionName
+      - traceId
+      - traceStates
+      - invocationContext
+    ExportedResourceInstanceDescription:
+      title: ExportedResourceInstanceDescription
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        resourceOwner:
+          type: string
+        resourceName:
+          type: string
+        resourceParams:
+          type: array
+          items:
+            type: string
+      required:
+      - createdAt
+      - resourceOwner
+      - resourceName
+    ExportedResourceInstanceKey:
+      title: ExportedResourceInstanceKey
+      type: object
+      properties:
+        resourceId:
+          type: integer
+          format: uint64
+      required:
+      - resourceId
+    ExportedResourceMetadata:
+      title: ExportedResourceMetadata
+      type: object
+      properties:
+        key:
+          $ref: '#/components/schemas/ExportedResourceInstanceKey'
+        description:
+          $ref: '#/components/schemas/ExportedResourceInstanceDescription'
+      required:
+      - key
+      - description
+    FailedUpdate:
+      title: FailedUpdate
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+        details:
+          type: string
+      required:
+      - timestamp
+      - targetVersion
+    FailedUpdateParameters:
+      title: FailedUpdateParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+        details:
+          type: string
+      required:
+      - timestamp
+      - targetVersion
+    FilterComparator:
+      type: string
+      enum:
+      - Equal
+      - NotEqual
+      - GreaterEqual
+      - Greater
+      - LessEqual
+      - Less
+    FinishSpanParameters:
+      title: FinishSpanParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        spanId:
+          type: string
+      required:
+      - timestamp
+      - spanId
+    FlatComponentFileSystemNode:
+      title: FlatComponentFileSystemNode
+      type: object
+      properties:
+        name:
+          type: string
+        lastModified:
+          type: integer
+          format: uint64
+        kind:
+          $ref: '#/components/schemas/FlatComponentFileSystemNodeKind'
+        permissions:
+          $ref: '#/components/schemas/ComponentFilePermissions'
+        size:
+          type: integer
+          format: uint64
+      required:
+      - name
+      - lastModified
+      - kind
+    FlatComponentFileSystemNodeKind:
+      type: string
+      enum:
+      - directory
+      - file
+    GatewayBindingComponent:
+      title: GatewayBindingComponent
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          description: |-
+            Version of the component. If not provided the latest version is used.
+            Note that the version is only used to typecheck the various rib scripts and prevent component updates.
+            During runtime, the actual version of the worker or the latest version (in case no worker was found) is used.
+          type: integer
+          format: uint64
+      required:
+      - name
+    GatewayBindingData:
+      title: GatewayBindingData
+      type: object
+      properties:
+        bindingType:
+          $ref: '#/components/schemas/GatewayBindingType'
+        component:
+          $ref: '#/components/schemas/GatewayBindingComponent'
+        workerName:
+          type: string
+        idempotencyKey:
+          type: string
+        response:
+          type: string
+        invocationContext:
+          type: string
+    GatewayBindingResponseData:
+      title: GatewayBindingResponseData
+      type: object
+      properties:
+        component:
+          $ref: '#/components/schemas/ResolvedGatewayBindingComponent'
+        workerName:
+          type: string
+        idempotencyKey:
+          type: string
+        invocationContext:
+          type: string
+        response:
+          type: string
+        bindingType:
+          $ref: '#/components/schemas/GatewayBindingType'
+        responseMappingInput:
+          $ref: '#/components/schemas/RibInputTypeInfo'
+        workerNameInput:
+          $ref: '#/components/schemas/RibInputTypeInfo'
+        idempotencyKeyInput:
+          $ref: '#/components/schemas/RibInputTypeInfo'
+        corsPreflight:
+          $ref: '#/components/schemas/HttpCors'
+        responseMappingOutput:
+          $ref: '#/components/schemas/RibOutputTypeInfo'
+    GatewayBindingType:
+      type: string
+      enum:
+      - default
+      - file-server
+      - http-handler
+      - cors-preflight
+      - swagger-ui
+    GetFilesResponse:
+      title: GetFilesResponse
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlatComponentFileSystemNode'
+      required:
+      - nodes
+    GetOplogResponse:
+      title: GetOplogResponse
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicOplogEntryWithIndex'
+        next:
+          $ref: '#/components/schemas/OplogCursor'
+        firstIndexInChunk:
+          type: integer
+          format: uint64
+        lastIndex:
+          type: integer
+          format: uint64
+      required:
+      - entries
+      - firstIndexInChunk
+      - lastIndex
+    GrowMemoryParameters:
+      title: GrowMemoryParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        delta:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - delta
+    HealthcheckResponse:
+      title: HealthcheckResponse
+      type: object
+    HttpApiDefinitionRequest:
+      title: HttpApiDefinitionRequest
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        security:
+          type: array
+          items:
+            type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteRequestData'
+        draft:
+          type: boolean
+      required:
+      - id
+      - version
+      - routes
+      - draft
+    HttpApiDefinitionResponseData:
+      title: HttpApiDefinitionResponseData
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteResponseData'
+        draft:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - version
+      - routes
+      - draft
+    HttpCors:
+      title: HttpCors
+      type: object
+      properties:
+        allowOrigin:
+          type: string
+        allowMethods:
+          type: string
+        allowHeaders:
+          type: string
+        exposeHeaders:
+          type: string
+        allowCredentials:
+          type: boolean
+        maxAge:
+          type: integer
+          format: uint64
+      required:
+      - allowOrigin
+      - allowMethods
+      - allowHeaders
+    ImportedFunctionInvokedParameters:
+      title: ImportedFunctionInvokedParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        functionName:
+          type: string
+        request:
+          $ref: '#/components/schemas/ValueAndType'
+        response:
+          $ref: '#/components/schemas/ValueAndType'
+        durableFunctionType:
+          $ref: '#/components/schemas/PublicDurableFunctionType'
+      required:
+      - timestamp
+      - functionName
+      - request
+      - response
+      - durableFunctionType
+    InterruptResponse:
+      title: InterruptResponse
+      type: object
+    InvokeParameters:
+      title: InvokeParameters
+      type: object
+      properties:
+        params:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValueAndOptionalType'
+      required:
+      - params
+    InvokeResponse:
+      title: InvokeResponse
+      type: object
+    InvokeResult:
+      title: InvokeResult
+      type: object
+      properties:
+        result:
+          $ref: '#/components/schemas/ValueAndType'
+    JumpParameters:
+      title: JumpParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        jump:
+          $ref: '#/components/schemas/OplogRegion'
+      required:
+      - timestamp
+      - jump
+    LogLevel:
+      description: Worker log levels including the special stdout and stderr channels
+      type: string
+      enum:
+      - Stdout
+      - Stderr
+      - Trace
+      - Debug
+      - Info
+      - Warn
+      - Error
+      - Critical
+    LogParameters:
+      title: LogParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          $ref: '#/components/schemas/LogLevel'
+        context:
+          type: string
+        message:
+          type: string
+      required:
+      - timestamp
+      - level
+      - context
+      - message
+    ManualUpdateParameters:
+      title: ManualUpdateParameters
+      type: object
+      properties:
+        targetVersion:
+          type: integer
+          format: uint64
+      required:
+      - targetVersion
+    MethodPattern:
+      type: string
+      enum:
+      - Get
+      - Connect
+      - Post
+      - Delete
+      - Put
+      - Patch
+      - Options
+      - Trace
+      - Head
+    NameOptionTypePair:
+      title: NameOptionTypePair
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - name
+    NameTypePair:
+      title: NameTypePair
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - name
+      - typ
+    NamedElementValue:
+      title: NamedElementValue
+      type: object
+      properties:
+        name:
+          type: string
+        value:
+          $ref: '#/components/schemas/ElementValue'
+      required:
+      - name
+      - value
+    NamedElementValues:
+      title: NamedElementValues
+      type: object
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamedElementValue'
+      required:
+      - elements
+    OpenApiHttpApiDefinitionResponse:
+      title: OpenApiHttpApiDefinitionResponse
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        openapi_yaml:
+          type: string
+      required:
+      - id
+      - version
+      - openapi_yaml
+    OplogCursor:
+      title: OplogCursor
+      type: object
+      properties:
+        nextOplogIndex:
+          type: integer
+          format: uint64
+        currentComponentVersion:
+          type: integer
+          format: uint64
+      required:
+      - nextOplogIndex
+      - currentComponentVersion
+    OplogRegion:
+      title: OplogRegion
+      type: object
+      properties:
+        start:
+          type: integer
+          format: uint64
+        end:
+          type: integer
+          format: uint64
+      required:
+      - start
+      - end
+    PendingUpdate:
+      title: PendingUpdate
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - targetVersion
+    PendingUpdateParameters:
+      title: PendingUpdateParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        target_version:
+          type: integer
+          format: uint64
+        description:
+          $ref: '#/components/schemas/PublicUpdateDescription'
+      required:
+      - timestamp
+      - target_version
+      - description
+    PendingWorkerInvocationParameters:
+      title: PendingWorkerInvocationParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocation:
+          $ref: '#/components/schemas/PublicWorkerInvocation'
+      required:
+      - timestamp
+      - invocation
+    PersistenceLevel:
+      type: string
+      enum:
+      - PersistNothing
+      - PersistRemoteSideEffects
+      - Smart
+    PluginInstallationDescription:
+      title: PluginInstallationDescription
+      type: object
+      properties:
+        installationId:
+          type: string
+          format: uuid
+        pluginName:
+          type: string
+        pluginVersion:
+          type: string
+        registered:
+          type: boolean
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - installationId
+      - pluginName
+      - pluginVersion
+      - registered
+      - parameters
+    Provider:
+      type: string
+      enum:
+      - Google
+      - Facebook
+      - Microsoft
+      - Gitlab
+    PublicAttribute:
+      title: PublicAttribute
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          $ref: '#/components/schemas/PublicAttributeValue'
+      required:
+      - key
+      - value
+    PublicAttributeValue:
+      discriminator:
+        propertyName: type
+        mapping:
+          String: '#/components/schemas/PublicAttributeValue_StringAttributeValue'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicAttributeValue_StringAttributeValue'
+    PublicAttributeValue_StringAttributeValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: String
+            type: string
+            enum:
+            - String
+        required:
+        - type
+      - $ref: '#/components/schemas/StringAttributeValue'
+    PublicDurableFunctionType:
+      discriminator:
+        propertyName: type
+        mapping:
+          ReadLocal: '#/components/schemas/PublicDurableFunctionType_Empty'
+          WriteLocal: '#/components/schemas/PublicDurableFunctionType_Empty'
+          ReadRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
+          WriteRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
+          WriteRemoteBatched: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
+    PublicDurableFunctionType_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WriteRemote
+            type: string
+            enum:
+            - WriteRemote
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PublicDurableFunctionType_WriteRemoteBatchedParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WriteRemoteBatched
+            type: string
+            enum:
+            - WriteRemoteBatched
+        required:
+        - type
+      - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
+    PublicExternalSpanData:
+      title: PublicExternalSpanData
+      type: object
+      properties:
+        spanId:
+          type: string
+      required:
+      - spanId
+    PublicLocalSpanData:
+      title: PublicLocalSpanData
+      type: object
+      properties:
+        spanId:
+          type: string
+        start:
+          type: string
+          format: date-time
+        parentId:
+          type: string
+        linkedContext:
+          type: integer
+          format: uint64
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
+        inherited:
+          type: boolean
+      required:
+      - spanId
+      - start
+      - attributes
+      - inherited
+    PublicOplogEntry:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      discriminator:
+        propertyName: type
+        mapping:
+          Create: '#/components/schemas/PublicOplogEntry_CreateParameters'
+          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_ImportedFunctionInvokedParameters'
+          ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_ExportedFunctionInvokedParameters'
+          ExportedFunctionCompleted: '#/components/schemas/PublicOplogEntry_ExportedFunctionCompletedParameters'
+          Suspend: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          Error: '#/components/schemas/PublicOplogEntry_ErrorParameters'
+          NoOp: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          Jump: '#/components/schemas/PublicOplogEntry_JumpParameters'
+          Interrupted: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          Exited: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          ChangeRetryPolicy: '#/components/schemas/PublicOplogEntry_ChangeRetryPolicyParameters'
+          BeginAtomicRegion: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          EndAtomicRegion: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+          BeginRemoteWrite: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          EndRemoteWrite: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+          PendingWorkerInvocation: '#/components/schemas/PublicOplogEntry_PendingWorkerInvocationParameters'
+          PendingUpdate: '#/components/schemas/PublicOplogEntry_PendingUpdateParameters'
+          SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_SuccessfulUpdateParameters'
+          FailedUpdate: '#/components/schemas/PublicOplogEntry_FailedUpdateParameters'
+          GrowMemory: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
+          CreateResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+          DropResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+          DescribeResource: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
+          Log: '#/components/schemas/PublicOplogEntry_LogParameters'
+          Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
+          DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
+          Revert: '#/components/schemas/PublicOplogEntry_RevertParameters'
+          CancelInvocation: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
+          StartSpan: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
+          FinishSpan: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
+          SetSpanAttribute: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
+          ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
+          CreateAgentInstance: '#/components/schemas/PublicOplogEntry_CreateAgentInstanceParameters'
+          DropAgentInstance: '#/components/schemas/PublicOplogEntry_DropAgentInstanceParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ImportedFunctionInvokedParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ExportedFunctionInvokedParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ExportedFunctionCompletedParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_ErrorParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_JumpParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_ChangeRetryPolicyParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_PendingWorkerInvocationParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_PendingUpdateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_SuccessfulUpdateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_FailedUpdateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_LogParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RevertParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_CreateAgentInstanceParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_DropAgentInstanceParameters'
+    PublicOplogEntryWithIndex:
+      title: PublicOplogEntryWithIndex
+      type: object
+      properties:
+        oplogIndex:
+          type: integer
+          format: uint64
+        entry:
+          $ref: '#/components/schemas/PublicOplogEntry'
+      required:
+      - oplogIndex
+      - entry
+    PublicOplogEntry_ActivatePluginParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ActivatePlugin
+            type: string
+            enum:
+            - ActivatePlugin
+        required:
+        - type
+      - $ref: '#/components/schemas/ActivatePluginParameters'
+    PublicOplogEntry_CancelInvocationParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CancelInvocation
+            type: string
+            enum:
+            - CancelInvocation
+        required:
+        - type
+      - $ref: '#/components/schemas/CancelInvocationParameters'
+    PublicOplogEntry_ChangePersistenceLevelParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ChangePersistenceLevel
+            type: string
+            enum:
+            - ChangePersistenceLevel
+        required:
+        - type
+      - $ref: '#/components/schemas/ChangePersistenceLevelParameters'
+    PublicOplogEntry_ChangeRetryPolicyParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ChangeRetryPolicy
+            type: string
+            enum:
+            - ChangeRetryPolicy
+        required:
+        - type
+      - $ref: '#/components/schemas/ChangeRetryPolicyParameters'
+    PublicOplogEntry_CreateAgentInstanceParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CreateAgentInstance
+            type: string
+            enum:
+            - CreateAgentInstance
+        required:
+        - type
+      - $ref: '#/components/schemas/CreateAgentInstanceParameters'
+    PublicOplogEntry_CreateParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Create
+            type: string
+            enum:
+            - Create
+        required:
+        - type
+      - $ref: '#/components/schemas/CreateParameters'
+    PublicOplogEntry_DeactivatePluginParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: DeactivatePlugin
+            type: string
+            enum:
+            - DeactivatePlugin
+        required:
+        - type
+      - $ref: '#/components/schemas/DeactivatePluginParameters'
+    PublicOplogEntry_DescribeResourceParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: DescribeResource
+            type: string
+            enum:
+            - DescribeResource
+        required:
+        - type
+      - $ref: '#/components/schemas/DescribeResourceParameters'
+    PublicOplogEntry_DropAgentInstanceParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: DropAgentInstance
+            type: string
+            enum:
+            - DropAgentInstance
+        required:
+        - type
+      - $ref: '#/components/schemas/DropAgentInstanceParameters'
+    PublicOplogEntry_EndRegionParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: EndRemoteWrite
+            type: string
+            enum:
+            - EndRemoteWrite
+        required:
+        - type
+      - $ref: '#/components/schemas/EndRegionParameters'
+    PublicOplogEntry_ErrorParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Error
+            type: string
+            enum:
+            - Error
+        required:
+        - type
+      - $ref: '#/components/schemas/ErrorParameters'
+    PublicOplogEntry_ExportedFunctionCompletedParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ExportedFunctionCompleted
+            type: string
+            enum:
+            - ExportedFunctionCompleted
+        required:
+        - type
+      - $ref: '#/components/schemas/ExportedFunctionCompletedParameters'
+    PublicOplogEntry_ExportedFunctionInvokedParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ExportedFunctionInvoked
+            type: string
+            enum:
+            - ExportedFunctionInvoked
+        required:
+        - type
+      - $ref: '#/components/schemas/ExportedFunctionInvokedParameters'
+    PublicOplogEntry_FailedUpdateParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FailedUpdate
+            type: string
+            enum:
+            - FailedUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/FailedUpdateParameters'
+    PublicOplogEntry_FinishSpanParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FinishSpan
+            type: string
+            enum:
+            - FinishSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/FinishSpanParameters'
+    PublicOplogEntry_GrowMemoryParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: GrowMemory
+            type: string
+            enum:
+            - GrowMemory
+        required:
+        - type
+      - $ref: '#/components/schemas/GrowMemoryParameters'
+    PublicOplogEntry_ImportedFunctionInvokedParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ImportedFunctionInvoked
+            type: string
+            enum:
+            - ImportedFunctionInvoked
+        required:
+        - type
+      - $ref: '#/components/schemas/ImportedFunctionInvokedParameters'
+    PublicOplogEntry_JumpParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Jump
+            type: string
+            enum:
+            - Jump
+        required:
+        - type
+      - $ref: '#/components/schemas/JumpParameters'
+    PublicOplogEntry_LogParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Log
+            type: string
+            enum:
+            - Log
+        required:
+        - type
+      - $ref: '#/components/schemas/LogParameters'
+    PublicOplogEntry_PendingUpdateParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PendingUpdate
+            type: string
+            enum:
+            - PendingUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/PendingUpdateParameters'
+    PublicOplogEntry_PendingWorkerInvocationParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PendingWorkerInvocation
+            type: string
+            enum:
+            - PendingWorkerInvocation
+        required:
+        - type
+      - $ref: '#/components/schemas/PendingWorkerInvocationParameters'
+    PublicOplogEntry_ResourceParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: DropResource
+            type: string
+            enum:
+            - DropResource
+        required:
+        - type
+      - $ref: '#/components/schemas/ResourceParameters'
+    PublicOplogEntry_RevertParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Revert
+            type: string
+            enum:
+            - Revert
+        required:
+        - type
+      - $ref: '#/components/schemas/RevertParameters'
+    PublicOplogEntry_SetSpanAttributeParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SetSpanAttribute
+            type: string
+            enum:
+            - SetSpanAttribute
+        required:
+        - type
+      - $ref: '#/components/schemas/SetSpanAttributeParameters'
+    PublicOplogEntry_StartSpanParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: StartSpan
+            type: string
+            enum:
+            - StartSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/StartSpanParameters'
+    PublicOplogEntry_SuccessfulUpdateParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SuccessfulUpdate
+            type: string
+            enum:
+            - SuccessfulUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/SuccessfulUpdateParameters'
+    PublicOplogEntry_TimestampParameter:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Restart
+            type: string
+            enum:
+            - Restart
+        required:
+        - type
+      - $ref: '#/components/schemas/TimestampParameter'
+    PublicRetryConfig:
+      title: PublicRetryConfig
+      type: object
+      properties:
+        maxAttempts:
+          type: integer
+          format: uint32
+        minDelay:
+          type: string
+          format: duration
+        maxDelay:
+          type: string
+          format: duration
+        multiplier:
+          type: number
+          format: double
+        maxJitterFactor:
+          type: number
+          format: double
+      required:
+      - maxAttempts
+      - minDelay
+      - maxDelay
+      - multiplier
+    PublicSpanData:
+      discriminator:
+        propertyName: type
+        mapping:
+          LocalSpan: '#/components/schemas/PublicSpanData_PublicLocalSpanData'
+          ExternalSpan: '#/components/schemas/PublicSpanData_PublicExternalSpanData'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicSpanData_PublicLocalSpanData'
+      - $ref: '#/components/schemas/PublicSpanData_PublicExternalSpanData'
+    PublicSpanData_PublicExternalSpanData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ExternalSpan
+            type: string
+            enum:
+            - ExternalSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicExternalSpanData'
+    PublicSpanData_PublicLocalSpanData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: LocalSpan
+            type: string
+            enum:
+            - LocalSpan
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicLocalSpanData'
+    PublicUpdateDescription:
+      discriminator:
+        propertyName: type
+        mapping:
+          Automatic: '#/components/schemas/PublicUpdateDescription_Empty'
+          SnapshotBased: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicUpdateDescription_Empty'
+      - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
+    PublicUpdateDescription_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Automatic
+            type: string
+            enum:
+            - Automatic
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PublicUpdateDescription_SnapshotBasedUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SnapshotBased
+            type: string
+            enum:
+            - SnapshotBased
+        required:
+        - type
+      - $ref: '#/components/schemas/SnapshotBasedUpdateParameters'
+    PublicWorkerInvocation:
+      discriminator:
+        propertyName: type
+        mapping:
+          ExportedFunction: '#/components/schemas/PublicWorkerInvocation_ExportedFunctionParameters'
+          ManualUpdate: '#/components/schemas/PublicWorkerInvocation_ManualUpdateParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicWorkerInvocation_ExportedFunctionParameters'
+      - $ref: '#/components/schemas/PublicWorkerInvocation_ManualUpdateParameters'
+    PublicWorkerInvocation_ExportedFunctionParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ExportedFunction
+            type: string
+            enum:
+            - ExportedFunction
+        required:
+        - type
+      - $ref: '#/components/schemas/ExportedFunctionParameters'
+    PublicWorkerInvocation_ManualUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ManualUpdate
+            type: string
+            enum:
+            - ManualUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/ManualUpdateParameters'
+    ResolvedGatewayBindingComponent:
+      title: ResolvedGatewayBindingComponent
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: integer
+          format: uint64
+      required:
+      - name
+      - version
+    ResourceParameters:
+      title: ResourceParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        id:
+          type: integer
+          format: uint64
+        name:
+          type: string
+        owner:
+          type: string
+      required:
+      - timestamp
+      - id
+      - name
+      - owner
+    ResumeResponse:
+      title: ResumeResponse
+      type: object
+    RevertLastInvocations:
+      title: RevertLastInvocations
+      type: object
+      properties:
+        numberOfInvocations:
+          type: integer
+          format: uint64
+      required:
+      - numberOfInvocations
+    RevertParameters:
+      title: RevertParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        droppedRegion:
+          $ref: '#/components/schemas/OplogRegion'
+      required:
+      - timestamp
+      - droppedRegion
+    RevertToOplogIndex:
+      title: RevertToOplogIndex
+      type: object
+      properties:
+        lastOplogIndex:
+          type: integer
+          format: uint64
+      required:
+      - lastOplogIndex
+    RevertWorkerResponse:
+      title: RevertWorkerResponse
+      type: object
+    RevertWorkerTarget:
+      discriminator:
+        propertyName: type
+        mapping:
+          revertToOplogIndex: '#/components/schemas/RevertWorkerTarget_RevertToOplogIndex'
+          revertLastInvocations: '#/components/schemas/RevertWorkerTarget_RevertLastInvocations'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/RevertWorkerTarget_RevertToOplogIndex'
+      - $ref: '#/components/schemas/RevertWorkerTarget_RevertLastInvocations'
+    RevertWorkerTarget_RevertLastInvocations:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: revertLastInvocations
+            type: string
+            enum:
+            - revertLastInvocations
+        required:
+        - type
+      - $ref: '#/components/schemas/RevertLastInvocations'
+    RevertWorkerTarget_RevertToOplogIndex:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: revertToOplogIndex
+            type: string
+            enum:
+            - revertToOplogIndex
+        required:
+        - type
+      - $ref: '#/components/schemas/RevertToOplogIndex'
+    RibInputTypeInfo:
+      title: RibInputTypeInfo
+      type: object
+      properties:
+        types:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AnalysedType'
+      required:
+      - types
+    RibOutputTypeInfo:
+      title: RibOutputTypeInfo
+      type: object
+      properties:
+        analysedType:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - analysedType
+    RouteRequestData:
+      title: RouteRequestData
+      type: object
+      properties:
+        method:
+          $ref: '#/components/schemas/MethodPattern'
+        path:
+          type: string
+        binding:
+          $ref: '#/components/schemas/GatewayBindingData'
+        security:
+          type: string
+      required:
+      - method
+      - path
+      - binding
+    RouteResponseData:
+      title: RouteResponseData
+      type: object
+      properties:
+        method:
+          $ref: '#/components/schemas/MethodPattern'
+        path:
+          type: string
+        security:
+          type: string
+        binding:
+          $ref: '#/components/schemas/GatewayBindingResponseData'
+      required:
+      - method
+      - path
+      - binding
+    ScanCursor:
+      title: ScanCursor
+      type: object
+      properties:
+        cursor:
+          type: integer
+          format: uint64
+        layer:
+          type: integer
+          format: uint64
+      required:
+      - cursor
+      - layer
+    SecuritySchemeData:
+      title: SecuritySchemeData
+      type: object
+      properties:
+        providerType:
+          $ref: '#/components/schemas/Provider'
+        schemeIdentifier:
+          type: string
+        clientId:
+          type: string
+        clientSecret:
+          type: string
+        redirectUrl:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+      required:
+      - providerType
+      - schemeIdentifier
+      - clientId
+      - clientSecret
+      - redirectUrl
+      - scopes
+    SetSpanAttributeParameters:
+      title: SetSpanAttributeParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        spanId:
+          type: string
+        key:
+          type: string
+        value:
+          $ref: '#/components/schemas/PublicAttributeValue'
+      required:
+      - timestamp
+      - spanId
+      - key
+      - value
+    SnapshotBasedUpdateParameters:
+      title: SnapshotBasedUpdateParameters
+      type: object
+      properties:
+        payload:
+          type: array
+          items:
+            type: integer
+            format: uint8
+      required:
+      - payload
+    StartSpanParameters:
+      title: StartSpanParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        spanId:
+          type: string
+        parentId:
+          type: string
+        linkedContext:
+          type: string
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
+      required:
+      - timestamp
+      - spanId
+      - attributes
+    StringAttributeValue:
+      title: StringAttributeValue
+      type: object
+      properties:
+        value:
+          type: string
+      required:
+      - value
+    StringFilterComparator:
+      type: string
+      enum:
+      - Equal
+      - NotEqual
+      - Like
+      - NotLike
+    SuccessfulUpdate:
+      title: SuccessfulUpdate
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - targetVersion
+    SuccessfulUpdateParameters:
+      title: SuccessfulUpdateParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        target_version:
+          type: integer
+          format: uint64
+        new_component_size:
+          type: integer
+          format: uint64
+        new_active_plugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationDescription'
+      required:
+      - timestamp
+      - target_version
+      - new_component_size
+      - new_active_plugins
+    TextReference:
+      discriminator:
+        propertyName: type
+        mapping:
+          Url: '#/components/schemas/TextReference_Url'
+          Inline: '#/components/schemas/TextReference_TextSource'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/TextReference_Url'
+      - $ref: '#/components/schemas/TextReference_TextSource'
+    TextReference_TextSource:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Inline
+            type: string
+            enum:
+            - Inline
+        required:
+        - type
+      - $ref: '#/components/schemas/TextSource'
+    TextReference_Url:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Url
+            type: string
+            enum:
+            - Url
+        required:
+        - type
+      - $ref: '#/components/schemas/Url'
+    TextSource:
+      title: TextSource
+      type: object
+      properties:
+        data:
+          type: string
+        textType:
+          $ref: '#/components/schemas/TextType'
+      required:
+      - data
+    TextType:
+      title: TextType
+      type: object
+      properties:
+        languageCode:
+          type: string
+      required:
+      - languageCode
+    TimestampParameter:
+      title: TimestampParameter
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+      required:
+      - timestamp
+    TypeBool:
+      title: TypeBool
+      type: object
+    TypeChr:
+      title: TypeChr
+      type: object
+    TypeEnum:
+      title: TypeEnum
+      type: object
+      properties:
+        name:
+          type: string
+        owner:
+          type: string
+        cases:
+          type: array
+          items:
+            type: string
+      required:
+      - cases
+    TypeF32:
+      title: TypeF32
+      type: object
+    TypeF64:
+      title: TypeF64
+      type: object
+    TypeFlags:
+      title: TypeFlags
+      type: object
+      properties:
+        name:
+          type: string
+        owner:
+          type: string
+        names:
+          type: array
+          items:
+            type: string
+      required:
+      - names
+    TypeHandle:
+      title: TypeHandle
+      type: object
+      properties:
+        name:
+          type: string
+        owner:
+          type: string
+        resource_id:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AnalysedResourceMode'
+      required:
+      - resource_id
+      - mode
+    TypeList:
+      title: TypeList
+      type: object
+      properties:
+        name:
+          type: string
+        owner:
+          type: string
+        inner:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - inner
+    TypeOption:
+      title: TypeOption
+      type: object
+      properties:
+        name:
+          type: string
+        owner:
+          type: string
+        inner:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - inner
+    TypeRecord:
+      title: TypeRecord
+      type: object
+      properties:
+        name:
+          type: string
+        owner:
+          type: string
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/NameTypePair'
+      required:
+      - fields
+    TypeResult:
+      title: TypeResult
+      type: object
+      properties:
+        name:
+          type: string
+        owner:
+          type: string
+        ok:
+          $ref: '#/components/schemas/AnalysedType'
+        err:
+          $ref: '#/components/schemas/AnalysedType'
+    TypeS16:
+      title: TypeS16
+      type: object
+    TypeS32:
+      title: TypeS32
+      type: object
+    TypeS64:
+      title: TypeS64
+      type: object
+    TypeS8:
+      title: TypeS8
+      type: object
+    TypeStr:
+      title: TypeStr
+      type: object
+    TypeTuple:
+      title: TypeTuple
+      type: object
+      properties:
+        name:
+          type: string
+        owner:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedType'
+      required:
+      - items
+    TypeU16:
+      title: TypeU16
+      type: object
+    TypeU32:
+      title: TypeU32
+      type: object
+    TypeU64:
+      title: TypeU64
+      type: object
+    TypeU8:
+      title: TypeU8
+      type: object
+    TypeVariant:
+      title: TypeVariant
+      type: object
+      properties:
+        name:
+          type: string
+        owner:
+          type: string
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/NameOptionTypePair'
+      required:
+      - cases
+    UpdateRecord:
+      discriminator:
+        propertyName: type
+        mapping:
+          pendingUpdate: '#/components/schemas/UpdateRecord_PendingUpdate'
+          successfulUpdate: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
+          failedUpdate: '#/components/schemas/UpdateRecord_FailedUpdate'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/UpdateRecord_PendingUpdate'
+      - $ref: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
+      - $ref: '#/components/schemas/UpdateRecord_FailedUpdate'
+    UpdateRecord_FailedUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: failedUpdate
+            type: string
+            enum:
+            - failedUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/FailedUpdate'
+    UpdateRecord_PendingUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: pendingUpdate
+            type: string
+            enum:
+            - pendingUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/PendingUpdate'
+    UpdateRecord_SuccessfulUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: successfulUpdate
+            type: string
+            enum:
+            - successfulUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/SuccessfulUpdate'
+    UpdateWorkerRequest:
+      title: UpdateWorkerRequest
+      type: object
+      properties:
+        mode:
+          $ref: '#/components/schemas/WorkerUpdateMode'
+        targetVersion:
+          type: integer
+          format: uint64
+      required:
+      - mode
+      - targetVersion
+    UpdateWorkerResponse:
+      title: UpdateWorkerResponse
+      type: object
+    Url:
+      title: Url
+      type: object
+      properties:
+        value:
+          type: string
+      required:
+      - value
+    ValueAndOptionalType:
+      type: object
+      properties:
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+        value: {}
+      required:
+      - value
+    ValueAndType:
+      type: object
+      properties:
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+        value: {}
+      required:
+      - typ
+      - value
+    VersionInfo:
+      title: VersionInfo
+      type: object
+      properties:
+        version:
+          type: string
+      required:
+      - version
+    WasiConfigVarsEntry:
+      title: WasiConfigVarsEntry
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+      required:
+      - key
+      - value
+    WorkerAndFilter:
+      title: WorkerAndFilter
+      type: object
+      properties:
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerFilter'
+      required:
+      - filters
+    WorkerCreatedAtFilter:
+      title: WorkerCreatedAtFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          type: string
+          format: date-time
+      required:
+      - comparator
+      - value
+    WorkerCreationRequest:
+      title: WorkerCreationRequest
+      type: object
+      properties:
+        name:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        wasiConfigVars:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
+      required:
+      - name
+      - args
+      - env
+    WorkerCreationResponse:
+      title: WorkerCreationResponse
+      type: object
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        componentVersion:
+          type: integer
+          format: uint64
+      required:
+      - workerId
+      - componentVersion
+    WorkerEnvFilter:
+      title: WorkerEnvFilter
+      type: object
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - name
+      - comparator
+      - value
+    WorkerErrorDetails:
+      title: WorkerErrorDetails
+      description: Detail in case the error was caused by the worker failing
+      type: object
+      properties:
+        cause:
+          description: Error that caused to worker to fail
+          type: string
+        stderr:
+          description: Error log of the worker
+          type: string
+      required:
+      - cause
+      - stderr
+    WorkerFilter:
+      discriminator:
+        propertyName: type
+        mapping:
+          Name: '#/components/schemas/WorkerFilter_WorkerNameFilter'
+          Status: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
+          Version: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
+          CreatedAt: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
+          Env: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
+          And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
+          Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
+          Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+          WasiConfigVars: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
+    WorkerFilter_WorkerAndFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: And
+            type: string
+            enum:
+            - And
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerAndFilter'
+    WorkerFilter_WorkerCreatedAtFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CreatedAt
+            type: string
+            enum:
+            - CreatedAt
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerCreatedAtFilter'
+    WorkerFilter_WorkerEnvFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Env
+            type: string
+            enum:
+            - Env
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerEnvFilter'
+    WorkerFilter_WorkerNameFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Name
+            type: string
+            enum:
+            - Name
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerNameFilter'
+    WorkerFilter_WorkerNotFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Not
+            type: string
+            enum:
+            - Not
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerNotFilter'
+    WorkerFilter_WorkerOrFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Or
+            type: string
+            enum:
+            - Or
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerOrFilter'
+    WorkerFilter_WorkerStatusFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Status
+            type: string
+            enum:
+            - Status
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerStatusFilter'
+    WorkerFilter_WorkerVersionFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Version
+            type: string
+            enum:
+            - Version
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerVersionFilter'
+    WorkerFilter_WorkerWasiConfigVarsFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WasiConfigVars
+            type: string
+            enum:
+            - WasiConfigVars
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerWasiConfigVarsFilter'
+    WorkerId:
+      title: WorkerId
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        workerName:
+          type: string
+      required:
+      - componentId
+      - workerName
+    WorkerMetadata:
+      title: WorkerMetadata
+      type: object
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        projectId:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        status:
+          $ref: '#/components/schemas/WorkerStatus'
+        componentVersion:
+          type: integer
+          format: uint64
+        retryCount:
+          type: integer
+          format: uint64
+        pendingInvocationCount:
+          type: integer
+          format: uint64
+        updates:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpdateRecord'
+        createdAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
+        componentSize:
+          type: integer
+          format: uint64
+        totalLinearMemorySize:
+          type: integer
+          format: uint64
+        exportedResourceInstances:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportedResourceMetadata'
+        agentInstances:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentInstanceMetadata'
+        activePlugins:
+          type: array
+          items:
+            type: string
+            format: uuid
+        skippedRegions:
+          description: |-
+            Oplog regions that are skipped during the worker's state recovery, but describe
+            the history of the worker. For example if an atomic region gets restarted, its partially
+            recorded oplog entries will be skipped on retry.
+          type: array
+          items:
+            $ref: '#/components/schemas/OplogRegion'
+        deletedRegions:
+          description: Oplog regions permanently deleted from the workers using the revert functionality.
+          type: array
+          items:
+            $ref: '#/components/schemas/OplogRegion'
+      required:
+      - workerId
+      - projectId
+      - createdBy
+      - args
+      - env
+      - wasiConfigVars
+      - status
+      - componentVersion
+      - retryCount
+      - pendingInvocationCount
+      - updates
+      - createdAt
+      - componentSize
+      - totalLinearMemorySize
+      - exportedResourceInstances
+      - agentInstances
+      - activePlugins
+      - skippedRegions
+      - deletedRegions
+    WorkerNameFilter:
+      title: WorkerNameFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - comparator
+      - value
+    WorkerNotFilter:
+      title: WorkerNotFilter
+      type: object
+      properties:
+        filter:
+          $ref: '#/components/schemas/WorkerFilter'
+      required:
+      - filter
+    WorkerOrFilter:
+      title: WorkerOrFilter
+      type: object
+      properties:
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerFilter'
+      required:
+      - filters
+    WorkerStatus:
+      description: |-
+        Represents last known status of a worker
+
+        This is always recorded together with the current oplog index, and it can only be used
+        as a source of truth if there are no newer oplog entries since the record.
+      type: string
+      enum:
+      - Running
+      - Idle
+      - Suspended
+      - Interrupted
+      - Retrying
+      - Failed
+      - Exited
+    WorkerStatusFilter:
+      title: WorkerStatusFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          $ref: '#/components/schemas/WorkerStatus'
+      required:
+      - comparator
+      - value
+    WorkerUpdateMode:
+      type: string
+      enum:
+      - Automatic
+      - Manual
+    WorkerVersionFilter:
+      title: WorkerVersionFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          type: integer
+          format: uint64
+      required:
+      - comparator
+      - value
+    WorkerWasiConfigVarsFilter:
+      title: WorkerWasiConfigVarsFilter
+      type: object
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - name
+      - comparator
+      - value
+    WorkersMetadataRequest:
+      title: WorkersMetadataRequest
+      type: object
+      properties:
+        filter:
+          $ref: '#/components/schemas/WorkerFilter'
+        cursor:
+          $ref: '#/components/schemas/ScanCursor'
+        count:
+          type: integer
+          format: uint64
+        precise:
+          type: boolean
+    WorkersMetadataResponse:
+      title: WorkersMetadataResponse
+      type: object
+      properties:
+        workers:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerMetadata'
+        cursor:
+          $ref: '#/components/schemas/ScanCursor'
+      required:
+      - workers
+    WriteRemoteBatchedParameters:
+      title: WriteRemoteBatchedParameters
+      type: object
+      properties:
+        index:
+          type: integer
+          format: uint64
+    Account:
+      title: Account
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+        planId:
+          type: string
+          format: uuid
+      required:
+      - id
+      - name
+      - email
+      - planId
+    AgentConstructor:
+      title: AgentConstructor
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        promptHint:
+          type: string
+        inputSchema:
+          $ref: '#/components/schemas/DataSchema'
+      required:
+      - description
+      - inputSchema
+    AgentDependency:
+      title: AgentDependency
+      type: object
+      properties:
+        typeName:
+          type: string
+        description:
+          type: string
+        constructor:
+          $ref: '#/components/schemas/AgentConstructor'
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentMethod'
+      required:
+      - typeName
+      - constructor
+      - methods
+    AgentMethod:
+      title: AgentMethod
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        promptHint:
+          type: string
+        inputSchema:
+          $ref: '#/components/schemas/DataSchema'
+        outputSchema:
+          $ref: '#/components/schemas/DataSchema'
+      required:
+      - name
+      - description
+      - inputSchema
+      - outputSchema
+    AgentType:
+      title: AgentType
+      type: object
+      properties:
+        typeName:
+          type: string
+        description:
+          type: string
+        constructor:
+          $ref: '#/components/schemas/AgentConstructor'
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentMethod'
+        dependencies:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentDependency'
+      required:
+      - typeName
+      - description
+      - constructor
+      - methods
+      - dependencies
+    AnalysedExport:
+      discriminator:
+        propertyName: type
+        mapping:
+          Function: '#/components/schemas/AnalysedExport_AnalysedFunction'
+          Instance: '#/components/schemas/AnalysedExport_AnalysedInstance'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/AnalysedExport_AnalysedFunction'
+      - $ref: '#/components/schemas/AnalysedExport_AnalysedInstance'
+    AnalysedExport_AnalysedFunction:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Function
+            type: string
+            enum:
+            - Function
+        required:
+        - type
+      - $ref: '#/components/schemas/AnalysedFunction'
+    AnalysedExport_AnalysedInstance:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Instance
+            type: string
+            enum:
+            - Instance
+        required:
+        - type
+      - $ref: '#/components/schemas/AnalysedInstance'
+    AnalysedFunction:
+      title: AnalysedFunction
+      type: object
+      properties:
+        name:
+          type: string
+        parameters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedFunctionParameter'
+        result:
+          $ref: '#/components/schemas/AnalysedFunctionResult'
+      required:
+      - name
+      - parameters
+    AnalysedFunctionParameter:
+      title: AnalysedFunctionParameter
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - name
+      - typ
+    AnalysedFunctionResult:
+      title: AnalysedFunctionResult
+      type: object
+      properties:
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - typ
+    AnalysedInstance:
+      title: AnalysedInstance
+      type: object
+      properties:
+        name:
+          type: string
+        functions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedFunction'
+      required:
+      - name
+      - functions
     ApiDeployment:
       title: ApiDeployment
       type: object
@@ -7037,14 +11866,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/BinaryType'
-    BinaryType:
-      title: BinaryType
-      type: object
-      properties:
-        mimeType:
-          type: string
-      required:
-      - mimeType
     CertificateResponseView:
       title: CertificateResponseView
       type: object
@@ -7127,11 +11948,6 @@ components:
           - description: Path of the file in the uploaded archive
       required:
       - permissions
-    ComponentFilePermissions:
-      type: string
-      enum:
-      - read-only
-      - read-write
     ComponentMetadata:
       title: ComponentMetadata
       type: object
@@ -7528,9 +12344,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/TextDescriptor'
-    Empty:
-      title: Empty
-      type: object
     Environment:
       title: Environment
       type: object
@@ -7562,24 +12375,6 @@ components:
     EnvironmentSummary:
       title: EnvironmentSummary
       type: object
-    ErrorBody:
-      title: ErrorBody
-      type: object
-      properties:
-        error:
-          type: string
-      required:
-      - error
-    ErrorsBody:
-      title: ErrorsBody
-      type: object
-      properties:
-        errors:
-          type: array
-          items:
-            type: string
-      required:
-      - errors
     GatewayBindingRequestView:
       title: GatewayBindingRequestView
       type: object
@@ -7622,17 +12417,6 @@ components:
           $ref: '#/components/schemas/RibOutputTypeInfo'
         openapiSpecJson:
           type: string
-    GatewayBindingType:
-      type: string
-      enum:
-      - default
-      - file-server
-      - http-handler
-      - cors-preflight
-      - swagger-ui
-    HealthcheckResponse:
-      title: HealthcheckResponse
-      type: object
     HttpApiDefinitionResponseView:
       title: HttpApiDefinitionResponseView
       type: object
@@ -7691,27 +12475,6 @@ components:
           format: uint64
       required:
       - initial
-    NameOptionTypePair:
-      title: NameOptionTypePair
-      type: object
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - name
-    NameTypePair:
-      title: NameTypePair
-      type: object
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - name
-      - typ
     NamedElementSchema:
       title: NamedElementSchema
       type: object
@@ -8311,31 +13074,6 @@ components:
           format: uuid
       required:
       - projectId
-    Provider:
-      type: string
-      enum:
-      - Google
-      - Facebook
-      - Microsoft
-      - Gitlab
-    RibInputTypeInfo:
-      title: RibInputTypeInfo
-      type: object
-      properties:
-        types:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/AnalysedType'
-      required:
-      - types
-    RibOutputTypeInfo:
-      title: RibOutputTypeInfo
-      type: object
-      properties:
-        analysedType:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - analysedType
     Role:
       type: string
       enum:
@@ -8422,14 +13160,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TextType'
-    TextType:
-      title: TextType
-      type: object
-      properties:
-        languageCode:
-          type: string
-      required:
-      - languageCode
     Token:
       title: Token
       type: object
@@ -8476,167 +13206,6 @@ components:
       - accountId
       - createdAt
       - expiresAt
-    TypeBool:
-      title: TypeBool
-      type: object
-    TypeChr:
-      title: TypeChr
-      type: object
-    TypeEnum:
-      title: TypeEnum
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        cases:
-          type: array
-          items:
-            type: string
-      required:
-      - cases
-    TypeF32:
-      title: TypeF32
-      type: object
-    TypeF64:
-      title: TypeF64
-      type: object
-    TypeFlags:
-      title: TypeFlags
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        names:
-          type: array
-          items:
-            type: string
-      required:
-      - names
-    TypeHandle:
-      title: TypeHandle
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        resource_id:
-          type: integer
-          format: uint64
-        mode:
-          $ref: '#/components/schemas/AnalysedResourceMode'
-      required:
-      - resource_id
-      - mode
-    TypeList:
-      title: TypeList
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        inner:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - inner
-    TypeOption:
-      title: TypeOption
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        inner:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - inner
-    TypeRecord:
-      title: TypeRecord
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        fields:
-          type: array
-          items:
-            $ref: '#/components/schemas/NameTypePair'
-      required:
-      - fields
-    TypeResult:
-      title: TypeResult
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        ok:
-          $ref: '#/components/schemas/AnalysedType'
-        err:
-          $ref: '#/components/schemas/AnalysedType'
-    TypeS16:
-      title: TypeS16
-      type: object
-    TypeS32:
-      title: TypeS32
-      type: object
-    TypeS64:
-      title: TypeS64
-      type: object
-    TypeS8:
-      title: TypeS8
-      type: object
-    TypeStr:
-      title: TypeStr
-      type: object
-    TypeTuple:
-      title: TypeTuple
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedType'
-      required:
-      - items
-    TypeU16:
-      title: TypeU16
-      type: object
-    TypeU32:
-      title: TypeU32
-      type: object
-    TypeU64:
-      title: TypeU64
-      type: object
-    TypeU8:
-      title: TypeU8
-      type: object
-    TypeVariant:
-      title: TypeVariant
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        cases:
-          type: array
-          items:
-            $ref: '#/components/schemas/NameOptionTypePair'
-      required:
-      - cases
     UpdateApiDeploymentRequest:
       title: UpdateApiDeploymentRequest
       type: object
@@ -8720,14 +13289,6 @@ components:
             $ref: '#/components/schemas/RouteRequestView'
       required:
       - routes
-    VersionInfo:
-      title: VersionInfo
-      type: object
-      properties:
-        version:
-          type: string
-      required:
-      - version
     VersionedComponentId:
       title: VersionedComponentId
       type: object
@@ -8783,11 +13344,8 @@ tags:
 - name: ApiDeployment
 - name: ApiDomain
 - name: ApiSecurity
-- name: Application
 - name: Component
 - name: Debugging
-- name: Deployment
-- name: Environment
 - name: Grant
 - name: HealthCheck
 - name: Limits
@@ -8807,7 +13365,10 @@ tags:
     The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
 - name: ProjectPolicy
   description: Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
-- name: RegistryService
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
 - name: Worker
+- name: Application
+- name: Deployment
+- name: Environment
+- name: RegistryService

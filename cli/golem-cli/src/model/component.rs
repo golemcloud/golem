@@ -20,7 +20,9 @@ use chrono::{DateTime, Utc};
 use golem_client::model::{
     AnalysedType, ComponentMetadata, ComponentType, InitialComponentFile, VersionedComponentId,
 };
-use golem_common::model::component_metadata::DynamicLinkedInstance;
+use golem_common::model::component::{ComponentType, InitialComponentFile, VersionedComponentId};
+use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_wasm_ast::analysis::wave::DisplayNamedFunc;
 use golem_wasm_ast::analysis::{
@@ -67,7 +69,7 @@ pub struct Component {
     pub component_size: u64,
     pub component_type: ComponentType,
     pub metadata: ComponentMetadata,
-    pub project_id: Option<ProjectId>,
+    pub environment_id: Option<EnvironmentId>,
     pub created_at: Option<DateTime<Utc>>,
     pub files: Vec<InitialComponentFile>,
     pub env: BTreeMap<String, String>,
@@ -80,7 +82,7 @@ impl From<golem_client::model::Component> for Component {
             component_name: value.component_name.into(),
             component_size: value.component_size,
             metadata: value.metadata,
-            project_id: Some(ProjectId(value.project_id)),
+            environment_id: Some(value.environment_id),
             created_at: Some(value.created_at),
             component_type: value.component_type,
             files: value.files,

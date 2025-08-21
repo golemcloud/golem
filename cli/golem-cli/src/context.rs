@@ -25,7 +25,7 @@ use crate::model::app::{AppBuildStep, ApplicationSourceMode};
 use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileName};
 use crate::model::text::fmt::log_error;
 use crate::model::{app_raw, Format, ProjectReference};
-use crate::model::{AccountDetails, AccountId, PluginReference};
+use crate::model::{AccountDetails, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use futures_util::future::BoxFuture;
@@ -48,6 +48,7 @@ use golem_client::api::WorkerClientLive as WorkerClientCloud;
 use golem_client::api::{AccountClient, AccountSummaryClientLive as AccountSummaryClientCloud};
 use golem_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
 use golem_client::{Context as ContextCloud, Security};
+use golem_common::model::account::AccountId;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
@@ -547,7 +548,7 @@ impl GolemClients {
             .authenticate(token_override, auth_config, config_dir, profile_name)
             .await?;
 
-        let security_token = Security::Bearer(authentication.0.secret.value.to_string());
+        let security_token = Security::Bearer(authentication.0.secret.0.to_string());
 
         let component_context = || ContextCloud {
             client: service_http_client.clone(),
@@ -652,7 +653,7 @@ impl GolemClients {
     }
 
     pub fn auth_token(&self) -> String {
-        self.authentication.0.secret.value.to_string()
+        self.authentication.0.secret.0.to_string()
     }
 }
 

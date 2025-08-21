@@ -15,7 +15,6 @@
 use crate::model::Format;
 use anyhow::{anyhow, bail, Context};
 use chrono::{DateTime, Utc};
-use golem_client::model::TokenSecret;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -475,11 +474,5 @@ impl Display for AuthSecret {
 impl Debug for AuthSecret {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("AuthSecret").field(&"*******").finish()
-    }
-}
-
-impl From<AuthSecret> for TokenSecret {
-    fn from(value: AuthSecret) -> Self {
-        Self { value: value.0 }
     }
 }

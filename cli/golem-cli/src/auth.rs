@@ -18,42 +18,38 @@ use crate::config::{
 use crate::config::{Config, ProfileName};
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::LogColorize;
-use crate::model::AccountId;
 use anyhow::{anyhow, bail, Context};
 use colored::Colorize;
-use golem_client::api::{LoginClient, LoginClientLive, LoginOauth2WebFlowPollError};
-use golem_client::model::{Token, TokenSecret, UnsafeToken, WebFlowAuthorizeUrlResponse};
+use golem_client::api::{LoginClient, LoginClientLive};
+use golem_client::model::{Token, TokenWithSecret};
 use golem_client::Security;
+use golem_common::model::account::AccountId;
 use indoc::printdoc;
 use std::path::Path;
 use tracing::info;
 use uuid::Uuid;
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct Authentication(pub UnsafeToken);
+pub struct Authentication(pub TokenWithSecret);
 
 impl Authentication {
     pub fn header(&self) -> String {
         token_header(&self.0.secret)
     }
 
-    pub fn account_id(&self) -> AccountId {
-        AccountId(self.0.data.account_id.clone())
+    pub fn account_id(&self) -> &AccountId {
+        &self.0.account_id
     }
 }
 
-impl From<&OAuth2AuthenticationData> for Authentication {
-    fn from(val: &OAuth2AuthenticationData) -> Self {
-        Authentication(UnsafeToken {
-            data: Token {
-                id: val.id,
-                account_id: val.account_id.to_string(),
-                created_at: val.created_at,
-                expires_at: val.expires_at,
-            },
-            secret: TokenSecret {
-                value: val.secret.0,
-            },
+impl From<OAuth2AuthenticationData> for Authentication {
+    fn from(value: OAuth2AuthenticationData) -> Self {
+        Authentication(TokenWithSecret {
+            id: value.id.into(),
+            account_id: value.account_id.into(),
+            created_at: value.created_at,
+            expires_at: value.expires_at,
+            secret: value.secret.0.into(),
         })
     }
 }
@@ -80,7 +76,7 @@ impl Auth {
             };
             let data = self.token_details(secret.clone()).await?;
 
-            Ok(Authentication(UnsafeToken { data, secret }))
+            Ok(Authentication(TokenWithSecret { data, secret }))
         } else {
             self.profile_authentication(auth_config, config_dir, profile_name)
                 .await

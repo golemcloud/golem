@@ -66,7 +66,7 @@ macro_rules! newtype_uuid {
 
             fn try_from(value: &str) -> Result<Self, Self::Error> {
                 let uuid =
-                    uuid::Uuid::parse_str(value).map_err(|err| format!("Invalid plan ID: {err}"))?;
+                    uuid::Uuid::parse_str(value).map_err(|err| format!("Invalid UUID: {err}"))?;
                 Ok(Self(uuid))
             }
         }

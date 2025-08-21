@@ -549,11 +549,12 @@ pub enum GolemCliSubcommand {
 
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
-    use crate::model::{AccountId, PluginReference};
+    use crate::model::PluginReference;
     use crate::model::{
         ComponentName, ProjectName, ProjectReference, WorkerName, WorkerUpdateMode,
     };
     use clap::Args;
+    use golem_common::model::account::AccountId;
     use golem_templates::model::GuestLanguage;
 
     pub type ComponentTemplateName = String;
