@@ -88,6 +88,7 @@ use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
 use std::collections::HashSet;
 use std::path::Path;
+use std::env::var;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
 use tokio::runtime::Handle;
@@ -143,8 +144,8 @@ impl TestWorkerExecutor {
         match response.result {
             None => panic!("No response from get_running_workers_metadata"),
             Some(get_running_workers_metadata_response::Result::Success(
-                GetRunningWorkersMetadataSuccessResponse { workers },
-            )) => workers.iter().map(to_worker_metadata).collect(),
+                     GetRunningWorkersMetadataSuccessResponse { workers },
+                 )) => workers.iter().map(to_worker_metadata).collect(),
 
             Some(get_running_workers_metadata_response::Result::Failure(error)) => {
                 panic!("Failed to get worker metadata: {error:?}")
@@ -406,7 +407,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             owned_worker_id,
             latest_worker_status,
         )
-        .await
+            .await
     }
 
     async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
@@ -419,7 +420,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             owned_worker_id,
             metadata,
         )
-        .await
+            .await
     }
 
     async fn resume_replay(
@@ -447,7 +448,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             account_id,
             last_known_limits,
         )
-        .await
+            .await
     }
 
     async fn on_worker_deleted<T: HasAll<TestWorkerCtx> + Send + Sync>(
@@ -475,7 +476,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             target_version,
             details,
         )
-        .await
+            .await
     }
 }
 
@@ -677,7 +678,7 @@ impl WorkerCtx for TestWorkerCtx {
             plugins,
             worker_fork,
         )
-        .await?;
+            .await?;
         Ok(Self { durable_ctx })
     }
 
@@ -1127,12 +1128,9 @@ pub fn new_worker_id() -> WorkerId {
 }
 
 pub async fn postgres_host( rdbms: Option<Arc<dyn Rdbms<PostgresType> + Send + Sync>> ) -> RdbPostgresHost {
-    let docker_active = match option_env!("GOLEM_DOCKER_SERVICES").unwrap() {
-        "true" => { true }
-        _ => { false }
-    };
+    let docker_active = var("GOLEM_DOCKER_SERVICES").map(|v| v == "true").unwrap_or(false);
     let host = RdbPostgresHost {
-        rdbms: if !rdbms.is_some() { PostgresType::new_rdbms( RdbmsConfig::default() ) } else { rdbms.unwrap() },
+        rdbms: rdbms.unwrap_or_else(|| PostgresType::new_rdbms(RdbmsConfig::default())),
         container: if docker_active { Some(futures::executor::block_on(DockerPostgresRdb::new("test-net"))) } else { None },
         provided : if !docker_active {
             Some(ProvidedPostgresRdb::new(PostgresInfo {
@@ -1153,12 +1151,9 @@ pub async fn postgres_host( rdbms: Option<Arc<dyn Rdbms<PostgresType> + Send + S
 }
 
 pub async fn mysql_host( rdbms: Option<Arc<dyn Rdbms<MysqlType> + Send + Sync>> ) -> RdbMysqlHost {
-    let docker_active = match option_env!("GOLEM_DOCKER_SERVICES").unwrap() {
-        "true" => { true }
-        _ => { false }
-    };
+    let docker_active = var("GOLEM_DOCKER_SERVICES").map(|v| v == "true").unwrap_or(false);
     let host = RdbMysqlHost {
-        rdbms: if !rdbms.is_some() { MysqlType::new_rdbms( RdbmsConfig::default() ) } else { rdbms.unwrap() },
+        rdbms: rdbms.unwrap_or_else(|| MysqlType::new_rdbms(RdbmsConfig::default())),
         container: if docker_active { Some(futures::executor::block_on(DockerMysqlRdb::new("test-net"))) } else { None },
         provided : if !docker_active {
             Some(ProvidedMysqlRdb::new(MysqlInfo {
@@ -1217,7 +1212,7 @@ impl RdbPostgresHost {
                             info!("No user databases found to drop (excluding template0, template1, postgres).");
                         }
                         for row in db_result.rows {
-                            let db_name_to_drop_opt: Option<String> = match row.values.get(0).cloned() {
+                            let db_name_to_drop_opt: Option<String> = match row.values.first().cloned() {
                                 Some(postgres_types::DbValue::Text(s)) => Some(s),
                                 _ => None,
                             };
@@ -1369,7 +1364,7 @@ impl RdbMysqlHost {
                             info!("No databases found to drop.");
                         }
                         for row in db_result.rows {
-                            let db_name_opt: Option<String> = match row.values.get(0).cloned() {
+                            let db_name_opt: Option<String> = match row.values.first().cloned() {
                                 Some(mysql_types::DbValue::Varchar(s)) => Some(s),
                                 Some(mysql_types::DbValue::Varbinary(bytes)) => String::from_utf8(bytes).ok(),
                                 _ => None,

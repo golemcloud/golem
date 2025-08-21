@@ -55,6 +55,7 @@ impl<W: io::Write> TextWriter<W> {
         Self { inner_wave_writer }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn has_unsupported<V>(&mut self, val: &V) -> bool
     where
         V: WasmValue,
@@ -64,9 +65,9 @@ impl<W: io::Write> TextWriter<W> {
             WasmTypeKind::Record => val.unwrap_record().any(|(_, item_cow)| self.has_unsupported(item_cow.as_ref())),
             WasmTypeKind::Tuple => val.unwrap_tuple().any(|item_cow| self.has_unsupported(item_cow.as_ref())),
             WasmTypeKind::Variant => {
-                val.unwrap_variant().1.map_or(false, |inner_val_cow| self.has_unsupported(inner_val_cow.as_ref()))
+                val.unwrap_variant().1.is_some_and(|inner_val_cow| self.has_unsupported(inner_val_cow.as_ref()))
             }
-            WasmTypeKind::Option => val.unwrap_option().map_or(false, |inner_val_cow| self.has_unsupported(inner_val_cow.as_ref())),
+            WasmTypeKind::Option => val.unwrap_option().is_some_and(|inner_val_cow| self.has_unsupported(inner_val_cow.as_ref())),
             WasmTypeKind::Result => {
                 match val.unwrap_result() {
                     Ok(Some(ok_val_cow)) => self.has_unsupported(ok_val_cow.as_ref()),

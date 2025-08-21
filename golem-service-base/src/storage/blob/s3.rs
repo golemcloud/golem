@@ -80,7 +80,7 @@ impl S3BlobStorage {
         path: &Path
     ) -> UnixPathBuf {
         // push of components is done to prevent mixed-separator paths
-        let mut pre = self.prefix_of(&namespace);
+        let mut pre = self.prefix_of(namespace);
         path.components().for_each(|comp| {
            pre.push(comp.as_os_str().to_string_lossy().to_string());
         });
@@ -849,7 +849,7 @@ impl BlobStorage for S3BlobStorage {
         let key = Path::new(unix_key.to_str().unwrap()); // keep content
 
         let to_delete = self
-            .list_objects(target_label, op_label, bucket, &key)
+            .list_objects(target_label, op_label, bucket, key)
             .await?
             .iter()
             .flat_map(|obj| {

@@ -49,9 +49,9 @@ inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
 #[cfg(windows)]
-const LINE_ENDING: &'static str = "\r\n";
+const LINE_ENDING: &str = "\r\n";
 #[cfg(not(windows))]
-const LINE_ENDING: &'static str = "\n";
+const LINE_ENDING: &str = "\n";
 
 #[test]
 #[tracing::instrument]

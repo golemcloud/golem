@@ -1,4 +1,4 @@
-
+use std::env::var;
 use async_trait::async_trait;
 use golem_common::config::RedisConfig;
 use golem_common::model::{AccountId, ProjectId, RetryConfig};
@@ -229,10 +229,7 @@ impl Debug for RegularWorkerExecutorTestDependencies {
 
 impl RegularWorkerExecutorTestDependencies {
     pub async fn new() -> Self {
-        let docker_active = match option_env!("GOLEM_DOCKER_SERVICES").unwrap() {
-            "true" => { true }
-            _ => { false }
-        };
+        let docker_active = var("GOLEM_DOCKER_SERVICES").map(|v| v == "true").unwrap_or(false);
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = if !docker_active {
             Arc::new(SpawnedRedis::new(

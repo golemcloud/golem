@@ -29,6 +29,7 @@ use golem_service_base::model::ComponentName;
 use golem_service_base::repo::RepoError;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::slice::from_ref;
 use test_r::{inherit_test_dep, sequential_suite};
 use tracing::info;
 use uuid::{uuid, Uuid};
@@ -618,7 +619,7 @@ async fn test_default_plugin_repo(
 
     let all1 = plugin_repo.get_all(&plugin_owner_row).await?;
     let scoped1 = plugin_repo
-        .get_for_scope(&plugin_owner_row, &[scope1.clone()])
+        .get_for_scope(&plugin_owner_row, from_ref(&scope1))
         .await?;
     let named1 = plugin_repo
         .get_all_with_name(&plugin_owner_row, "plugin1")
@@ -667,7 +668,7 @@ async fn test_default_plugin_repo(
 
     let all2 = plugin_repo.get_all(&plugin_owner_row).await?;
     let scoped2 = plugin_repo
-        .get_for_scope(&plugin_owner_row, &[scope1.clone()])
+        .get_for_scope(&plugin_owner_row, from_ref(&scope1))
         .await?;
     let named2 = plugin_repo
         .get_all_with_name(&plugin_owner_row, "plugin1")

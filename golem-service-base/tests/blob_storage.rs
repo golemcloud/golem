@@ -791,7 +791,7 @@ async fn list_dir(
 
     let path = UnixPath::new("test-dir");
     storage
-        .create_dir("list_dir", "create-dir", namespace.clone(), as_std_path(&path).as_path())
+        .create_dir("list_dir", "create-dir", namespace.clone(), as_std_path(path).as_path())
         .await
         .unwrap();
     storage
@@ -824,7 +824,7 @@ async fn list_dir(
         .await
         .unwrap();
     let mut entries = storage
-        .list_dir("list_dir", "entries", namespace.clone(), as_std_path(&path).as_path())
+        .list_dir("list_dir", "entries", namespace.clone(), as_std_path(path).as_path())
         .await
         .unwrap();
 

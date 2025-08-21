@@ -21,11 +21,10 @@ use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDslUnsafe;
 use redis::AsyncCommands;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tracing::info;
-use url::form_urlencoded::Target;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);

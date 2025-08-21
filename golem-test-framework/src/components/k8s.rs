@@ -123,6 +123,7 @@ impl AsyncDrop for ManagedService {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ManagedRouting {
     Minikube { child: Option<Child> },
     Ingress(ManagedIngress),

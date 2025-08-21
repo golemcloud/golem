@@ -179,7 +179,7 @@ async fn rdbms_postgres_crud(
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(&deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids1 = start_workers::<PostgresType>(&executor, &component_id, &db_address, 1).await;
@@ -320,7 +320,7 @@ async fn rdbms_postgres_idempotency(
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(&deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids = start_workers::<PostgresType>(&executor, &component_id, &db_address, 1).await;
@@ -567,7 +567,7 @@ async fn rdbms_mysql_crud(
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(&deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids1 = start_workers::<MysqlType>(&executor, &component_id, &db_address, 1).await;
@@ -711,7 +711,7 @@ async fn rdbms_mysql_idempotency(
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(&deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, 1).await;
@@ -936,7 +936,7 @@ async fn rdbms_component_test<T: RdbmsType>(
     n_workers: u8,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(&deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin();
     let component_id = executor.component("rdbms-service").store().await;
     let worker_ids = start_workers::<T>(&executor, &component_id, db_address, n_workers).await;
 
