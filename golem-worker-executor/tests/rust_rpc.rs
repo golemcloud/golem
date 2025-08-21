@@ -735,9 +735,8 @@ async fn error_message_non_existing_target_component(
 
     drop(executor);
 
-    assert!(
-        matches!(worker_error_logs(&create_auction_result.err().unwrap()), Some(logs) if logs.contains("Could not find any component with the given id"))
-    );
+    assert!(format!("{:?}", create_auction_result.err().unwrap())
+        .contains("Could not find any component with the given id"));
 }
 
 #[test]
