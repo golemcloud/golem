@@ -653,16 +653,16 @@ CREATE INDEX environment_plugin_installation_revisions_plugin_idx
 
 CREATE TABLE environment_shares
 (
-    environment_id  UUID      NOT NULL,
-    environment_share_id UUID NOT NULL,
-    grantee_account_id UUID NOT NULL,
+    environment_id       UUID      NOT NULL,
+    environment_share_id UUID      NOT NULL,
+    grantee_account_id   UUID      NOT NULL,
 
-    created_at  TIMESTAMP NOT NULL,
-    updated_at  TIMESTAMP NOT NULL,
-    deleted_at      TIMESTAMP,
-    modified_by UUID      NOT NULL,
+    created_at           TIMESTAMP NOT NULL,
+    updated_at           TIMESTAMP NOT NULL,
+    deleted_at           TIMESTAMP,
+    modified_by          UUID      NOT NULL,
 
-    current_revision_id BIGINT    NOT NULL,
+    current_revision_id  BIGINT    NOT NULL,
 
     CONSTRAINT environment_shares_pk
         PRIMARY KEY (environment_share_id),
@@ -684,14 +684,14 @@ CREATE UNIQUE INDEX environment_shares_grantee_idx
 
 CREATE TABLE environment_share_revisions
 (
-    environment_share_id  UUID      NOT NULL,
-    revision_id BIGINT    NOT NULL,
+    environment_share_id UUID      NOT NULL,
+    revision_id          BIGINT    NOT NULL,
 
-    created_at  TIMESTAMP NOT NULL,
-    created_by  UUID      NOT NULL,
-    deleted     BOOLEAN   NOT NULL,
+    created_at           TIMESTAMP NOT NULL,
+    created_by           UUID      NOT NULL,
+    deleted              BOOLEAN   NOT NULL,
 
-    CONSTRAINT  environment_share_revisions_pk
+    CONSTRAINT environment_share_revisions_pk
         PRIMARY KEY (environment_share_id, revision_id),
     CONSTRAINT environment_share_revisions_environment_shares_fk
         FOREIGN KEY (environment_share_id) REFERENCES environment_shares
@@ -699,9 +699,9 @@ CREATE TABLE environment_share_revisions
 
 CREATE TABLE environment_share_revision_roles
 (
-    environment_share_id  UUID      NOT NULL,
-    revision_id BIGINT    NOT NULL,
-    role            INT      NOT NULL,
+    environment_share_id UUID   NOT NULL,
+    revision_id          BIGINT NOT NULL,
+    role                 INT    NOT NULL,
 
     CONSTRAINT environment_share_revision_roles_pk
         PRIMARY KEY (environment_share_id, revision_id, role),
