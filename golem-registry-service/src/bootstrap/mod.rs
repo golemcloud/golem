@@ -48,6 +48,8 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use include_dir::include_dir;
 use std::sync::Arc;
+use crate::repo::environment_share::{DbEnvironmentShareRepo, EnvironmentShareRepo};
+use crate::services::environment_share::EnvironmentShareService;
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
@@ -60,6 +62,7 @@ pub struct Services {
     pub login_system: LoginSystem,
     pub plan_service: Arc<PlanService>,
     pub token_service: Arc<TokenService>,
+    pub environment_share_service: Arc<EnvironmentShareService>
 }
 
 struct Repos {
@@ -72,6 +75,7 @@ struct Repos {
     token_repo: Arc<dyn TokenRepo>,
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
     oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
+    environment_share_repo: Arc<dyn EnvironmentShareRepo>,
 }
 
 impl Services {
@@ -112,6 +116,8 @@ impl Services {
 
         let environment_service = Arc::new(EnvironmentService::new(repos.environment_repo.clone()));
 
+        let environment_share_service = Arc::new(EnvironmentShareService::new(repos.environment_share_repo.clone()));
+
         let component_service = Arc::new(ComponentService::new(
             repos.component_repo,
             component_object_store,
@@ -139,6 +145,7 @@ impl Services {
             token_service,
             login_system,
             plan_service,
+            environment_share_service
         })
     }
 }
@@ -162,7 +169,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
             let token_repo = Arc::new(DbTokenRepo::logged(db_pool.clone()));
             let oauth2_token_repo = Arc::new(DbOAuth2TokenRepo::logged(db_pool.clone()));
-            let oauth2_webflow_state_repo = Arc::new(DbOAuth2WebflowStateRepo::logged(db_pool));
+            let oauth2_webflow_state_repo = Arc::new(DbOAuth2WebflowStateRepo::logged(db_pool.clone()));
+            let environment_share_repo = Arc::new(DbEnvironmentShareRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -174,6 +182,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 token_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
+                environment_share_repo
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
@@ -191,7 +200,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
             let token_repo = Arc::new(DbTokenRepo::logged(db_pool.clone()));
             let oauth2_token_repo = Arc::new(DbOAuth2TokenRepo::logged(db_pool.clone()));
-            let oauth2_webflow_state_repo = Arc::new(DbOAuth2WebflowStateRepo::logged(db_pool));
+            let oauth2_webflow_state_repo = Arc::new(DbOAuth2WebflowStateRepo::logged(db_pool.clone()));
+            let environment_share_repo = Arc::new(DbEnvironmentShareRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -203,6 +213,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 token_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
+                environment_share_repo
             })
         }
     }

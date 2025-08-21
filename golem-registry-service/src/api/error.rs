@@ -24,6 +24,7 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
+use crate::services::environment_share::EnvironmentShareError;
 
 #[derive(ApiResponse, Debug)]
 pub enum ApiError {
@@ -258,6 +259,26 @@ impl From<OAuth2Error> for ApiError {
             OAuth2Error::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("OAuth2Error")),
+            })),
+        }
+    }
+}
+
+impl From<EnvironmentShareError> for ApiError {
+    fn from(value: EnvironmentShareError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            EnvironmentShareError::ConcurrentModification | EnvironmentShareError::ShareForAccountAlreadyExists => Self::Conflict(Json(ErrorBody {
+                error,
+                cause: None
+             })),
+             EnvironmentShareError::EnvironmentShareNotFound(_) => Self::NotFound(Json(ErrorBody {
+                error,
+                cause: None
+             })),
+            EnvironmentShareError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("EnvironmentShareError")),
             })),
         }
     }

@@ -27,6 +27,7 @@ pub mod environment_api_domains;
 pub mod environment_certificates;
 pub mod environment_components;
 pub mod environment_security_schemes;
+pub mod environment_shares;
 pub mod environments;
 pub mod error;
 pub mod login;
@@ -108,7 +109,8 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 EnvironmentCertificatesApi {},
                 EnvironmentComponentsApi::new(services.component_service.clone()),
                 EnvironmentsApi::new(
-                    services.environment_service.clone()
+                    services.environment_service.clone(),
+                    services.environment_share_service.clone()
                 ),
                 EnvironmentSecuritySchemesApi {},
             ),

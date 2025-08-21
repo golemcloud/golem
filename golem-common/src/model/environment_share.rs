@@ -32,8 +32,11 @@ declare_structs! {
     }
 
     pub struct NewEnvironmentShare {
-        pub environment_id: EnvironmentId,
         pub grantee_account_id: AccountId,
         pub roles: Vec<EnvironmentRole>
+    }
+
+    pub struct UpdateEnvironmentShare {
+        pub new_roles: Vec<EnvironmentRole>
     }
 }
