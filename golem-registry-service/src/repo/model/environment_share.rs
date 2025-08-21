@@ -64,6 +64,15 @@ pub struct EnvironmentShareRevisionRecord {
 }
 
 impl EnvironmentShareRevisionRecord {
+    pub fn from_model(value: EnvironmentShare, actor: AccountId) -> Self {
+        Self {
+            roles: value.roles.into_iter().map(|r| EnvironmentShareRoleRecord::from_model(value.id.clone(), value.revision.clone(), r)).collect(),
+            environment_share_id: value.id.0,
+            revision_id: value.revision.into(),
+            audit: DeletableRevisionAuditFields::new(actor.0),
+        }
+    }
+
     pub fn ensure_first(self) -> Self {
         Self {
             revision_id: 0,
@@ -76,6 +85,14 @@ impl EnvironmentShareRevisionRecord {
         Self {
             revision_id: current_revision_id + 1,
             audit: self.audit.ensure_new(),
+            ..self
+        }
+    }
+
+    pub fn ensure_deleted(self, current_revision_id: i64) -> Self {
+        Self {
+            revision_id: current_revision_id + 1,
+            audit: self.audit.ensure_deletion(),
             ..self
         }
     }

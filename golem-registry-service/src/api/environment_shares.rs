@@ -121,4 +121,40 @@ impl EnvironmentSharesApi {
         let share = self.environment_share_service.update(&environment_share_id, data, actor).await?;
         Ok(Json(share))
     }
+
+    /// Delete environment share
+    #[oai(
+        path = "/:environment_id",
+        method = "delete",
+        operation_id = "delete_environment_share"
+    )]
+    pub async fn delete_environment_share(
+        &self,
+        environment_share_id: Path<EnvironmentShareId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<EnvironmentShare>> {
+        let record = recorded_http_api_request!(
+            "delete_environment_share",
+            environment_share_id = environment_share_id.0.to_string()
+        );
+
+        let auth = AuthCtx::new(token.secret());
+
+        let response = self
+            .delete_environment_share_internal(environment_share_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn delete_environment_share_internal(
+        &self,
+        environment_share_id: EnvironmentShareId,
+        _auth: AuthCtx,
+    ) -> ApiResult<Json<EnvironmentShare>> {
+        let actor = AccountId(Uuid::new_v4());
+        let share = self.environment_share_service.delete(&environment_share_id, actor).await?;
+        Ok(Json(share))
+    }
 }

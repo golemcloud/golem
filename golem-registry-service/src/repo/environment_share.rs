@@ -44,6 +44,12 @@ pub trait EnvironmentShareRepo: Send + Sync {
         revision: EnvironmentShareRevisionRecord,
     ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError>;
 
+    async fn delete(
+        &self,
+        current_revision_id: i64,
+        revision: EnvironmentShareRevisionRecord,
+    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError>;
+
     async fn get_by_id(
         &self,
         environment_share_id: &Uuid,
@@ -95,6 +101,18 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
         let span = Self::span_environment_share_id(&revision.environment_share_id);
         self.repo
             .update(current_revision_id, revision)
+            .instrument(span)
+            .await
+    }
+
+    async fn delete(
+        &self,
+        current_revision_id: i64,
+        revision: EnvironmentShareRevisionRecord,
+    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
+        let span = Self::span_environment_share_id(&revision.environment_share_id);
+        self.repo
+            .delete(current_revision_id, revision)
             .instrument(span)
             .await
     }
@@ -279,6 +297,42 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                         sqlx::query_as(indoc! {r#"
                             UPDATE environment_shares
                             SET updated_at = $1, modified_by = $2, current_revision_id = $3
+                            WHERE environment_share_id = $4 AND current_revision_id = $5 AND deleted_at IS null
+                            RETURNING environment_id, environment_share_id, grantee_account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                        "#})
+                            .bind(&revision.audit.created_at)
+                            .bind(revision.audit.created_by)
+                            .bind(revision.revision_id)
+                            .bind(revision.environment_share_id)
+                            .bind(current_revision_id)
+                    ).await?
+                    .ok_or(EnvironmentShareRepoError::RevisionForUpdateNotFound { revision_id: current_revision_id })?;
+
+                Ok(EnvironmentShareExtRevisionRecord {
+                    environment_id: environment_share_record.environment_id,
+                    grantee_account_id: environment_share_record.grantee_account_id,
+                    entity_created_at: environment_share_record.audit.created_at,
+                    revision: revision_record
+                })
+            }.boxed()
+        }).await
+    }
+
+    async fn delete(
+        &self,
+        current_revision_id: i64,
+        revision: EnvironmentShareRevisionRecord,
+    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError>  {
+        let revision = revision.ensure_deleted(current_revision_id);
+        self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
+            async move {
+                let revision_record = Self::insert_revision(tx, revision.clone()).await?;
+
+                let environment_share_record: EnvironmentShareRecord = tx
+                    .fetch_optional_as(
+                        sqlx::query_as(indoc! {r#"
+                            UPDATE environment_shares
+                            SET updated_at = $1, modified_by = $2, deleted_at = $1, current_revision_id = $3
                             WHERE environment_share_id = $4 AND current_revision_id = $5 AND deleted_at IS null
                             RETURNING environment_id, environment_share_id, grantee_account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})

@@ -59,6 +59,7 @@ use self::tokens::TokensApi;
 use crate::bootstrap::Services;
 use golem_service_base::api::HealthcheckApi;
 use poem_openapi::OpenApiService;
+use self::environment_shares::EnvironmentSharesApi;
 
 pub type Apis = (
     HealthcheckApi,
@@ -77,6 +78,7 @@ pub type Apis = (
         EnvironmentComponentsApi,
         EnvironmentsApi,
         EnvironmentSecuritySchemesApi,
+        EnvironmentSharesApi
     ),
     LoginApi,
     PluginRegistrationApi,
@@ -113,6 +115,9 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.environment_share_service.clone()
                 ),
                 EnvironmentSecuritySchemesApi {},
+                EnvironmentSharesApi::new(
+                    services.environment_share_service.clone()
+                )
             ),
             LoginApi::new(
                 services.login_system.clone(),

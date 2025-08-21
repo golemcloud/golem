@@ -99,7 +99,7 @@ impl EnvironmentShareService {
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         let mut environment_share: EnvironmentShare = self.environment_share_repo
             .get_by_id(&environment_share_id.0).await?
-            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(environment_share_id))?
+            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone()))?
             .try_into()?;
 
         let current_revision = environment_share.revision;
@@ -111,12 +111,7 @@ impl EnvironmentShareService {
             .environment_share_repo
             .update(
                 current_revision.into(),
-                EnvironmentShareRevisionRecord {
-                    environment_share_id: environment_share.id.0,
-                    revision_id: environment_share.revision.into(),
-                    audit: DeletableRevisionAuditFields::new(actor.0),
-                    roles: environment_share.roles.into_iter().map(|r| EnvironmentShareRoleRecord::from_model(environment_share.id.clone(), environment_share.revision.clone(), r)).collect()
-                }
+                EnvironmentShareRevisionRecord::from_model(environment_share, actor)
             )
             .await;
 
@@ -126,6 +121,36 @@ impl EnvironmentShareService {
             Err(other) => Err(other.into())
         }
     }
+
+    pub async fn delete(
+        &self,
+        environment_share_id: &EnvironmentShareId,
+        actor: AccountId,
+    ) -> Result<EnvironmentShare, EnvironmentShareError> {
+        let mut environment_share: EnvironmentShare = self.environment_share_repo
+            .get_by_id(&environment_share_id.0).await?
+            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone()))?
+            .try_into()?;
+
+        let current_revision = environment_share.revision;
+
+        environment_share.revision = current_revision.clone().next()?;
+
+        let result = self
+            .environment_share_repo
+            .delete(
+                current_revision.into(),
+                EnvironmentShareRevisionRecord::from_model(environment_share, actor)
+            )
+            .await;
+
+        match result {
+            Ok(record) => Ok(record.try_into()?),
+            Err(EnvironmentShareRepoError::RevisionAlreadyExists { .. } | EnvironmentShareRepoError::RevisionForUpdateNotFound { .. }) => Err(EnvironmentShareError::ConcurrentModification),
+            Err(other) => Err(other.into())
+        }
+    }
+
 
     pub async fn get(
         &self,
