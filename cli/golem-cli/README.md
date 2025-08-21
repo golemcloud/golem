@@ -24,19 +24,19 @@ Make sure the server is running:
 curl -sS -o /dev/null -w "%{http_code}
 " http://127.0.0.1:1232/mcp
 ```
-# Expected: 405
+> Expected: 405
 
 # 1) initialize
 ```bash
 curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | jq
 ```
-# Expected: { "jsonrpc": "2.0", "id": 1, "result": { "protocolVersion": "...", "serverInfo": {...}, "capabilities": {...} } }
+> Expected: { "jsonrpc": "2.0", "id": 1, "result": { "protocolVersion": "...", "serverInfo": {...}, "capabilities": {...} } }
 
 # 2) tools/list
 ```bash
 curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | jq
 ```
-# Expected: one tool: "golem.run" with args + cwd schema
+> Expected: one tool: "golem.run" with args + cwd schema
 
 # 3) tools/call — happy path
 ```bash
@@ -50,7 +50,7 @@ curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{
         }
       }' | jq
 ```
-# Expected: { "ok": true, "command": {"binary":"golem","args":["version"]}, "logs":[...], "result":{"exitCode":0} }
+> Expected: { "ok": true, "command": {"binary":"golem","args":["version"]}, "logs":[...], "result":{"exitCode":0} }
 
 # 4) tools/call — disallowed subcommand
 ```bash
@@ -64,7 +64,7 @@ curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{
         }
       }' | jq
 ```
-# Expected: error with "Disallowed subcommand 'system'"
+> Expected: error with "Disallowed subcommand 'system'"
 
 # 5) tools/call — with cwd
 ```bash
@@ -78,13 +78,13 @@ curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{
         }
       }' | jq
 ```
-# Expected: same shape as happy path but in /tmp
+> Expected: same shape as happy path but in /tmp
 
 # 6) resources/list
 ```bash
 curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":"rlist","method":"resources/list","params":{}}' | jq
 ```
-# Expected: list of files (e.g. manifest.yaml)
+> Expected: list of files (e.g. manifest.yaml)
 
 # 7) resources/read
 ```bash
@@ -97,22 +97,22 @@ curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d "{
         }
       }" | jq
 ```
-# Expected: { "contents": [ { "uri": "...", "mimeType":"application/yaml", "text": "..." } ] }
+> Expected: { "contents": [ { "uri": "...", "mimeType":"application/yaml", "text": "..." } ] }
 
 # 8a) Error case: Unknown method
 ```bash
 curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":"x","method":"nonsense","params":{}}' | jq
 ```
-# Expected: error { "code": -32601, "message": "Method not found" }
+> Expected: error { "code": -32601, "message": "Method not found" }
 
 # 8b) Error case: Wrong tool name
 ```bash
 curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":"badtool","method":"tools/call","params":{"name":"not-a-tool","arguments":{}}}' | jq
 ```
-# Expected: error { "code": -32602, "message": "Unknown tool name" }
+> Expected: error { "code": -32602, "message": "Unknown tool name" }
 
 # 8c) Error case: Bad URI
 ```bash
 curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":"baduri","method":"resources/read","params":{"uri":"notfile:///tmp/foo"}}' | jq
 ```
-# Expected: error { "code": -32602, "message": "Only file:// URIs are supported" }
+> Expected: error { "code": -32602, "message": "Only file:// URIs are supported" }
