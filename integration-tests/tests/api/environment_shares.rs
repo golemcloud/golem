@@ -14,19 +14,12 @@
 
 use super::Tracing;
 use assert2::{assert, let_assert};
-use golem_client::api::{
-    RegistryServiceClient, RegistryServiceCreateAccountError,
-    RegistryServiceGetEnvironmentShareError, RegistryServiceUpdateAccountError,
-};
-use golem_client::model::AccountRole;
-use golem_client::model::UpdatedAccountData;
-use golem_common::model::account::{AccountRevision, NewAccountData};
+use golem_client::api::{RegistryServiceClient, RegistryServiceGetEnvironmentShareError};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment_share::{NewEnvironmentShare, UpdateEnvironmentShare};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 use test_r::{inherit_test_dep, test};
-use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
