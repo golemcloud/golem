@@ -38,6 +38,7 @@ pub struct EnvironmentSharesApi {
 
 #[OpenApi(
     prefix_path = "/v1/environment-shares",
+    tag = ApiTags::RegistryService,
     tag = ApiTags::EnvironmentShares
 )]
 impl EnvironmentSharesApi {
@@ -51,7 +52,7 @@ impl EnvironmentSharesApi {
 
     /// Get environment share by id.
     #[oai(
-        path = "/:environment_id",
+        path = "/:environment_share_id",
         method = "get",
         operation_id = "get_environment_share"
     )]
@@ -86,7 +87,7 @@ impl EnvironmentSharesApi {
 
     /// Update environment share
     #[oai(
-        path = "/:environment_id",
+        path = "/:environment_share_id",
         method = "patch",
         operation_id = "update_environment_share"
     )]
@@ -124,7 +125,7 @@ impl EnvironmentSharesApi {
 
     /// Delete environment share
     #[oai(
-        path = "/:environment_id",
+        path = "/:environment_share_id",
         method = "delete",
         operation_id = "delete_environment_share"
     )]

@@ -256,9 +256,9 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                 let environment_share_record: EnvironmentShareRecord = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! {r#"
-                            INSERT INTO environment_shares (environment_id, envionment_share_id, grantee_account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                            INSERT INTO environment_shares (environment_id, environment_share_id, grantee_account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
                             VALUES ($1, $2, $3, $4, $4, NULL, $5, $6)
-                            RETURNING environment_id, envionment_share_id, grantee_account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            RETURNING environment_id, environment_share_id, grantee_account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                             .bind(&environment_id)
                             .bind(&revision.environment_share_id)
@@ -364,7 +364,7 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                     SELECT es.environment_id, es.grantee_account_id, es.created_at AS entity_created_at, esr.environment_share_id, esr.revision_id, esr.created_at, esr.created_by, esr.deleted
                     FROM environment_shares es
                     JOIN environment_share_revisions esr ON esr.environment_share_id = es.environment_share_id AND esr.revision_id = es.current_revision_id
-                    WHERE es.environment_share_id = $1 AND a.deleted_at IS NULL
+                    WHERE es.environment_share_id = $1 AND es.deleted_at IS NULL
                 "#})
                     .bind(environment_share_id),
             )
@@ -389,7 +389,7 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                     SELECT es.environment_id, es.grantee_account_id, es.created_at AS entity_created_at, esr.environment_share_id, esr.revision_id, esr.created_at, esr.created_by, esr.deleted
                     FROM environment_shares es
                     JOIN environment_share_revisions esr ON esr.environment_share_id = es.environment_share_id AND esr.revision_id = es.current_revision_id
-                    WHERE es.environment_id = $1 AND a.deleted_at IS NULL
+                    WHERE es.environment_id = $1 AND es.deleted_at IS NULL
                 "#})
                     .bind(environment_id),
             )

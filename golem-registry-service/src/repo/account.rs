@@ -273,7 +273,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                         sqlx::query_as(indoc! {r#"
                             UPDATE accounts
                             SET updated_at = $1, modified_by = $2, current_revision_id = $3, email = $4
-                            WHERE account_id = $5 AND current_revision_id = $6
+                            WHERE account_id = $5 AND current_revision_id = $6 AND deleted_at IS null
                             RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                             .bind(&revision.audit.created_at)
