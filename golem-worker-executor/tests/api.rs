@@ -35,7 +35,9 @@ use golem_test_framework::dsl::{
     worker_error_logs, worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
-use golem_wasm_ast::analysis::{analysed_type, AnalysedType, TypeStr};
+use golem_wasm_ast::analysis::{
+    analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle, TypeStr,
+};
 use golem_wasm_rpc::{IntoValue, Record};
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use redis::Commands;
@@ -2735,7 +2737,7 @@ async fn counter_resource_test_1(
     check!(
         resources1
             == vec![(
-                "resource(0)".to_string(),
+                "0".to_string(),
                 WorkerResourceDescription {
                     created_at: ts,
                     resource_owner: "rpc:counters-exports/api".to_string(),
@@ -2748,7 +2750,15 @@ async fn counter_resource_test_1(
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| (k.to_string(), WorkerResourceDescription { created_at: ts, ..v.clone() }))
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
         .collect::<Vec<_>>();
     check!(resources2 == vec![]);
 
@@ -3103,12 +3113,28 @@ async fn cancelling_pending_invocations(
     let ik3 = IdempotencyKey::fresh();
     let ik4 = IdempotencyKey::fresh();
 
+    let counter1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{[constructor]counter}",
+            vec!["counter1".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let counter_handle_type = AnalysedType::Handle(TypeHandle {
+        name: None,
+        owner: None,
+        resource_id: AnalysedResourceId(0),
+        mode: AnalysedResourceMode::Borrowed,
+    });
+    let counter_ref = ValueAndType::new(counter1[0].clone(), counter_handle_type);
+
     let _ = executor
         .invoke_and_await_with_key(
             &worker_id,
             &ik1,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![5u64.into_value_and_type()],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![counter_ref.clone(), 5u64.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -3116,8 +3142,8 @@ async fn cancelling_pending_invocations(
     let promise_id = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").create-promise}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.create-promise}",
+            vec![counter_ref.clone()],
         )
         .await
         .unwrap();
@@ -3125,11 +3151,14 @@ async fn cancelling_pending_invocations(
     executor
         .invoke(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").block-on-promise}",
-            vec![ValueAndType {
-                value: promise_id[0].clone(),
-                typ: PromiseId::get_type(),
-            }],
+            "rpc:counters-exports/api.{[method]counter.block-on-promise}",
+            vec![
+                counter_ref.clone(),
+                ValueAndType {
+                    value: promise_id[0].clone(),
+                    typ: PromiseId::get_type(),
+                },
+            ],
         )
         .await
         .unwrap();
@@ -3138,8 +3167,8 @@ async fn cancelling_pending_invocations(
         .invoke_with_key(
             &worker_id,
             &ik2,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![6u64.into_value_and_type()],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![counter_ref.clone(), 6u64.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -3148,8 +3177,8 @@ async fn cancelling_pending_invocations(
         .invoke_with_key(
             &worker_id,
             &ik3,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![7u64.into_value_and_type()],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![counter_ref.clone(), 7u64.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -3188,8 +3217,8 @@ async fn cancelling_pending_invocations(
     let final_result = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.get-value}",
+            vec![counter_ref.clone()],
         )
         .await
         .unwrap();

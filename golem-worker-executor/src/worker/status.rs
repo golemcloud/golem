@@ -627,7 +627,7 @@ fn collect_resources(
                 );
             }
             OplogEntry::DropResource { id, .. } => {
-                result.remove(&id);
+                result.remove(id);
             }
 
             _ => {}
