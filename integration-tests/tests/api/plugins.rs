@@ -27,9 +27,7 @@ use golem_common::model::plugin::{
 };
 use golem_common::model::plugin::{PluginScope, ProjectPluginScope};
 use golem_common::model::{ComponentFilePermissions, Empty, ScanCursor};
-use golem_test_framework::config::{
-    TestDependencies, TestDependenciesDsl,
-};
+use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_test_framework::model::PluginDefinitionCreation;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
@@ -1127,10 +1125,7 @@ async fn invoke_after_deleting_plugin(deps: &Deps, _tracing: &Tracing) {
 
 #[test]
 #[tag(http_only)]
-async fn querying_plugins_return_only_plugins_valid_in_scope(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn querying_plugins_return_only_plugins_valid_in_scope(deps: &Deps, _tracing: &Tracing) {
     let user = deps.user().await;
 
     let project_1 = user.create_project().await;
@@ -1304,10 +1299,7 @@ async fn querying_plugins_return_only_plugins_valid_in_scope(
 
 #[test]
 #[tag(http_only)]
-async fn install_global_plugin_in_shared_project(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn install_global_plugin_in_shared_project(deps: &Deps, _tracing: &Tracing) {
     // user 1 defines a project and a global plugin, user 2 installs the plugin to a component in the project
 
     let user_1 = deps.user().await;
@@ -1360,10 +1352,7 @@ async fn install_global_plugin_in_shared_project(
 
 #[test]
 #[tag(http_only)]
-async fn install_project_plugin_in_shared_project(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn install_project_plugin_in_shared_project(deps: &Deps, _tracing: &Tracing) {
     // user 1 defines a project, user 2 defines and installs the plugin to a component in the project
 
     let user_1 = deps.user().await;
@@ -1422,10 +1411,7 @@ async fn install_project_plugin_in_shared_project(
 
 #[test]
 #[tag(http_only)]
-async fn install_component_plugin_in_shared_project(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn install_component_plugin_in_shared_project(deps: &Deps, _tracing: &Tracing) {
     // user 1 defines a project, user 2 defines and installs the plugin to a component in the project
 
     let user_1 = deps.user().await;

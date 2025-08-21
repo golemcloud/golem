@@ -25,8 +25,8 @@ use tracing::{error, info};
 pub mod docker_mysql;
 pub mod docker_postgres;
 pub mod k8s_postgres;
-pub mod provided_postgres;
 pub mod provided_mysql;
+pub mod provided_postgres;
 pub mod sqlite;
 
 #[async_trait]

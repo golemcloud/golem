@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::env;
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig};
@@ -85,6 +84,7 @@ use openidconnect::{
     TokenUrl, UserInfoUrl,
 };
 use std::collections::HashMap;
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::test;
@@ -509,7 +509,11 @@ struct SqliteDb {
 
 impl SqliteDb {
     async fn new() -> Self {
-        let db_path = format!("{}/golem-worker-{}.db", env::temp_dir().display(), Uuid::new_v4());
+        let db_path = format!(
+            "{}/golem-worker-{}.db",
+            env::temp_dir().display(),
+            Uuid::new_v4()
+        );
         let db_config = DbSqliteConfig {
             database: db_path.clone(),
             max_connections: 10,
@@ -526,10 +530,7 @@ impl SqliteDb {
             .await
             .expect("Failed db configuration");
 
-        Self {
-            db_path,
-            db_pool,
-        }
+        Self { db_path, db_pool }
     }
 }
 
@@ -537,7 +538,10 @@ impl Drop for SqliteDb {
     fn drop(&mut self) {
         futures::executor::block_on(self.db_pool.close());
         if let Err(e) = std::fs::remove_file(&self.db_path) {
-            eprintln!("Warning: Failed to remove test database file '{}': {}", self.db_path, e);
+            eprintln!(
+                "Warning: Failed to remove test database file '{}': {}",
+                self.db_path, e
+            );
         }
     }
 }
@@ -697,9 +701,12 @@ pub async fn test_gateway_session_with_sqlite_expired() {
         .await
         .expect("Insert to session failed");
 
-    SqliteGatewaySession::cleanup_expired(db.db_pool.clone(), SqliteGatewaySession::current_time() + 10)
-        .await
-        .expect("Failed to cleanup expired sessions");
+    SqliteGatewaySession::cleanup_expired(
+        db.db_pool.clone(),
+        SqliteGatewaySession::current_time() + 10,
+    )
+    .await
+    .expect("Failed to cleanup expired sessions");
 
     let result = session_store.get(&session_id, &data_key).await;
 
@@ -802,7 +809,8 @@ pub async fn test_with_sqlite_db() {
     let api_certificate_repo: Arc<dyn ApiCertificateRepo> =
         Arc::new(DbApiCertificateRepo::new(db.db_pool.clone()));
 
-    let api_domain_repo: Arc<dyn ApiDomainRepo> = Arc::new(DbApiDomainRepo::new(db.db_pool.clone()));
+    let api_domain_repo: Arc<dyn ApiDomainRepo> =
+        Arc::new(DbApiDomainRepo::new(db.db_pool.clone()));
 
     test_services(
         api_definition_repo,

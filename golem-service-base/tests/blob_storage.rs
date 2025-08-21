@@ -29,6 +29,7 @@ use golem_service_base::config::S3BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::replayable_stream::ReplayableStream;
+use golem_service_base::storage::blob::as_std_path;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::*;
 use golem_service_base::storage::blob::{fs, memory, s3, BlobStorage, BlobStorageNamespace};
@@ -39,14 +40,13 @@ use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
 use test_r::{define_matrix_dimension, test, test_dep};
+use testcontainers::core::ContainerPort;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
-use testcontainers::core::ContainerPort;
 use testcontainers_modules::minio::MinIO;
 use tracing::warn;
 use unix_path::Path as UnixPath;
 use uuid::Uuid;
-use golem_service_base::storage::blob::as_std_path;
 
 #[async_trait]
 trait GetBlobStorage: Debug {
@@ -169,7 +169,7 @@ pub async fn delete_all_objects(client: &Client, bucket_name: &str) -> Result<()
     if let Some(contents) = list_response.contents {
         for object in contents {
             if let Some(key) = object.key {
-                object_identifiers.push( ObjectIdentifier::builder().key(key).build().unwrap() );
+                object_identifiers.push(ObjectIdentifier::builder().key(key).build().unwrap());
             }
         }
     }
@@ -189,12 +189,7 @@ pub async fn delete_all_objects(client: &Client, bucket_name: &str) -> Result<()
             .unwrap();
     }
 
-    client
-        .delete_bucket()
-        .bucket(bucket_name)
-        .send()
-        .await
-        .ok();
+    client.delete_bucket().bucket(bucket_name).send().await.ok();
 
     Ok(())
 }
@@ -212,19 +207,17 @@ async fn setup_buckets(host: &str, host_port: u16, config: &S3BlobStorageConfig)
 
     let client = Client::new(&sdk_config);
     // clear previous runs
-    delete_all_objects( &client, &config.compilation_cache_bucket )
+    delete_all_objects(&client, &config.compilation_cache_bucket)
         .await
         .ok();
-    delete_all_objects( &client, &config.custom_data_bucket )
+    delete_all_objects(&client, &config.custom_data_bucket)
         .await
         .ok();
-    delete_all_objects( &client, &config.oplog_payload_bucket )
+    delete_all_objects(&client, &config.oplog_payload_bucket)
         .await
         .ok();
     for bucket in &config.compressed_oplog_buckets {
-        delete_all_objects( &client, bucket )
-            .await
-            .ok();
+        delete_all_objects(&client, bucket).await.ok();
     }
 
     // recreate buckets
@@ -791,7 +784,12 @@ async fn list_dir(
 
     let path = UnixPath::new("test-dir");
     storage
-        .create_dir("list_dir", "create-dir", namespace.clone(), as_std_path(path).as_path())
+        .create_dir(
+            "list_dir",
+            "create-dir",
+            namespace.clone(),
+            as_std_path(path).as_path(),
+        )
         .await
         .unwrap();
     storage
@@ -824,7 +822,12 @@ async fn list_dir(
         .await
         .unwrap();
     let mut entries = storage
-        .list_dir("list_dir", "entries", namespace.clone(), as_std_path(path).as_path())
+        .list_dir(
+            "list_dir",
+            "entries",
+            namespace.clone(),
+            as_std_path(path).as_path(),
+        )
         .await
         .unwrap();
 
@@ -1057,15 +1060,30 @@ async fn list_dir_same_prefix(
     let path2 = UnixPath::new("test-dir2");
     let path3 = UnixPath::new("test-dir3");
     storage
-        .create_dir("list_dir", "create-dir", namespace.clone(), as_std_path(path1).as_path())
+        .create_dir(
+            "list_dir",
+            "create-dir",
+            namespace.clone(),
+            as_std_path(path1).as_path(),
+        )
         .await
         .unwrap();
     storage
-        .create_dir("list_dir", "create-dir-2", namespace.clone(), as_std_path(path2).as_path())
+        .create_dir(
+            "list_dir",
+            "create-dir-2",
+            namespace.clone(),
+            as_std_path(path2).as_path(),
+        )
         .await
         .unwrap();
     storage
-        .create_dir("list_dir", "create-dir-3", namespace.clone(), as_std_path(path3).as_path())
+        .create_dir(
+            "list_dir",
+            "create-dir-3",
+            namespace.clone(),
+            as_std_path(path3).as_path(),
+        )
         .await
         .unwrap();
     storage
@@ -1098,7 +1116,12 @@ async fn list_dir_same_prefix(
         .await
         .unwrap();
     let mut entries = storage
-        .list_dir("list_dir_same_prefix", "entries", namespace.clone(), as_std_path(path1).as_path())
+        .list_dir(
+            "list_dir_same_prefix",
+            "entries",
+            namespace.clone(),
+            as_std_path(path1).as_path(),
+        )
         .await
         .unwrap();
 

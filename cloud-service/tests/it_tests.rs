@@ -79,7 +79,8 @@ async fn start_docker_postgres() -> (CloudServiceConfig, ContainerAsync<Postgres
         "/tmp/golem/components",
     );
 
-    env::set_current_dir( PathBuf::from(env!("CARGO_MANIFEST_DIR")) ).expect("Failed to set current directory");
+    env::set_current_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+        .expect("Failed to set current directory");
 
     let config = make_config_loader()
         .load_or_dump_config()
@@ -567,7 +568,11 @@ struct SqliteDb {
 impl Default for SqliteDb {
     fn default() -> Self {
         Self {
-            db_path: format!("{}/golem-{}.db", env::temp_dir().as_path().display(), Uuid::new_v4()),
+            db_path: format!(
+                "{}/golem-{}.db",
+                env::temp_dir().as_path().display(),
+                Uuid::new_v4()
+            ),
         }
     }
 }
@@ -617,7 +622,8 @@ pub async fn test_sqlite_db() {
         "/tmp/golem/components",
     );
 
-    env::set_current_dir( PathBuf::from(env!("CARGO_MANIFEST_DIR")) ).expect("Failed to set current directory");
+    env::set_current_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+        .expect("Failed to set current directory");
 
     let config = make_config_loader()
         .load_or_dump_config()

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use assert2::{check, let_assert};
 use chrono::Datelike;
@@ -21,7 +22,6 @@ use golem_test_framework::dsl::{events_to_lines, TestDslUnsafe};
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::time::{Duration, Instant};
 use test_r::{inherit_test_dep, test, timeout};
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -30,11 +30,7 @@ inherit_test_dep!(Tracing);
 #[test]
 #[tracing::instrument]
 #[timeout(300_000)]
-async fn javascript_example_3(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn javascript_example_3(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -61,11 +57,7 @@ async fn javascript_example_3(
 
 #[test]
 #[tracing::instrument]
-async fn javascript_example_4(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn javascript_example_4(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -86,11 +78,7 @@ async fn javascript_example_4(
 
 #[test]
 #[tracing::instrument]
-async fn python_example_1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn python_example_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -130,11 +118,7 @@ async fn python_example_1(
 #[test]
 #[tracing::instrument]
 #[ignore]
-async fn swift_example_1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn swift_example_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 

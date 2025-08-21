@@ -15,12 +15,12 @@
 use test_r::{inherit_test_dep, test};
 
 use crate::common::{start, TestContext};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use assert2::check;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);

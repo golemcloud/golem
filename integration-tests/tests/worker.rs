@@ -148,10 +148,7 @@ async fn dynamic_worker_creation_without_name(deps: &Deps, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn ephemeral_worker_creation_without_name(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn ephemeral_worker_creation_without_name(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_id = admin
         .component("environment-service")
@@ -187,10 +184,7 @@ async fn ephemeral_worker_creation_without_name(
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn ephemeral_worker_creation_with_name_is_not_persistent(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn ephemeral_worker_creation_with_name_is_not_persistent(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_id = admin.component("counters").ephemeral().store().await;
     let worker_id = TargetWorkerId {
@@ -708,10 +702,7 @@ async fn counter_resource_test_2_json(deps: &Deps, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn counter_resource_test_2_json_no_types(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn counter_resource_test_2_json_no_types(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_id = admin.component("counters").unique().store().await;
     let worker_id = admin.start_worker(&component_id, "counters-2j").await;
@@ -1272,10 +1263,7 @@ async fn auto_update_on_idle(deps: &Deps, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(300000)]
-async fn auto_update_on_idle_via_host_function(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn auto_update_on_idle_via_host_function(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_id = admin.component("update-test-v1").unique().store().await;
     let worker_id = admin
@@ -1745,10 +1733,7 @@ async fn worker_read_files(deps: &Deps, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(600000)]
-async fn worker_initial_files_after_automatic_worker_update(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn worker_initial_files_after_automatic_worker_update(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_files_1 = admin
         .add_initial_component_files(&[

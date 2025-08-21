@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::docker::DockerCloudService;
 use crate::components::cloud_service::k8s::K8sCloudService;
 use crate::components::cloud_service::provided::ProvidedCloudService;
 use crate::components::cloud_service::spawned::SpawnedCloudService;
-use crate::components::cloud_service::docker::DockerCloudService;
 use crate::components::cloud_service::CloudService;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::k8s::K8sComponentCompilationService;
@@ -408,14 +408,14 @@ impl CliTestDependencies {
         );
 
         let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
-                DockerComponentCompilationService::new(
-                    &unique_network_id,
-                    component_service.clone(),
-                    params_clone.service_verbosity(),
-                    cloud_service.clone(),
-                )
-                .await,
-            );
+            DockerComponentCompilationService::new(
+                &unique_network_id,
+                component_service.clone(),
+                params_clone.service_verbosity(),
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> =
             Arc::new(DockerRedis::new(&unique_network_id, redis_prefix.to_string()).await);
@@ -450,19 +450,19 @@ impl CliTestDependencies {
         );
 
         let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> = Arc::new(
-                DockerWorkerExecutorCluster::new(
-                    cluster_size,
-                    &unique_network_id,
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    params.service_verbosity(),
-                    true,
-                    cloud_service.clone(),
-                )
-                .await,
-            );
+            DockerWorkerExecutorCluster::new(
+                cluster_size,
+                &unique_network_id,
+                redis.clone(),
+                component_service.clone(),
+                shard_manager.clone(),
+                worker_service.clone(),
+                params.service_verbosity(),
+                true,
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
         Self {
             rdb,
@@ -568,19 +568,19 @@ impl CliTestDependencies {
         };
 
         let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
-                SpawnedComponentCompilationService::new(
-                    &build_root.join("golem-component-compilation-service"),
-                    &workspace_root.join("golem-component-compilation-service"),
-                    component_compilation_service_http_port,
-                    component_compilation_service_grpc_port,
-                    component_service.clone(),
-                    params.service_verbosity(),
-                    out_level,
-                    Level::ERROR,
-                    cloud_service.clone(),
-                )
-                .await,
-            );
+            SpawnedComponentCompilationService::new(
+                &build_root.join("golem-component-compilation-service"),
+                &workspace_root.join("golem-component-compilation-service"),
+                component_compilation_service_http_port,
+                component_compilation_service_grpc_port,
+                component_service.clone(),
+                params.service_verbosity(),
+                out_level,
+                Level::ERROR,
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
             redis_port,
@@ -629,24 +629,24 @@ impl CliTestDependencies {
             .await,
         );
         let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> = Arc::new(
-                SpawnedWorkerExecutorCluster::new(
-                    cluster_size,
-                    worker_executor_base_http_port,
-                    worker_executor_base_grpc_port,
-                    &build_root.join("worker-executor"),
-                    &workspace_root.join("golem-worker-executor"),
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    params.service_verbosity(),
-                    out_level,
-                    Level::ERROR,
-                    true,
-                    cloud_service.clone(),
-                )
-                .await,
-            );
+            SpawnedWorkerExecutorCluster::new(
+                cluster_size,
+                worker_executor_base_http_port,
+                worker_executor_base_grpc_port,
+                &build_root.join("worker-executor"),
+                &workspace_root.join("golem-worker-executor"),
+                redis.clone(),
+                component_service.clone(),
+                shard_manager.clone(),
+                worker_service.clone(),
+                params.service_verbosity(),
+                out_level,
+                Level::ERROR,
+                true,
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
         Self {
             rdb,
@@ -782,22 +782,22 @@ impl CliTestDependencies {
         );
 
         let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> = Arc::new(
-                K8sWorkerExecutorCluster::new(
-                    cluster_size,
-                    &namespace,
-                    &routing_type,
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    Level::INFO,
-                    timeout,
-                    None,
-                    true,
-                    cloud_service.clone(),
-                )
-                .await,
-            );
+            K8sWorkerExecutorCluster::new(
+                cluster_size,
+                &namespace,
+                &routing_type,
+                redis.clone(),
+                component_service.clone(),
+                shard_manager.clone(),
+                worker_service.clone(),
+                Level::INFO,
+                timeout,
+                None,
+                true,
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
         Self {
             rdb,
@@ -887,17 +887,17 @@ impl CliTestDependencies {
         };
 
         let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
-                K8sComponentCompilationService::new(
-                    &namespace,
-                    &routing_type,
-                    Level::INFO,
-                    component_service.clone(),
-                    timeout,
-                    service_annotations.clone(),
-                    cloud_service.clone(),
-                )
-                .await,
-            );
+            K8sComponentCompilationService::new(
+                &namespace,
+                &routing_type,
+                Level::INFO,
+                component_service.clone(),
+                timeout,
+                service_annotations.clone(),
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
             K8sRedis::new(
@@ -1043,10 +1043,10 @@ impl CliTestDependencies {
                 );
 
                 let shard_manager: Arc<dyn ShardManager> = Arc::new(ProvidedShardManager::new(
-                        shard_manager_host.clone(),
-                        *shard_manager_http_port,
-                        *shard_manager_grpc_port,
-                    ));
+                    shard_manager_host.clone(),
+                    *shard_manager_http_port,
+                    *shard_manager_grpc_port,
+                ));
 
                 let component_service: Arc<dyn ComponentService> = Arc::new(
                     ProvidedComponentService::new(
@@ -1062,10 +1062,10 @@ impl CliTestDependencies {
 
                 let component_compilation_service: Arc<dyn ComponentCompilationService> =
                     Arc::new(ProvidedComponentCompilationService::new(
-                    component_compilation_service_host.clone(),
-                    *component_compilation_service_http_port,
-                    *component_compilation_service_grpc_port,
-                ));
+                        component_compilation_service_host.clone(),
+                        *component_compilation_service_http_port,
+                        *component_compilation_service_grpc_port,
+                    ));
 
                 let worker_service: Arc<dyn WorkerService> = Arc::new(
                     ProvidedWorkerService::new(
@@ -1080,11 +1080,11 @@ impl CliTestDependencies {
                 );
                 let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> =
                     Arc::new(ProvidedWorkerExecutorCluster::new(
-                    worker_executor_host.clone(),
-                    *worker_executor_http_port,
-                    *worker_executor_grpc_port,
-                    true,
-                ));
+                        worker_executor_host.clone(),
+                        *worker_executor_http_port,
+                        *worker_executor_grpc_port,
+                        true,
+                    ));
 
                 Self {
                     rdb,
@@ -1282,14 +1282,14 @@ impl CliTestService {
                 let build_root = workspace_root.join(build_target);
 
                 let service: Arc<dyn Service> = Arc::new(SpawnedService::new(
-                        name.clone(),
-                        &build_root.join(name.clone()),
-                        &workspace_root.join(name.clone()),
-                        env_vars,
-                        params.service_verbosity(),
-                        Level::INFO,
-                        Level::ERROR,
-                    ));
+                    name.clone(),
+                    &build_root.join(name.clone()),
+                    &workspace_root.join(name.clone()),
+                    env_vars,
+                    params.service_verbosity(),
+                    Level::INFO,
+                    Level::ERROR,
+                ));
 
                 Self { service }
             }

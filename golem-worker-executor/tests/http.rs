@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, start_customized, TestContext};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use assert2::{check, let_assert};
 use axum::routing::post;
@@ -29,7 +30,6 @@ use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test};
 use tokio::spawn;
 use tracing::Instrument;
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -37,11 +37,7 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
-async fn http_client(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn http_client(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -94,11 +90,7 @@ async fn http_client(
 
 #[test]
 #[tracing::instrument]
-async fn http_client_using_reqwest(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn http_client_using_reqwest(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));

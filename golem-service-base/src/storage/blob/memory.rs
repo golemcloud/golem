@@ -294,7 +294,7 @@ impl BlobStorage for InMemoryBlobStorage {
 
                     // this does not re-convert the path to os-separator, keeps expected unix
                     let std_pathnew = Path::new(pathnew.to_str().unwrap()).to_path_buf();
-                    result.push( std_pathnew );
+                    result.push(std_pathnew);
                 });
 
             Ok(result)

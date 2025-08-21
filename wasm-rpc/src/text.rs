@@ -17,10 +17,10 @@ use golem_wasm_ast::analysis::AnalysedType;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::io;
-use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
 use wasm_wave::from_str;
+use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
 use wasm_wave::writer as wave_writer;
-use wasm_wave::writer::{WriterError};
+use wasm_wave::writer::WriterError;
 
 #[cfg(all(feature = "typeinfo", feature = "protobuf"))]
 pub use type_annotated_value::*;
@@ -38,7 +38,9 @@ pub fn print_value_and_type(value: &ValueAndType) -> Result<String, String> {
     let inner_writer = wave_writer::Writer::new(&mut buf);
     let mut text_writer = TextWriter::new(inner_writer);
 
-    text_writer.write_value(value).map_err(|err| err.to_string())?;
+    text_writer
+        .write_value(value)
+        .map_err(|err| err.to_string())?;
     Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
 }
 
@@ -61,13 +63,22 @@ impl<W: io::Write> TextWriter<W> {
         V: WasmValue,
     {
         match val.kind() {
-            WasmTypeKind::List => val.unwrap_list().any(|item_cow| self.has_unsupported(item_cow.as_ref())),
-            WasmTypeKind::Record => val.unwrap_record().any(|(_, item_cow)| self.has_unsupported(item_cow.as_ref())),
-            WasmTypeKind::Tuple => val.unwrap_tuple().any(|item_cow| self.has_unsupported(item_cow.as_ref())),
-            WasmTypeKind::Variant => {
-                val.unwrap_variant().1.is_some_and(|inner_val_cow| self.has_unsupported(inner_val_cow.as_ref()))
-            }
-            WasmTypeKind::Option => val.unwrap_option().is_some_and(|inner_val_cow| self.has_unsupported(inner_val_cow.as_ref())),
+            WasmTypeKind::List => val
+                .unwrap_list()
+                .any(|item_cow| self.has_unsupported(item_cow.as_ref())),
+            WasmTypeKind::Record => val
+                .unwrap_record()
+                .any(|(_, item_cow)| self.has_unsupported(item_cow.as_ref())),
+            WasmTypeKind::Tuple => val
+                .unwrap_tuple()
+                .any(|item_cow| self.has_unsupported(item_cow.as_ref())),
+            WasmTypeKind::Variant => val
+                .unwrap_variant()
+                .1
+                .is_some_and(|inner_val_cow| self.has_unsupported(inner_val_cow.as_ref())),
+            WasmTypeKind::Option => val
+                .unwrap_option()
+                .is_some_and(|inner_val_cow| self.has_unsupported(inner_val_cow.as_ref())),
             WasmTypeKind::Result => {
                 match val.unwrap_result() {
                     Ok(Some(ok_val_cow)) => self.has_unsupported(ok_val_cow.as_ref()),
@@ -96,8 +107,11 @@ impl<W: io::Write> TextWriter<W> {
         V: WasmValue,
     {
         if self.has_unsupported(val) {
-            let placeholder_value_and_type = ValueAndType::make_string(Cow::Borrowed("<unsupported>"));
-            return self.inner_wave_writer.write_value(&placeholder_value_and_type);
+            let placeholder_value_and_type =
+                ValueAndType::make_string(Cow::Borrowed("<unsupported>"));
+            return self
+                .inner_wave_writer
+                .write_value(&placeholder_value_and_type);
         }
         self.inner_wave_writer.write_value(val)?;
         Ok(())
@@ -551,7 +565,10 @@ mod tests {
         text_writer.write_value(&typed_value).unwrap();
         let s_via_writer = String::from_utf8(buffer).unwrap();
 
-        assert_eq!(s_via_to_string, s_via_writer, "Output from to_string and TextWriter should match");
+        assert_eq!(
+            s_via_to_string, s_via_writer,
+            "Output from to_string and TextWriter should match"
+        );
 
         let round_trip_value_from_writer: ValueAndType =
             parse_value_and_type(&typ, &s_via_writer).unwrap();
@@ -725,14 +742,14 @@ mod type_annotated_value {
         TypedVariant,
     };
     use crate::protobuf::{TypeAnnotatedValue as RootTypeAnnotatedValue, TypedResult};
+    use crate::text::TextWriter;
     use golem_wasm_ast::analysis::{protobuf, TypeEnum, TypeFlags};
     use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeRecord, TypeTuple, TypeVariant};
     use std::borrow::Cow;
     use std::ops::Deref;
-    use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
     use wasm_wave::from_str;
+    use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
     use wasm_wave::writer::Writer;
-    use crate::text::TextWriter;
 
     pub fn parse_type_annotated_value(
         analysed_type: &AnalysedType,
@@ -750,7 +767,9 @@ mod type_annotated_value {
         let mut text_writer = TextWriter::new(inner_writer);
 
         let printable_typed_value = TypeAnnotatedValuePrintable(value.clone());
-        text_writer.write_value(&printable_typed_value).map_err(|err| err.to_string())?;
+        text_writer
+            .write_value(&printable_typed_value)
+            .map_err(|err| err.to_string())?;
 
         Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
     }
@@ -1132,7 +1151,8 @@ mod type_annotated_value {
 
         fn unwrap_char(&self) -> char {
             match self.0 {
-                TypeAnnotatedValue::Char(value) => char::from_u32(value as u32).unwrap_or_else(|| panic!("Invalid char value: {value}")),
+                TypeAnnotatedValue::Char(value) => char::from_u32(value as u32)
+                    .unwrap_or_else(|| panic!("Invalid char value: {value}")),
                 _ => panic!("Expected chr, found {self:?}"),
             }
         }
@@ -1144,12 +1164,15 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_list(&self) -> Box<dyn Iterator<Item=Cow<'_, Self>> + '_> {
+        fn unwrap_list(&self) -> Box<dyn Iterator<Item = Cow<'_, Self>> + '_> {
             match &self.0 {
                 TypeAnnotatedValue::List(TypedList { typ: _, values }) => {
                     Box::new(values.iter().map(|v| {
                         Cow::Owned(TypeAnnotatedValuePrintable(
-                            v.type_annotated_value.as_ref().expect("List item value missing").clone(),
+                            v.type_annotated_value
+                                .as_ref()
+                                .expect("List item value missing")
+                                .clone(),
                         ))
                     }))
                 }
@@ -1157,13 +1180,19 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_record(&self) -> Box<dyn Iterator<Item=(Cow<'_, str>, Cow<'_, Self>)> + '_> {
+        fn unwrap_record(&self) -> Box<dyn Iterator<Item = (Cow<'_, str>, Cow<'_, Self>)> + '_> {
             match &self.0 {
                 TypeAnnotatedValue::Record(TypedRecord { typ: _, value }) => {
                     Box::new(value.iter().map(|name_value| {
                         let name = Cow::Borrowed(name_value.name.as_str());
-                        let type_annotated_value =
-                            name_value.value.as_ref().expect("Record field value missing").type_annotated_value.as_ref().expect("Record field inner value missing").clone();
+                        let type_annotated_value = name_value
+                            .value
+                            .as_ref()
+                            .expect("Record field value missing")
+                            .type_annotated_value
+                            .as_ref()
+                            .expect("Record field inner value missing")
+                            .clone();
                         (
                             name,
                             Cow::Owned(TypeAnnotatedValuePrintable(type_annotated_value)),
@@ -1174,7 +1203,7 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_tuple(&self) -> Box<dyn Iterator<Item=Cow<'_, Self>> + '_> {
+        fn unwrap_tuple(&self) -> Box<dyn Iterator<Item = Cow<'_, Self>> + '_> {
             match &self.0 {
                 TypeAnnotatedValue::Tuple(TypedTuple { typ: _, value }) => {
                     Box::new(value.iter().map(|x| {
@@ -1194,7 +1223,12 @@ mod type_annotated_value {
                 TypeAnnotatedValue::Variant(variant) => {
                     let case_name = Cow::Borrowed(variant.case_name.as_str());
                     let case_value = variant.case_value.as_ref().map(|v| {
-                        Cow::Owned(TypeAnnotatedValuePrintable(v.type_annotated_value.as_ref().expect("Variant inner value missing").clone()))
+                        Cow::Owned(TypeAnnotatedValuePrintable(
+                            v.type_annotated_value
+                                .as_ref()
+                                .expect("Variant inner value missing")
+                                .clone(),
+                        ))
                     });
                     (case_name, case_value)
                 }
@@ -1225,15 +1259,16 @@ mod type_annotated_value {
                 TypeAnnotatedValue::Result(result0) => match result0.result_value.as_ref() {
                     Some(result) => match result {
                         ResultValue::OkValue(ok) => match ok.type_annotated_value.as_ref() {
-                            Some(ok_value) => {
-                                Ok(Some(Cow::Owned(TypeAnnotatedValuePrintable(ok_value.clone()))))
-                            }
+                            Some(ok_value) => Ok(Some(Cow::Owned(TypeAnnotatedValuePrintable(
+                                ok_value.clone(),
+                            )))),
                             None => Ok(None),
                         },
-                        ResultValue::ErrorValue(error) => match error.type_annotated_value.as_ref() {
-                            Some(error_value) => {
-                                Err(Some(Cow::Owned(TypeAnnotatedValuePrintable(error_value.clone()))))
-                            }
+                        ResultValue::ErrorValue(error) => match error.type_annotated_value.as_ref()
+                        {
+                            Some(error_value) => Err(Some(Cow::Owned(
+                                TypeAnnotatedValuePrintable(error_value.clone()),
+                            ))),
                             None => Err(None),
                         },
                     },
@@ -1243,7 +1278,7 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_flags(&self) -> Box<dyn Iterator<Item=Cow<'_, str>> + '_> {
+        fn unwrap_flags(&self) -> Box<dyn Iterator<Item = Cow<'_, str>> + '_> {
             match &self.0 {
                 TypeAnnotatedValue::Flags(TypedFlags { typ: _, values }) => {
                     Box::new(values.iter().map(|s| Cow::Borrowed(s.as_str())))

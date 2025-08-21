@@ -161,7 +161,8 @@ pub trait IndexedStorage: Debug {
 }
 
 pub trait IndexedStorageLabelledApi<T: IndexedStorage + ?Sized> {
-    fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledIndexedStorage<'_, T>;
+    fn with(&self, svc_name: &'static str, api_name: &'static str)
+        -> LabelledIndexedStorage<'_, T>;
 
     fn with_entity(
         &self,
@@ -172,7 +173,11 @@ pub trait IndexedStorageLabelledApi<T: IndexedStorage + ?Sized> {
 }
 
 impl<T: ?Sized + IndexedStorage> IndexedStorageLabelledApi<T> for T {
-    fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledIndexedStorage<'_, T> {
+    fn with(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+    ) -> LabelledIndexedStorage<'_, T> {
         LabelledIndexedStorage::new(svc_name, api_name, self)
     }
     fn with_entity(

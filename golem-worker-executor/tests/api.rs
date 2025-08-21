@@ -62,11 +62,7 @@ inherit_test_dep!(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn interruption(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn interruption(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -100,11 +96,7 @@ async fn interruption(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn simulated_crash(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn simulated_crash(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -143,10 +135,7 @@ async fn simulated_crash(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn shopping_cart_example(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn shopping_cart_example(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -263,10 +252,7 @@ async fn shopping_cart_example(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn dynamic_worker_creation(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn dynamic_worker_creation(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -338,10 +324,7 @@ fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn dynamic_worker_creation_without_name(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn dynamic_worker_creation_without_name(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -377,10 +360,7 @@ async fn dynamic_worker_creation_without_name(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn ephemeral_worker_creation_without_name(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn ephemeral_worker_creation_without_name(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -459,11 +439,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn promise(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn promise(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -647,10 +623,7 @@ async fn get_workers_from_worker(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn get_metadata_from_worker(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn get_metadata_from_worker(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -895,10 +868,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn component_env_variables(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn component_env_variables(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -945,10 +915,7 @@ async fn component_env_variables(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn component_env_variables_update(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn component_env_variables_update(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -995,10 +962,7 @@ async fn component_env_variables_update(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn component_env_and_worker_env_priority(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn component_env_and_worker_env_priority(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1029,11 +993,7 @@ async fn component_env_and_worker_env_priority(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn optional_parameters(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn optional_parameters(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1102,11 +1062,7 @@ async fn optional_parameters(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn flags_parameters(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn flags_parameters(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1166,10 +1122,7 @@ async fn flags_parameters(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn variants_with_no_payloads(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn variants_with_no_payloads(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1190,11 +1143,7 @@ async fn variants_with_no_payloads(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn delete_worker(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn delete_worker(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1240,11 +1189,7 @@ async fn delete_worker(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn get_workers(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn get_workers(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     async fn get_check(
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
@@ -1434,11 +1379,7 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn get_worker_metadata(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn get_worker_metadata(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1501,10 +1442,7 @@ async fn get_worker_metadata(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn create_invoke_delete_create_invoke(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn create_invoke_delete_create_invoke(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1852,10 +1790,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn long_running_poll_loop_works_as_expected(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn long_running_poll_loop_works_as_expected(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -2346,14 +2281,14 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     let mut found2 = false;
     let previous_events = drain_connection(rx).await;
     {
-        previous_events.into_iter().for_each( |event| {
+        previous_events.into_iter().for_each(|event| {
             let ev = event.unwrap();
             if stdout_event_matching(&ev, "Calling the poll endpoint\n") {
                 found1 = true;
             } else if stdout_event_matching(&ev, "Received initial\n") {
                 found2 = true;
             }
-        } );
+        });
     }
     let (status2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
@@ -2496,10 +2431,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn shopping_cart_resource_example(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn shopping_cart_resource_example(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -2645,10 +2577,7 @@ async fn shopping_cart_resource_example(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn counter_resource_test_1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn counter_resource_test_1(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -2772,10 +2701,7 @@ async fn counter_resource_test_1(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn counter_resource_test_2(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn counter_resource_test_2(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -2925,10 +2851,7 @@ async fn counter_resource_test_2(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn reconstruct_interrupted_state(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn reconstruct_interrupted_state(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -2984,10 +2907,7 @@ async fn reconstruct_interrupted_state(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn invocation_queue_is_persistent(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn invocation_queue_is_persistent(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -3092,10 +3012,7 @@ async fn invocation_queue_is_persistent(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn invoke_with_non_existing_function(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn invoke_with_non_existing_function(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -3130,10 +3047,7 @@ async fn invoke_with_non_existing_function(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn invoke_with_wrong_parameters(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn invoke_with_wrong_parameters(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -3170,10 +3084,7 @@ async fn invoke_with_wrong_parameters(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn stderr_returned_for_failed_component(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn stderr_returned_for_failed_component(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -3247,10 +3158,7 @@ async fn stderr_returned_for_failed_component(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn cancelling_pending_invocations(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-) {
+async fn cancelling_pending_invocations(last_unique_id: &LastUniqueId, deps: &Deps) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -3592,9 +3500,7 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
             timeout: Some(Duration::from_secs(120)),
             ..Default::default()
         },
-        move |last_unique_id: &LastUniqueId,
-              deps: &Deps,
-              tracing: &Tracing| async {
+        move |last_unique_id: &LastUniqueId, deps: &Deps, tracing: &Tracing| async {
             scheduled_invocation_test(
                 "it_scheduled_invocation_server",
                 "it_scheduled_invocation_client",
@@ -3612,9 +3518,7 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
             timeout: Some(Duration::from_secs(120)),
             ..Default::default()
         },
-        move |last_unique_id: &LastUniqueId,
-              deps: &Deps,
-              tracing: &Tracing| async {
+        move |last_unique_id: &LastUniqueId, deps: &Deps, tracing: &Tracing| async {
             scheduled_invocation_test(
                 "it_scheduled_invocation_server_stubless",
                 "it_scheduled_invocation_client_stubless",

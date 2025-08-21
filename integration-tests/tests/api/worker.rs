@@ -21,7 +21,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     LaunchNewWorkerSuccessResponse,
 };
 use golem_api_grpc::proto::golem::worker::{log_event, InvokeResult, LogEvent, TargetWorkerId};
-use golem_test_framework::config::{TestDependencies};
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;

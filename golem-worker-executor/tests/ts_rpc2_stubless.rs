@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::Deps;
 use crate::{common, LastUniqueId, Tracing};
 use assert2::check;
 use golem_common::model::component_metadata::{
@@ -23,7 +24,6 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -34,11 +34,7 @@ static CALLER_COMPONENT_NAME: &str = "caller-ts";
 
 #[test]
 #[tracing::instrument]
-async fn counter_resource_test_2(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn counter_resource_test_2(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap().into_admin();
 

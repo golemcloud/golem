@@ -568,33 +568,15 @@ async fn get_all_api_deployments(deps: &Deps) {
         .create_or_update_api_deployment(
             &admin.token,
             ApiDeploymentRequest {
-            project_id: project_id.0,
-            api_definitions: vec![ApiDefinitionInfo {
-                id: api_definition_1.id.as_ref().unwrap().value.clone(),
-                version: api_definition_1.version.clone(),
-            }],
-            site: ApiSite {
-                host: "domain".to_string(),
-                subdomain: None,
-            },
-            },
-        )
-        .await
-        .unwrap();
-
-    deps.worker_service()
-        .create_or_update_api_deployment(
-            &admin.token,
-            ApiDeploymentRequest {
-            project_id: project_id.0,
-            api_definitions: vec![ApiDefinitionInfo {
-                id: api_definition_1.id.as_ref().unwrap().value.clone(),
-                version: api_definition_1.version.clone(),
-            }],
-            site: ApiSite {
-                host: "domain".to_string(),
-                subdomain: Some("subdomain".to_string()),
-            },
+                project_id: project_id.0,
+                api_definitions: vec![ApiDefinitionInfo {
+                    id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                    version: api_definition_1.version.clone(),
+                }],
+                site: ApiSite {
+                    host: "domain".to_string(),
+                    subdomain: None,
+                },
             },
         )
         .await
@@ -604,15 +586,33 @@ async fn get_all_api_deployments(deps: &Deps) {
         .create_or_update_api_deployment(
             &admin.token,
             ApiDeploymentRequest {
-            project_id: project_id.0,
-            api_definitions: vec![ApiDefinitionInfo {
-                id: api_definition_2.id.as_ref().unwrap().value.clone(),
-                version: api_definition_2.version.clone(),
-            }],
-            site: ApiSite {
-                host: "other-domain".to_string(),
-                subdomain: None,
+                project_id: project_id.0,
+                api_definitions: vec![ApiDefinitionInfo {
+                    id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                    version: api_definition_1.version.clone(),
+                }],
+                site: ApiSite {
+                    host: "domain".to_string(),
+                    subdomain: Some("subdomain".to_string()),
+                },
             },
+        )
+        .await
+        .unwrap();
+
+    deps.worker_service()
+        .create_or_update_api_deployment(
+            &admin.token,
+            ApiDeploymentRequest {
+                project_id: project_id.0,
+                api_definitions: vec![ApiDefinitionInfo {
+                    id: api_definition_2.id.as_ref().unwrap().value.clone(),
+                    version: api_definition_2.version.clone(),
+                }],
+                site: ApiSite {
+                    host: "other-domain".to_string(),
+                    subdomain: None,
+                },
             },
         )
         .await
@@ -687,26 +687,26 @@ async fn create_api_definition_without_worker_calls(
             token,
             project,
             CreateApiDefinitionRequest {
-            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                ApiDefinitionRequest {
-                    id: Some(ApiDefinitionId {
-                        value: api_definition_id,
-                    }),
-                    version,
-                    draft: false,
-                    definition: Some(api_definition_request::Definition::Http(
-                        HttpApiDefinition {
-                            routes: vec![HttpRoute {
-                                method: HttpMethod::Post as i32,
-                                path,
-                                binding: Some(GatewayBinding {
-                                    component: Some(VersionedComponentId {
-                                        component_id: Some(component_id.clone().into()),
-                                        version: 0,
-                                    }),
-                                    worker_name: None,
-                                    response: Some(to_grpc_rib_expr(
-                                        r#"
+                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                    ApiDefinitionRequest {
+                        id: Some(ApiDefinitionId {
+                            value: api_definition_id,
+                        }),
+                        version,
+                        draft: false,
+                        definition: Some(api_definition_request::Definition::Http(
+                            HttpApiDefinition {
+                                routes: vec![HttpRoute {
+                                    method: HttpMethod::Post as i32,
+                                    path,
+                                    binding: Some(GatewayBinding {
+                                        component: Some(VersionedComponentId {
+                                            component_id: Some(component_id.clone().into()),
+                                            version: 0,
+                                        }),
+                                        worker_name: None,
+                                        response: Some(to_grpc_rib_expr(
+                                            r#"
                                             let status: u64 = 200;
                                             {
                                               headers: {ContentType: "json", userid: "foo"},
@@ -714,18 +714,18 @@ async fn create_api_definition_without_worker_calls(
                                               status: status
                                             }
                                         "#,
-                                    )),
-                                    idempotency_key: None,
-                                    binding_type: Some(GatewayBindingType::Default as i32),
-                                    static_binding: None,
-                                    invocation_context: None,
-                                }),
-                                middleware: None,
-                            }],
-                        },
-                    )),
-                },
-            )),
+                                        )),
+                                        idempotency_key: None,
+                                        binding_type: Some(GatewayBindingType::Default as i32),
+                                        static_binding: None,
+                                        invocation_context: None,
+                                    }),
+                                    middleware: None,
+                                }],
+                            },
+                        )),
+                    },
+                )),
             },
         )
         .await
@@ -746,26 +746,26 @@ async fn create_api_definition(
             token,
             project,
             CreateApiDefinitionRequest {
-            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                ApiDefinitionRequest {
-                    id: Some(ApiDefinitionId {
-                        value: api_definition_id,
-                    }),
-                    version,
-                    draft: false,
-                    definition: Some(api_definition_request::Definition::Http(
-                        HttpApiDefinition {
-                            routes: vec![HttpRoute {
-                                method: HttpMethod::Post as i32,
-                                path,
-                                binding: Some(GatewayBinding {
-                                    component: Some(VersionedComponentId {
-                                        component_id: Some(component_id.clone().into()),
-                                        version: 0,
-                                    }),
-                                    worker_name: None,
-                                    response: Some(to_grpc_rib_expr(
-                                        r#"
+                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                    ApiDefinitionRequest {
+                        id: Some(ApiDefinitionId {
+                            value: api_definition_id,
+                        }),
+                        version,
+                        draft: false,
+                        definition: Some(api_definition_request::Definition::Http(
+                            HttpApiDefinition {
+                                routes: vec![HttpRoute {
+                                    method: HttpMethod::Post as i32,
+                                    path,
+                                    binding: Some(GatewayBinding {
+                                        component: Some(VersionedComponentId {
+                                            component_id: Some(component_id.clone().into()),
+                                            version: 0,
+                                        }),
+                                        worker_name: None,
+                                        response: Some(to_grpc_rib_expr(
+                                            r#"
                                             let worker = instance("shopping-cart");
                                             let result = worker.get-cart-contents();
                                             let status: u64 = 200;
@@ -775,18 +775,18 @@ async fn create_api_definition(
                                               status: status
                                             }
                                         "#,
-                                    )),
-                                    idempotency_key: None,
-                                    binding_type: Some(GatewayBindingType::Default as i32),
-                                    static_binding: None,
-                                    invocation_context: None,
-                                }),
-                                middleware: None,
-                            }],
-                        },
-                    )),
-                },
-            )),
+                                        )),
+                                        idempotency_key: None,
+                                        binding_type: Some(GatewayBindingType::Default as i32),
+                                        static_binding: None,
+                                        invocation_context: None,
+                                    }),
+                                    middleware: None,
+                                }],
+                            },
+                        )),
+                    },
+                )),
             },
         )
         .await
@@ -828,20 +828,20 @@ async fn undeploy_api_test(deps: &Deps) {
             &admin.token,
             ApiDeploymentRequest {
                 project_id: project.0,
-            api_definitions: vec![
-                ApiDefinitionInfo {
-                    id: api_definition_1.id.as_ref().unwrap().value.clone(),
-                    version: api_definition_1.version.clone(),
+                api_definitions: vec![
+                    ApiDefinitionInfo {
+                        id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                        version: api_definition_1.version.clone(),
+                    },
+                    ApiDefinitionInfo {
+                        id: api_definition_2.id.as_ref().unwrap().value.clone(),
+                        version: api_definition_2.version.clone(),
+                    },
+                ],
+                site: ApiSite {
+                    host: "localhost".to_string(),
+                    subdomain: Some("undeploy-test".to_string()),
                 },
-                ApiDefinitionInfo {
-                    id: api_definition_2.id.as_ref().unwrap().value.clone(),
-                    version: api_definition_2.version.clone(),
-                },
-            ],
-            site: ApiSite {
-                host: "localhost".to_string(),
-                subdomain: Some("undeploy-test".to_string()),
-            },
             },
         )
         .await

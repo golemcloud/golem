@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, start_customized, TestContext};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use assert2::check;
 use futures_util::stream::FuturesUnordered;
@@ -26,7 +27,6 @@ use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
 use tokio::task::JoinSet;
 use tracing::{info, Instrument};
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);

@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::apidefinition::{
     GatewayBindingType, HttpApiDefinition, HttpMethod, HttpRoute,
 };
 use golem_api_grpc::proto::golem::component::VersionedComponentId;
-use golem_test_framework::config::{TestDependencies};
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};

@@ -164,10 +164,7 @@ async fn test_repl_invoking_functions(deps: &Deps, worker_name: Option<&str>) {
     );
 }
 
-async fn test_repl_invoking_resource_methods(
-    deps: &Deps,
-    worker_name: Option<&str>,
-) {
+async fn test_repl_invoking_resource_methods(deps: &Deps, worker_name: Option<&str>) {
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
         dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),

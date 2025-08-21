@@ -201,7 +201,9 @@ impl EnvBasedTestDependencies {
         }
     }
 
-    async fn make_redis(config: Arc<EnvBasedTestDependenciesConfig>) -> Arc<dyn Redis + Send + Sync + 'static> {
+    async fn make_redis(
+        config: Arc<EnvBasedTestDependenciesConfig>,
+    ) -> Arc<dyn Redis + Send + Sync + 'static> {
         let prefix = config.redis_key_prefix.clone();
         if config.golem_docker_services {
             Arc::new(DockerRedis::new(&config.unique_network_id, prefix).await)

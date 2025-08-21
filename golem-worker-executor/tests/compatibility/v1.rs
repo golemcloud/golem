@@ -130,7 +130,10 @@ pub fn worker_status() {
     let ws6 = WorkerStatus::Failed;
     let ws7 = WorkerStatus::Exited;
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("worker_status_running", &mut mint, ws1);
     backward_compatible("worker_status_idle", &mut mint, ws2);
     backward_compatible("worker_status_suspended", &mut mint, ws3);
@@ -154,7 +157,10 @@ pub fn deleted_regions() {
         },
     ]);
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("deleted_regions_empty", &mut mint, dr1);
     backward_compatible("deleted_regions_nonempty", &mut mint, dr2);
 }
@@ -177,7 +183,10 @@ pub fn retry_config() {
         max_jitter_factor: Some(0.1),
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("retry_config_default", &mut mint, rc1);
     backward_compatible("retry_config_custom1", &mut mint, rc2);
     backward_compatible("retry_config_custom2", &mut mint, rc3);
@@ -226,7 +235,10 @@ pub fn wasm_rpc_value() {
         resource_id: 123,
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("wasm_rpc_value_bool", &mut mint, v1);
     backward_compatible("wasm_rpc_value_u8", &mut mint, v2);
     backward_compatible("wasm_rpc_value_u16", &mut mint, v3);
@@ -303,7 +315,10 @@ pub fn timestamped_worker_invocation() {
         },
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible_custom(
         "timestamped_worker_invocation_exported_function",
         &mut mint,
@@ -335,7 +350,10 @@ pub fn timestamped_update_description() {
             payload: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
         },
     };
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("timestamped_update_description_automatic", &mut mint, tud1);
     backward_compatible(
         "timestamped_update_description_snapshot_based",
@@ -350,7 +368,10 @@ pub fn successful_update_record() {
         timestamp: Timestamp::from(1724701938466),
         target_version: 123,
     };
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("successful_update_record", &mut mint, sur1);
 }
 
@@ -366,26 +387,38 @@ pub fn failed_update_record() {
         target_version: 123,
         details: Some("details".to_string()),
     };
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("failed_update_record_no_details", &mut mint, fur1);
     backward_compatible("failed_update_record_with_details", &mut mint, fur2);
 }
 
 #[test]
 pub fn worker_resource_id() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("worker_resource_id", &mut mint, WorkerResourceId(1));
 }
 
 #[test]
 pub fn oplog_index() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("oplog_index", &mut mint, OplogIndex::from_u64(1));
 }
 
 #[test]
 pub fn idempotency_key() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible(
         "idempotency_key",
         &mut mint,
@@ -397,7 +430,10 @@ pub fn idempotency_key() {
 
 #[test]
 pub fn timestamp() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("timestamp", &mut mint, Timestamp::from(1724701938466));
 }
 
@@ -414,7 +450,10 @@ pub fn worker_resource_description() {
             resource_params: vec!["a".to_string(), "b".to_string()],
         }),
     };
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("worker_resource_description", &mut mint, wrd1);
     backward_compatible("worker_resource_description_indexed", &mut mint, wrd2);
 }
@@ -426,7 +465,10 @@ pub fn oplog_payload() {
         payload_id: PayloadId(Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap()),
         md5_hash: vec![1, 2, 3, 4],
     };
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("oplog_payload_inline", &mut mint, op1);
     backward_compatible("oplog_payload_external", &mut mint, op2);
 }
@@ -436,7 +478,10 @@ pub fn redis_promise_state() {
     let s1 = RedisPromiseState::Pending;
     let s2 = RedisPromiseState::Complete(vec![]);
     let s3 = RedisPromiseState::Complete(vec![1, 2, 3, 4]);
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("redis_promise_state_pending", &mut mint, s1);
     backward_compatible("redis_promise_state_complete_empty", &mut mint, s2);
     backward_compatible("redis_promise_state_complete_nonempty", &mut mint, s3);
@@ -444,7 +489,10 @@ pub fn redis_promise_state() {
 
 #[test]
 pub fn account_id() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible(
         "account_id",
         &mut mint,
@@ -456,7 +504,10 @@ pub fn account_id() {
 
 #[test]
 pub fn component_id() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible(
         "component_id",
         &mut mint,
@@ -466,7 +517,10 @@ pub fn component_id() {
 
 #[test]
 pub fn worker_id() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible(
         "worker_id",
         &mut mint,
@@ -491,7 +545,10 @@ pub fn promise_id() {
         oplog_idx: OplogIndex::from_u64(100),
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("promise_id", &mut mint, pid1);
 }
 
@@ -527,14 +584,20 @@ pub fn scheduled_action() {
         next_after: Duration::from_secs(10),
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("scheduled_action_complete_promise", &mut mint, sa1);
     backward_compatible("scheduled_action_archive_oplog", &mut mint, sa2);
 }
 
 #[test]
 pub fn wrapped_function_type() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible(
         "wrapped_function_type_read_local",
         &mut mint,
@@ -574,7 +637,10 @@ pub fn worker_error() {
     let we3 = WorkerError::StackOverflow;
     let we4 = WorkerError::Unknown("unknown".to_string());
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("worker_error_out_of_memory", &mut mint, we1);
     backward_compatible("worker_error_invalid_request", &mut mint, we2);
     backward_compatible("worker_error_stack_overflow", &mut mint, we3);
@@ -583,7 +649,10 @@ pub fn worker_error() {
 
 #[test]
 pub fn log_level() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("log_level_error", &mut mint, LogLevel::Error);
     backward_compatible("log_level_debug", &mut mint, LogLevel::Debug);
     backward_compatible("log_level_warn", &mut mint, LogLevel::Warn);
@@ -821,7 +890,10 @@ pub fn oplog_entry() {
         message: "message".to_string(),
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("oplog_entry_create", &mut mint, oe1a);
     backward_compatible("oplog_entry_create_with_parent", &mut mint, oe1b);
     backward_compatible("oplog_entry_imported_function_invoked", &mut mint, oe2);
@@ -864,13 +936,19 @@ pub fn blob_store_object_metadata() {
         size: 500_000_000,
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("blob_store_object_metadata", &mut mint, om1);
 }
 
 #[test]
 pub fn interrupt_kind() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible(
         "interrupt_kind_interrupt",
         &mut mint,
@@ -883,7 +961,10 @@ pub fn interrupt_kind() {
 
 #[test]
 pub fn shard_id() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("shard_id", &mut mint, ShardId::new(1));
 }
 
@@ -984,7 +1065,10 @@ pub fn golem_error() {
         stderr: "stderr".to_string(),
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("golem_error_invalid_request", &mut mint, g1);
     backward_compatible("golem_error_worker_already_exists", &mut mint, g2);
     backward_compatible("golem_error_worker_not_found", &mut mint, g3);
@@ -1036,7 +1120,10 @@ pub fn rpc_error() {
         details: "not working".to_string(),
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("rpc_error_protocol_error", &mut mint, rpc1);
     backward_compatible("rpc_error_denied", &mut mint, rpc2);
     backward_compatible("rpc_error_not_found", &mut mint, rpc3);
@@ -1052,7 +1139,10 @@ pub fn worker_proxy_error() {
     let wpe5 = WorkerProxyError::AlreadyExists("already exists".to_string());
     let wpe6 = WorkerProxyError::InternalError(WorkerExecutorError::unknown("internal error"));
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("worker_proxy_error_bad_request", &mut mint, wpe1);
     backward_compatible("worker_proxy_error_unauthorized", &mut mint, wpe2);
     backward_compatible("worker_proxy_error_limit_exceeded", &mut mint, wpe3);
@@ -1082,7 +1172,10 @@ pub fn serializable_error() {
         error: WorkerProxyError::AlreadyExists("already exists".to_string()),
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("serializable_error_fs_error", &mut mint, se1);
     backward_compatible("serializable_error_generic", &mut mint, se2);
     backward_compatible("serializable_error_golem", &mut mint, se3);
@@ -1101,7 +1194,10 @@ pub fn serializable_stream_error() {
         message: "hello world".to_string(),
     });
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("serializable_stream_error_closed", &mut mint, sse1);
     backward_compatible(
         "serializable_stream_error_last_operation_failed",
@@ -1120,7 +1216,10 @@ pub fn serializable_ip_address() {
         address: [1, 2, 3, 4, 5, 6, 7, 8],
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("serializable_ip_address_ipv4", &mut mint, sia1);
     backward_compatible("serializable_ip_address_ipv6", &mut mint, sia2);
 }
@@ -1131,7 +1230,10 @@ pub fn serializable_ip_addresses() {
         address: [127, 0, 0, 1],
     }]);
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("serializable_ip_addresses", &mut mint, sia1);
 }
 
@@ -1182,7 +1284,10 @@ pub fn wit_value() {
     }
     .into();
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible_wit_value("wit_value_bool", &mut mint, wv1);
     backward_compatible_wit_value("wit_value_u8", &mut mint, wv2);
     backward_compatible_wit_value("wit_value_u16", &mut mint, wv3);
@@ -1223,7 +1328,10 @@ pub fn serializable_dns_error_payload() {
         info_code: None,
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("serializable_dns_error_payload_some", &mut mint, sd1);
     backward_compatible("serializable_dns_error_payload_none", &mut mint, sd2);
 }
@@ -1239,7 +1347,10 @@ pub fn serializable_tls_alert_received_payload() {
         alert_message: None,
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible(
         "serializable_tls_alert_received_payload_some",
         &mut mint,
@@ -1263,14 +1374,20 @@ pub fn serializable_field_size_payload() {
         field_name: None,
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("serializable_field_size_payload_some", &mut mint, sf1);
     backward_compatible("serializable_field_size_payload_none", &mut mint, sf2);
 }
 
 #[test]
 pub fn serializable_error_code() {
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible(
         "serializable_error_code_dns_timeout",
         &mut mint,
@@ -1549,7 +1666,10 @@ pub fn serializable_response() {
         message: "hello world".to_string(),
     }));
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("serializable_response_pending", &mut mint, sr1);
     backward_compatible("serializable_response_headers_received", &mut mint, sr2);
     backward_compatible("serializable_response_http_error", &mut mint, sr3);
@@ -1569,7 +1689,10 @@ pub fn serializable_invoke_result() {
         details: "not now".to_string(),
     }));
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("serializable_invoke_result_pending", &mut mint, sir1);
     backward_compatible("serializable_invoke_result_failed", &mut mint, sir2);
     backward_compatible("serializable_invoke_result_completed_ok", &mut mint, sir3);
@@ -1593,7 +1716,10 @@ pub fn serializable_file_times() {
         data_modification_timestamp: None,
     };
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("serializable_file_times_some", &mut mint, sft1);
     backward_compatible("serializable_file_times_none", &mut mint, sft2);
 }
@@ -1650,7 +1776,10 @@ pub fn proto_val() {
     }
     .into();
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("proto_val_bool", &mut mint, pv1);
     backward_compatible("proto_val_u8", &mut mint, pv2);
     backward_compatible("proto_val_u16", &mut mint, pv3);
@@ -1861,7 +1990,10 @@ pub fn type_annotated_value() {
     )
     .unwrap();
 
-    let mut mint = Mint::new( PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles" ]) );
+    let mut mint = Mint::new(PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+    ]));
     backward_compatible("type_annotated_value_bool", &mut mint, tav1);
     backward_compatible("type_annotated_value_u8", &mut mint, tav2);
     backward_compatible("type_annotated_value_u16", &mut mint, tav3);

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::Deps;
 use async_trait::async_trait;
 use golem_common::config::RedisConfig;
 use golem_common::model::AccountId;
@@ -27,7 +28,6 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use uuid::Uuid;
-use crate::Deps;
 
 #[async_trait]
 trait GetKeyValueStorage: Debug {
@@ -50,9 +50,7 @@ impl GetKeyValueStorage for InMemoryKeyValueStorageWrapper {
 }
 
 #[test_dep(tagged_as = "in_memory")]
-async fn in_memory_storage(
-    _deps: &Deps,
-) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
+async fn in_memory_storage(_deps: &Deps) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
     Arc::new(InMemoryKeyValueStorageWrapper)
 }
 
@@ -89,9 +87,7 @@ impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
 }
 
 #[test_dep(tagged_as = "redis")]
-async fn redis_storage(
-    deps: &Deps,
-) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
+async fn redis_storage(deps: &Deps) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
     let redis = deps.redis.clone();
     let redis_monitor = deps.redis_monitor.clone();
     redis.assert_valid();
@@ -123,9 +119,7 @@ impl GetKeyValueStorage for SqliteKeyValueStorageWrapper {
 }
 
 #[test_dep(tagged_as = "sqlite")]
-async fn sqlite_storage(
-    _deps: &Deps,
-) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
+async fn sqlite_storage(_deps: &Deps) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
     Arc::new(SqliteKeyValueStorageWrapper)
 }
 

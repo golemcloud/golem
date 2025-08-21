@@ -40,7 +40,7 @@ impl SpawnedRedis {
 
     #[cfg(windows)]
     pub fn new(_port: u16, _prefix: String, _out_level: Level, _err_level: Level) -> Self {
-        panic!( "Not supported on windows" );
+        panic!("Not supported on windows");
     }
 
     #[cfg(not(windows))]

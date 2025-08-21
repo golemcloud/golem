@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
-use crate::{Deps};
 use golem_common::model::{WorkerId, WorkerStatus};
 use golem_common::serialization::{deserialize, serialize};
 use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
@@ -107,11 +107,7 @@ async fn recover_environment_example(
 
 #[test]
 #[tracing::instrument]
-async fn recover_read_stdin(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn recover_read_stdin(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -128,11 +124,7 @@ async fn recover_read_stdin(
 
 #[test]
 #[tracing::instrument]
-async fn recover_jump(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn recover_jump(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -148,11 +140,7 @@ async fn recover_jump(
 
 #[test]
 #[tracing::instrument]
-async fn recover_js_example_1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn recover_js_example_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -230,10 +218,16 @@ async fn restore_from_recovery_golden_file(
     name: &str,
     component_names: &[&str],
 ) -> WorkerId {
-    let worker_id_path = PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles",
-        format!("worker_recovery_{name}.worker_id.bin").as_str() ]);
-    let oplog_path = PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles",
-        format!("worker_recovery_{name}.oplog.bin").as_str() ]);
+    let worker_id_path = PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+        format!("worker_recovery_{name}.worker_id.bin").as_str(),
+    ]);
+    let oplog_path = PathBuf::from_iter([
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/goldenfiles",
+        format!("worker_recovery_{name}.oplog.bin").as_str(),
+    ]);
 
     let worker_id = tokio::fs::read(&worker_id_path).await.unwrap();
     let worker_id: WorkerId = deserialize(&worker_id).unwrap();
@@ -307,10 +301,16 @@ pub async fn save_recovery_golden_file(
             .await
             .unwrap();
 
-        let worker_id_path = PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles",
-            format!("worker_recovery_{name}.worker_id.bin").as_str() ]);
-        let oplog_path = PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "tests/goldenfiles",
-            format!("worker_recovery_{name}.oplog.bin").as_str() ]);
+        let worker_id_path = PathBuf::from_iter([
+            env!("CARGO_MANIFEST_DIR"),
+            "tests/goldenfiles",
+            format!("worker_recovery_{name}.worker_id.bin").as_str(),
+        ]);
+        let oplog_path = PathBuf::from_iter([
+            env!("CARGO_MANIFEST_DIR"),
+            "tests/goldenfiles",
+            format!("worker_recovery_{name}.oplog.bin").as_str(),
+        ]);
 
         let encoded_oplog = serialize(&entries).unwrap();
         let encoded_worker_id = serialize(&worker_id).unwrap();

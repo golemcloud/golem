@@ -28,7 +28,9 @@ use golem_test_framework::components::worker_executor::provided::ProvidedWorkerE
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
-use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies, TestDependenciesDsl};
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies, TestDependenciesDsl,
+};
 use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
@@ -149,7 +151,7 @@ impl Debug for WorkerExecutorTestDependencies {
 impl WorkerExecutorTestDependencies {
     pub async fn new() -> Self {
         let env_config = EnvBasedTestDependenciesConfig::new();
-        let env = EnvBasedTestDependencies::new( env_config ).await;
+        let env = EnvBasedTestDependencies::new(env_config).await;
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = env.redis();
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = env.redis_monitor();
@@ -216,10 +218,10 @@ impl WorkerExecutorTestDependencies {
         ));
         // Fake worker service forwarding all requests to the worker executor directly
         let worker_service: Arc<dyn WorkerService> = Arc::new(ForwardingWorkerService::new(
-                worker_executor.clone(),
+            worker_executor.clone(),
             self.component_service.clone(),
             self.cloud_service.clone(),
-            ));
+        ));
         WorkerExecutorPerTestDependencies {
             redis,
             redis_monitor: self.redis_monitor.clone(),
@@ -254,7 +256,9 @@ pub async fn test_dependencies(_tracing: &Tracing) -> Deps {
 
     let deps2 = TestDependenciesDsl {
         deps,
-        account_id: AccountId { value: "".to_string() },
+        account_id: AccountId {
+            value: "".to_string(),
+        },
         account_email: "".to_string(),
         token: Default::default(),
     };

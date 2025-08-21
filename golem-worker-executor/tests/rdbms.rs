@@ -19,15 +19,17 @@ use test_r::{inherit_test_dep, test, timeout};
 use tracing::Instrument;
 
 use crate::common::{mysql_host, postgres_host, start, TestContext};
-use golem_test_framework::components::rdb::RdbConnection;
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use assert2::check;
+use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_common::model::public_oplog::{
     EndRegionParameters, ImportedFunctionInvokedParameters, PublicDurableFunctionType,
     PublicOplogEntry, TimestampParameter, WriteRemoteBatchedParameters,
 };
 use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
 use golem_service_base::model::PublicOplogEntryWithIndex;
+use golem_test_framework::components::rdb::RdbConnection;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type;
@@ -39,8 +41,6 @@ use serde_json::json;
 use tokio::task::JoinSet;
 use try_match::try_match;
 use uuid::Uuid;
-use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -170,12 +170,8 @@ impl RdbmsTest {
 #[test]
 #[timeout(300_000)]
 #[tracing::instrument]
-async fn rdbms_postgres_crud(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
-    let postgres = postgres_host( None ).await;
+async fn rdbms_postgres_crud(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+    let postgres = postgres_host(None).await;
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
@@ -316,7 +312,7 @@ async fn rdbms_postgres_idempotency(
     deps: &Deps,
     _tracing: &Tracing,
 ) {
-    let postgres = postgres_host( None ).await;
+    let postgres = postgres_host(None).await;
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
@@ -518,12 +514,8 @@ fn postgres_get_expected(expected_values: Vec<(Uuid, String, String)>) -> serde_
 #[test]
 #[timeout(300_000)]
 #[tracing::instrument]
-async fn rdbms_postgres_select1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
-    let postgres = postgres_host( None ).await;
+async fn rdbms_postgres_select1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+    let postgres = postgres_host(None).await;
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(1));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({
@@ -558,12 +550,8 @@ async fn rdbms_postgres_select1(
 #[test]
 #[timeout(300_000)]
 #[tracing::instrument]
-async fn rdbms_mysql_crud(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
-    let mysql = mysql_host( None ).await;
+async fn rdbms_mysql_crud(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+    let mysql = mysql_host(None).await;
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
@@ -702,12 +690,8 @@ async fn rdbms_mysql_crud(
 #[test]
 #[timeout(300_000)]
 #[tracing::instrument]
-async fn rdbms_mysql_idempotency(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
-    let mysql = mysql_host( None ).await;
+async fn rdbms_mysql_idempotency(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+    let mysql = mysql_host(None).await;
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
@@ -891,12 +875,8 @@ fn mysql_get_expected(expected_values: Vec<(String, String)>) -> serde_json::Val
 #[test]
 #[timeout(300_000)]
 #[tracing::instrument]
-async fn rdbms_mysql_select1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
-    let mysql = mysql_host( None ).await;
+async fn rdbms_mysql_select1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+    let mysql = mysql_host(None).await;
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(0));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({

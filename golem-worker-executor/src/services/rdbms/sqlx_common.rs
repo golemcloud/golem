@@ -758,8 +758,7 @@ where
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
-        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::query(self.inner(), statement, params)
-            .await
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::query(self.inner(), statement, params).await
     }
 
     async fn query_stream(
@@ -775,7 +774,7 @@ where
             statement,
             params,
         )
-            .await
+        .await
     }
 
     async fn commit(&self) -> Result<(), Error> {

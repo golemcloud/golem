@@ -1,5 +1,5 @@
+use crate::Deps;
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies};
-use crate::{Deps};
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -25,6 +25,10 @@ use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_test_framework::components::cloud_service::CloudService;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
+use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
+use golem_test_framework::components::rdb::provided_mysql::ProvidedMysqlRdb;
+use golem_test_framework::components::rdb::provided_postgres::ProvidedPostgresRdb;
 use golem_test_framework::components::rdb::{DbInfo, MysqlInfo, PostgresInfo, Rdb, RdbConnection};
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
@@ -52,15 +56,19 @@ use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
-    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig, RdbmsConfig,
+    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
     IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig,
-    ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    ProjectServiceDisabledConfig, RdbmsConfig, ShardManagerServiceConfig,
+    ShardManagerServiceSingleShardConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::{Oplog, OplogService};
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
 use golem_worker_executor::services::promise::PromiseService;
+use golem_worker_executor::services::rdbms::mysql::{types as mysql_types, MysqlType};
+use golem_worker_executor::services::rdbms::postgres::{types as postgres_types, PostgresType};
+use golem_worker_executor::services::rdbms::Rdbms;
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
@@ -87,8 +95,8 @@ use golem_worker_executor::workerctx::{
 use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
 use std::collections::HashSet;
-use std::path::Path;
 use std::env::var;
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
 use tokio::runtime::Handle;
@@ -100,17 +108,6 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
-use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
-use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
-use golem_test_framework::components::rdb::provided_mysql::ProvidedMysqlRdb;
-use golem_test_framework::components::rdb::provided_postgres::ProvidedPostgresRdb;
-use golem_worker_executor::services::rdbms::Rdbms;
-use golem_worker_executor::services::rdbms::postgres::{
-    types as postgres_types, PostgresType,
-};
-use golem_worker_executor::services::rdbms::mysql::{
-    types as mysql_types, MysqlType
-};
 
 pub struct TestWorkerExecutor {
     _join_set: Option<JoinSet<anyhow::Result<()>>>,
@@ -144,8 +141,8 @@ impl TestWorkerExecutor {
         match response.result {
             None => panic!("No response from get_running_workers_metadata"),
             Some(get_running_workers_metadata_response::Result::Success(
-                     GetRunningWorkersMetadataSuccessResponse { workers },
-                 )) => workers.iter().map(to_worker_metadata).collect(),
+                GetRunningWorkersMetadataSuccessResponse { workers },
+            )) => workers.iter().map(to_worker_metadata).collect(),
 
             Some(get_running_workers_metadata_response::Result::Failure(error)) => {
                 panic!("Failed to get worker metadata: {error:?}")
@@ -246,10 +243,7 @@ impl TestContext {
     }
 }
 
-pub async fn start(
-    deps: &Deps,
-    context: &TestContext,
-) -> anyhow::Result<TestWorkerExecutor> {
+pub async fn start(deps: &Deps, context: &TestContext) -> anyhow::Result<TestWorkerExecutor> {
     start_customized(deps, context, None, None).await
 }
 
@@ -407,7 +401,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             owned_worker_id,
             latest_worker_status,
         )
-            .await
+        .await
     }
 
     async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
@@ -420,7 +414,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             owned_worker_id,
             metadata,
         )
-            .await
+        .await
     }
 
     async fn resume_replay(
@@ -448,7 +442,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             account_id,
             last_known_limits,
         )
-            .await
+        .await
     }
 
     async fn on_worker_deleted<T: HasAll<TestWorkerCtx> + Send + Sync>(
@@ -476,7 +470,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             target_version,
             details,
         )
-            .await
+        .await
     }
 }
 
@@ -678,7 +672,7 @@ impl WorkerCtx for TestWorkerCtx {
             plugins,
             worker_fork,
         )
-            .await?;
+        .await?;
         Ok(Self { durable_ctx })
     }
 
@@ -1127,12 +1121,22 @@ pub fn new_worker_id() -> WorkerId {
     }
 }
 
-pub async fn postgres_host( rdbms: Option<Arc<dyn Rdbms<PostgresType> + Send + Sync>> ) -> RdbPostgresHost {
-    let docker_active = var("GOLEM_DOCKER_SERVICES").map(|v| v == "true").unwrap_or(false);
+pub async fn postgres_host(
+    rdbms: Option<Arc<dyn Rdbms<PostgresType> + Send + Sync>>,
+) -> RdbPostgresHost {
+    let docker_active = var("GOLEM_DOCKER_SERVICES")
+        .map(|v| v == "true")
+        .unwrap_or(false);
     let host = RdbPostgresHost {
         rdbms: rdbms.unwrap_or_else(|| PostgresType::new_rdbms(RdbmsConfig::default())),
-        container: if docker_active { Some(futures::executor::block_on(DockerPostgresRdb::new("test-net"))) } else { None },
-        provided : if !docker_active {
+        container: if docker_active {
+            Some(futures::executor::block_on(DockerPostgresRdb::new(
+                "test-net",
+            )))
+        } else {
+            None
+        },
+        provided: if !docker_active {
             Some(ProvidedPostgresRdb::new(PostgresInfo {
                 public_host: "localhost".to_string(),
                 public_port: 5432,
@@ -1141,8 +1145,10 @@ pub async fn postgres_host( rdbms: Option<Arc<dyn Rdbms<PostgresType> + Send + S
                 database_name: "postgres".to_string(),
                 username: "postgres".to_string(),
                 password: "postgres".to_string(),
-            } ))
-        } else { None },
+            }))
+        } else {
+            None
+        },
     };
 
     host.reset().await;
@@ -1150,12 +1156,18 @@ pub async fn postgres_host( rdbms: Option<Arc<dyn Rdbms<PostgresType> + Send + S
     host
 }
 
-pub async fn mysql_host( rdbms: Option<Arc<dyn Rdbms<MysqlType> + Send + Sync>> ) -> RdbMysqlHost {
-    let docker_active = var("GOLEM_DOCKER_SERVICES").map(|v| v == "true").unwrap_or(false);
+pub async fn mysql_host(rdbms: Option<Arc<dyn Rdbms<MysqlType> + Send + Sync>>) -> RdbMysqlHost {
+    let docker_active = var("GOLEM_DOCKER_SERVICES")
+        .map(|v| v == "true")
+        .unwrap_or(false);
     let host = RdbMysqlHost {
         rdbms: rdbms.unwrap_or_else(|| MysqlType::new_rdbms(RdbmsConfig::default())),
-        container: if docker_active { Some(futures::executor::block_on(DockerMysqlRdb::new("test-net"))) } else { None },
-        provided : if !docker_active {
+        container: if docker_active {
+            Some(futures::executor::block_on(DockerMysqlRdb::new("test-net")))
+        } else {
+            None
+        },
+        provided: if !docker_active {
             Some(ProvidedMysqlRdb::new(MysqlInfo {
                 private_host: "localhost".to_string(),
                 private_port: 3306,
@@ -1164,8 +1176,10 @@ pub async fn mysql_host( rdbms: Option<Arc<dyn Rdbms<MysqlType> + Send + Sync>> 
                 database_name: "mysql".to_string(),
                 username: "root".to_string(),
                 password: "mysql".to_string(),
-            } ))
-        } else { None },
+            }))
+        } else {
+            None
+        },
     };
 
     host.reset().await;
@@ -1175,17 +1189,17 @@ pub async fn mysql_host( rdbms: Option<Arc<dyn Rdbms<MysqlType> + Send + Sync>> 
 
 pub struct RdbPostgresHost {
     container: Option<DockerPostgresRdb>,
-    provided:  Option<ProvidedPostgresRdb>,
-    rdbms:     Arc<dyn Rdbms<PostgresType> + Send + Sync>,
+    provided: Option<ProvidedPostgresRdb>,
+    rdbms: Arc<dyn Rdbms<PostgresType> + Send + Sync>,
 }
 
 impl RdbPostgresHost {
     pub fn public_connection_string_to_db(&self, db_name: &str) -> String {
         if let Some(container) = self.container.as_ref() {
-            return container.public_connection_string_to_db(db_name)
+            return container.public_connection_string_to_db(db_name);
         }
         if let Some(provided) = self.provided.as_ref() {
-            return provided.public_connection_string_to_db(db_name)
+            return provided.public_connection_string_to_db(db_name);
         }
         "".to_string()
     }
@@ -1206,28 +1220,48 @@ impl RdbPostgresHost {
                 // Drop all user databases (excluding templates and 'postgres' itself)
                 // Cast datname to TEXT to ensure compatibility
                 let list_databases_sql = "SELECT datname::TEXT FROM pg_database WHERE datistemplate = false AND datname NOT IN ('template0', 'template1', 'postgres');";
-                match self.rdbms.query(&admin_pool_key, &worker_id, list_databases_sql, vec![]).await {
+                match self
+                    .rdbms
+                    .query(&admin_pool_key, &worker_id, list_databases_sql, vec![])
+                    .await
+                {
                     Ok(db_result) => {
                         if db_result.rows.is_empty() {
                             info!("No user databases found to drop (excluding template0, template1, postgres).");
                         }
                         for row in db_result.rows {
-                            let db_name_to_drop_opt: Option<String> = match row.values.first().cloned() {
-                                Some(postgres_types::DbValue::Text(s)) => Some(s),
-                                _ => None,
-                            };
+                            let db_name_to_drop_opt: Option<String> =
+                                match row.values.first().cloned() {
+                                    Some(postgres_types::DbValue::Text(s)) => Some(s),
+                                    _ => None,
+                                };
 
                             if let Some(db_name_to_drop) = db_name_to_drop_opt {
                                 info!("Attempting to drop database: {}", db_name_to_drop);
 
                                 // WITH (FORCE) is available in PostgreSQL 13+ and closes connections.
-                                let drop_db_sql = format!("DROP DATABASE IF EXISTS \"{}\" WITH (FORCE);", db_name_to_drop);
-                                match self.rdbms.execute(&admin_pool_key, &worker_id, &drop_db_sql, vec![]).await {
-                                    Ok(_) => info!("Successfully dropped database: {}", db_name_to_drop),
-                                    Err(e) => eprintln!("Failed to drop database {}: {:?}", db_name_to_drop, e),
+                                let drop_db_sql = format!(
+                                    "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE);",
+                                    db_name_to_drop
+                                );
+                                match self
+                                    .rdbms
+                                    .execute(&admin_pool_key, &worker_id, &drop_db_sql, vec![])
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        info!("Successfully dropped database: {}", db_name_to_drop)
+                                    }
+                                    Err(e) => eprintln!(
+                                        "Failed to drop database {}: {:?}",
+                                        db_name_to_drop, e
+                                    ),
                                 }
                             } else {
-                                eprintln!("Could not extract database name from row for dropping: {:?}", row);
+                                eprintln!(
+                                    "Could not extract database name from row for dropping: {:?}",
+                                    row
+                                );
                             }
                         }
                     }
@@ -1245,17 +1279,33 @@ impl RdbPostgresHost {
                 }
 
                 let create_schema_sql = "CREATE SCHEMA public;";
-                match self.rdbms.execute(&admin_pool_key, &worker_id, create_schema_sql, vec![]).await {
-                    Ok(_) => info!("Successfully created public schema in database {}", admin_db_name_for_schema_clean),
-                    Err(e) => eprintln!("Failed to create public schema in database {}: {:?}", admin_db_name_for_schema_clean, e),
+                match self
+                    .rdbms
+                    .execute(&admin_pool_key, &worker_id, create_schema_sql, vec![])
+                    .await
+                {
+                    Ok(_) => info!(
+                        "Successfully created public schema in database {}",
+                        admin_db_name_for_schema_clean
+                    ),
+                    Err(e) => eprintln!(
+                        "Failed to create public schema in database {}: {:?}",
+                        admin_db_name_for_schema_clean, e
+                    ),
                 }
 
                 if !self.rdbms.remove(&admin_pool_key, &worker_id) {
-                    eprintln!("Failed to remove pool key for {} after cleaning", admin_pool_key.masked_address());
+                    eprintln!(
+                        "Failed to remove pool key for {} after cleaning",
+                        admin_pool_key.masked_address()
+                    );
                 }
             }
             Err(e) => {
-                eprintln!("Failed to connect to PostgreSQL admin database {} for cleaning: {:?}", admin_db_conn_string, e);
+                eprintln!(
+                    "Failed to connect to PostgreSQL admin database {} for cleaning: {:?}",
+                    admin_db_conn_string, e
+                );
             }
         }
     }
@@ -1265,10 +1315,10 @@ impl RdbPostgresHost {
 impl Rdb for RdbPostgresHost {
     fn info(&self) -> DbInfo {
         if let Some(container) = self.container.as_ref() {
-            return container.info()
+            return container.info();
         }
         if let Some(provided) = self.provided.as_ref() {
-            return provided.info()
+            return provided.info();
         }
         panic!("Postgres not configured")
     }
@@ -1289,20 +1339,20 @@ impl Rdb for RdbPostgresHost {
 impl RdbConnection for RdbPostgresHost {
     fn public_connection_string(&self) -> String {
         if let Some(container) = self.container.as_ref() {
-            return container.public_connection_string()
+            return container.public_connection_string();
         }
         if let Some(provided) = self.provided.as_ref() {
-            return provided.public_connection_string()
+            return provided.public_connection_string();
         }
         "".to_string()
     }
 
     fn private_connection_string(&self) -> String {
         if let Some(container) = self.container.as_ref() {
-            return container.private_connection_string()
+            return container.private_connection_string();
         }
         if let Some(provided) = self.provided.as_ref() {
-            return provided.private_connection_string()
+            return provided.private_connection_string();
         }
         "".to_string()
     }
@@ -1310,25 +1360,25 @@ impl RdbConnection for RdbPostgresHost {
 
 impl Drop for RdbPostgresHost {
     fn drop(&mut self) {
-        if let Some( container ) = self.container.as_ref() {
-            futures::executor::block_on( container.kill() );
+        if let Some(container) = self.container.as_ref() {
+            futures::executor::block_on(container.kill());
         }
     }
 }
 
 pub struct RdbMysqlHost {
     container: Option<DockerMysqlRdb>,
-    provided:  Option<ProvidedMysqlRdb>,
-    rdbms:   Arc<dyn Rdbms<MysqlType> + Send + Sync>,
+    provided: Option<ProvidedMysqlRdb>,
+    rdbms: Arc<dyn Rdbms<MysqlType> + Send + Sync>,
 }
 
 impl RdbMysqlHost {
     pub fn public_connection_string_to_db(&self, db_name: &str) -> String {
         if let Some(container) = self.container.as_ref() {
-            return container.public_connection_string_to_db(db_name)
+            return container.public_connection_string_to_db(db_name);
         }
         if let Some(provided) = self.provided.as_ref() {
-            return provided.public_connection_string_to_db(db_name)
+            return provided.public_connection_string_to_db(db_name);
         }
         "".to_string()
     }
@@ -1358,7 +1408,11 @@ impl RdbMysqlHost {
                     // Add any other system/default databases specific to your MySQL setup if needed
                 ];
 
-                match self.rdbms.query(&pool_key, &worker_id, query_databases, vec![]).await {
+                match self
+                    .rdbms
+                    .query(&pool_key, &worker_id, query_databases, vec![])
+                    .await
+                {
                     Ok(db_result) => {
                         if db_result.rows.is_empty() {
                             info!("No databases found to drop.");
@@ -1366,7 +1420,9 @@ impl RdbMysqlHost {
                         for row in db_result.rows {
                             let db_name_opt: Option<String> = match row.values.first().cloned() {
                                 Some(mysql_types::DbValue::Varchar(s)) => Some(s),
-                                Some(mysql_types::DbValue::Varbinary(bytes)) => String::from_utf8(bytes).ok(),
+                                Some(mysql_types::DbValue::Varbinary(bytes)) => {
+                                    String::from_utf8(bytes).ok()
+                                }
                                 _ => None,
                             };
 
@@ -1381,7 +1437,11 @@ impl RdbMysqlHost {
                                 // Active connections might prevent dropping.
                                 let drop_db_sql = format!("DROP DATABASE IF EXISTS `{}`;", db_name);
 
-                                match self.rdbms.execute(&pool_key, &worker_id, &drop_db_sql, vec![]).await {
+                                match self
+                                    .rdbms
+                                    .execute(&pool_key, &worker_id, &drop_db_sql, vec![])
+                                    .await
+                                {
                                     Ok(_) => info!("Successfully dropped database: {}", db_name),
                                     Err(e) => {
                                         eprintln!("Failed to drop database {}: {:?}. This might be due to active connections or insufficient permissions.", db_name, e);
@@ -1419,10 +1479,10 @@ impl RdbMysqlHost {
 impl Rdb for RdbMysqlHost {
     fn info(&self) -> DbInfo {
         if let Some(container) = self.container.as_ref() {
-            return container.info()
+            return container.info();
         }
         if let Some(provided) = self.provided.as_ref() {
-            return provided.info()
+            return provided.info();
         }
         panic!("Mysql not configured")
     }
@@ -1443,20 +1503,20 @@ impl Rdb for RdbMysqlHost {
 impl RdbConnection for RdbMysqlHost {
     fn public_connection_string(&self) -> String {
         if let Some(container) = self.container.as_ref() {
-            return container.public_connection_string()
+            return container.public_connection_string();
         }
         if let Some(provided) = self.provided.as_ref() {
-            return provided.public_connection_string()
+            return provided.public_connection_string();
         }
         "".to_string()
     }
 
     fn private_connection_string(&self) -> String {
         if let Some(container) = self.container.as_ref() {
-            return container.private_connection_string()
+            return container.private_connection_string();
         }
         if let Some(provided) = self.provided.as_ref() {
-            return provided.private_connection_string()
+            return provided.private_connection_string();
         }
         "".to_string()
     }

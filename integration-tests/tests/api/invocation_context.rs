@@ -32,7 +32,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::invocation_context::{SpanId, TraceId};
 use golem_common::model::ComponentType;
-use golem_test_framework::config::{TestDependencies};
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use reqwest::header::HeaderValue;
 use reqwest::Client;

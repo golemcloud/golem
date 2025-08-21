@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::{Deps, Tracing};
-use golem_test_framework::config::{
-    TestDependencies, TestDependenciesDsl,
-};
+use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDslUnsafe;
 use test_r::{inherit_test_dep, test};
 
@@ -23,10 +21,7 @@ inherit_test_dep!(Tracing);
 inherit_test_dep!(Deps);
 
 #[test]
-async fn get_account_of_owner_of_shared_project(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn get_account_of_owner_of_shared_project(deps: &Deps, _tracing: &Tracing) {
     let user_1 = deps.user().await;
     let user_2 = deps.user().await;
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use assert2::check;
 use golem_test_framework::config::TestDependencies;
@@ -23,7 +24,6 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use test_r::{inherit_test_dep, test};
 use tracing::info;
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -31,11 +31,7 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
-async fn auction_example_1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn auction_example_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -105,11 +101,7 @@ async fn auction_example_1(
 
 #[test]
 #[tracing::instrument]
-async fn auction_example_2(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn auction_example_2(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -179,11 +171,7 @@ async fn auction_example_2(
 
 #[test]
 #[tracing::instrument]
-async fn counter_resource_test_1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn counter_resource_test_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -223,11 +211,7 @@ async fn counter_resource_test_1(
 
 #[test]
 #[tracing::instrument]
-async fn counter_resource_test_2(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn counter_resource_test_2(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -317,11 +301,7 @@ async fn counter_resource_test_2_with_restart(
 
 #[test]
 #[tracing::instrument]
-async fn counter_resource_test_3(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn counter_resource_test_3(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -411,11 +391,7 @@ async fn counter_resource_test_3_with_restart(
 
 #[test]
 #[tracing::instrument]
-async fn context_inheritance(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn context_inheritance(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -503,11 +479,7 @@ async fn context_inheritance(
 
 #[test]
 #[tracing::instrument]
-async fn counter_resource_test_5(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn counter_resource_test_5(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -617,11 +589,7 @@ async fn counter_resource_test_5_with_restart(
 
 #[test]
 #[tracing::instrument]
-async fn wasm_rpc_bug_32_test(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn wasm_rpc_bug_32_test(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use assert2::{assert, check};
 use axum::response::IntoResponse;
@@ -29,7 +30,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use test_r::{inherit_test_dep, test};
 use tracing::{info, Instrument};
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -37,11 +37,7 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
-async fn zig_example_3(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn zig_example_3(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -78,11 +74,7 @@ async fn zig_example_3(
 
 #[test]
 #[tracing::instrument]
-async fn tinygo_example(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn tinygo_example(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -144,11 +136,7 @@ async fn tinygo_example(
 
 #[test]
 #[tracing::instrument]
-async fn tinygo_http_client(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn tinygo_http_client(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -231,11 +219,7 @@ async fn tinygo_http_client(
 #[test]
 #[tracing::instrument]
 #[ignore] // Building with the latest Grain compiler fails in "WebAssembly Translation error"
-async fn grain_example_1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn grain_example_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -277,11 +261,7 @@ async fn grain_example_1(
 #[ignore]
 #[test]
 #[tracing::instrument]
-async fn java_example_1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn java_example_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -325,11 +305,7 @@ async fn java_example_1(
 #[ignore]
 #[test]
 #[tracing::instrument]
-async fn java_shopping_cart(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn java_shopping_cart(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -433,11 +409,7 @@ async fn java_shopping_cart(
 
 #[test]
 #[tracing::instrument]
-async fn c_example_1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn c_example_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -473,11 +445,7 @@ async fn c_example_1(
 
 #[test]
 #[tracing::instrument]
-async fn c_example_2(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn c_example_2(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -515,11 +483,7 @@ async fn c_example_2(
 #[test]
 #[tracing::instrument]
 #[ignore]
-async fn c_example_3(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn c_example_3(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -545,11 +509,7 @@ async fn c_example_3(
 #[test]
 #[tracing::instrument]
 #[ignore]
-async fn c_example_4(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn c_example_4(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 

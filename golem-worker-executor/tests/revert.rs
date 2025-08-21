@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use assert2::check;
 use golem_common::model::OplogIndex;
@@ -23,7 +24,6 @@ use golem_wasm_rpc::{IntoValue, IntoValueAndType};
 use log::info;
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -126,11 +126,7 @@ async fn revert_successful_invocations(
 
 #[test]
 #[tracing::instrument]
-async fn revert_failed_worker(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn revert_failed_worker(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -184,11 +180,7 @@ async fn revert_failed_worker(
 
 #[test]
 #[tracing::instrument]
-async fn revert_auto_update(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn revert_auto_update(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -244,11 +236,7 @@ async fn revert_auto_update(
 
 #[test]
 #[tracing::instrument]
-async fn revert_manual_update(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn revert_manual_update(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 

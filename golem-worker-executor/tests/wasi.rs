@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use assert2::{assert, check};
 use axum::response::Response;
@@ -42,7 +43,6 @@ use tokio::spawn;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use tracing::{info, Instrument};
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -55,11 +55,7 @@ const LINE_ENDING: &str = "\n";
 
 #[test]
 #[tracing::instrument]
-async fn write_stdout(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn write_stdout(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -89,11 +85,7 @@ async fn write_stdout(
 
 #[test]
 #[tracing::instrument]
-async fn write_stderr(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn write_stderr(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -123,11 +115,7 @@ async fn write_stderr(
 
 #[test]
 #[tracing::instrument]
-async fn read_stdin(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn read_stdin(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -145,11 +133,7 @@ async fn read_stdin(
 
 #[test]
 #[tracing::instrument]
-async fn clocks(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn clocks(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -197,11 +181,7 @@ async fn clocks(
 
 #[test]
 #[tracing::instrument]
-async fn file_write_read_delete(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn file_write_read_delete(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -233,11 +213,7 @@ async fn file_write_read_delete(
 
 #[test]
 #[tracing::instrument]
-async fn initial_file_read_write(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn initial_file_read_write(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -310,8 +286,8 @@ async fn initial_file_listing_through_api(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
-    let foo_file_size = get_file_size( &executor, "initial-file-read-write/files/foo.txt" ).await;
-    let baz_file_size = get_file_size( &executor, "initial-file-read-write/files/baz.txt" ).await;
+    let foo_file_size = get_file_size(&executor, "initial-file-read-write/files/foo.txt").await;
+    let baz_file_size = get_file_size(&executor, "initial-file-read-write/files/baz.txt").await;
 
     let component_files = executor
         .add_initial_component_files(&[
@@ -450,11 +426,7 @@ async fn initial_file_reading_through_api(
 
 #[test]
 #[tracing::instrument]
-async fn directories(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn directories(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -510,11 +482,7 @@ async fn directories(
 
 #[test]
 #[tracing::instrument]
-async fn directories_replay(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn directories_replay(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -579,11 +547,7 @@ async fn directories_replay(
 
 #[test]
 #[tracing::instrument]
-async fn file_write_read(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn file_write_read(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -626,11 +590,7 @@ async fn file_write_read(
 
 #[test]
 #[tracing::instrument]
-async fn file_update_1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn file_update_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -965,11 +925,7 @@ async fn file_update_in_the_middle_of_exported_function(
 
 #[test]
 #[tracing::instrument]
-async fn environment_service(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn environment_service(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1315,11 +1271,7 @@ async fn http_client_interrupting_response_stream_async(
 
 #[test]
 #[tracing::instrument]
-async fn sleep(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn sleep(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1358,11 +1310,7 @@ async fn sleep(
 
 #[test]
 #[tracing::instrument]
-async fn resuming_sleep(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn resuming_sleep(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1417,11 +1365,7 @@ async fn resuming_sleep(
 
 #[test]
 #[tracing::instrument]
-async fn failing_worker(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn failing_worker(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1477,11 +1421,7 @@ async fn failing_worker(
 
 #[test]
 #[tracing::instrument]
-async fn file_service_write_direct(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn file_service_write_direct(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -1621,11 +1561,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
 
 #[test]
 #[tracing::instrument]
-async fn file_hard_link(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn file_hard_link(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -2165,11 +2101,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
 
 #[test]
 #[tracing::instrument]
-async fn filesystem_metadata_hash(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn filesystem_metadata_hash(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -2217,11 +2149,7 @@ async fn filesystem_metadata_hash(
 
 #[test]
 #[tracing::instrument]
-async fn ip_address_resolve(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn ip_address_resolve(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 

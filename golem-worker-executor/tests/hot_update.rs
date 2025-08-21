@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::Deps;
 use crate::{common, LastUniqueId, Tracing};
 use assert2::check;
 use async_mutex::Mutex;
@@ -29,7 +30,6 @@ use test_r::{flaky, inherit_test_dep, test};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, Instrument};
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -137,11 +137,7 @@ impl TestHttpServer {
 
 #[test]
 #[tracing::instrument]
-async fn auto_update_on_running(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn auto_update_on_running(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap().into_admin();
 
@@ -215,11 +211,7 @@ async fn auto_update_on_running(
 
 #[test]
 #[tracing::instrument]
-async fn auto_update_on_idle(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn auto_update_on_idle(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap().into_admin();
 
@@ -465,11 +457,7 @@ async fn failing_auto_update_on_running(
 
 #[test]
 #[tracing::instrument]
-async fn manual_update_on_idle(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn manual_update_on_idle(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await.unwrap().into_admin();
 

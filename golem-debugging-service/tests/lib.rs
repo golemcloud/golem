@@ -1,4 +1,3 @@
-use std::env::var;
 use async_trait::async_trait;
 use golem_common::config::RedisConfig;
 use golem_common::model::{AccountId, ProjectId, RetryConfig};
@@ -32,6 +31,7 @@ use golem_worker_executor::services::golem_config::{
     ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
     WorkerServiceGrpcConfig,
 };
+use std::env::var;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
@@ -229,7 +229,9 @@ impl Debug for RegularWorkerExecutorTestDependencies {
 
 impl RegularWorkerExecutorTestDependencies {
     pub async fn new() -> Self {
-        let docker_active = var("GOLEM_DOCKER_SERVICES").map(|v| v == "true").unwrap_or(false);
+        let docker_active = var("GOLEM_DOCKER_SERVICES")
+            .map(|v| v == "true")
+            .unwrap_or(false);
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = if !docker_active {
             Arc::new(SpawnedRedis::new(
@@ -239,12 +241,20 @@ impl RegularWorkerExecutorTestDependencies {
                 Level::ERROR,
             ))
         } else {
-            Arc::new(DockerRedis::new( "test_network", "".to_string() ).await)
+            Arc::new(DockerRedis::new("test_network", "".to_string()).await)
         };
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = if !docker_active {
-            Arc::new(SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR))
+            Arc::new(SpawnedRedisMonitor::new(
+                redis.clone(),
+                Level::DEBUG,
+                Level::ERROR,
+            ))
         } else {
-            Arc::new(DockerRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR))
+            Arc::new(DockerRedisMonitor::new(
+                redis.clone(),
+                Level::DEBUG,
+                Level::ERROR,
+            ))
         };
 
         let blob_storage = Arc::new(
@@ -310,10 +320,10 @@ impl RegularWorkerExecutorTestDependencies {
         ));
 
         let worker_service: Arc<dyn WorkerService> = Arc::new(ForwardingWorkerService::new(
-                worker_executor.clone(),
+            worker_executor.clone(),
             self.component_service.clone(),
             self.cloud_service.clone(),
-            ));
+        ));
 
         RegularWorkerExecutorPerTestDependencies {
             redis,

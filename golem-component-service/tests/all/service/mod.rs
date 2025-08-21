@@ -105,9 +105,13 @@ fn component_compilation_service() -> Arc<dyn ComponentCompilationService> {
 #[test_dep]
 async fn blob_storage() -> Arc<dyn BlobStorage + Send + Sync> {
     Arc::new(
-        FileSystemBlobStorage::new(&PathBuf::from(format!("{}/blob-{}", env::temp_dir().display(), Uuid::new_v4())))
-            .await
-            .expect("Failed to create blob storage"),
+        FileSystemBlobStorage::new(&PathBuf::from(format!(
+            "{}/blob-{}",
+            env::temp_dir().display(),
+            Uuid::new_v4()
+        )))
+        .await
+        .expect("Failed to create blob storage"),
     )
 }
 

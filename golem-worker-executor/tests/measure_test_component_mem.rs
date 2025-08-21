@@ -1,6 +1,7 @@
 use test_r::{inherit_test_dep, test};
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use anyhow::anyhow;
 use golem_common::model::ComponentType;
@@ -17,7 +18,6 @@ use std::fmt::Write;
 use std::path::Path;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tracing::{error, info};
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -25,11 +25,7 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[ignore]
-async fn measure(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn measure(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let mut system = System::new_all();
     let ctx = TestContext::new(last_unique_id);
     let executor = start(deps, &ctx).await.unwrap().into_admin();

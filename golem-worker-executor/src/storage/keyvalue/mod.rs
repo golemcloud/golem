@@ -175,7 +175,11 @@ pub trait KeyValueStorage: Debug {
 }
 
 pub trait KeyValueStorageLabelledApi<T: KeyValueStorage + ?Sized> {
-    fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledKeyValueStorage<'_, T>;
+    fn with(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+    ) -> LabelledKeyValueStorage<'_, T>;
 
     fn with_entity(
         &self,
@@ -186,7 +190,11 @@ pub trait KeyValueStorageLabelledApi<T: KeyValueStorage + ?Sized> {
 }
 
 impl<T: ?Sized + KeyValueStorage> KeyValueStorageLabelledApi<T> for T {
-    fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledKeyValueStorage<'_, T> {
+    fn with(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+    ) -> LabelledKeyValueStorage<'_, T> {
         LabelledKeyValueStorage::new(svc_name, api_name, self)
     }
     fn with_entity(

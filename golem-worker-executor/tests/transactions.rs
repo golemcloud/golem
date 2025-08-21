@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use assert2::check;
 use axum::extract::Path;
@@ -34,7 +35,6 @@ use test_r::{inherit_test_dep, test, timeout};
 use tokio::task::JoinHandle;
 use tracing::info;
 use tracing::{debug, instrument, Instrument};
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -133,11 +133,7 @@ impl TestHttpServer {
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn jump(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn jump(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -196,11 +192,7 @@ async fn jump(
 
 #[test]
 #[instrument]
-async fn explicit_oplog_commit(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn explicit_oplog_commit(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -229,11 +221,7 @@ async fn explicit_oplog_commit(
 
 #[test]
 #[instrument]
-async fn set_retry_policy(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn set_retry_policy(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -290,11 +278,7 @@ async fn set_retry_policy(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn atomic_region(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn atomic_region(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -327,11 +311,7 @@ async fn atomic_region(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn idempotence_on(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn idempotence_on(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -369,11 +349,7 @@ async fn idempotence_on(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn idempotence_off(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn idempotence_off(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -412,11 +388,7 @@ async fn idempotence_off(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn persist_nothing(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn persist_nothing(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -545,11 +517,7 @@ async fn golem_rust_set_retry_policy(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn golem_rust_atomic_region(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn golem_rust_atomic_region(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -582,11 +550,7 @@ async fn golem_rust_atomic_region(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn golem_rust_idempotence_on(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn golem_rust_idempotence_on(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 

@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
-use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies, TestDependenciesDsl};
-use test_r::test_dep;
 use golem_common::model::AccountId;
+use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies, TestDependenciesDsl,
+};
+use std::ops::Deref;
+use test_r::test_dep;
 
 test_r::enable!();
 
@@ -61,13 +63,15 @@ pub async fn create_deps(_tracing: &Tracing) -> Deps {
         worker_executor_cluster_size: 3,
         ..EnvBasedTestDependenciesConfig::new()
     })
-        .await;
+    .await;
 
     deps.redis_monitor().assert_valid();
 
     let deps2 = TestDependenciesDsl {
         deps,
-        account_id: AccountId { value: "".to_string() },
+        account_id: AccountId {
+            value: "".to_string(),
+        },
         account_email: "".to_string(),
         token: Default::default(),
     };

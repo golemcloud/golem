@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::common::{start, TestContext};
+use crate::Deps;
 use crate::{LastUniqueId, Tracing};
 use axum::extract::Query;
 use axum::response::Response;
@@ -31,7 +32,6 @@ use std::sync::Arc;
 use test_r::{inherit_test_dep, test};
 use tokio::sync::Mutex;
 use tracing::Instrument;
-use crate::Deps;
 
 inherit_test_dep!(Deps);
 inherit_test_dep!(LastUniqueId);
@@ -39,11 +39,7 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
-async fn custom_durability_1(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn custom_durability_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -122,11 +118,7 @@ async fn custom_durability_1(
 
 #[test]
 #[tracing::instrument]
-async fn lazy_pollable(
-    last_unique_id: &LastUniqueId,
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn lazy_pollable(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap().into_admin();
 

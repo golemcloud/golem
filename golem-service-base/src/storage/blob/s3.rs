@@ -74,15 +74,11 @@ impl S3BlobStorage {
         }
     }
 
-    fn s3_key(
-        &self,
-        namespace: &BlobStorageNamespace,
-        path: &Path
-    ) -> UnixPathBuf {
+    fn s3_key(&self, namespace: &BlobStorageNamespace, path: &Path) -> UnixPathBuf {
         // push of components is done to prevent mixed-separator paths
         let mut pre = self.prefix_of(namespace);
         path.components().for_each(|comp| {
-           pre.push(comp.as_os_str().to_string_lossy().to_string());
+            pre.push(comp.as_os_str().to_string_lossy().to_string());
         });
         pre
     }
@@ -105,7 +101,7 @@ impl S3BlobStorage {
 
     fn prefix_of(&self, namespace: &BlobStorageNamespace) -> UnixPathBuf {
         let mut base = UnixPathBuf::new();
-        if ! self.config.object_prefix.is_empty() {
+        if !self.config.object_prefix.is_empty() {
             base.push(&self.config.object_prefix);
         }
         match namespace {
@@ -114,7 +110,7 @@ impl S3BlobStorage {
             }
             BlobStorageNamespace::Components => {
                 // none
-            },
+            }
             BlobStorageNamespace::CustomStorage(account_id) => {
                 let account_id_string = account_id.to_string();
                 base.push(&account_id_string);
@@ -158,7 +154,7 @@ impl S3BlobStorage {
         bucket: &str,
         prefix: &Path,
     ) -> Result<Vec<Object>, String> {
-        let u_path = as_unix_path( prefix );
+        let u_path = as_unix_path(prefix);
         let mut result = Vec::new();
         let mut cont: Option<String> = None;
 
@@ -172,7 +168,11 @@ impl S3BlobStorage {
                 |(client, bucket, u_path, cont)| {
                     Box::pin(async move {
                         let prefix = if u_path.to_string_lossy().ends_with('/') {
-                            u_path.to_string_lossy().strip_suffix("/").unwrap().to_string()
+                            u_path
+                                .to_string_lossy()
+                                .strip_suffix("/")
+                                .unwrap()
+                                .to_string()
                         } else {
                             u_path.to_string_lossy().to_string()
                         };
@@ -809,9 +809,11 @@ impl BlobStorage for S3BlobStorage {
             })
             .filter_map(|path_elem| {
                 let mut components = path_elem.components().collect::<Vec<_>>();
-                let has_prefix_key : bool = is_empty_path || components[0].as_os_str() == OsStr::new(path);
-                let has_marker_dir : bool = components.last().unwrap().as_os_str() == OsStr::new("__dir_marker");
-                let is_nested : bool = if is_empty_path {
+                let has_prefix_key: bool =
+                    is_empty_path || components[0].as_os_str() == OsStr::new(path);
+                let has_marker_dir: bool =
+                    components.last().unwrap().as_os_str() == OsStr::new("__dir_marker");
+                let is_nested: bool = if is_empty_path {
                     components.len() > 1
                 } else {
                     components.len() > 2
@@ -823,12 +825,12 @@ impl BlobStorage for S3BlobStorage {
 
                         // create actual path
                         let mut newpath = PathBuf::new();
-                        components.iter().for_each( |comp| {
-                            newpath.push( comp );
-                        } );
-                        return Some( newpath );
+                        components.iter().for_each(|comp| {
+                            newpath.push(comp);
+                        });
+                        return Some(newpath);
                     }
-                    if ! is_nested && ! has_marker_dir {
+                    if !is_nested && !has_marker_dir {
                         return Some(path_elem);
                     }
                 }

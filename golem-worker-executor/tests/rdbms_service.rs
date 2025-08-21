@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::common::{mysql_host, new_worker_id, postgres_host};
 use assert2::check;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use golem_common::model::WorkerId;
+use golem_test_framework::components::rdb::RdbConnection;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use golem_worker_executor::services::rdbms::mysql::{types as mysql_types, MysqlType};
 use golem_worker_executor::services::rdbms::postgres::{types as postgres_types, PostgresType};
@@ -33,8 +35,6 @@ use test_r::{test, test_dep, timeout};
 use tokio::task::JoinSet;
 use tracing::{info, Instrument};
 use uuid::Uuid;
-use golem_test_framework::components::rdb::RdbConnection;
-use crate::common::{mysql_host, new_worker_id, postgres_host};
 
 #[test_dep]
 fn rdbms_service() -> RdbmsServiceDefault {
@@ -195,10 +195,8 @@ impl<T: RdbmsType + Clone> RdbmsTest<T> {
 
 #[test]
 #[timeout(300_000)]
-async fn postgres_transaction_tests(
-    rdbms_service: &RdbmsServiceDefault,
-) {
-    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
+async fn postgres_transaction_tests(rdbms_service: &RdbmsServiceDefault) {
+    let postgres = postgres_host(Some(rdbms_service.postgres().clone())).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
@@ -316,10 +314,8 @@ async fn postgres_transaction_tests(
 
 #[test]
 #[timeout(300_000)]
-async fn postgres_create_insert_select_test(
-    rdbms_service: &RdbmsServiceDefault,
-) {
-    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
+async fn postgres_create_insert_select_test(rdbms_service: &RdbmsServiceDefault) {
+    let postgres = postgres_host(Some(rdbms_service.postgres().clone())).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
@@ -973,10 +969,8 @@ async fn postgres_create_insert_select_test(
 
 #[test]
 #[timeout(300_000)]
-async fn postgres_create_insert_select_array_test(
-    rdbms_service: &RdbmsServiceDefault,
-) {
-    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
+async fn postgres_create_insert_select_array_test(rdbms_service: &RdbmsServiceDefault) {
+    let postgres = postgres_host(Some(rdbms_service.postgres().clone())).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
@@ -1846,10 +1840,8 @@ async fn postgres_create_insert_select_array_test(
 
 #[test]
 #[timeout(300_000)]
-async fn postgres_schema_test(
-    rdbms_service: &RdbmsServiceDefault
-) {
-    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
+async fn postgres_schema_test(rdbms_service: &RdbmsServiceDefault) {
+    let postgres = postgres_host(Some(rdbms_service.postgres().clone())).await;
     let rdbms = rdbms_service.postgres();
     let db_address = postgres.public_connection_string();
 
@@ -1883,10 +1875,8 @@ async fn postgres_schema_test(
 
 #[test]
 #[timeout(300_000)]
-async fn mysql_transaction_tests(
-    rdbms_service: &RdbmsServiceDefault
-) {
-    let mysql = mysql_host( Some(rdbms_service.mysql().clone()) ).await;
+async fn mysql_transaction_tests(rdbms_service: &RdbmsServiceDefault) {
+    let mysql = mysql_host(Some(rdbms_service.mysql().clone())).await;
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
 
@@ -2000,10 +1990,8 @@ async fn mysql_transaction_tests(
 
 #[test]
 #[timeout(300_000)]
-async fn mysql_create_insert_select_test(
-    rdbms_service: &RdbmsServiceDefault,
-) {
-    let mysql = mysql_host( Some(rdbms_service.mysql().clone()) ).await;
+async fn mysql_create_insert_select_test(rdbms_service: &RdbmsServiceDefault) {
+    let mysql = mysql_host(Some(rdbms_service.mysql().clone())).await;
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
     let create_table_statement = r#"
@@ -2615,10 +2603,8 @@ async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
 
 #[test]
 #[timeout(300_000)]
-async fn postgres_query_err_test(
-    rdbms_service: &RdbmsServiceDefault,
-) {
-    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
+async fn postgres_query_err_test(rdbms_service: &RdbmsServiceDefault) {
+    let postgres = postgres_host(Some(rdbms_service.postgres().clone())).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
@@ -2658,10 +2644,8 @@ async fn postgres_query_err_test(
 
 #[test]
 #[timeout(300_000)]
-async fn postgres_execute_err_test(
-    rdbms_service: &RdbmsServiceDefault,
-) {
-    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
+async fn postgres_execute_err_test(rdbms_service: &RdbmsServiceDefault) {
+    let postgres = postgres_host(Some(rdbms_service.postgres().clone())).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
@@ -2693,10 +2677,8 @@ async fn postgres_execute_err_test(
 
 #[test]
 #[timeout(300_000)]
-async fn mysql_query_err_test(
-    rdbms_service: &RdbmsServiceDefault
-) {
-    let mysql = mysql_host( Some(rdbms_service.mysql().clone()) ).await;
+async fn mysql_query_err_test(rdbms_service: &RdbmsServiceDefault) {
+    let mysql = mysql_host(Some(rdbms_service.mysql().clone())).await;
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
 
@@ -2724,10 +2706,8 @@ async fn mysql_query_err_test(
 
 #[test]
 #[timeout(300_000)]
-async fn mysql_execute_err_test(
-    rdbms_service: &RdbmsServiceDefault
-) {
-    let mysql = mysql_host( Some(rdbms_service.mysql().clone()) ).await;
+async fn mysql_execute_err_test(rdbms_service: &RdbmsServiceDefault) {
+    let mysql = mysql_host(Some(rdbms_service.mysql().clone())).await;
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
 
@@ -2864,10 +2844,8 @@ async fn test_rdbms_pool_key_masked_address() {
 
 #[test]
 #[timeout(300_000)]
-async fn mysql_par_test(
-    rdbms_service: &RdbmsServiceDefault
-) {
-    let mysql = mysql_host( Some(rdbms_service.mysql().clone()) ).await;
+async fn mysql_par_test(rdbms_service: &RdbmsServiceDefault) {
+    let mysql = mysql_host(Some(rdbms_service.mysql().clone())).await;
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
     let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {
@@ -2890,10 +2868,8 @@ async fn mysql_par_test(
 
 #[test]
 #[timeout(60_000)]
-async fn postgres_par_test(
-    rdbms_service: &RdbmsServiceDefault
-) {
-    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
+async fn postgres_par_test(rdbms_service: &RdbmsServiceDefault) {
+    let postgres = postgres_host(Some(rdbms_service.postgres().clone())).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
     let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {

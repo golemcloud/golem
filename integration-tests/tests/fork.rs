@@ -396,10 +396,7 @@ async fn fork_idle_worker(deps: &Deps, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_worker_when_target_already_exists(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn fork_worker_when_target_already_exists(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_id = admin.component("shopping-cart").store().await;
 
@@ -443,10 +440,7 @@ async fn fork_worker_when_target_already_exists(
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_worker_with_invalid_oplog_index_cut_off(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn fork_worker_with_invalid_oplog_index_cut_off(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_id = admin.component("shopping-cart").store().await;
 
@@ -523,10 +517,7 @@ async fn fork_invalid_worker(deps: &Deps, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_worker_ensures_zero_divergence_until_cut_off(
-    deps: &Deps,
-    _tracing: &Tracing,
-) {
+async fn fork_worker_ensures_zero_divergence_until_cut_off(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin();
     let component_id = admin.component("environment-service").store().await;
 

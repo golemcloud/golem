@@ -22,7 +22,8 @@ mod tests {
 
     #[test]
     pub fn config_is_loadable() {
-        env::set_current_dir( PathBuf::from(env!("CARGO_MANIFEST_DIR")) ).expect("Failed to set current directory");
+        env::set_current_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+            .expect("Failed to set current directory");
 
         make_config_loader()
             .load()
