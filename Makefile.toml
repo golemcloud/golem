@@ -30,14 +30,14 @@ default_to_workspace = false # by default, we run cargo commands on top level in
 skip_core_tasks = true       # we are not using the predefined cargo-make flows, instead redefine here for more clarity
 
 [env]
-JUNIT_OPTS = ""
-JUNIT_OPTS_WIN = ""
+JUNIT_OPTS = "--nocapture --report-time"
+JUNIT_OPTS_WIN = "--report-time"
 AWS_EC2_METADATA_DISABLED = "true"
 
 [env.ci]
 CARGO_INCREMENTAL = "false"
 # CARGO_LOG="cargo::core::compiler::fingerprint=trace"
-JUNIT_OPTS = "--format junit --logfile target/report.xml"
+JUNIT_OPTS = "--nocapture --report-time --format junit --logfile target/report.xml"
 JUNIT_OPTS_WIN = "--color=never --test-threads=1 --report-time --format junit"
 
 [tasks.default]
@@ -238,8 +238,8 @@ dependencies = [
 dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
-cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- --nocapture --report-time $JUNIT_OPTS
-cargo test -p golem-wasm-ast --tests --all-features -- --nocapture --report-time $JUNIT_OPTS
+cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- $JUNIT_OPTS
+cargo test -p golem-wasm-ast --tests --all-features -- $JUNIT_OPTS
 '''
 
 [tasks.unit-tests.windows]
@@ -355,7 +355,7 @@ description = "Runs integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package integration-tests --test integration -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package integration-tests --test integration -- $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group2]
@@ -363,7 +363,7 @@ description = "Runs component service integration tests only"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package golem-component-service --test tests -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-component-service --test tests -- $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group3]
@@ -371,8 +371,8 @@ description = "Runs worker service integration tests only"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package golem-worker-service --test services_tests -- --nocapture --report-time $JUNIT_OPTS
-cargo test --package golem-worker-service --test api_gateway_end_to_end_tests -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-service --test services_tests -- $JUNIT_OPTS
+cargo test --package golem-worker-service --test api_gateway_end_to_end_tests -- $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group4]
@@ -380,9 +380,9 @@ description = "Runs golem-service-base integration tests only"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
-cargo test --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
-cargo test --package cloud-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-service-base --test integration -- $JUNIT_OPTS
+cargo test --package golem-worker-service --test '*' -- $JUNIT_OPTS
+cargo test --package cloud-service --test '*' -- $JUNIT_OPTS
 cargo test --package golem-debugging-service --test 'integration' -- --report-time $JUNIT_OPTS
 '''
 
@@ -398,7 +398,7 @@ cargo test --package integration-tests --test sharding -- --report-time $JUNIT_O
 dependencies = ["build-bins"]
 script = '''
 rm -rf logs data
-mkdir -pv logs data
+mkdir -p logs data
 
 export RUST_LOG=info,golem_test_framework::components=WARN
 export RUST_BACKTRACE=1
@@ -421,7 +421,7 @@ description = "Runs API HTTP tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "http" }
 script = '''
-cargo test --package integration-tests --test api -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package integration-tests --test api -- $JUNIT_OPTS
 '''
 
 [tasks.api-tests-grpc]
@@ -429,7 +429,7 @@ description = "Runs API GRPC tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc" }
 script = '''
-cargo test --package integration-tests --test api -- :tag: --nocapture --report-time $JUNIT_OPTS
+cargo test --package integration-tests --test api -- :tag: $JUNIT_OPTS
 '''
 
 ## ** CHECK-OPENAPI **
@@ -481,6 +481,40 @@ script = '''
   fi
 '''
 
+[tasks.diff-openapi.windows]
+description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
+dependencies = ["merge-openapi"]
+script = '''
+function Test-OpenApiSpec {
+    param (
+        [string]$SourceFile,
+        [string]$TargetFile,
+        [string]$ServiceName
+    )
+
+    # Execute diff command and capture exit code, suppressing output
+    # Assumes 'diff.exe' is available in the system's PATH
+    & diff.exe $SourceFile $TargetFile *>$null
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Latest $($ServiceName) OpenAPI spec version detected."
+    } else {
+        Write-Error "$($SourceFile) is not the same as produced by $($ServiceName)."
+        Write-Error "Run cargo make generate-openapi to generate new spec."
+        
+        # Only output the diff for golem-service.yaml as in the original script
+        if ($SourceFile -eq "openapi/golem-service.yaml") {
+            & diff.exe $SourceFile $TargetFile
+        }
+    }
+}
+
+Test-OpenApiSpec -SourceFile "openapi/golem-service.yaml" -TargetFile "target/golem-service.yaml" -ServiceName "golem-service-yaml"
+Test-OpenApiSpec -SourceFile "openapi/cloud-spec.yaml" -TargetFile "target/cloud-spec.yaml" -ServiceName "cloud-service"
+Test-OpenApiSpec -SourceFile "openapi/golem-component-service.yaml" -TargetFile "target/golem-component-service.yaml" -ServiceName "golem-component-service"
+Test-OpenApiSpec -SourceFile "openapi/golem-worker-service.yaml" -TargetFile "target/golem-worker-service.yaml" -ServiceName "golem-worker-service"
+'''
+
 ## ** GENERATE-OPENAPI **
 
 [tasks.generate-openapi]
@@ -495,7 +529,7 @@ description = "Generates openapi spec for worker service"
 dependencies = [ "build-worker-service" ]
 cwd = "./target/debug"
 script = '''
-mkdir -pv ../data
+mkdir -p ../data
 ./golem-worker-service --dump-openapi-yaml > ../golem-worker-service.yaml
 '''
 
@@ -504,7 +538,7 @@ description = "Generates openapi spec for component service"
 dependencies = [ "build-component-service" ]
 cwd = "./target/debug"
 script = '''
-mkdir -pv ../data
+mkdir -p ../data
 ./golem-component-service --dump-openapi-yaml > ../golem-component-service.yaml
 '''
 
@@ -513,7 +547,7 @@ description = "Generates openapi spec for cloud service"
 dependencies = [ "build-cloud-service" ]
 cwd = "./target/debug"
 script = '''
-mkdir -pv ../data
+mkdir -p ../data
 ./cloud-service --dump-openapi-yaml > ../cloud-spec.yaml
 '''
 
