@@ -15,6 +15,7 @@
 use crate::services::worker_activator::WorkerActivator;
 use std::sync::Arc;
 
+use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::plugins::Plugins;
 use crate::workerctx::WorkerCtx;
@@ -22,6 +23,7 @@ use file_loader::FileLoader;
 use tokio::runtime::Handle;
 
 pub mod active_workers;
+pub mod agent_types;
 pub mod blob_store;
 pub mod compiled_component;
 pub mod component;
@@ -64,6 +66,10 @@ impl NoAdditionalDeps {
 // HasXXX traits for fine-grained control of which dependencies a function needs
 pub trait HasActiveWorkers<Ctx: WorkerCtx> {
     fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>>;
+}
+
+pub trait HasAgentTypesService {
+    fn agent_types(&self) -> Arc<dyn agent_types::AgentTypesService>;
 }
 
 pub trait HasComponentService {
@@ -181,6 +187,7 @@ pub trait HasProjectService {
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
+    + HasAgentTypesService
     + HasComponentService
     + HasConfig
     + HasWorkerForkService
@@ -214,6 +221,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
 impl<
         Ctx: WorkerCtx,
         T: HasActiveWorkers<Ctx>
+            + HasAgentTypesService
             + HasComponentService
             + HasConfig
             + HasWorkerForkService
@@ -249,6 +257,7 @@ impl<
 /// To be used as a convenient struct member for services that need access to all dependencies
 pub struct All<Ctx: WorkerCtx> {
     active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    agent_types: Arc<dyn agent_types::AgentTypesService>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
@@ -283,6 +292,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
     fn clone(&self) -> Self {
         Self {
             active_workers: self.active_workers.clone(),
+            agent_types: self.agent_types.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
@@ -318,6 +328,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+        agent_types: Arc<dyn agent_types::AgentTypesService>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
@@ -350,6 +361,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
     ) -> Self {
         Self {
             active_workers,
+            agent_types,
             engine,
             linker,
             runtime,
@@ -383,6 +395,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
     pub fn from_other<T: HasAll<Ctx>>(this: &T) -> All<Ctx> {
         All::new(
             this.active_workers(),
+            this.agent_types(),
             this.engine(),
             this.linker(),
             this.runtime(),
@@ -431,6 +444,12 @@ impl<Ctx: WorkerCtx> UsesAllDeps for All<Ctx> {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasActiveWorkers<Ctx> for T {
     fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
         self.all().active_workers.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentTypesService for T {
+    fn agent_types(&self) -> Arc<dyn AgentTypesService> {
+        self.all().agent_types.clone()
     }
 }
 

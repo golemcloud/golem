@@ -1738,6 +1738,7 @@ impl ComponentService for ComponentServiceDefault {
             self.component_repo
                 .delete(&owner.to_string(), component_id.0)
                 .await?;
+
             Ok(())
         } else {
             Err(ComponentError::UnknownComponentId(component_id.clone()))

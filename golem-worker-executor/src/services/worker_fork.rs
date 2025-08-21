@@ -17,6 +17,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::preview2::golem_api_1_x::host::ForkResult;
+use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
@@ -27,13 +28,14 @@ use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
-    active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
-    shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
-    HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
-    HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins, HasProjectService,
-    HasPromiseService, HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService,
-    HasSchedulerService, HasShardManagerService, HasShardService, HasWasmtimeEngine,
-    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
+    active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
+    scheduler, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
+    HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
+    HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService,
+    HasPlugins, HasProjectService, HasPromiseService, HasResourceLimits, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
+    HasWorkerProxy, HasWorkerService,
 };
 use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
@@ -70,6 +72,7 @@ pub trait WorkerForkService: Send + Sync {
 pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub rpc: Arc<dyn Rpc>,
     pub active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    pub agent_types: Arc<dyn agent_types::AgentTypesService>,
     pub engine: Arc<wasmtime::Engine>,
     pub linker: Arc<wasmtime::component::Linker<Ctx>>,
     pub runtime: Handle,
@@ -107,6 +110,12 @@ impl<Ctx: WorkerCtx> HasEvents for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DefaultWorkerFork<Ctx> {
     fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
         self.active_workers.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasAgentTypesService for DefaultWorkerFork<Ctx> {
+    fn agent_types(&self) -> Arc<dyn agent_types::AgentTypesService> {
+        self.agent_types.clone()
     }
 }
 
@@ -269,6 +278,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
         Self {
             rpc: self.rpc.clone(),
             active_workers: self.active_workers.clone(),
+            agent_types: self.agent_types.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
@@ -329,11 +339,13 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
+        agent_types: Arc<dyn AgentTypesService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
             rpc,
             active_workers,
+            agent_types,
             engine,
             linker,
             runtime,

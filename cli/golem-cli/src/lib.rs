@@ -16,6 +16,7 @@ use clap_verbosity_flag::Verbosity;
 use golem_common::tracing::directive;
 use golem_common::tracing::directive::warn;
 use shadow_rs::shadow;
+use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod app;
@@ -91,6 +92,8 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
             tracing::subscriber::set_global_default(subscriber)
                 .expect("setting default subscriber failed");
         };
+
+        LogTracer::init().expect("failed to initialize log tracer");
     }
 }
 
