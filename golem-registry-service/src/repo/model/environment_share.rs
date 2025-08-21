@@ -31,6 +31,8 @@ pub enum EnvironmentShareRepoError {
     ShareViolatesUniqueness,
     #[error("Revision already exists: {revision_id}")]
     RevisionAlreadyExists { revision_id: i64 },
+    #[error("Revision for update not found: {revision_id}")]
+    RevisionForUpdateNotFound { revision_id: i64 },
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
