@@ -222,9 +222,7 @@ impl DbEnvironmentShareRepo<PostgresPool> {
                 .bind_deletable_revision_audit(revision.audit),
             )
             .await
-            .to_error_on_unique_violation(EnvironmentShareRepoError::RevisionAlreadyExists {
-                revision_id: revision.revision_id,
-            })?;
+            .to_error_on_unique_violation(EnvironmentShareRepoError::ConcurrentModification)?;
 
         revision.roles = {
             let mut inserted_roles = Vec::with_capacity(revision.roles.len());
@@ -311,7 +309,7 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                             .bind(revision.environment_share_id)
                             .bind(current_revision_id)
                     ).await?
-                    .ok_or(EnvironmentShareRepoError::RevisionForUpdateNotFound { revision_id: current_revision_id })?;
+                    .ok_or(EnvironmentShareRepoError::ConcurrentModification)?;
 
                 Ok(EnvironmentShareExtRevisionRecord {
                     environment_id: environment_share_record.environment_id,
@@ -347,7 +345,7 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                             .bind(revision.environment_share_id)
                             .bind(current_revision_id)
                     ).await?
-                    .ok_or(EnvironmentShareRepoError::RevisionForUpdateNotFound { revision_id: current_revision_id })?;
+                    .ok_or(EnvironmentShareRepoError::ConcurrentModification)?;
 
                 Ok(EnvironmentShareExtRevisionRecord {
                     environment_id: environment_share_record.environment_id,

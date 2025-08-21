@@ -29,10 +29,8 @@ use uuid::Uuid;
 pub enum EnvironmentShareRepoError {
     #[error("There is already a share for this account in this environment")]
     ShareViolatesUniqueness,
-    #[error("Revision already exists: {revision_id}")]
-    RevisionAlreadyExists { revision_id: i64 },
-    #[error("Revision for update not found: {revision_id}")]
-    RevisionForUpdateNotFound { revision_id: i64 },
+    #[error("Concurrent modification")]
+    ConcurrentModification,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }

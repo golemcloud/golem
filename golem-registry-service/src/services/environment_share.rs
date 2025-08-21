@@ -129,10 +129,9 @@ impl EnvironmentShareService {
 
         match result {
             Ok(record) => Ok(record.try_into()?),
-            Err(
-                EnvironmentShareRepoError::RevisionAlreadyExists { .. }
-                | EnvironmentShareRepoError::RevisionForUpdateNotFound { .. },
-            ) => Err(EnvironmentShareError::ConcurrentModification),
+            Err(EnvironmentShareRepoError::ConcurrentModification) => {
+                Err(EnvironmentShareError::ConcurrentModification)
+            }
             Err(other) => Err(other.into()),
         }
     }
@@ -165,10 +164,9 @@ impl EnvironmentShareService {
 
         match result {
             Ok(record) => Ok(record.try_into()?),
-            Err(
-                EnvironmentShareRepoError::RevisionAlreadyExists { .. }
-                | EnvironmentShareRepoError::RevisionForUpdateNotFound { .. },
-            ) => Err(EnvironmentShareError::ConcurrentModification),
+            Err(EnvironmentShareRepoError::ConcurrentModification) => {
+                Err(EnvironmentShareError::ConcurrentModification)
+            }
             Err(other) => Err(other.into()),
         }
     }

@@ -676,6 +676,12 @@ CREATE UNIQUE INDEX environment_shares_environment_grantee_uk
     ON environment_shares (environment_id, grantee_account_id)
     WHERE deleted_at IS NULL;
 
+CREATE UNIQUE INDEX environment_shares_environment_idx
+    ON environment_shares (environment_id);
+
+CREATE UNIQUE INDEX environment_shares_grantee_idx
+    ON environment_shares (grantee_account_id);
+
 CREATE TABLE environment_share_revisions
 (
     environment_share_id  UUID      NOT NULL,
