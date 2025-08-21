@@ -59,11 +59,12 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{worker_enumeration, HasAll, HasConfig, HasOplogService};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
     StatusManagement, UpdateManagement, WorkerCtx,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
@@ -467,6 +468,22 @@ impl HostFutureInvokeResult for DebugContext {
     }
 }
 
+impl wasmtime_wasi::p2::bindings::cli::environment::Host for DebugContext {
+    fn get_environment(
+        &mut self,
+    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
+    }
+
+    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
+    }
+
+    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
+    }
+}
+
 #[async_trait]
 impl DynamicLinking<Self> for DebugContext {
     fn link(
@@ -523,6 +540,12 @@ impl InvocationContextManagement for DebugContext {
         self.durable_ctx
             .set_span_attribute(span_id, key, value)
             .await
+    }
+}
+
+impl HasWasiConfigVars for DebugContext {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.wasi_config_vars()
     }
 }
 
@@ -647,5 +670,9 @@ impl WorkerCtx for DebugContext {
 
     fn component_service(&self) -> Arc<dyn ComponentService> {
         self.durable_ctx().component_service()
+    }
+
+    fn created_by(&self) -> &AccountId {
+        self.durable_ctx.created_by()
     }
 }

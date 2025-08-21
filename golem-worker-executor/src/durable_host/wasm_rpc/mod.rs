@@ -25,7 +25,9 @@ use crate::get_oplog_entry;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
-use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
+use crate::workerctx::{
+    HasWasiConfigVars, InvocationContextManagement, InvocationManagement, WorkerCtx,
+};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -64,10 +66,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
+        let args = self.get_arguments().await?;
+        let env = self.get_environment().await?;
+        let wasi_config_vars = self.wasi_config_vars();
+
         let worker_id: WorkerId = worker_id.into();
         let remote_worker_id = worker_id.into_target_worker_id();
 
-        construct_wasm_rpc_resource(self, remote_worker_id).await
+        construct_wasm_rpc_resource(self, remote_worker_id, &args, &env, wasi_config_vars).await
     }
 
     async fn ephemeral(
@@ -76,13 +82,17 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::rpc::wasm-rpc", "ephemeral");
 
+        let args = self.get_arguments().await?;
+        let env = self.get_environment().await?;
+        let wasi_config_vars = self.wasi_config_vars();
+
         let component_id: ComponentId = component_id.into();
         let remote_worker_id = TargetWorkerId {
             component_id,
             worker_name: None,
         };
 
-        construct_wasm_rpc_resource(self, remote_worker_id).await
+        construct_wasm_rpc_resource(self, remote_worker_id, &args, &env, wasi_config_vars).await
     }
 
     async fn invoke_and_await(
@@ -1128,6 +1138,9 @@ impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_worker_id: TargetWorkerId,
+    args: &[String],
+    env: &[(String, String)],
+    config: BTreeMap<String, String>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let remote_worker_id = ctx
         .generate_unique_local_worker_id(remote_worker_id)
@@ -1136,7 +1149,17 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
 
     let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.project_id, &remote_worker_id);
-    let demand = ctx.rpc().create_demand(&remote_worker_id).await;
+    let demand = ctx
+        .rpc()
+        .create_demand(
+            &remote_worker_id,
+            ctx.created_by(),
+            ctx.worker_id(),
+            args,
+            env,
+            config,
+        )
+        .await?;
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload::Interface {
             demand,

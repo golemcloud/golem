@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::LogEventEmitBehaviour;
+use super::{HasWasiConfigVars, LogEventEmitBehaviour};
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{
@@ -64,7 +64,8 @@ use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{
     CancellationTokenEntry, ComponentId, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
 use tracing::debug;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
@@ -547,6 +548,22 @@ impl HostFutureInvokeResult for Context {
     }
 }
 
+impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
+    fn get_environment(
+        &mut self,
+    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
+    }
+
+    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
+    }
+
+    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
+    }
+}
+
 #[async_trait]
 impl DynamicLinking<Context> for Context {
     fn link(
@@ -603,6 +620,12 @@ impl InvocationContextManagement for Context {
         self.durable_ctx
             .set_span_attribute(span_id, key, value)
             .await
+    }
+}
+
+impl HasWasiConfigVars for Context {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.wasi_config_vars()
     }
 }
 
@@ -692,6 +715,10 @@ impl WorkerCtx for Context {
 
     fn owned_worker_id(&self) -> &OwnedWorkerId {
         self.durable_ctx.owned_worker_id()
+    }
+
+    fn created_by(&self) -> &AccountId {
+        self.durable_ctx.created_by()
     }
 
     fn component_metadata(&self) -> &golem_service_base::model::Component {

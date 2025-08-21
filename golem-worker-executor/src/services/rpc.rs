@@ -49,7 +49,15 @@ use tracing::debug;
 
 #[async_trait]
 pub trait Rpc: Send + Sync {
-    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand>;
+    async fn create_demand(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        self_created_by: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+    ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
     async fn invoke_and_await(
         &self,
@@ -209,9 +217,29 @@ impl Drop for LoggingDemand {
 /// Rpc implementation simply calling the public Golem Worker API for invocation
 #[async_trait]
 impl Rpc for RemoteInvocationRpc {
-    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
+    async fn create_demand(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        _self_created_by: &AccountId,
+        _self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+    ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        debug!("Ensuring remote target worker exists");
+
         let demand = LoggingDemand::new(owned_worker_id.worker_id());
-        Box::new(demand)
+
+        self.worker_proxy
+            .start(
+                owned_worker_id,
+                self_args.to_vec(),
+                HashMap::from_iter(self_env.to_vec()),
+                self_config,
+            )
+            .await?;
+
+        Ok(Box::new(demand))
     }
 
     async fn invoke_and_await(
@@ -667,9 +695,48 @@ fn enrich_function_name_by_target_information(
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
-    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
-        let demand = LoggingDemand::new(owned_worker_id.worker_id());
-        Box::new(demand)
+    async fn create_demand(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        self_created_by: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+    ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        if self
+            .shard_service()
+            .check_worker(&owned_worker_id.worker_id)
+            .is_ok()
+        {
+            debug!("Ensuring local target worker exists");
+
+            let _worker = Worker::get_or_create_running(
+                self,
+                self_created_by,
+                owned_worker_id,
+                Some(self_args.to_vec()),
+                Some(self_env.to_vec()),
+                Some(self_config),
+                None,
+                Some(self_worker_id.clone()),
+            )
+            .await?;
+
+            let demand = LoggingDemand::new(owned_worker_id.worker_id());
+            Ok(Box::new(demand))
+        } else {
+            self.remote_rpc
+                .create_demand(
+                    owned_worker_id,
+                    self_created_by,
+                    self_worker_id,
+                    self_args,
+                    self_env,
+                    self_config,
+                )
+                .await
+        }
     }
 
     async fn invoke_and_await(

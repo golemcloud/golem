@@ -53,7 +53,7 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Value, ValueAndType};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
@@ -75,12 +75,13 @@ pub trait WorkerCtx:
     + FileSystemReading
     + DynamicLinking<Self>
     + InvocationContextManagement
+    + HasWasiConfigVars
     + Send
     + Sync
     + Sized
     + 'static
 {
-    /// PublicState is a subset of the worker context which is accessible outside the worker
+    /// PublicState is a subset of the worker context that is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
     type PublicState: PublicWorkerIo + HasWorker<Self> + HasOplog + Clone + Send + Sync;
@@ -158,6 +159,9 @@ pub trait WorkerCtx:
 
     /// Get the owned worker ID associated with this worker context
     fn owned_worker_id(&self) -> &OwnedWorkerId;
+
+    /// Gets the account created this worker
+    fn created_by(&self) -> &AccountId;
 
     fn component_metadata(&self) -> &golem_service_base::model::Component;
 
@@ -467,6 +471,10 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         component: &Component,
         component_metadata: &golem_service_base::model::Component,
     ) -> anyhow::Result<()>;
+}
+
+pub trait HasWasiConfigVars {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String>;
 }
 
 pub enum LogEventEmitBehaviour {

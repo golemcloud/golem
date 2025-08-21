@@ -70,8 +70,8 @@ use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
 use crate::worker::status::calculate_last_known_status;
 use crate::worker::{interpret_function_result, is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
-    InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
+    ExternalOperations, FileSystemReading, HasWasiConfigVars, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
@@ -582,8 +582,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|last_error| last_error.retry_count)
             .unwrap_or_default()
     }
+}
 
-    pub fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+impl<Ctx: WorkerCtx> HasWasiConfigVars for DurableWorkerCtx<Ctx> {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
         self.state.wasi_config_vars.read().unwrap().clone()
     }
 }

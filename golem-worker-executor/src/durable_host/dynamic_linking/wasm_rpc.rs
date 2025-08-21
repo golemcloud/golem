@@ -38,7 +38,12 @@ use wasmtime::component::{LinkerInstance, Resource, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Engine, StoreContextMut};
 use wasmtime_wasi::IoView;
 
-pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
+pub fn dynamic_wasm_rpc_link<
+    Ctx: WorkerCtx
+        + HostWasmRpc
+        + HostFutureInvokeResult
+        + wasmtime_wasi::p2::bindings::cli::environment::Host,
+>(
     name: &str,
     rpc_metadata: &DynamicLinkedWasmRpc,
     engine: &Engine,
@@ -199,7 +204,12 @@ fn register_wasm_rpc_entry<Ctx: WorkerCtx>(
     })?)
 }
 
-async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
+async fn dynamic_function_call<
+    Ctx: WorkerCtx
+        + HostWasmRpc
+        + HostFutureInvokeResult
+        + wasmtime_wasi::p2::bindings::cli::environment::Host,
+>(
     mut store: impl AsContextMut<Data = Ctx> + Send,
     function_name: &ParsedFunctionName,
     params: &[Val],
@@ -1050,7 +1060,9 @@ fn val_to_datetime(val: Val) -> anyhow::Result<golem_wasm_rpc::wasi::clocks::wal
     })
 }
 
-async fn create_default_durable_rpc_target<Ctx: WorkerCtx>(
+async fn create_default_durable_rpc_target<
+    Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::environment::Host,
+>(
     store: &mut StoreContextMut<'_, Ctx>,
     component_name: &String,
     target_worker_name: Val,
@@ -1078,7 +1090,25 @@ async fn create_default_durable_rpc_target<Ctx: WorkerCtx>(
             &store.data().owned_worker_id().project_id,
             &remote_worker_id,
         );
-        let demand = store.data().rpc().create_demand(&remote_worker_id).await;
+        let self_created_by = store.data().created_by().clone();
+        let self_worker_id = store.data().owned_worker_id().worker_id();
+
+        let args = store.data_mut().get_arguments().await?;
+        let env = store.data_mut().get_environment().await?;
+        let config = store.data().wasi_config_vars();
+
+        let demand = store
+            .data()
+            .rpc()
+            .create_demand(
+                &remote_worker_id,
+                &self_created_by,
+                &self_worker_id,
+                &args,
+                &env,
+                config,
+            )
+            .await?;
         Ok((remote_worker_id, demand))
     } else {
         Err(anyhow!("Failed to resolve component {component_name}"))
@@ -1120,7 +1150,9 @@ fn decode_worker_id(worker_id: Val) -> Option<WorkerId> {
     }
 }
 
-async fn create_durable_rpc_target<Ctx: WorkerCtx>(
+async fn create_durable_rpc_target<
+    Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::environment::Host,
+>(
     store: &mut StoreContextMut<'_, Ctx>,
     worker_id: Val,
 ) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
@@ -1130,11 +1162,30 @@ async fn create_durable_rpc_target<Ctx: WorkerCtx>(
         &store.data().owned_worker_id().project_id,
         &remote_worker_id,
     );
-    let demand = store.data().rpc().create_demand(&remote_worker_id).await;
+    let self_created_by = store.data().created_by().clone();
+    let self_worker_id = store.data().owned_worker_id().worker_id();
+
+    let args = store.data_mut().get_arguments().await?;
+    let env = store.data_mut().get_environment().await?;
+    let config = store.data().wasi_config_vars();
+    let demand = store
+        .data()
+        .rpc()
+        .create_demand(
+            &remote_worker_id,
+            &self_created_by,
+            &self_worker_id,
+            &args,
+            &env,
+            config,
+        )
+        .await?;
     Ok((remote_worker_id, demand))
 }
 
-async fn create_default_ephemeral_rpc_target<Ctx: WorkerCtx>(
+async fn create_default_ephemeral_rpc_target<
+    Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::environment::Host,
+>(
     store: &mut StoreContextMut<'_, Ctx>,
     component_name: &String,
 ) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
@@ -1159,14 +1210,33 @@ async fn create_default_ephemeral_rpc_target<Ctx: WorkerCtx>(
             &store.data().owned_worker_id().project_id,
             &remote_worker_id,
         );
-        let demand = store.data().rpc().create_demand(&remote_worker_id).await;
+        let self_created_by = store.data().created_by().clone();
+        let self_worker_id = store.data().owned_worker_id().worker_id();
+
+        let args = store.data_mut().get_arguments().await?;
+        let env = store.data_mut().get_environment().await?;
+        let config = store.data().wasi_config_vars();
+        let demand = store
+            .data()
+            .rpc()
+            .create_demand(
+                &remote_worker_id,
+                &self_created_by,
+                &self_worker_id,
+                &args,
+                &env,
+                config,
+            )
+            .await?;
         Ok((remote_worker_id, demand))
     } else {
         Err(anyhow!("Failed to resolve component {component_name}"))
     }
 }
 
-async fn create_ephemeral_rpc_target<Ctx: WorkerCtx>(
+async fn create_ephemeral_rpc_target<
+    Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::environment::Host,
+>(
     store: &mut StoreContextMut<'_, Ctx>,
     component_id: Val,
 ) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
@@ -1182,7 +1252,24 @@ async fn create_ephemeral_rpc_target<Ctx: WorkerCtx>(
         &store.data().owned_worker_id().project_id,
         &remote_worker_id,
     );
-    let demand = store.data().rpc().create_demand(&remote_worker_id).await;
+    let self_created_by = store.data().created_by().clone();
+    let self_worker_id = store.data().owned_worker_id().worker_id();
+
+    let args = store.data_mut().get_arguments().await?;
+    let env = store.data_mut().get_environment().await?;
+    let config = store.data().wasi_config_vars();
+    let demand = store
+        .data()
+        .rpc()
+        .create_demand(
+            &remote_worker_id,
+            &self_created_by,
+            &self_worker_id,
+            &args,
+            &env,
+            config,
+        )
+        .await?;
     Ok((remote_worker_id, demand))
 }
 

@@ -80,13 +80,14 @@ use golem_worker_executor::services::{
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
     StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
@@ -347,6 +348,28 @@ impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
 
     fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<TestWorkerCtx> {
         &mut self.durable_ctx
+    }
+}
+
+impl HasWasiConfigVars for TestWorkerCtx {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.wasi_config_vars()
+    }
+}
+
+impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
+    fn get_environment(
+        &mut self,
+    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
+    }
+
+    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
+    }
+
+    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
     }
 }
 
@@ -689,6 +712,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn owned_worker_id(&self) -> &OwnedWorkerId {
         self.durable_ctx.owned_worker_id()
+    }
+
+    fn created_by(&self) -> &AccountId {
+        self.durable_ctx.created_by()
     }
 
     fn component_metadata(&self) -> &golem_service_base::model::Component {
