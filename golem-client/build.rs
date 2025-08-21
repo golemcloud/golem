@@ -79,6 +79,12 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::application::NewApplicationData",
             ),
             (
+                "RegisteredAgentType",
+                "golem_common::model::agent::RegisteredAgentType",
+            ),
+            ("ShardId", "golem_common::model::ShardId"),
+            ("ValueAndType", "golem_wasm_rpc::ValueAndType"),
+            (
                 "NewEnvironmentData",
                 "golem_common::model::environment::NewEnvironmentData",
             ),

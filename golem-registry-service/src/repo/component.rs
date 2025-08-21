@@ -1048,19 +1048,17 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         version_check: bool,
         revision: ComponentRevisionRecord,
     ) -> Result<ComponentRevisionRecord, ComponentRepoError> {
-        let requested_version = revision.version.clone();
-
         if version_check
             && Self::version_exists(
                 tx,
                 environment_id,
                 &revision.component_id,
-                &requested_version,
+                &revision.version,
             )
             .await?
         {
             Err(ComponentRepoError::VersionAlreadyExists {
-                version: requested_version.clone(),
+                version: revision.version.clone(),
             })?
         }
 
@@ -1098,11 +1096,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 .bind(revision.transformed_object_store_key),
             )
             .await
-            .to_error_on_unique_violation(
-                ComponentRepoError::VersionAlreadyExists {
-                    version: requested_version.clone(),
-                },
-            )?
+            .to_error_on_unique_violation(ComponentRepoError::ConcurrentModification)?
         };
 
         revision.original_files = {

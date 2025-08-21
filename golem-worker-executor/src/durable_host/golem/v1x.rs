@@ -102,8 +102,6 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
-        self.observe_function_call("golem::api", "create_promise");
-
         let durability = Durability::<PromiseId, SerializableError>::new(
             self,
             "golem::api",

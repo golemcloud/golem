@@ -25,6 +25,7 @@ use golem_worker_executor::model::{
     CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::file_loader::FileLoader;
@@ -95,6 +96,7 @@ impl WorkerCtx for TestWorkerCtx {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -119,6 +121,7 @@ impl WorkerCtx for TestWorkerCtx {
             plugins,
             worker_fork,
             project_service,
+            agent_types_service,
         )
         .await?;
         Ok(Self { durable_ctx })

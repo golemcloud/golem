@@ -5,6 +5,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
@@ -101,6 +102,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(&ResourceLimitsConfig::Disabled(
             ResourceLimitsDisabledConfig {},
@@ -135,6 +137,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             project_service.clone(),
+            agent_types_service.clone(),
             (),
         ));
 
@@ -168,10 +171,12 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             project_service.clone(),
+            agent_types_service.clone(),
             (),
         ));
         Ok(All::new(
             active_workers,
+            agent_types_service,
             engine,
             linker,
             runtime,

@@ -31,6 +31,7 @@ test_r::enable!();
 
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
@@ -101,7 +102,7 @@ pub struct RunDetails {
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
 /// of its services.
-/// With a valid `Bootstrap` implementation the service can be started with the `run` method.
+/// With a valid `Bootstrap` implementation, the service can be started with the `run` method.
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
@@ -203,6 +204,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         project_service: Arc<dyn ProjectService>,
+        agent_type_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -408,6 +410,11 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         project_service.clone(),
     );
 
+    let agent_type_service = services::agent_types::configured(
+        &golem_config.agent_types_service,
+        component_service.clone(),
+    );
+
     let golem_config = Arc::new(golem_config.clone());
     let promise_service: Arc<dyn PromiseService> =
         Arc::new(DefaultPromiseService::new(key_value_storage.clone()));
@@ -566,6 +573,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             plugins,
             oplog_processor_plugin,
             project_service,
+            agent_type_service,
         )
         .await?;
 
