@@ -9,6 +9,23 @@ tracing_file_name_with_port = true
 drop_when_full = 0.25
 ttl = "8h"
 
+[agent_types_service]
+type = "Grpc"
+
+[agent_types_service.config]
+access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+cache_time_to_idle = "1m"
+connect_timeout = "30s"
+host = "localhost"
+port = 9092
+
+[agent_types_service.config.retries]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
 [blob_storage]
 type = "LocalFileSystem"
 
@@ -237,6 +254,23 @@ without_time = false
 # [active_workers]
 # drop_when_full = 0.25
 # ttl = "8h"
+# 
+# [agent_types_service]
+# type = "Grpc"
+# 
+# [agent_types_service.config]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# cache_time_to_idle = "1m"
+# connect_timeout = "30s"
+# host = "localhost"
+# port = 9092
+# 
+# [agent_types_service.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [blob_storage]
 # type = "S3"
@@ -472,6 +506,23 @@ without_time = false
 # [active_workers]
 # drop_when_full = 0.25
 # ttl = "8h"
+# 
+# [agent_types_service]
+# type = "Grpc"
+# 
+# [agent_types_service.config]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# cache_time_to_idle = "1m"
+# connect_timeout = "30s"
+# host = "localhost"
+# port = 9092
+# 
+# [agent_types_service.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [blob_storage]
 # type = "InMemory"

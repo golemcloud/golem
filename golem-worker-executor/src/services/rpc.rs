@@ -25,14 +25,14 @@ use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
-    active_workers, blob_store, component, golem_config, key_value, oplog, promise, rdbms,
-    scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
-    HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
-    HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins,
-    HasProjectService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
+    rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
+    HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
+    HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin,
+    HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService,
+    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator,
+    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -312,6 +312,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
     project_service: Arc<dyn ProjectService>,
+    agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -344,6 +345,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
             project_service: self.project_service.clone(),
+            agent_types_service: self.agent_types_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -358,6 +360,12 @@ impl<Ctx: WorkerCtx> HasEvents for DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DirectWorkerInvocationRpc<Ctx> {
     fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
         self.active_workers.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasAgentTypesService for DirectWorkerInvocationRpc<Ctx> {
+    fn agent_types(&self) -> Arc<dyn agent_types::AgentTypesService> {
+        self.agent_types_service.clone()
     }
 }
 
@@ -547,6 +555,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -576,6 +585,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             oplog_processor_plugin,
             resource_limits,
             project_service,
+            agent_types_service,
             extra_deps,
         }
     }

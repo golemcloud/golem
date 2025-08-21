@@ -41,13 +41,13 @@ CREATE INDEX plan_usage_limits_usage_type_idx
 
 CREATE TABLE accounts
 (
-    account_id  UUID      NOT NULL,
-    email       TEXT      NOT NULL,
+    account_id          UUID      NOT NULL,
+    email               TEXT      NOT NULL,
 
-    created_at  TIMESTAMP NOT NULL,
-    updated_at  TIMESTAMP NOT NULL,
-    deleted_at      TIMESTAMP,
-    modified_by UUID      NOT NULL,
+    created_at          TIMESTAMP NOT NULL,
+    updated_at          TIMESTAMP NOT NULL,
+    deleted_at          TIMESTAMP,
+    modified_by         UUID      NOT NULL,
 
     current_revision_id BIGINT    NOT NULL,
 
@@ -82,9 +82,9 @@ CREATE TABLE account_revisions
 
 CREATE TABLE account_revision_roles
 (
-    account_id  UUID      NOT NULL,
-    revision_id BIGINT    NOT NULL,
-    role            INT      NOT NULL,
+    account_id  UUID   NOT NULL,
+    revision_id BIGINT NOT NULL,
+    role        INT    NOT NULL,
 
     CONSTRAINT account_revision_roles_pk
         PRIMARY KEY (account_id, revision_id, role),

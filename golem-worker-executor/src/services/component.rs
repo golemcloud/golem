@@ -49,13 +49,17 @@ pub trait ComponentService: Send + Sync {
         forced_version: Option<ComponentVersion>,
     ) -> Result<golem_service_base::model::Component, WorkerExecutorError>;
 
-    /// Resolve a component given a user provided string. The syntax of the provided string is allowed to vary between implementations.
-    /// Resolving component is the component in whoose context the resolution is being performed
+    /// Resolve a component given a user-provided string. The syntax of the provided string is allowed to vary between implementations.
+    /// Resolving component is the component in whose context the resolution is being performed
     async fn resolve_component(
         &self,
         component_reference: String,
         resolving_component: ComponentOwner,
     ) -> Result<Option<ComponentId>, WorkerExecutorError>;
+
+    /// Returns all the component metadata the implementation has cached.
+    /// This is useful for some mock/local implementations.
+    async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::Component>;
 }
 
 pub fn configured(
@@ -450,6 +454,18 @@ mod filesystem {
                 .id_by_name
                 .get(&component_reference)
                 .cloned())
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::Component> {
+            self.index
+                .read()
+                .await
+                .metadata
+                .values()
+                .map(|local_metadata| {
+                    golem_service_base::model::Component::from(local_metadata.clone())
+                })
+                .collect()
         }
     }
 
@@ -859,6 +875,13 @@ mod grpc {
                     Box::pin(self.resolve_component_remotely(&project_id, &component_name))
                 })
                 .await
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::Component> {
+            self.component_metadata_cache
+                .iter()
+                .map(|(_, v)| v)
+                .collect()
         }
     }
 

@@ -12,8 +12,71 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::agent::bindings::golem::agent::host;
 use golem_common::model::agent::bindings::golem::agent::host::Host;
+use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::oplog::DurableFunctionType;
 
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<host::RegisteredAgentType>> {
+        let durability = Durability::<Vec<RegisteredAgentType>, SerializableError>::new(
+            self,
+            "golem_agent",
+            "get_all_agent_types",
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+        let result = if durability.is_live() {
+            let project_id = &self.owned_worker_id.project_id;
+            durability
+                .persist(
+                    self,
+                    (),
+                    self.agent_types_service().get_all(project_id).await,
+                )
+                .await
+        } else {
+            durability.replay(self).await
+        };
+
+        match result {
+            Ok(result) => Ok(result.into_iter().map(|r| r.into()).collect()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn get_agent_type(
+        &mut self,
+        agent_type_name: String,
+    ) -> anyhow::Result<Option<host::RegisteredAgentType>> {
+        let durability = Durability::<Option<RegisteredAgentType>, SerializableError>::new(
+            self,
+            "golem_agent",
+            "get_agent_type",
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+        let result = if durability.is_live() {
+            let project_id = &self.owned_worker_id.project_id;
+            durability
+                .persist(
+                    self,
+                    agent_type_name.clone(),
+                    self.agent_types_service()
+                        .get(project_id, &agent_type_name)
+                        .await,
+                )
+                .await
+        } else {
+            durability.replay(self).await
+        };
+
+        match result {
+            Ok(result) => Ok(result.map(|r| r.into())),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
