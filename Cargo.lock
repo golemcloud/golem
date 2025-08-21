@@ -4183,6 +4183,7 @@ name = "golem-common"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "bincode",
  "bytes 1.10.1",
@@ -4206,6 +4207,7 @@ dependencies = [
  "nonempty-collections",
  "poem",
  "poem-openapi",
+ "pretty_assertions",
  "prometheus 0.13.4",
  "prost-types 0.13.5",
  "rand 0.9.2",
