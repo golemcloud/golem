@@ -270,7 +270,8 @@ args = ["clippy", "--all-targets", "--", "--no-deps", "-Dwarnings"]
 
 [tasks.fix]
 description = "Runs rustfmt and clippy checks and applies fixes"
-dependencies = ["wit", "fix-clippy", "fix-rustfmt"]
+#dependencies = ["wit", "fix-clippy", "fix-rustfmt"]
+dependencies = ["fix-clippy", "fix-rustfmt"]
 
 [tasks.fix-rustfmt]
 description = "Runs rustfmt checks and applies fixes"

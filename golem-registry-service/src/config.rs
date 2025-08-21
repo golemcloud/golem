@@ -15,7 +15,7 @@
 use chrono::Duration;
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
-use golem_common::model::auth::Role;
+use golem_common::model::auth::AccountRole;
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_service_base::config::BlobStorageConfig;
@@ -132,7 +132,7 @@ impl Default for AccountsConfig {
                 name: "Initial User".to_string(),
                 email: "initial@user".to_string(),
                 token: uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1"),
-                role: Role::Admin,
+                role: AccountRole::Admin,
                 plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"),
             },
         );
@@ -143,7 +143,7 @@ impl Default for AccountsConfig {
                 name: "Marketing User".to_string(),
                 email: "marketing@user".to_string(),
                 token: uuid!("39c8e462-1a4c-464c-91d5-5265e1e1b0e5"),
-                role: Role::MarketingAdmin,
+                role: AccountRole::MarketingAdmin,
                 plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"),
             },
         );
@@ -158,7 +158,7 @@ pub struct PrecreatedAccount {
     pub email: String,
     pub token: Uuid,
     pub plan_id: Uuid,
-    pub role: Role,
+    pub role: AccountRole,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

@@ -10,7 +10,7 @@ email = "marketing@user"
 id = "0e8a0431-94b9-4644-89ca-fbf403edb6e7"
 name = "Marketing User"
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
-role = "MarketingAdmin"
+role = "marketing-admin"
 token = "39c8e462-1a4c-464c-91d5-5265e1e1b0e5"
 
 [accounts.root]
@@ -18,7 +18,7 @@ email = "initial@user"
 id = "e71a6160-4144-4720-9e34-e5943458d129"
 name = "Initial User"
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
-role = "Admin"
+role = "admin"
 token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 
 [blob_storage]

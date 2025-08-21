@@ -46,41 +46,49 @@ CREATE TABLE accounts
 
     created_at  TIMESTAMP NOT NULL,
     updated_at  TIMESTAMP NOT NULL,
-    deleted_at  TIMESTAMP,
+    deleted_at      TIMESTAMP,
     modified_by UUID      NOT NULL,
 
-    name        TEXT      NOT NULL,
-    plan_id     UUID      NOT NULL,
+    current_revision_id BIGINT    NOT NULL,
 
     CONSTRAINT accounts_pk
-        PRIMARY KEY (account_id),
-    CONSTRAINT accounts_plans_fk
-        FOREIGN KEY (plan_id) REFERENCES plans
+        PRIMARY KEY (account_id)
 );
 
 CREATE UNIQUE INDEX accounts_email_uk
     ON accounts (email)
     WHERE deleted_at IS NULL;
 
-CREATE INDEX accounts_plan_id_idx ON accounts (plan_id);
-
 CREATE TABLE account_revisions
 (
     account_id  UUID      NOT NULL,
     revision_id BIGINT    NOT NULL,
+    name        TEXT      NOT NULL,
     email       TEXT      NOT NULL,
+    plan_id     UUID      NOT NULL,
 
     created_at  TIMESTAMP NOT NULL,
     created_by  UUID      NOT NULL,
     deleted     BOOLEAN   NOT NULL,
 
-    plan_id     UUID      NOT NULL,
-    name        TEXT      NOT NULL,
-
     CONSTRAINT account_revisions_pk
         PRIMARY KEY (account_id, revision_id),
-    CONSTRAINT account_revisions_fk
-        FOREIGN KEY (account_id) REFERENCES accounts
+    CONSTRAINT account_revisions_accounts_fk
+        FOREIGN KEY (account_id) REFERENCES accounts,
+    CONSTRAINT account_revisions_plans_fk
+        FOREIGN KEY (plan_id) REFERENCES plans
+);
+
+CREATE TABLE account_revision_roles
+(
+    account_id  UUID      NOT NULL,
+    revision_id BIGINT    NOT NULL,
+    role            INT      NOT NULL,
+
+    CONSTRAINT account_revision_roles_pk
+        PRIMARY KEY (account_id, revision_id, role),
+    CONSTRAINT account_revision_roles_account_revisions_fk
+        FOREIGN KEY (account_id, revision_id) REFERENCES account_revisions
 );
 
 CREATE TABLE tokens
@@ -641,4 +649,3 @@ CREATE TABLE environment_plugin_installation_revisions
 
 CREATE INDEX environment_plugin_installation_revisions_plugin_idx
     ON environment_plugin_installation_revisions (plugin_id);
-

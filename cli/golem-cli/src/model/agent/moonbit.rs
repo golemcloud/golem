@@ -17,7 +17,7 @@ use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use golem_client::model::AnalysedType;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchemas};
-use heck::{ToKebabCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use moonbit_component_generator::{MoonBitComponent, MoonBitPackage, Warning, WarningControl};
 use std::fmt::Write;
 use std::path::Path;
@@ -29,6 +29,7 @@ pub fn generate_moonbit_wrapper(
 ) -> anyhow::Result<()> {
     let wit = &ctx.single_file_wrapper_wit_source;
     let mut component = MoonBitComponent::empty_from_wit(wit, Some("agent-wrapper"))?;
+    component.disable_cleanup(); // TODO: remove
 
     component
         .define_bindgen_packages()
@@ -79,7 +80,7 @@ pub fn generate_moonbit_wrapper(
 
     for agent in &ctx.agent_types {
         let agent_stub = generate_agent_stub(&ctx, agent)?;
-        let agent_name = agent.type_name.to_kebab_case();
+        let agent_name = agent.type_name.to_lower_camel_case();
 
         component.set_warning_control(
             &format!(
@@ -324,7 +325,7 @@ fn setup_dependencies(
     )?;
 
     for agent in agent_types {
-        let agent_name = agent.type_name.to_kebab_case();
+        let agent_name = agent.type_name.to_lower_camel_case();
 
         depends_on_golem_agent_common(
             component,

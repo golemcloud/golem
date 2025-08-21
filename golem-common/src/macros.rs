@@ -189,6 +189,90 @@ macro_rules! newtype_uuid {
     };
 }
 
+#[macro_export]
+macro_rules! declare_revision {
+    ($name:ident) => {
+        #[derive(
+            Debug,
+            Copy,
+            Clone,
+            PartialEq,
+            serde::Deserialize,
+            serde::Serialize,
+            derive_more::Display,
+        )]
+        #[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
+        #[repr(transparent)]
+        pub struct $name(pub u64);
+
+        impl $name {
+            pub const INITIAL: Self = Self(0);
+
+            pub fn next(self) -> anyhow::Result<Self> {
+                Ok(Self(self.0.checked_add(1).ok_or(::anyhow::anyhow!(
+                    "Failed to calculate next {}",
+                    stringify!($name)
+                ))?))
+            }
+        }
+
+        impl From<i64> for $name {
+            fn from(value: i64) -> Self {
+                Self(value as u64)
+            }
+        }
+
+        impl From<$name> for i64 {
+            fn from(value: $name) -> i64 {
+                value.0 as i64
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! declare_structs {
+    ($($i:item)*) => { $(
+        #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+        #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+        #[serde(rename_all = "camelCase")]
+        $i
+    )* }
+}
+
+#[macro_export]
+macro_rules! declare_unions {
+    ($($i:item)*) => { $(
+        #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+        #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+        #[serde(tag = "type")]
+        $i
+    )* }
+}
+
+#[macro_export]
+macro_rules! declare_enums {
+    ($($i:item)*) => { $(
+        #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+        #[cfg_attr(feature = "poem", oai(rename_all = "kebab-case"))]
+        #[serde(rename_all = "kebab-case")]
+        $i
+    )* }
+}
+
+#[macro_export]
+macro_rules! declare_transparent_newtypes {
+    ($($i:item)*) => { $(
+    #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize, derive_more::Display)]
+    #[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
+    #[repr(transparent)]
+        $i
+    )* }
+}
+
 // Could be a derive macro
 // Can be removed and inlined into error_forwarders once https://github.com/rust-lang/rust/issues/86935 is stable.
 #[macro_export]

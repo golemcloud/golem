@@ -18,7 +18,7 @@ use crate::components::rdb::DbInfo;
 use crate::components::{new_reqwest_client, wait_for_startup_http};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::{Role, TokenSecret};
+use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::PlanId;
 use golem_registry_service::config::{
     AccountsConfig, PlansConfig, PrecreatedAccount, PrecreatedPlan, RegistryServiceConfig,
@@ -186,7 +186,7 @@ fn make_config(
                     email: ADMIN_ACCOUNT_EMAIL.to_string(),
                     token: admin_token.0,
                     plan_id: admin_plan_id.0,
-                    role: Role::Admin,
+                    role: AccountRole::Admin,
                 },
             )]),
         },

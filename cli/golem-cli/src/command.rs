@@ -816,6 +816,8 @@ pub mod app {
             #[command(flatten)]
             component_name: AppOptionalComponentNames,
         },
+        /// List all the deployed agent types
+        ListAgentTypes {},
         /// Run custom command
         #[clap(external_subcommand)]
         CustomCommand(Vec<String>),
@@ -1659,7 +1661,6 @@ pub mod cloud {
     }
 
     pub mod project {
-
         use crate::command::cloud::project::plugin::ProjectPluginSubcommand;
         use crate::command::cloud::project::policy::PolicySubcommand;
         use crate::model::{ProjectName, ProjectPolicyId, ProjectReference};
