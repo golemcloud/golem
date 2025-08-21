@@ -34,7 +34,7 @@ use golem_common::model::login::{
     EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2Provider, OAuth2WebflowData,
     OAuth2WebflowStateId,
 };
-use golem_common::{SafeDisplay, error_forwarders, into_internal_error};
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use std::sync::Arc;
@@ -59,9 +59,7 @@ impl SafeDisplay for OAuth2Error {
     }
 }
 
-into_internal_error!(OAuth2Error);
-
-error_forwarders!(
+error_forwarding!(
     OAuth2Error,
     OAuth2GithubClientError,
     RepoError,

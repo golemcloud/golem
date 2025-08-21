@@ -17,7 +17,7 @@ use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::login::OAuth2WebflowStateId;
-use golem_common::{SafeDisplay, into_internal_error};
+use golem_common::{SafeDisplay, error_forwarding};
 use std::fmt::{Debug, Display, Formatter};
 use std::time::Duration;
 use url::Url;
@@ -33,7 +33,7 @@ pub enum OAuth2GithubClientError {
     InternalError(#[from] anyhow::Error),
 }
 
-into_internal_error!(OAuth2GithubClientError);
+error_forwarding!(OAuth2GithubClientError);
 
 impl SafeDisplay for OAuth2GithubClientError {
     fn to_safe_string(&self) -> String {

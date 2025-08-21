@@ -23,7 +23,7 @@ use super::environment::EnvironmentService;
 use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;
-use crate::repo::model::component::{ComponentRevisionRecord, ComponentRevisionRepoError};
+use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::{AccountUsage, AccountUsageService};
 use anyhow::Context;
 use futures::stream::BoxStream;
@@ -151,10 +151,13 @@ impl ComponentService {
             .create(&environment_id.0, &component_name.0, record)
             .await;
 
-        let stored_component: Component = match result? {
+        let stored_component: Component = match result {
             Ok(record) => record.try_into()?,
-            Err(ComponentRevisionRepoError::ConcurrentModification) => todo!(),
-            Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),
+            Err(
+                ComponentRepoError::ConcurrentModification
+                | ComponentRepoError::VersionAlreadyExists { .. },
+            ) => Err(ComponentError::ConcurrentUpdate)?,
+            Err(other) => Err(other)?,
         };
 
         account_usage.ack();
@@ -273,15 +276,15 @@ impl ComponentService {
             .update(current_revision.0 as i64, record)
             .await;
 
-        let stored_component: Component = match result? {
+        let stored_component: Component = match result {
             Ok(record) => record.try_into()?,
-            Err(ComponentRevisionRepoError::ConcurrentModification) => {
-                Err(ComponentError::ConcurrentUpdate {
-                    component_id: component_id.clone(),
-                    current_revision,
-                })?
+            Err(ComponentRepoError::ConcurrentModification) => {
+                Err(ComponentError::ConcurrentUpdate)?
             }
-            Err(ComponentRevisionRepoError::VersionAlreadyExists { .. }) => todo!(),
+            Err(ComponentRepoError::VersionAlreadyExists { .. }) => {
+                Err(ComponentError::InvalidCurrentRevision)?
+            }
+            Err(other) => Err(other)?,
         };
 
         self.component_compilation

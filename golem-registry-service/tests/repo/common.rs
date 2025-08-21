@@ -27,16 +27,16 @@ use golem_registry_service::repo::model::audit::{
     DeletableRevisionAuditFields, RevisionAuditFields,
 };
 use golem_registry_service::repo::model::component::{
-    ComponentFileRecord, ComponentPluginInstallationRecord, ComponentRevisionRecord,
-    ComponentRevisionRepoError,
+    ComponentFileRecord, ComponentPluginInstallationRecord, ComponentRepoError,
+    ComponentRevisionRecord,
 };
 use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_definition::{
-    HttpApiDefinitionRevisionRecord, HttpApiDefinitionRevisionRepoError,
+    HttpApiDefinitionRepoError, HttpApiDefinitionRevisionRecord,
 };
 use golem_registry_service::repo::model::http_api_deployment::{
-    HttpApiDeploymentRevisionRecord, HttpApiDeploymentRevisionRepoError,
+    HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
@@ -617,7 +617,7 @@ pub async fn test_component_stage(deps: &Deps) {
         )
         .await
         .unwrap();
-    let_assert!(Ok(created_revision_0) = created_revision_0);
+    let_assert!(created_revision_0 = created_revision_0);
     assert!(revision_0 == created_revision_0.revision);
     assert!(created_revision_0.environment_id == env.revision.environment_id);
     assert!(created_revision_0.name == component_name);
@@ -629,9 +629,8 @@ pub async fn test_component_stage(deps: &Deps) {
             component_name,
             revision_0.clone(),
         )
-        .await
-        .unwrap();
-    let_assert!(Err(ComponentRevisionRepoError::ConcurrentModification) = recreate);
+        .await;
+    let_assert!(Err(ComponentRepoError::ConcurrentModification) = recreate);
 
     let get_revision_0 = deps
         .component_repo
@@ -702,17 +701,13 @@ pub async fn test_component_stage(deps: &Deps) {
         .update(0, revision_1.clone())
         .await
         .unwrap();
-    let_assert!(Ok(created_revision_1) = created_revision_1);
+    let_assert!(created_revision_1 = created_revision_1);
     assert!(revision_1 == created_revision_1.revision);
     assert!(created_revision_1.environment_id == env.revision.environment_id);
     assert!(created_revision_1.name == component_name);
 
-    let recreated_revision_1 = deps
-        .component_repo
-        .update(0, revision_1.clone())
-        .await
-        .unwrap();
-    let_assert!(Err(ComponentRevisionRepoError::ConcurrentModification) = recreated_revision_1);
+    let recreated_revision_1 = deps.component_repo.update(0, revision_1.clone()).await;
+    let_assert!(Err(ComponentRepoError::ConcurrentModification) = recreated_revision_1);
 
     let components = deps
         .component_repo
@@ -741,7 +736,6 @@ pub async fn test_component_stage(deps: &Deps) {
             other_component_revision_0.clone(),
         )
         .await
-        .unwrap()
         .unwrap();
     assert!(created_other_component_0.revision == other_component_revision_0);
 
@@ -758,16 +752,13 @@ pub async fn test_component_stage(deps: &Deps) {
     let delete_with_old_revision = deps
         .component_repo
         .delete(&user.revision.account_id, &component_id, 0)
-        .await
-        .unwrap();
-    let_assert!(Err(ComponentRevisionRepoError::ConcurrentModification) = delete_with_old_revision);
+        .await;
+    let_assert!(Err(ComponentRepoError::ConcurrentModification) = delete_with_old_revision);
 
-    let delete_with_current_revision = deps
-        .component_repo
+    deps.component_repo
         .delete(&user.revision.account_id, &component_id, 1)
         .await
         .unwrap();
-    let_assert!(Ok(()) = delete_with_current_revision);
 
     let components = deps
         .component_repo
@@ -800,7 +791,7 @@ pub async fn test_component_stage(deps: &Deps) {
         ..revision_after_delete
     }
     .with_updated_hash();
-    let_assert!(Ok(created_after_delete) = created_after_delete);
+    let_assert!(created_after_delete = created_after_delete);
     assert!(created_after_delete.revision == revision_after_delete);
 }
 
@@ -829,7 +820,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
         )
         .await
         .unwrap();
-    let_assert!(Ok(created_revision_0) = created_revision_0);
+    let_assert!(created_revision_0 = created_revision_0);
     assert!(revision_0 == created_revision_0.revision);
     assert!(created_revision_0.environment_id == env.revision.environment_id);
     assert!(created_revision_0.name == definition_name);
@@ -841,9 +832,8 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
             definition_name,
             revision_0.clone(),
         )
-        .await
-        .unwrap();
-    let_assert!(Err(HttpApiDefinitionRevisionRepoError::ConcurrentModification) = recreate);
+        .await;
+    let_assert!(Err(HttpApiDefinitionRepoError::ConcurrentModification) = recreate);
 
     let get_revision_0 = deps
         .http_api_definition_repo
@@ -889,7 +879,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
         .update(0, revision_1.clone())
         .await
         .unwrap();
-    let_assert!(Ok(created_revision_1) = created_revision_1);
+    let_assert!(created_revision_1 = created_revision_1);
     assert!(revision_1 == created_revision_1.revision);
     assert!(created_revision_1.environment_id == env.revision.environment_id);
     assert!(created_revision_1.name == definition_name);
@@ -897,11 +887,8 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
     let recreated_revision_1 = deps
         .http_api_definition_repo
         .update(0, revision_1.clone())
-        .await
-        .unwrap();
-    let_assert!(
-        Err(HttpApiDefinitionRevisionRepoError::ConcurrentModification) = recreated_revision_1
-    );
+        .await;
+    let_assert!(Err(HttpApiDefinitionRepoError::ConcurrentModification) = recreated_revision_1);
 
     let definitions = deps
         .http_api_definition_repo
@@ -926,7 +913,6 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
             other_definition_revision_0.clone(),
         )
         .await
-        .unwrap()
         .unwrap();
     assert!(created_other_definition_0.revision == other_definition_revision_0);
 
@@ -943,18 +929,13 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
     let delete_with_old_revision = deps
         .http_api_definition_repo
         .delete(&user.revision.account_id, &definition_id, 0)
-        .await
-        .unwrap();
-    let_assert!(
-        Err(HttpApiDefinitionRevisionRepoError::ConcurrentModification) = delete_with_old_revision
-    );
+        .await;
+    let_assert!(Err(HttpApiDefinitionRepoError::ConcurrentModification) = delete_with_old_revision);
 
-    let delete_with_current_revision = deps
-        .http_api_definition_repo
+    deps.http_api_definition_repo
         .delete(&user.revision.account_id, &definition_id, 1)
         .await
         .unwrap();
-    let_assert!(Ok(()) = delete_with_current_revision);
 
     let definitions = deps
         .http_api_definition_repo
@@ -983,7 +964,6 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
         revision_id: 3,
         ..revision_after_delete
     };
-    let_assert!(Ok(created_after_delete) = created_after_delete);
     assert!(created_after_delete.revision == revision_after_delete);
 }
 
@@ -1020,7 +1000,6 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
             definition_revision.clone(),
         )
         .await
-        .unwrap()
         .unwrap();
 
     let revision_0 = HttpApiDeploymentRevisionRecord {
@@ -1042,7 +1021,6 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         )
         .await
         .unwrap();
-    let_assert!(Ok(created_revision_0) = created_revision_0);
     assert!(revision_0 == created_revision_0.revision);
     assert!(created_revision_0.environment_id == env.revision.environment_id);
     assert!(created_revision_0.host == host);
@@ -1056,10 +1034,9 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
             subdomain,
             revision_0.clone(),
         )
-        .await
-        .unwrap();
+        .await;
 
-    let_assert!(Err(HttpApiDeploymentRevisionRepoError::ConcurrentModification) = recreate);
+    let_assert!(Err(HttpApiDeploymentRepoError::ConcurrentModification) = recreate);
 
     let get_revision_0 = deps
         .http_api_deployment_repo
@@ -1106,7 +1083,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         .update(0, revision_1.clone())
         .await
         .unwrap();
-    let_assert!(Ok(created_revision_1) = created_revision_1);
+
     assert!(revision_1 == created_revision_1.revision);
     assert!(created_revision_1.environment_id == env.revision.environment_id);
     assert!(created_revision_1.host == host);
@@ -1115,11 +1092,9 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
     let recreated_revision_1 = deps
         .http_api_deployment_repo
         .update(0, revision_1.clone())
-        .await
-        .unwrap();
-    let_assert!(
-        Err(HttpApiDeploymentRevisionRepoError::ConcurrentModification) = recreated_revision_1
-    );
+        .await;
+
+    let_assert!(Err(HttpApiDeploymentRepoError::ConcurrentModification) = recreated_revision_1);
 
     let deployments = deps
         .http_api_deployment_repo
@@ -1146,7 +1121,6 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
             other_deployment_revision_0.clone(),
         )
         .await
-        .unwrap()
         .unwrap();
     assert!(created_other_deployment_0.revision == other_deployment_revision_0);
 
@@ -1163,18 +1137,14 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
     let delete_with_old_revision = deps
         .http_api_deployment_repo
         .delete(&user.revision.account_id, &deployment_id, 0)
-        .await
-        .unwrap();
-    let_assert!(
-        Err(HttpApiDeploymentRevisionRepoError::ConcurrentModification) = delete_with_old_revision
-    );
+        .await;
 
-    let delete_with_current_revision = deps
-        .http_api_deployment_repo
+    let_assert!(Err(HttpApiDeploymentRepoError::ConcurrentModification) = delete_with_old_revision);
+
+    deps.http_api_deployment_repo
         .delete(&user.revision.account_id, &deployment_id, 1)
         .await
         .unwrap();
-    let_assert!(Ok(()) = delete_with_current_revision);
 
     let deployments = deps
         .http_api_deployment_repo
@@ -1204,7 +1174,6 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         revision_id: 3,
         ..revision_after_delete
     };
-    let_assert!(Ok(created_after_delete) = created_after_delete);
     assert!(created_after_delete.revision == revision_after_delete);
 }
 
@@ -1368,7 +1337,6 @@ pub async fn test_account_usage(deps: &Deps) {
                 },
             )
             .await
-            .unwrap()
             .unwrap();
 
         let usage = deps

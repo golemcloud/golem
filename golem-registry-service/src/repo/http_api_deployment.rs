@@ -15,9 +15,8 @@
 use crate::repo::model::BindFields;
 use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
 use crate::repo::model::http_api_deployment::{
-    HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRecord,
+    HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRecord, HttpApiDeploymentRepoError,
     HttpApiDeploymentRevisionIdentityRecord, HttpApiDeploymentRevisionRecord,
-    HttpApiDeploymentRevisionRepoError,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -25,13 +24,11 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt, stream};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{
-    LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi, ToBusiness, TxError, TxResult,
-};
-use golem_service_base::repo::{BusinessResult, RepoResult};
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
+use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
-use std::fmt::Display;
+use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -43,20 +40,20 @@ pub trait HttpApiDeploymentRepo: Send + Sync {
         host: &str,
         subdomain: Option<&str>,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>;
+    ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError>;
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>;
+    ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError>;
 
     async fn delete(
         &self,
         user_account_id: &Uuid,
         http_api_deployment_id: &Uuid,
         current_revision_id: i64,
-    ) -> BusinessResult<(), HttpApiDeploymentRevisionRepoError>;
+    ) -> Result<(), HttpApiDeploymentRepoError>;
 
     async fn get_staged_by_id(
         &self,
@@ -162,8 +159,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         host: &str,
         subdomain: Option<&str>,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>
-    {
+    ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError> {
         self.repo
             .create(environment_id, host, subdomain, revision)
             .instrument(Self::span_name(environment_id, host, subdomain))
@@ -174,8 +170,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         &self,
         current_revision_id: i64,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>
-    {
+    ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError> {
         let span = Self::span_id(&revision.http_api_deployment_id);
         self.repo
             .update(current_revision_id, revision)
@@ -188,7 +183,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         user_account_id: &Uuid,
         http_api_deployment_id: &Uuid,
         current_revision_id: i64,
-    ) -> BusinessResult<(), HttpApiDeploymentRevisionRepoError> {
+    ) -> Result<(), HttpApiDeploymentRepoError> {
         self.repo
             .delete(user_account_id, http_api_deployment_id, current_revision_id)
             .instrument(Self::span_id(http_api_deployment_id))
@@ -328,13 +323,13 @@ impl<DBP: Pool> DbHttpApiDeploymentRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> TxResult<R, E>
+    async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> Result<R, E>
     where
         R: Send,
-        E: Display + Send,
+        E: Debug + Send + From<RepoError>,
         F: for<'f> FnOnce(
                 &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, TxResult<R, E>>
+            ) -> BoxFuture<'f, Result<R, E>>
             + Send,
     {
         self.db_pool
@@ -352,8 +347,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         host: &str,
         subdomain: Option<&str>,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>
-    {
+    ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError> {
         let opt_deleted_revision: Option<HttpApiDeploymentRevisionIdentityRecord> =
             self.with_ro("create - get opt deleted").fetch_optional_as(
                 match subdomain {
@@ -415,7 +409,8 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by),
                 )
-                .await?;
+                .await
+                .to_error_on_unique_violation(HttpApiDeploymentRepoError::ConcurrentModification)?;
 
                 let revision = Self::insert_revision(tx, &environment_id, revision).await?;
 
@@ -429,24 +424,18 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .to_business_result_on_unique_violation(|| {
-            HttpApiDeploymentRevisionRepoError::ConcurrentModification
-        })
     }
 
     async fn update(
         &self,
         current_revision_id: i64,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> BusinessResult<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRevisionRepoError>
-    {
+    ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError> {
         let Some(checked_current) = self
             .check_current_revision(&revision.http_api_deployment_id, current_revision_id)
             .await?
         else {
-            return Ok(Err(
-                HttpApiDeploymentRevisionRepoError::ConcurrentModification,
-            ));
+            return Err(HttpApiDeploymentRepoError::ConcurrentModification);
         };
 
         self.with_tx_err("update", |tx| {
@@ -474,18 +463,15 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                     .await?;
 
                 Ok(HttpApiDeploymentExtRevisionRecord {
-                    environment_id: ext.try_get("environment_id")?,
-                    host: ext.try_get("host")?,
-                    subdomain: ext.try_get("subdomain")?,
+                    environment_id: ext.try_get("environment_id").map_err(RepoError::from)?,
+                    host: ext.try_get("host").map_err(RepoError::from)?,
+                    subdomain: ext.try_get("subdomain").map_err(RepoError::from)?,
                     revision,
                 })
             }
             .boxed()
         })
         .await
-        .to_business_result_on_unique_violation(|| {
-            HttpApiDeploymentRevisionRepoError::ConcurrentModification
-        })
     }
 
     async fn delete(
@@ -493,7 +479,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         user_account_id: &Uuid,
         http_api_deployment_id: &Uuid,
         current_revision_id: i64,
-    ) -> BusinessResult<(), HttpApiDeploymentRevisionRepoError> {
+    ) -> Result<(), HttpApiDeploymentRepoError> {
         let user_account_id = *user_account_id;
         let http_api_deployment_id = *http_api_deployment_id;
 
@@ -501,9 +487,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .check_current_revision(&http_api_deployment_id, current_revision_id)
             .await?
         else {
-            return Ok(Err(
-                HttpApiDeploymentRevisionRepoError::ConcurrentModification,
-            ));
+            return Err(HttpApiDeploymentRepoError::ConcurrentModification);
         };
 
         self.with_tx_err("delete", |tx| {
@@ -537,9 +521,6 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .to_business_result_on_unique_violation(|| {
-            HttpApiDeploymentRevisionRepoError::ConcurrentModification
-        })
     }
 
     async fn get_staged_by_id(
@@ -903,7 +884,7 @@ trait HttpApiDeploymentRepoInternal: HttpApiDeploymentRepo {
         tx: &mut Self::Tx,
         environment_id: &Uuid,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> TxResult<HttpApiDeploymentRevisionRecord, HttpApiDeploymentRevisionRepoError>;
+    ) -> Result<HttpApiDeploymentRevisionRecord, HttpApiDeploymentRepoError>;
 
     async fn insert_definition(
         tx: &mut Self::Tx,
@@ -971,7 +952,7 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
         tx: &mut Self::Tx,
         environment_id: &Uuid,
         revision: HttpApiDeploymentRevisionRecord,
-    ) -> TxResult<HttpApiDeploymentRevisionRecord, HttpApiDeploymentRevisionRepoError> {
+    ) -> Result<HttpApiDeploymentRevisionRecord, HttpApiDeploymentRepoError> {
         let revision = revision.with_updated_hash();
 
         let definitions_ids = {
@@ -986,11 +967,9 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
             }
 
             if !missing_definitions.is_empty() {
-                return Err(TxError::Business(
-                    HttpApiDeploymentRevisionRepoError::MissingDefinitions {
-                        missing_definitions,
-                    },
-                ));
+                return Err(HttpApiDeploymentRepoError::MissingDefinitions {
+                    missing_definitions,
+                });
             }
 
             definitions
@@ -1011,7 +990,8 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
                 .bind(revision.hash)
                 .bind_deletable_revision_audit(revision.audit),
             )
-            .await?;
+            .await
+            .to_error_on_unique_violation(HttpApiDeploymentRepoError::ConcurrentModification)?;
 
         revision.http_api_definitions = {
             let mut inserted_definitions = Vec::with_capacity(definitions_ids.len());

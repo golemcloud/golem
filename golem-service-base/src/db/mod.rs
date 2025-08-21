@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::{BusinessResult, RepoError};
+use crate::repo::RepoError;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{TryFutureExt, future};
 use sqlx::query::{Query, QueryAs};
 use sqlx::{Database, Error, FromRow, IntoArguments, Row};
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use tracing::{error, warn};
 
 pub mod postgres;
@@ -34,61 +34,6 @@ pub struct DBValue {
 impl DBValue {
     pub fn into_bytes(self) -> Bytes {
         Bytes::from(self.value)
-    }
-}
-
-#[derive(Debug)]
-pub enum TxError<E: Display> {
-    Repo(RepoError),
-    Business(E),
-}
-
-pub type TxResult<T, E> = Result<T, TxError<E>>;
-
-impl<E: Display> From<RepoError> for TxError<E> {
-    fn from(value: RepoError) -> Self {
-        TxError::Repo(value)
-    }
-}
-
-impl<E: Display> From<Error> for TxError<E> {
-    fn from(value: Error) -> Self {
-        TxError::Repo(value.into())
-    }
-}
-
-pub trait ToBusiness<T, E> {
-    fn to_business_result(self) -> BusinessResult<T, E>;
-    fn to_business_result_on_unique_violation<F>(
-        self,
-        to_business_error: F,
-    ) -> BusinessResult<T, E>
-    where
-        F: FnOnce() -> E;
-}
-
-impl<T, E> ToBusiness<T, E> for TxResult<T, E>
-where
-    E: Display,
-{
-    fn to_business_result(self) -> BusinessResult<T, E> {
-        match self {
-            Ok(result) => Ok(Ok(result)),
-            Err(err) => match err {
-                TxError::Repo(err) => Err(err),
-                TxError::Business(err) => Ok(Err(err)),
-            },
-        }
-    }
-
-    fn to_business_result_on_unique_violation<F>(self, to_business_error: F) -> BusinessResult<T, E>
-    where
-        F: FnOnce() -> E,
-    {
-        match self {
-            Err(TxError::Repo(err)) if err.is_unique_violation() => Ok(Err(to_business_error())),
-            other => other.to_business_result(),
-        }
     }
 }
 
@@ -115,20 +60,18 @@ pub trait Pool: Debug + Sync + Clone {
     /// this style enforces calling labeled rollback on any error. In direct style, rollback is usually
     /// only called on the sqlx::Transaction drop, unless explicitly handled by the code, which means
     /// that those rollbacks are not visible for metrics.
-    ///
-    ///
     async fn with_tx_err<R, E, F>(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         f: F,
-    ) -> TxResult<R, E>
+    ) -> Result<R, E>
     where
         R: Send,
-        E: Display + Send,
+        E: Debug + Send + From<RepoError>,
         F: for<'f> FnOnce(
                 &'f mut <Self::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, TxResult<R, E>>
+            ) -> BoxFuture<'f, Result<R, E>>
             + Send,
     {
         let mut tx = self.with_rw(svc_name, api_name).begin().await?;
@@ -138,24 +81,14 @@ pub trait Pool: Debug + Sync + Clone {
                 Ok(result)
             }
             Err(err) => {
-                match &err {
-                    TxError::Repo(err) => {
-                        warn!(
-                            svc_name, api_name, error = %err,
-                            "Rolling back, transaction failed with repo error",
-                        );
-                    }
-                    TxError::Business(err) => {
-                        warn!(
-                            svc_name, api_name, error = %err,
-                            "Rolling back, transaction failed with business error",
-                        );
-                    }
-                }
+                warn!(
+                    svc_name, api_name, error = ?err,
+                    "Rolling back, transaction failed with repo error",
+                );
 
                 // If rollback fails, we still return the original error, but log the rollback error
-                if let Err(err) = tx.rollback().await {
-                    error!(svc_name, api_name, error = %err, "Rollback failed");
+                if let Err(rollback_error) = tx.rollback().await {
+                    error!(svc_name, api_name, rollback_error = %rollback_error, "Rollback failed");
                 }
 
                 Err(err)
@@ -193,43 +126,6 @@ pub trait Pool: Debug + Sync + Clone {
                 // If rollback fails, we still return the original error, but log the rollback error
                 if let Err(err) = tx.rollback().await {
                     error!(svc_name, api_name, error = %err, "Rollback failed");
-                }
-
-                Err(err)
-            }
-        }
-    }
-
-    /// A simplified version of with_tx_err in which a custom error type is used that can absorb repo errors.
-    async fn with_tx_custom_error<R, E, F>(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        f: F,
-    ) -> Result<R, E>
-    where
-        R: Send,
-        E: Debug + Send + From<RepoError>,
-        F: for<'f> FnOnce(
-                &'f mut <Self::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, Result<R, E>>
-            + Send,
-    {
-        let mut tx = self.with_rw(svc_name, api_name).begin().await?;
-        match f(&mut tx).await {
-            Ok(result) => {
-                tx.commit().await?;
-                Ok(result)
-            }
-            Err(err) => {
-                warn!(
-                    svc_name, api_name, error = ?err,
-                    "Rolling back, transaction failed with repo error",
-                );
-
-                // If rollback fails, we still return the original error, but log the rollback error
-                if let Err(rollback_error) = tx.rollback().await {
-                    error!(svc_name, api_name, rollback_error = %rollback_error, "Rollback failed");
                 }
 
                 Err(err)

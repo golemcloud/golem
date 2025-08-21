@@ -14,18 +14,24 @@
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use golem_common::error_forwarding;
 use golem_common::model::diff;
 use golem_common::model::diff::Hashable;
+use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, thiserror::Error, PartialEq)]
-pub enum HttpApiDefinitionRevisionRepoError {
+#[derive(Debug, thiserror::Error)]
+pub enum HttpApiDefinitionRepoError {
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error),
 }
+
+error_forwarding!(HttpApiDefinitionRepoError, RepoError);
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDefinitionRecord {

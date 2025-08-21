@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::model::component::ComponentRepoError;
 use crate::services::account_usage::error::AccountUsageError;
 use crate::services::application::ApplicationError;
 use crate::services::environment::EnvironmentError;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
-    ComponentFilePath, ComponentName, ComponentRevision, InitialComponentFileKey,
-    VersionedComponentId,
+    ComponentFilePath, ComponentName, InitialComponentFileKey, VersionedComponentId,
 };
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentId, PluginInstallationId};
-use golem_common::{SafeDisplay, error_forwarders, into_internal_error};
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
@@ -76,11 +76,10 @@ pub enum ComponentError {
         plugin_version: String,
         details: String,
     },
-    #[error("Concurrent update of component {component_id} from version {current_revision}")]
-    ConcurrentUpdate {
-        component_id: ComponentId,
-        current_revision: ComponentRevision,
-    },
+    #[error("Concurrent update of component")]
+    ConcurrentUpdate,
+    #[error("Current revision for update is incorrect")]
+    InvalidCurrentRevision,
     #[error("Plugin installation not found: {installation_id}")]
     PluginInstallationNotFound {
         installation_id: PluginInstallationId,
@@ -106,20 +105,20 @@ impl SafeDisplay for ComponentError {
             Self::InvalidOplogProcessorPlugin => self.to_string(),
             Self::PluginNotFound { .. } => self.to_string(),
             Self::InvalidPluginScope { .. } => self.to_string(),
-            Self::ConcurrentUpdate { .. } => self.to_string(),
+            Self::ConcurrentUpdate => self.to_string(),
+            Self::InvalidCurrentRevision => self.to_string(),
             Self::PluginInstallationNotFound { .. } => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
 }
 
-into_internal_error!(ComponentError);
-
-error_forwarders!(
+error_forwarding!(
     ComponentError,
     RepoError,
     EnvironmentError,
-    ApplicationError
+    ApplicationError,
+    ComponentRepoError
 );
 
 impl From<AccountUsageError> for ComponentError {

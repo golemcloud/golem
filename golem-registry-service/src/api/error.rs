@@ -16,6 +16,7 @@ use crate::services::account::AccountError;
 use crate::services::application::ApplicationError;
 use crate::services::component::ComponentError;
 use crate::services::environment::EnvironmentError;
+use crate::services::environment_share::EnvironmentShareError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
 use crate::services::token::TokenError;
@@ -197,13 +198,17 @@ impl From<ComponentError> for ApiError {
             | ComponentError::InvalidComponentName { .. }
             | ComponentError::InvalidOplogProcessorPlugin
             | ComponentError::InvalidPluginScope { .. }
-            | ComponentError::ConcurrentUpdate { .. }
+            | ComponentError::InvalidCurrentRevision
             | ComponentError::MalformedComponentArchive { .. }
             | ComponentError::PluginInstallationNotFound { .. } => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],
                     cause: None,
                 }))
+            }
+
+            ComponentError::ConcurrentUpdate => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
             ComponentError::UnknownComponentId(_)
@@ -254,6 +259,25 @@ impl From<OAuth2Error> for ApiError {
             OAuth2Error::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("OAuth2Error")),
+            })),
+        }
+    }
+}
+
+impl From<EnvironmentShareError> for ApiError {
+    fn from(value: EnvironmentShareError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            EnvironmentShareError::ConcurrentModification
+            | EnvironmentShareError::ShareForAccountAlreadyExists => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+            EnvironmentShareError::EnvironmentShareNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+            EnvironmentShareError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("EnvironmentShareError")),
             })),
         }
     }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::{SafeDisplay, into_internal_error};
+use golem_common::{SafeDisplay, error_forwarding};
 use sqlx::error::ErrorKind;
 
 #[derive(Debug, thiserror::Error)]
@@ -29,7 +29,7 @@ impl RepoError {
     }
 }
 
-into_internal_error!(RepoError);
+error_forwarding!(RepoError);
 
 impl From<sqlx::Error> for RepoError {
     fn from(error: sqlx::Error) -> Self {
@@ -56,24 +56,12 @@ impl SafeDisplay for RepoError {
 
 pub type RepoResult<T> = Result<T, RepoError>;
 
-pub type BusinessResult<T, E> = Result<Result<T, E>, RepoError>;
-
 pub trait ResultExt<T> {
     fn none_on_unique_violation(self) -> RepoResult<Option<T>>;
 
     fn false_on_unique_violation(self) -> RepoResult<bool>;
 
-    fn to_business_result_on_unique_violation<F, E>(
-        self,
-        to_business_error: F,
-    ) -> BusinessResult<T, E>
-    where
-        F: FnOnce() -> E;
-
-    fn to_custom_result_on_unique_violation<E: From<RepoError>>(
-        self,
-        business_error: E,
-    ) -> Result<T, E>;
+    fn to_error_on_unique_violation<E: From<RepoError>>(self, business_error: E) -> Result<T, E>;
 }
 
 impl<T> ResultExt<T> for RepoResult<T> {
@@ -93,24 +81,7 @@ impl<T> ResultExt<T> for RepoResult<T> {
         }
     }
 
-    fn to_business_result_on_unique_violation<F, E>(
-        self,
-        to_business_error: F,
-    ) -> BusinessResult<T, E>
-    where
-        F: FnOnce() -> E,
-    {
-        match self {
-            Ok(value) => Ok(Ok(value)),
-            Err(err) if err.is_unique_violation() => Ok(Err(to_business_error())),
-            Err(err) => Err(err),
-        }
-    }
-
-    fn to_custom_result_on_unique_violation<E: From<RepoError>>(
-        self,
-        business_error: E,
-    ) -> Result<T, E> {
+    fn to_error_on_unique_violation<E: From<RepoError>>(self, business_error: E) -> Result<T, E> {
         match self {
             Ok(value) => Ok(value),
             Err(err) if err.is_unique_violation() => Err(business_error),
