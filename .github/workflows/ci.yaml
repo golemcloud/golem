@@ -140,8 +140,8 @@ jobs:
           rustup set default-host x86_64-pc-windows-gnu
           rustup override set stable-x86_64-pc-windows-gnu
       
-      # - name: Unit tests
-        # run: cargo make --profile ci unit-tests
+      - name: Unit tests
+        run: cargo make --profile ci unit-tests
       - name: check formatting and clippy rules
         run: cargo make --profile ci check
       - name: Check openapi is up to date
