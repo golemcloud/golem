@@ -14,6 +14,7 @@
 
 mod account;
 mod component;
+mod environment_shares;
 
 use super::Tracing;
 use golem_test_framework::config::EnvBasedTestDependencies;

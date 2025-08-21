@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::{SafeDisplay, error_forwarders};
+use golem_common::{SafeDisplay, error_forwarding};
 use sqlx::error::ErrorKind;
 
 #[derive(Debug, thiserror::Error)]
@@ -29,7 +29,7 @@ impl RepoError {
     }
 }
 
-error_forwarders!(RepoError);
+error_forwarding!(RepoError);
 
 impl From<sqlx::Error> for RepoError {
     fn from(error: sqlx::Error) -> Self {

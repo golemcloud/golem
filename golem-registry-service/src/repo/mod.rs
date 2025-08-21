@@ -19,6 +19,7 @@ pub mod application;
 pub mod component;
 pub mod deployment;
 pub mod environment;
+pub mod environment_share;
 pub mod http_api_definition;
 pub mod http_api_deployment;
 pub mod oauth2_token;

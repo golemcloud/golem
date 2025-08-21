@@ -15,7 +15,7 @@
 use super::datetime::SqlDateTime;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use anyhow::anyhow;
-use golem_common::error_forwarders;
+use golem_common::error_forwarding;
 use golem_common::model::PlanId;
 use golem_common::model::account::{Account, AccountId, AccountRevision};
 use golem_common::model::auth::AccountRole;
@@ -35,7 +35,7 @@ pub enum AccountRepoError {
     InternalError(#[from] anyhow::Error),
 }
 
-error_forwarders!(AccountRepoError, RepoError);
+error_forwarding!(AccountRepoError, RepoError);
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountRecord {

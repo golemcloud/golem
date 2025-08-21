@@ -16,7 +16,7 @@ use crate::model::component::{Component, FinalizedComponentRevision};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
-use golem_common::error_forwarders;
+use golem_common::error_forwarding;
 use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
@@ -49,7 +49,7 @@ pub enum ComponentRepoError {
     InternalError(#[from] anyhow::Error),
 }
 
-error_forwarders!(ComponentRepoError, RepoError);
+error_forwarding!(ComponentRepoError, RepoError);
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct SqlComponentFilePermissions {
