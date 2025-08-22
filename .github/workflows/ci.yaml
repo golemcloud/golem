@@ -57,7 +57,6 @@ jobs:
         with:
           path: ${{ github.workspace }}/target/debug/
           key: ${{ env.CACHE_KEY }}
-          fail-on-cache-miss: true
 
       - name: Restore cached vcpkg deps
         id: restore-deps
