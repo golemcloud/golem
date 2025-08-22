@@ -81,10 +81,10 @@ script_runner = "@duckscript"
 script = """
 rm -r wasm-rpc/wit/deps
 mkdir wasm-rpc/wit/deps
-cp wit/deps/io wasm-rpc/wit/deps
-cp wit/deps/clocks wasm-rpc/wit/deps
-cp wit/deps/golem-1.x wasm-rpc/wit/deps
-cp wit/deps/golem-rpc wasm-rpc/wit/deps
+cp -v wit/deps/io wasm-rpc/wit/deps
+cp -v wit/deps/clocks wasm-rpc/wit/deps
+cp -v wit/deps/golem-1.x wasm-rpc/wit/deps
+cp -v wit/deps/golem-rpc wasm-rpc/wit/deps
 """
 
 [tasks.wit-host]
@@ -246,11 +246,9 @@ cargo test -p golem-wasm-ast --tests --all-features -- $JUNIT_OPTS
 script_runner = "pwsh"
 script_extension = "ps1"
 script = '''
-mkdir target/
 $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- $additional_params > ./target/report.xml
-cargo test -p golem-wasm-ast --tests --all-features -- $additional_params >> ./target/report.xml
-(Get-Content -Path "./target/report.xml" -Raw) -split '(?=<\?xml)' | Where-Object { $_.Trim() } | ForEach-Object -Begin { $i = 1 } -Process { $_.Trim() | Set-Content -Path "./target/report-unit_tests-$i.xml" -Encoding UTF8; $i++ }
+cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- $additional_params > ./target/report-unit-tests.xml
+cargo test -p golem-wasm-ast --tests --all-features -- $additional_params >> ./target/report-unit-tests.xml
 '''
 
 [tasks.worker-executor-tests]
@@ -276,12 +274,30 @@ script = '''
 cargo test --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
 '''
 
+[tasks.worker-executor-tests-untagged.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $additional_params
+'''
+
 [tasks.worker-executor-tests-group1]
 dependencies = ["wit"]
 description = "Runs worker executor tests only (group 1/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo test --package golem-worker-executor --test integration :tag:group1 -- --report-time --nocapture $JUNIT_OPTS
+'''
+
+[tasks.worker-executor-tests-group1.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-executor --test integration :tag:group1 -- --report-time --nocapture $additional_params
 '''
 
 [tasks.worker-executor-tests-group2]
@@ -292,12 +308,30 @@ script = '''
 cargo test --package golem-worker-executor --test integration :tag:group2 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
+[tasks.worker-executor-tests-group2.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-executor --test integration :tag:group2 -- --report-time --nocapture $additional_params
+'''
+
 [tasks.worker-executor-tests-group3]
 dependencies = ["wit"]
 description = "Runs worker executor tests only (group 3/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo test --package golem-worker-executor --test integration :tag:group3 -- --report-time --nocapture $JUNIT_OPTS
+'''
+
+[tasks.worker-executor-tests-group3.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-executor --test integration :tag:group3 -- --report-time --nocapture $additional_params
 '''
 
 [tasks.worker-executor-tests-group4]
@@ -308,12 +342,30 @@ script = '''
 cargo test --package golem-worker-executor --test integration :tag:group4 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
+[tasks.worker-executor-tests-group4.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-executor --test integration :tag:group4 -- --report-time --nocapture $additional_params
+'''
+
 [tasks.worker-executor-tests-group5]
 dependencies = ["wit"]
 description = "Runs worker executor tests only (group 5/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo test --package golem-worker-executor --test integration :tag:group5 -- --report-time --nocapture $JUNIT_OPTS
+'''
+
+[tasks.worker-executor-tests-group5.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-executor --test integration :tag:group5 -- --report-time --nocapture $additional_params
 '''
 
 [tasks.worker-executor-tests-group6]
@@ -324,6 +376,15 @@ script = '''
 cargo test --package golem-worker-executor --test integration :tag:group6 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
+[tasks.worker-executor-tests-group6.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-executor --test integration :tag:group6 -- --report-time --nocapture $additional_params
+'''
+
 [tasks.worker-executor-tests-group7]
 dependencies = ["wit"]
 description = "Runs worker executor tests only (group 7/8)"
@@ -332,12 +393,30 @@ script = '''
 cargo test --package golem-worker-executor --test integration :tag:group7 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
+[tasks.worker-executor-tests-group7.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-executor --test integration :tag:group7 -- --report-time --nocapture $additional_params
+'''
+
 [tasks.worker-executor-tests-group8]
 dependencies = ["wit"]
 description = "Runs worker executor tests only (group 8/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo test --package golem-worker-executor --test integration :tag:group8 -- --report-time --nocapture $JUNIT_OPTS
+'''
+
+[tasks.worker-executor-tests-group8.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-executor --test integration :tag:group8 -- --report-time --nocapture $additional_params
 '''
 
 [tasks.integration-tests]
@@ -358,12 +437,30 @@ script = '''
 cargo test --package integration-tests --test integration -- $JUNIT_OPTS
 '''
 
+[tasks.integration-tests-group1.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package integration-tests --test integration -- $additional_params
+'''
+
 [tasks.integration-tests-group2]
 description = "Runs component service integration tests only"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package golem-component-service --test tests -- $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group2.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-component-service --test tests -- $additional_params
 '''
 
 [tasks.integration-tests-group3]
@@ -373,6 +470,16 @@ env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package golem-worker-service --test services_tests -- $JUNIT_OPTS
 cargo test --package golem-worker-service --test api_gateway_end_to_end_tests -- $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group3.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-service --test services_tests -- $additional_params
+cargo test --package golem-worker-service --test api_gateway_end_to_end_tests -- $additional_params
 '''
 
 [tasks.integration-tests-group4]
@@ -386,12 +493,33 @@ cargo test --package cloud-service --test '*' -- $JUNIT_OPTS
 cargo test --package golem-debugging-service --test 'integration' -- --report-time $JUNIT_OPTS
 '''
 
+[tasks.integration-tests-group4.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-service-base --test integration -- $additional_params
+cargo test --package golem-worker-service --test '*' -- $additional_params
+cargo test --package cloud-service --test '*' -- $additional_params
+cargo test --package golem-debugging-service --test 'integration' -- --report-time $additional_params
+'''
+
 [tasks.integration-tests-group5]
 description = "Runs sharding integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group5.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package integration-tests --test sharding -- --report-time $additional_params
 '''
 
 [tasks.sharding-tests-debug]
@@ -412,6 +540,29 @@ cargo test \
 -- --nocapture --test-threads=1
 '''
 
+[tasks.sharding-tests-debug.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+dependencies = ["build-bins"]
+script = '''
+Remove-Item -Recurse -Force logs, data -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path "logs"
+New-Item -ItemType Directory -Force -Path "data"
+
+$env:RUST_LOG="info,golem_test_framework::components=WARN"
+$env:RUST_BACKTRACE="1"
+$env:GOLEM__TRACING__FILE_DIR="..\\logs"
+$env:GOLEM__TRACING__FILE_TRUNCATE="false"
+$env:GOLEM__TRACING__FILE__ENABLED="true"
+
+$test_args = $args
+
+cargo test `
+--package integration-tests `
+--test sharding $test_args `
+-- --nocapture --test-threads=1
+'''
+
 [tasks.api-tests]
 description = "Runs all API tests"
 dependencies = ["api-tests-http", "api-tests-grpc"]
@@ -424,12 +575,30 @@ script = '''
 cargo test --package integration-tests --test api -- $JUNIT_OPTS
 '''
 
+[tasks.api-tests-http.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "http" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package integration-tests --test api -- $additional_params
+'''
+
 [tasks.api-tests-grpc]
 description = "Runs API GRPC tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc" }
 script = '''
 cargo test --package integration-tests --test api -- :tag: $JUNIT_OPTS
+'''
+
+[tasks.api-tests-grpc.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package integration-tests --test api -- :tag: $additional_params
 '''
 
 ## ** CHECK-OPENAPI **
@@ -533,6 +702,16 @@ mkdir -p ../data
 ./golem-worker-service --dump-openapi-yaml > ../golem-worker-service.yaml
 '''
 
+[tasks.generate-worker-service-openapi.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+dependencies = [ "build-worker-service" ]
+cwd = "./target/debug"
+script = '''
+New-Item -ItemType Directory -Force -Path "..\data"
+.\golem-worker-service.exe --dump-openapi-yaml | Out-File "..\golem-worker-service.yaml"
+'''
+
 [tasks.generate-component-service-openapi]
 description = "Generates openapi spec for component service"
 dependencies = [ "build-component-service" ]
@@ -542,6 +721,16 @@ mkdir -p ../data
 ./golem-component-service --dump-openapi-yaml > ../golem-component-service.yaml
 '''
 
+[tasks.generate-component-service-openapi.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+dependencies = [ "build-component-service" ]
+cwd = "./target/debug"
+script = '''
+New-Item -ItemType Directory -Force -Path "..\data"
+.\golem-component-service.exe --dump-openapi-yaml | Out-File "..\golem-component-service.yaml"
+'''
+
 [tasks.generate-cloud-service-openapi]
 description = "Generates openapi spec for cloud service"
 dependencies = [ "build-cloud-service" ]
@@ -549,6 +738,16 @@ cwd = "./target/debug"
 script = '''
 mkdir -p ../data
 ./cloud-service --dump-openapi-yaml > ../cloud-spec.yaml
+'''
+
+[tasks.generate-cloud-service-openapi.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+dependencies = [ "build-cloud-service" ]
+cwd = "./target/debug"
+script = '''
+New-Item -ItemType Directory -Force -Path "..\data"
+.\cloud-service.exe --dump-openapi-yaml | Out-File "..\cloud-spec.yaml"
 '''
 
 [tasks.merge-openapi]
@@ -840,6 +1039,30 @@ export RUST_BACKTRACE=1
 ./target/debug/cloud-service --dump-config-default-env-var > cloud-service/config/cloud-service.sample.env
 '''
 
+[tasks.generate-configs.windows]
+description = "Generates default and exmaple config files"
+dependencies = ["build-bins"]
+script_runner = "pwsh"
+script_extension = "ps1"
+script = '''
+$env:RUST_BACKTRACE="1"
+
+.\target\debug\golem-shard-manager.exe --dump-config-default-toml | Out-File "golem-shard-manager\config\shard-manager.toml"
+.\target\debug\golem-shard-manager.exe --dump-config-default-env-var | Out-File "golem-shard-manager\config\shard-manager.sample.env"
+.\target\debug\golem-component-compilation-service.exe --dump-config-default-toml | Out-File "golem-component-compilation-service\config\component-compilation-service.toml"
+.\target\debug\golem-component-compilation-service.exe --dump-config-default-env-var | Out-File "golem-component-compilation-service\config\component-compilation-service.sample.env"
+.\target\debug\golem-component-service.exe --dump-config-default-toml | Out-File "golem-component-service\config\component-service.toml"
+.\target\debug\golem-component-service.exe --dump-config-default-env-var | Out-File "golem-component-service\config\component-service.sample.env"
+.\target\debug\golem-worker-service.exe --dump-config-default-toml | Out-File "golem-worker-service\config\worker-service.toml"
+.\target\debug\golem-worker-service.exe --dump-config-default-env-var | Out-File "golem-worker-service\config\worker-service.sample.env"
+.\target\debug\worker-executor.exe --dump-config-default-toml | Out-File "golem-worker-executor\config\worker-executor.toml"
+.\target\debug\worker-executor.exe --dump-config-default-env-var | Out-File "golem-worker-executor\config\worker-executor.sample.env"
+.\target\debug\golem-debugging-service.exe --dump-config-default-toml | Out-File "golem-debugging-service\config\debug-worker-executor.toml"
+.\target\debug\golem-debugging-service.exe --dump-config-default-env-var | Out-File "golem-debugging-service\config\debug-worker-executor.sample.env"
+.\target\debug\cloud-service.exe --dump-config-default-toml | Out-File "cloud-service\config\cloud-service.toml"
+.\target\debug\cloud-service.exe --dump-config-default-env-var | Out-File "cloud-service\config\cloud-service.sample.env"
+'''
+
 ## ** CHECK CONFIGS **
 
 [tasks.check-configs]
@@ -882,4 +1105,3 @@ docker compose --project-directory log-tools/elastic stop
 description = "Stops and removes the elastic environment, including all data"
 script = '''
 docker compose --project-directory log-tools/elastic down --volumes
-'''

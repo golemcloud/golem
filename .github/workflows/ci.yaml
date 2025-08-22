@@ -30,6 +30,7 @@ jobs:
       VCPKG_PKG_INSTALL_DIR: "${{ github.workspace }}/vcpkg_installed/"
       PROTOC: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/tools/protobuf/protoc.exe"
       PROTOC_INCLUDE: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/include"
+      CACHE_KEY: golem-debug
 #    runs-on: blacksmith-16vcpu-ubuntu-2204
     runs-on: self-hosted
     defaults:
@@ -56,7 +57,15 @@ jobs:
           7z.exe x "mingw-w64.7z" -aoa -r
           gcc --version
         
+      - name: Restore cached vcpkg deps
+        id: restore-build
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
+          key: vcpkg-${{ env.CACHE_KEY }}
+
       - name: Setup vcpkg
+        if: ${{ steps.restore-build.outputs.cache-hit != 'true' }}
         uses: lukka/run-vcpkg@v11
         id: runvcpkg
         with:
@@ -65,9 +74,18 @@ jobs:
           doNotCache: true
           
       - name: Vcpkg build and install packages
+        id: vcpkg-build
+        if: ${{ steps.restore-build.outputs.cache-hit != 'true' }}
         run: |
           ${{ env.VCPKG_ROOT }}/vcpkg.exe install --recurse --clean-after-build --x-install-root "${{ env.VCPKG_PKG_INSTALL_DIR }}" --triplet "${{ env.VCPKG_DEFAULT_TRIPLET }}"
-            
+      
+      - name: Cache vcpkg build
+        if: ${{ steps.restore-build.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
+          key: vcpkg-${{ env.CACHE_KEY }}
+      
       - name: Setup Rust
         run: |
           rustup install stable-gnu
@@ -86,7 +104,13 @@ jobs:
           QUIET: true
         run: |
           cargo make --profile ci build
-        timeout-minutes: 180
+        timeout-minutes: 60
+        
+      - name: Cache build
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/target
+          key: ${{ env.CACHE_KEY }}
 
   unit-tests-and-checks:
     # if: false
@@ -95,6 +119,7 @@ jobs:
       VCPKG_PKG_INSTALL_DIR: "${{ github.workspace }}/vcpkg_installed/"
       PROTOC: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/tools/protobuf/protoc.exe"
       PROTOC_INCLUDE: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/include"
+      CACHE_KEY: golem-debug
 #    runs-on: blacksmith-16vcpu-ubuntu-2204
     runs-on: self-hosted
     needs: [ build ]
@@ -116,23 +141,27 @@ jobs:
       - name: Fetch tag
         run: git fetch origin --deepen=1
         
+      - name: Restore cached build
+        id: restore-build
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/target
+          key: ${{ env.CACHE_KEY }}
+          fail-on-cache-miss: true
+
       - name: Download MinGW # TODO CACHE
         run: |
           Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
           7z.exe x "mingw-w64.7z" -aoa -r
           gcc --version
         
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
-        id: runvcpkg
+      - name: Restore cached vcpkg deps
+        id: restore-build
+        uses: actions/cache/restore@v4
         with:
-          vcpkgDirectory: "C:/vcpkg"
-          doNotUpdateVcpkg: true
-          doNotCache: true
-          
-      - name: Vcpkg build and install packages
-        run: |
-          ${{ env.VCPKG_ROOT }}/vcpkg.exe install --recurse --clean-after-build --x-install-root "${{ env.VCPKG_PKG_INSTALL_DIR }}" --triplet "${{ env.VCPKG_DEFAULT_TRIPLET }}"
+          path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
+          key: vcpkg-${{ env.CACHE_KEY }}
+          fail-on-cache-miss: true
       
       - name: Setup Rust
         run: |
@@ -149,6 +178,22 @@ jobs:
         run: cargo make --profile ci check-openapi
       - name: Check configs are up to date
         run: cargo make --profile ci check-configs
+      - name: Format results
+        run: |
+          # split execution files in separate suite files
+          $i = 1
+          $sourceFiles = Get-ChildItem -Path "./target/raw-report-*.xml" -File
+          foreach ($file in $sourceFiles) {
+              $fileContent = Get-Content -Path $file.FullName -Raw
+              $splitContents = $fileContent -split '(?=<\?xml)'
+              $trimmedSplitContents = $splitContents | Where-Object { $_.Trim() }
+              foreach ($item in $trimmedSplitContents) {
+                $outputPath = "./target/report-$i.xml"
+                $item.Trim() | Set-Content -Path $outputPath -Encoding UTF8
+                $i++
+              }
+          }
+
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
         if: always()
