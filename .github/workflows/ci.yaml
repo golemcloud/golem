@@ -142,7 +142,6 @@ jobs:
         run: git fetch origin --deepen=1
         
       - name: Restore cached build
-        id: restore-build
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/target
@@ -156,7 +155,6 @@ jobs:
           gcc --version
         
       - name: Restore cached vcpkg deps
-        id: restore-build
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
