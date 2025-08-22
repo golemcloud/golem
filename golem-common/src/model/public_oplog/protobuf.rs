@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::component::ComponentRevision;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
 use crate::model::public_oplog::{
@@ -134,14 +135,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .worker_id
                     .ok_or("Missing worker_id field")?
                     .try_into()?,
-                component_version: create.component_version,
+                component_version: ComponentRevision(create.component_version),
                 args: create.args,
                 env: create.env.into_iter().collect(),
                 project_id: create
                     .project_id
                     .ok_or("Missing project_id field")?
                     .try_into()?,
-                created_by: create.created_by.ok_or("Missing created_by field")?.into(),
+                created_by: create
+                    .created_by
+                    .ok_or("Missing created_by field")?
+                    .try_into()?,
                 wasi_config_vars: create
                     .wasi_config_vars
                     .ok_or("Missing wasi_config_vars field")?
@@ -313,7 +317,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_version: pending_update.target_version,
+                    target_version: ComponentRevision(pending_update.target_version),
                     description: pending_update
                         .update_description
                         .ok_or("Missing update_description field")?
@@ -326,7 +330,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_version: successful_update.target_version,
+                    target_version: ComponentRevision(successful_update.target_version),
                     new_component_size: successful_update.new_component_size,
                     new_active_plugins: BTreeSet::from_iter(
                         successful_update
@@ -343,7 +347,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_version: failed_update.target_version,
+                    target_version: ComponentRevision(failed_update.target_version),
                     details: failed_update.details,
                 }))
             }
@@ -533,7 +537,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::CreateParameters {
                         timestamp: Some(create.timestamp.into()),
                         worker_id: Some(create.worker_id.into()),
-                        component_version: create.component_version,
+                        component_version: create.component_version.0,
                         args: create.args,
                         env: create.env.into_iter().collect(),
                         created_by: Some(create.created_by.into()),
@@ -712,7 +716,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::PendingUpdate(
                         golem_api_grpc::proto::golem::worker::PendingUpdateParameters {
                             timestamp: Some(pending_update.timestamp.into()),
-                            target_version: pending_update.target_version,
+                            target_version: pending_update.target_version.0,
                             update_description: Some(pending_update.description.into()),
                         },
                     )),
@@ -723,7 +727,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::SuccessfulUpdate(
                         golem_api_grpc::proto::golem::worker::SuccessfulUpdateParameters {
                             timestamp: Some(successful_update.timestamp.into()),
-                            target_version: successful_update.target_version,
+                            target_version: successful_update.target_version.0,
                             new_component_size: successful_update.new_component_size,
                             new_active_plugins: successful_update
                                 .new_active_plugins
@@ -739,7 +743,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::FailedUpdate(
                         golem_api_grpc::proto::golem::worker::FailedUpdateParameters {
                             timestamp: Some(failed_update.timestamp.into()),
-                            target_version: failed_update.target_version,
+                            target_version: failed_update.target_version.0,
                             details: failed_update.details,
                         },
                     )),
@@ -1099,7 +1103,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerInvocation> for PublicW
             ),
             worker_invocation::Invocation::ManualUpdate(manual_update) => Ok(
                 PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters {
-                    target_version: manual_update,
+                    target_version: ComponentRevision(manual_update),
                 }),
             ),
         }
@@ -1133,7 +1137,7 @@ impl TryFrom<PublicWorkerInvocation> for golem_api_grpc::proto::golem::worker::W
             PublicWorkerInvocation::ManualUpdate(manual_update) => {
                 golem_api_grpc::proto::golem::worker::WorkerInvocation {
                     invocation: Some(worker_invocation::Invocation::ManualUpdate(
-                        manual_update.target_version,
+                        manual_update.target_version.0,
                     )),
                 }
             }

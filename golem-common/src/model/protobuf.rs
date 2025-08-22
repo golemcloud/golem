@@ -12,19 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{
-    AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
-    ExportedResourceInstanceKey, WorkerResourceDescription, WorkerResourceKey,
-    WorkerWasiConfigVarsFilter,
+use super::component::ComponentRevision;
+use super::component::{
+    ComponentFilePath, ComponentType, InitialComponentFile, InitialComponentFileKey,
 };
-use crate::model::oplog::{OplogIndex, WorkerResourceId};
-use crate::model::{
-    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentType, FilterComparator, IdempotencyKey,
-    InitialComponentFile, InitialComponentFileKey, LogLevel, NumberOfShards, Pod, PromiseId,
-    RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, TargetWorkerId,
-    Timestamp, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId,
-    WorkerNameFilter, WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
+use super::oplog::OplogIndex;
+use super::AgentInstanceDescription;
+use super::AgentInstanceKey;
+use super::ExportedResourceInstanceDescription;
+use super::ExportedResourceInstanceKey;
+use super::WorkerResourceDescription;
+use super::WorkerResourceId;
+use super::WorkerResourceKey;
+use super::WorkerWasiConfigVarsFilter;
+use super::{
+    ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
+    FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable,
+    RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, TargetWorkerId, Timestamp,
+    WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId, WorkerNameFilter,
+    WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
 };
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
@@ -198,18 +204,6 @@ impl From<WorkerStatus> for golem_api_grpc::proto::golem::worker::WorkerStatus {
     }
 }
 
-impl From<golem_api_grpc::proto::golem::common::AccountId> for AccountId {
-    fn from(proto: golem_api_grpc::proto::golem::common::AccountId) -> Self {
-        Self { value: proto.name }
-    }
-}
-
-impl From<AccountId> for golem_api_grpc::proto::golem::common::AccountId {
-    fn from(value: AccountId) -> Self {
-        golem_api_grpc::proto::golem::common::AccountId { name: value.value }
-    }
-}
-
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilter {
     type Error = String;
 
@@ -221,9 +215,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilte
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Name(filter) => Ok(
                     WorkerFilter::new_name(filter.comparator.try_into()?, filter.value),
                 ),
-                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(filter) => Ok(
-                    WorkerFilter::new_version(filter.comparator.try_into()?, filter.value),
-                ),
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(filter) => {
+                    Ok(WorkerFilter::new_version(
+                        filter.comparator.try_into()?,
+                        ComponentRevision(filter.value),
+                    ))
+                }
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Status(filter) => {
                     Ok(WorkerFilter::new_status(
                         filter.comparator.try_into()?,
@@ -297,7 +294,7 @@ impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(
                     golem_api_grpc::proto::golem::worker::WorkerVersionFilter {
                         comparator: comparator.into(),
-                        value,
+                        value: value.0,
                     },
                 )
             }

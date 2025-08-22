@@ -36,7 +36,6 @@ newtype_uuid!(
 newtype_uuid!(PlanId, golem_api_grpc::proto::golem::account::PlanId);
 newtype_uuid!(ProjectGrantId);
 newtype_uuid!(ProjectPolicyId);
-newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Encode, Decode)]
 #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
@@ -101,8 +100,6 @@ impl golem_wasm_rpc::IntoValue for ShardId {
         golem_wasm_ast::analysis::analysed_type::s64()
     }
 }
-
-pub type ComponentVersion = u64;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
 #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]

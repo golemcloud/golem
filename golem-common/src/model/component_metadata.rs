@@ -14,7 +14,7 @@
 
 use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
 use crate::model::base64::Base64;
-use crate::model::ComponentType;
+use crate::model::component::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
 use bincode::de::BorrowDecoder;
 use bincode::enc::Encoder;
