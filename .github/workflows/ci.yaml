@@ -26,7 +26,7 @@ jobs:
   build:
     # if: false
     env:
-      CARGO_BUILD_JOBS: 4
+      CARGO_BUILD_JOBS: 2
       VCPKG_PKG_INSTALL_DIR: "${{ github.workspace }}/vcpkg_installed/"
       PROTOC: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/tools/protobuf/protoc.exe"
       PROTOC_INCLUDE: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/include"
@@ -109,13 +109,15 @@ jobs:
       - name: Cache build
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/target
+          path: |
+            ${{ github.workspace }}/target/debug/*.exe
+            ${{ github.workspace }}/target/debug/*.dll
           key: ${{ env.CACHE_KEY }}
 
   unit-tests-and-checks:
     # if: false
     env:
-      CARGO_BUILD_JOBS: 4
+      CARGO_BUILD_JOBS: 2
       VCPKG_PKG_INSTALL_DIR: "${{ github.workspace }}/vcpkg_installed/"
       PROTOC: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/tools/protobuf/protoc.exe"
       PROTOC_INCLUDE: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/include"
