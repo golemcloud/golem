@@ -434,14 +434,29 @@ cargo test --package integration-tests --test sharding -- --report-time $JUNIT_O
 '''
 
 [tasks.cli-integration-tests]
+dependencies = [
+    "cli-integration-tests-group1",
+    "cli-integration-tests-group2",
+]
+description = "Run CLI integration tests"
+
+[tasks.cli-integration-tests-group1]
 dependencies = ["build"]
 description = "Run CLI integration tests"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo test --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
 exec --fail-on-error cargo test --package golem-cli :tag:app --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group2]
+dependencies = ["build"]
+description = "Run CLI integration tests"
+script_runner = "@duckscript"
+script = '''
 exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
+
 
 [tasks.template-integration-tests]
 dependencies = ["build"]
