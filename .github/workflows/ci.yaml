@@ -51,21 +51,30 @@ jobs:
       - name: Fetch tag
         run: git fetch origin --deepen=1
         
-      - name: Download MinGW # TODO CACHE
-        run: |
-          Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
-          7z.exe x "mingw-w64.7z" -aoa -r
-          gcc --version
-        
-      - name: Restore cached vcpkg deps
+      - name: Restore cached build
         id: restore-build
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/target/debug/
+          key: ${{ env.CACHE_KEY }}
+          fail-on-cache-miss: true
+
+      - name: Restore cached vcpkg deps
+        id: restore-deps
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
           key: vcpkg-${{ env.CACHE_KEY }}
 
+      - name: Download MinGW
+        if: ${{ steps.restore-build.outputs.cache-hit != 'true' && steps.restore-deps.outputs.cache-hit != 'true' }}
+        run: |
+          Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
+          7z.exe x "mingw-w64.7z" -aoa -r
+          gcc --version
+        
       - name: Setup vcpkg
-        if: ${{ steps.restore-build.outputs.cache-hit != 'true' }}
+        if: ${{ steps.restore-build.outputs.cache-hit != 'true' && steps.restore-deps.outputs.cache-hit != 'true' }}
         uses: lukka/run-vcpkg@v11
         id: runvcpkg
         with:
@@ -75,18 +84,19 @@ jobs:
           
       - name: Vcpkg build and install packages
         id: vcpkg-build
-        if: ${{ steps.restore-build.outputs.cache-hit != 'true' }}
+        if: ${{ steps.restore-build.outputs.cache-hit != 'true' && steps.restore-deps.outputs.cache-hit != 'true' }}
         run: |
           ${{ env.VCPKG_ROOT }}/vcpkg.exe install --recurse --clean-after-build --x-install-root "${{ env.VCPKG_PKG_INSTALL_DIR }}" --triplet "${{ env.VCPKG_DEFAULT_TRIPLET }}"
       
       - name: Cache vcpkg build
-        if: ${{ steps.restore-build.outputs.cache-hit != 'true' }}
+        if: ${{ steps.restore-build.outputs.cache-hit != 'true' && steps.restore-deps.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
           key: vcpkg-${{ env.CACHE_KEY }}
       
       - name: Setup Rust
+        if: ${{ steps.restore-build.outputs.cache-hit != 'true' && steps.restore-deps.outputs.cache-hit != 'true' }}
         run: |
           rustup install stable-gnu
           rustup update stable-gnu --no-self-update
@@ -102,11 +112,13 @@ jobs:
       - name: Building all executables
         env:
           QUIET: true
+        if: ${{ steps.restore-build.outputs.cache-hit != 'true' }}
         run: |
           cargo make --profile ci build
         timeout-minutes: 180
         
       - name: Cache build
+        if: ${{ steps.restore-build.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: |
@@ -146,16 +158,10 @@ jobs:
       - name: Restore cached build
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/target
+          path: ${{ github.workspace }}/target/debug/
           key: ${{ env.CACHE_KEY }}
           fail-on-cache-miss: true
 
-      - name: Download MinGW # TODO CACHE
-        run: |
-          Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
-          7z.exe x "mingw-w64.7z" -aoa -r
-          gcc --version
-        
       - name: Restore cached vcpkg deps
         uses: actions/cache/restore@v4
         with:
@@ -163,6 +169,12 @@ jobs:
           key: vcpkg-${{ env.CACHE_KEY }}
           fail-on-cache-miss: true
       
+      - name: Download MinGW # TODO CACHE
+        run: |
+          Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
+          7z.exe x "mingw-w64.7z" -aoa -r
+          gcc --version
+        
       - name: Setup Rust
         run: |
           rustup install stable-gnu
