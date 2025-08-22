@@ -1105,3 +1105,4 @@ docker compose --project-directory log-tools/elastic stop
 description = "Stops and removes the elastic environment, including all data"
 script = '''
 docker compose --project-directory log-tools/elastic down --volumes
+'''
