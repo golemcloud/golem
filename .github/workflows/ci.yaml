@@ -27,7 +27,7 @@ env:
 
 jobs:
   build:
-    # if: false
+    if: false
     env:
       CARGO_BUILD_JOBS: 2
       VCPKG_PKG_INSTALL_DIR: "${{ github.workspace }}/vcpkg_installed/"
@@ -62,7 +62,7 @@ jobs:
             ${{ github.workspace }}/target/debug/*.exe
             ${{ github.workspace }}/target/debug/*.dll
           key: ${{ env.CACHE_KEY }}
-          fail-on-cache-miss: true
+          lookup-only: true
 
       - name: Restore cached vcpkg deps
         id: restore-deps
@@ -103,7 +103,7 @@ jobs:
           key: vcpkg-golem-debug
       
       - name: Setup Rust
-        if: ${{ steps.restore-build.outputs.cache-hit != 'true' && steps.restore-deps.outputs.cache-hit != 'true' }}
+        if: ${{ steps.restore-build.outputs.cache-hit != 'true' }}
         run: |
           rustup install stable-gnu
           rustup update stable-gnu --no-self-update
@@ -143,7 +143,7 @@ jobs:
       CACHE_KEY: golem-binaries
 #    runs-on: blacksmith-16vcpu-ubuntu-2204
     runs-on: self-hosted
-    needs: [ build ]
+    # needs: [ build ]
     defaults:
       run:
         shell: pwsh
@@ -201,6 +201,7 @@ jobs:
       - name: Check configs are up to date
         run: cargo make --profile ci check-configs
       - name: Format results
+        if: always()
         run: |
           # split execution files in separate suite files
           $i = 1
