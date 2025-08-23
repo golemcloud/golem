@@ -1,10 +1,11 @@
 name: CI
 on:
-#  push:
+ push:
 #    tags:
 #      - "v*.*.*"
-#    branches:
-#      - main
+   branches:
+     # - main
+     - "windows-*"
 #  pull_request:
   workflow_dispatch:
 
@@ -20,6 +21,7 @@ env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
   VCPKG_DEFAULT_TRIPLET: "x64-mingw-dynamic"
   VCPKG_ENABLE_METRICS: 0
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: 2
   MINGW_PACKAGE: "https://github.com/niXman/mingw-builds-binaries/releases/download/14.2.0-rt_v12-rev2/x86_64-14.2.0-release-posix-seh-ucrt-rt_v12-rev2.7z"
 
 jobs:
@@ -30,7 +32,7 @@ jobs:
       VCPKG_PKG_INSTALL_DIR: "${{ github.workspace }}/vcpkg_installed/"
       PROTOC: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/tools/protobuf/protoc.exe"
       PROTOC_INCLUDE: "${{ github.workspace }}/vcpkg_installed/x64-mingw-dynamic/include"
-      CACHE_KEY: golem-debug
+      CACHE_KEY: golem-binaries
 #    runs-on: blacksmith-16vcpu-ubuntu-2204
     runs-on: self-hosted
     defaults:
@@ -63,7 +65,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
-          key: vcpkg-${{ env.CACHE_KEY }}
+          # key: vcpkg-${{ env.CACHE_KEY }}
+          key: vcpkg-golem-debug
 
       - name: Download MinGW
         if: ${{ steps.restore-build.outputs.cache-hit != 'true' && steps.restore-deps.outputs.cache-hit != 'true' }}
@@ -92,7 +95,8 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
-          key: vcpkg-${{ env.CACHE_KEY }}
+          # key: vcpkg-${{ env.CACHE_KEY }}
+          key: vcpkg-golem-debug
       
       - name: Setup Rust
         if: ${{ steps.restore-build.outputs.cache-hit != 'true' && steps.restore-deps.outputs.cache-hit != 'true' }}
@@ -165,10 +169,11 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
-          key: vcpkg-${{ env.CACHE_KEY }}
+          # key: vcpkg-${{ env.CACHE_KEY }}
+          key: vcpkg-golem-debug
           fail-on-cache-miss: true
       
-      - name: Download MinGW # TODO CACHE
+      - name: Download MinGW
         run: |
           Invoke-WebRequest -Uri $env:MINGW_PACKAGE -Out mingw-w64.7z
           7z.exe x "mingw-w64.7z" -aoa -r
