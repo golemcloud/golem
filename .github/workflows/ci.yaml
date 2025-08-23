@@ -58,7 +58,9 @@ jobs:
         id: restore-build
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/target/debug/
+          path: |
+            ${{ github.workspace }}/target/debug/*.exe
+            ${{ github.workspace }}/target/debug/*.dll
           key: ${{ env.CACHE_KEY }}
           fail-on-cache-miss: true
 
@@ -163,7 +165,9 @@ jobs:
       - name: Restore cached build
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/target/debug/
+          path: |
+            ${{ github.workspace }}/target/debug/*.exe
+            ${{ github.workspace }}/target/debug/*.dll
           key: ${{ env.CACHE_KEY }}
           fail-on-cache-miss: true
 
