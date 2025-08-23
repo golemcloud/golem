@@ -247,8 +247,8 @@ script_runner = "pwsh"
 script_extension = "ps1"
 script = '''
 $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- $additional_params > ./target/report-unit-tests.xml
-cargo test -p golem-wasm-ast --tests --all-features -- $additional_params >> ./target/report-unit-tests.xml
+cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- $additional_params > ./target/raw-report-unit-tests.xml
+cargo test -p golem-wasm-ast --tests --all-features -- $additional_params >> ./target/raw-report-unit-tests.xml
 '''
 
 [tasks.worker-executor-tests]
@@ -653,6 +653,8 @@ script = '''
 [tasks.diff-openapi.windows]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
 dependencies = ["merge-openapi"]
+script_runner = "pwsh"
+script_extension = "ps1"
 script = '''
 function Test-OpenApiSpec {
     param (
