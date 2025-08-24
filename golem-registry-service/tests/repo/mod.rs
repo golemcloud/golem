@@ -94,7 +94,7 @@ impl Deps {
                 audit: DeletableRevisionAuditFields::new(account_id),
                 name: format!("Test Account {account_id}"),
                 plan_id: self.test_plan_id(),
-                roles: Vec::new(),
+                roles: 0,
             })
             .await
             .unwrap()

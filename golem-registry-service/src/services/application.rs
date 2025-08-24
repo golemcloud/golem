@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::application::ApplicationRepo;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{Application, ApplicationId, NewApplicationData};
+use golem_common::model::auth::AccountAction;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
@@ -25,6 +27,8 @@ use tracing::error;
 pub enum ApplicationError {
     #[error("Application not found for id {0}")]
     ApplicationNotFound(ApplicationId),
+    #[error("{0}")]
+    Unauthorized(AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -33,12 +37,19 @@ impl SafeDisplay for ApplicationError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::ApplicationNotFound(_) => self.to_string(),
+            Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
 }
 
 error_forwarding!(ApplicationError, RepoError);
+
+impl From<AuthorizationError> for ApplicationError {
+    fn from(value: AuthorizationError) -> Self {
+        Self::Unauthorized(value)
+    }
+}
 
 pub struct ApplicationService {
     application_repo: Arc<dyn ApplicationRepo>,
@@ -53,12 +64,14 @@ impl ApplicationService {
         &self,
         account_id: AccountId,
         data: NewApplicationData,
-        actor: AccountId,
+        auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
+        auth.authorize_account_action(&account_id, AccountAction::CreateApplication)?;
+
         // TODO: dedicated create function
         let record = self
             .application_repo
-            .ensure(&actor.0, &account_id.0, &data.name.0)
+            .ensure(&auth.account_id.0, &account_id.0, &data.name.0)
             .await?;
 
         Ok(record.into())

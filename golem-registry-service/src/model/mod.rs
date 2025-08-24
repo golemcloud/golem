@@ -12,6 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod account;
+pub mod auth;
 pub mod component;
+pub mod environment;
 pub mod login;
+
+use golem_common::model::account::AccountId;
+use golem_common::model::auth::EnvironmentRole;
+use std::collections::HashSet;
+
+#[derive(Debug)]
+pub struct WithEnvironmentAuth<A> {
+    pub value: A,
+
+    pub owner_account_id: AccountId,
+    pub roles_from_shares: HashSet<EnvironmentRole>,
+}

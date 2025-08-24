@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::auth::AuthorizationError;
 use crate::repo::model::component::ComponentRepoError;
 use crate::services::account_usage::error::AccountUsageError;
 use crate::services::application::ApplicationError;
@@ -54,8 +55,6 @@ pub enum ComponentError {
         "The component name {actual} did not match the component's root package name: {expected}"
     )]
     InvalidComponentName { expected: String, actual: String },
-    #[error("Unauthorized: {0}")]
-    Unauthorized(String),
     #[error("Limit {limit_name} exceeded, limit: {limit_value}, current: {current_value}")]
     LimitExceeded {
         limit_name: String,
@@ -85,6 +84,8 @@ pub enum ComponentError {
         installation_id: PluginInstallationId,
     },
     #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
+    #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
 
@@ -100,7 +101,6 @@ impl SafeDisplay for ComponentError {
             Self::InitialComponentFileNotFound { .. } => self.to_string(),
             Self::InvalidFilePath(_) => self.to_string(),
             Self::InvalidComponentName { .. } => self.to_string(),
-            Self::Unauthorized(_) => self.to_string(),
             Self::LimitExceeded { .. } => self.to_string(),
             Self::InvalidOplogProcessorPlugin => self.to_string(),
             Self::PluginNotFound { .. } => self.to_string(),
@@ -108,6 +108,7 @@ impl SafeDisplay for ComponentError {
             Self::ConcurrentUpdate => self.to_string(),
             Self::InvalidCurrentRevision => self.to_string(),
             Self::PluginInstallationNotFound { .. } => self.to_string(),
+            Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }

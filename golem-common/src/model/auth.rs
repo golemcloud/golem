@@ -39,19 +39,9 @@ declare_structs! {
         pub expires_at: chrono::DateTime<Utc>,
     }
 
-    pub struct AuthCtx {
-        pub token_secret: TokenSecret,
-    }
-
     pub struct AccountAuthorisation {
         pub token: Token,
         pub roles: Vec<AccountRole>,
-    }
-}
-
-impl AuthCtx {
-    pub fn new(token_secret: TokenSecret) -> Self {
-        Self { token_secret }
     }
 }
 
@@ -67,14 +57,14 @@ impl TokenWithSecret {
 }
 
 declare_enums! {
-    #[derive(FromRepr, EnumIter)]
+    #[derive(Eq, Hash, FromRepr, EnumIter)]
     #[repr(i32)]
     pub enum AccountRole {
         Admin = 0,
         MarketingAdmin = 1,
     }
 
-    #[derive(FromRepr, EnumIter)]
+    #[derive(Eq, Hash, FromRepr, EnumIter)]
     #[repr(i32)]
     pub enum EnvironmentRole {
         Admin = 0,
@@ -111,137 +101,44 @@ impl TryFrom<i32> for EnvironmentRole {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, EnumIter, FromRepr)]
-#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
+pub enum GlobalAction {
+    CreateAccount,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
 pub enum AccountAction {
-    ViewAccount = 0,
-    UpdateAccount = 1,
-    ViewPlan = 2,
-    CreateProject = 3,
-    DeleteAccount = 4,
-    ViewAccountGrants = 5,
-    CreateAccountGrant = 6,
-    DeleteAccountGrant = 7,
-    ViewDefaultProject = 8,
-    ListProjectGrants = 9,
-    ViewLimits = 10,
-    UpdateLimits = 11,
-    ViewTokens = 12,
-    CreateToken = 13,
-    DeleteToken = 14,
-    ViewGlobalPlugins = 15,
-    CreateGlobalPlugin = 16,
-    UpdateGlobalPlugin = 17,
-    DeleteGlobalPlugin = 18,
+    UpdateAccount,
+    SetRoles,
+    CreateApplication,
+    CreateToken,
+    CreateKnownSecret,
+    DeleteToken,
 }
 
-impl From<AccountAction> for i32 {
-    fn from(value: AccountAction) -> Self {
-        value as i32
-    }
-}
-
-impl TryFrom<i32> for AccountAction {
-    type Error = String;
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        AccountAction::from_repr(value).ok_or_else(|| format!("Invalid account action: {value}"))
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, EnumIter, FromRepr)]
-#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
 pub enum EnvironmentAction {
-    ViewComponent = 0,
-    CreateComponent = 1,
-    UpdateComponent = 2,
-    DeleteComponent = 3,
-    ViewWorker = 4,
-    CreateWorker = 5,
-    UpdateWorker = 6,
-    DeleteWorker = 7,
-    ViewProjectGrants = 8,
-    CreateProjectGrants = 9,
-    DeleteProjectGrants = 10,
-    ViewApiDefinition = 11,
-    CreateApiDefinition = 12,
-    UpdateApiDefinition = 13,
-    DeleteApiDefinition = 14,
-    DeleteProject = 15,
-    ViewProject = 16,
-    ViewPluginInstallations = 17,
-    CreatePluginInstallation = 18,
-    UpdatePluginInstallation = 19,
-    DeletePluginInstallation = 20,
-    UpsertApiDeployment = 21,
-    ViewApiDeployment = 22,
-    DeleteApiDeployment = 23,
-    UpsertApiDomain = 24,
-    ViewApiDomain = 25,
-    DeleteApiDomain = 26,
-    BatchUpdatePluginInstallations = 27,
-    ViewPluginDefinition = 28,
-    CreatePluginDefinition = 29,
-    UpdatePluginDefinition = 30,
-    DeletePluginDefinition = 31,
-    ExportApiDefinition = 32,
+    CreateComponent,
+    UpdateComponent,
 }
 
-impl From<EnvironmentAction> for i32 {
-    fn from(value: EnvironmentAction) -> Self {
-        value as i32
-    }
-}
+// #[cfg(feature = "protobuf")]
+// mod protobuf {
+//     use super::AccountAction;
 
-impl TryFrom<i32> for EnvironmentAction {
-    type Error = String;
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        EnvironmentAction::from_repr(value)
-            .ok_or_else(|| format!("Invalid project action: {value}"))
-    }
-}
+//     impl TryFrom<golem_api_grpc::proto::golem::auth::AccountAction> for AccountAction {
+//         type Error = String;
 
-#[cfg(feature = "protobuf")]
-mod protobuf {
-    use super::AccountAction;
+//         fn try_from(
+//             value: golem_api_grpc::proto::golem::auth::AccountAction,
+//         ) -> Result<Self, Self::Error> {
+//             Self::try_from(value as i32)
+//         }
+//     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::auth::AccountAction> for AccountAction {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::auth::AccountAction,
-        ) -> Result<Self, Self::Error> {
-            Self::try_from(value as i32)
-        }
-    }
-
-    impl From<AccountAction> for golem_api_grpc::proto::golem::auth::AccountAction {
-        fn from(value: AccountAction) -> Self {
-            Self::try_from(value as i32).expect("Encoding AccountAction as protobuf")
-        }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::AccountRole;
-    use super::EnvironmentAction;
-    use strum::IntoEnumIterator;
-    use test_r::test;
-
-    #[test]
-    fn role_to_from() {
-        for role in AccountRole::iter() {
-            let role_as_i32: i32 = role.clone().into();
-            let deserialized_role = AccountRole::try_from(role_as_i32).unwrap();
-            assert_eq!(role, deserialized_role);
-        }
-    }
-
-    #[test]
-    fn project_action_to_from() {
-        for action in EnvironmentAction::iter() {
-            let action_as_i32: i32 = action.clone().into();
-            let deserialized_action = EnvironmentAction::try_from(action_as_i32).unwrap();
-            assert_eq!(action, deserialized_action);
-        }
-    }
-}
+//     impl From<AccountAction> for golem_api_grpc::proto::golem::auth::AccountAction {
+//         fn from(value: AccountAction) -> Self {
+//             Self::try_from(value as i32).expect("Encoding AccountAction as protobuf")
+//         }
+//     }
+// }

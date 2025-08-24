@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::RecordWithEnvironmentAuth;
+use super::environment_share::environment_roles_from_bit_vector;
+use crate::model::WithEnvironmentAuth;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::model::account::AccountId;
@@ -22,7 +25,7 @@ use golem_common::model::environment::{
     Environment, EnvironmentId, EnvironmentName, NewEnvironmentData,
 };
 use sqlx::{FromRow, types::Json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -114,6 +117,7 @@ impl EnvironmentRevisionRecord {
 pub struct EnvironmentExtRevisionRecord {
     pub name: String,
     pub application_id: Uuid,
+
     #[sqlx(flatten)]
     pub revision: EnvironmentRevisionRecord,
 }
@@ -127,6 +131,20 @@ impl From<EnvironmentExtRevisionRecord> for Environment {
             compatibility_check: value.revision.compatibility_check,
             version_check: value.revision.version_check,
             security_overrides: value.revision.security_overrides,
+        }
+    }
+}
+
+impl From<RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>>
+    for WithEnvironmentAuth<Environment>
+{
+    fn from(record: RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>) -> Self {
+        Self {
+            value: record.value.into(),
+            owner_account_id: AccountId(record.owner_account_id),
+            roles_from_shares: HashSet::from_iter(environment_roles_from_bit_vector(
+                record.environment_roles_from_shares,
+            )),
         }
     }
 }

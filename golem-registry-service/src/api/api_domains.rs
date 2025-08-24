@@ -13,19 +13,23 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use golem_common::api::Page;
 use golem_common::api::api_domain::UpdateApiDomainRequest;
 use golem_common::model::api_domain::{ApiDomain, ApiDomainId};
-use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct ApiDomainsApi {}
+pub struct ApiDomainsApi {
+    auth_service: Arc<AuthService>,
+}
 
 #[OpenApi(
     prefix_path = "/v1/domains",
@@ -33,6 +37,10 @@ pub struct ApiDomainsApi {}
     tag = ApiTags::ApiDomain
 )]
 impl ApiDomainsApi {
+    pub fn new(auth_service: Arc<AuthService>) -> Self {
+        Self { auth_service }
+    }
+
     /// Get api domain by id
     #[oai(path = "/:domain_id", method = "get", operation_id = "get_domain")]
     async fn get_domain(
@@ -42,7 +50,7 @@ impl ApiDomainsApi {
     ) -> ApiResult<Json<ApiDomain>> {
         let record = recorded_http_api_request!("get_domains", domain_id = domain_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_domain_internal(domain_id.0, auth)
@@ -74,7 +82,7 @@ impl ApiDomainsApi {
         let record =
             recorded_http_api_request!("get_domain_revisions", domain_id = domain_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_domain_revisions_internal(domain_id.0, auth)
@@ -103,7 +111,7 @@ impl ApiDomainsApi {
         let record =
             recorded_http_api_request!("update_domain", domain_id = domain_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .update_domain_internal(domain_id.0, payload.0, auth)

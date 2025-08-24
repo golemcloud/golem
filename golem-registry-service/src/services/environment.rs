@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::WithEnvironmentAuth;
+use crate::model::auth::AuthCtx;
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use anyhow::anyhow;
 use golem_common::model::account::AccountId;
@@ -76,15 +78,22 @@ impl EnvironmentService {
     pub async fn get(
         &self,
         environment_id: &EnvironmentId,
-    ) -> Result<Environment, EnvironmentError> {
-        let record = self
+        auth: &AuthCtx,
+    ) -> Result<WithEnvironmentAuth<Environment>, EnvironmentError> {
+        let result = self
             .environment_repo
-            .get_by_id(&environment_id.0)
+            .get_by_id(
+                &environment_id.0,
+                &auth.account_id.0,
+                auth.should_override_storage_visibility_rules(),
+                false,
+            )
             .await?
             .ok_or(EnvironmentError::EnvironmentNotFound(
                 environment_id.clone(),
-            ))?;
+            ))?
+            .into();
 
-        Ok(record.into())
+        Ok(result)
     }
 }

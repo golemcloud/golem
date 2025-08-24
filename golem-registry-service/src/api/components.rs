@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use futures::TryStreamExt;
 use golem_common::api::Page;
 use golem_common::api::component::UpdateComponentRequestMetadata;
 use golem_common::model::ComponentId;
-use golem_common::model::account::AccountId;
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::Component;
 use golem_common::model::component::ComponentRevision;
 use golem_common::recorded_http_api_request;
@@ -33,10 +33,10 @@ use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::{Multipart, OpenApi};
 use std::sync::Arc;
 use tracing::Instrument;
-use uuid::uuid;
 
 pub struct ComponentsApi {
     component_service: Arc<ComponentService>,
+    auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
@@ -45,8 +45,11 @@ pub struct ComponentsApi {
     tag = ApiTags::Component
 )]
 impl ComponentsApi {
-    pub fn new(component_service: Arc<ComponentService>) -> Self {
-        Self { component_service }
+    pub fn new(component_service: Arc<ComponentService>, auth_service: Arc<AuthService>) -> Self {
+        Self {
+            component_service,
+            auth_service,
+        }
     }
 
     /// Get a component by id
@@ -63,7 +66,7 @@ impl ComponentsApi {
         let record =
             recorded_http_api_request!("get_component", component_id = component_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_component_internal(component_id.0, auth)
@@ -102,7 +105,7 @@ impl ComponentsApi {
             component_id = component_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_component_revisions_internal(component_id.0, auth)
@@ -138,7 +141,7 @@ impl ComponentsApi {
             revision = revision.0.0
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_component_revision_internal(component_id.0, revision.0, auth)
@@ -181,7 +184,7 @@ impl ComponentsApi {
             revision = revision.0.0
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_component_wasm_internal(component_id.0, revision.0, auth)
@@ -225,7 +228,7 @@ impl ComponentsApi {
             component_id = component_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .update_component_internal(component_id.0, payload, auth)
@@ -239,16 +242,13 @@ impl ComponentsApi {
         &self,
         component_id: ComponentId,
         payload: UpdateComponentRequest,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         let data = if let Some(upload) = payload.new_component_wasm {
             Some(upload.into_vec().await?)
         } else {
             None
         };
-
-        // TODO
-        let account_id: AccountId = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
 
         let new_files_archive = payload.new_files.map(|f| f.into_file());
 
@@ -267,7 +267,7 @@ impl ComponentsApi {
                 metadata.dynamic_linking,
                 metadata.env,
                 metadata.agent_types,
-                &account_id,
+                &auth,
             )
             .await?
             .into();

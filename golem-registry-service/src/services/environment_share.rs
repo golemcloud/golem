@@ -13,15 +13,13 @@
 // limitations under the License.
 
 use crate::repo::environment_share::EnvironmentShareRepo;
-use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment_share::{
-    EnvironmentShareRepoError, EnvironmentShareRevisionRecord, EnvironmentShareRoleRecord,
+    EnvironmentShareRepoError, EnvironmentShareRevisionRecord,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_share::{
-    EnvironmentShare, EnvironmentShareId, EnvironmentShareRevision, NewEnvironmentShare,
-    UpdateEnvironmentShare,
+    EnvironmentShare, EnvironmentShareId, NewEnvironmentShare, UpdateEnvironmentShare,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use std::fmt::Debug;
@@ -71,23 +69,12 @@ impl EnvironmentShareService {
         actor: AccountId,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         let id = EnvironmentShareId::new_v4();
-        let revision = EnvironmentShareRevision::INITIAL;
+
+        let record = EnvironmentShareRevisionRecord::creation(id, data.roles, actor);
+
         let result = self
             .environment_share_repo
-            .create(
-                environment_id.0,
-                EnvironmentShareRevisionRecord {
-                    environment_share_id: id.0,
-                    revision_id: EnvironmentShareRevision::INITIAL.into(),
-                    audit: DeletableRevisionAuditFields::new(actor.0),
-                    roles: data
-                        .roles
-                        .into_iter()
-                        .map(|r| EnvironmentShareRoleRecord::from_model(id.clone(), revision, r))
-                        .collect(),
-                },
-                data.grantee_account_id.0,
-            )
+            .create(environment_id.0, record, data.grantee_account_id.0)
             .await;
 
         match result {
@@ -198,6 +185,21 @@ impl EnvironmentShareService {
             .into_iter()
             .map(|r| r.try_into())
             .collect::<Result<_, _>>()?;
+
+        Ok(result)
+    }
+
+    pub async fn get_share_for_environment_and_grantee(
+        &self,
+        environment_id: &EnvironmentId,
+        grantee_account_id: &AccountId,
+    ) -> Result<Option<EnvironmentShare>, EnvironmentShareError> {
+        let result = self
+            .environment_share_repo
+            .get_for_environment_and_grantee(&environment_id.0, &grantee_account_id.0)
+            .await?
+            .map(|r| r.try_into())
+            .transpose()?;
 
         Ok(result)
     }

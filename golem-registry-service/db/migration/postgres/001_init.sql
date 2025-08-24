@@ -67,6 +67,8 @@ CREATE TABLE account_revisions
     name        TEXT      NOT NULL,
     email       TEXT      NOT NULL,
     plan_id     UUID      NOT NULL,
+    -- Bitvector of roles
+    roles INT NOT NULL,
 
     created_at  TIMESTAMP NOT NULL,
     created_by  UUID      NOT NULL,
@@ -77,19 +79,9 @@ CREATE TABLE account_revisions
     CONSTRAINT account_revisions_accounts_fk
         FOREIGN KEY (account_id) REFERENCES accounts,
     CONSTRAINT account_revisions_plans_fk
-        FOREIGN KEY (plan_id) REFERENCES plans
-);
-
-CREATE TABLE account_revision_roles
-(
-    account_id  UUID   NOT NULL,
-    revision_id BIGINT NOT NULL,
-    role        INT    NOT NULL,
-
-    CONSTRAINT account_revision_roles_pk
-        PRIMARY KEY (account_id, revision_id, role),
-    CONSTRAINT account_revision_roles_account_revisions_fk
-        FOREIGN KEY (account_id, revision_id) REFERENCES account_revisions
+        FOREIGN KEY (plan_id) REFERENCES plans,
+    CONSTRAINT account_revisions_check_roles
+        CHECK ((roles & ~3) = 0) -- for 3 roles (bits 0,1),
 );
 
 CREATE TABLE tokens
@@ -687,6 +679,9 @@ CREATE TABLE environment_share_revisions
     environment_share_id UUID      NOT NULL,
     revision_id          BIGINT    NOT NULL,
 
+    -- Bitvector of roles
+    roles INT NOT NULL,
+
     created_at           TIMESTAMP NOT NULL,
     created_by           UUID      NOT NULL,
     deleted              BOOLEAN   NOT NULL,
@@ -694,17 +689,7 @@ CREATE TABLE environment_share_revisions
     CONSTRAINT environment_share_revisions_pk
         PRIMARY KEY (environment_share_id, revision_id),
     CONSTRAINT environment_share_revisions_environment_shares_fk
-        FOREIGN KEY (environment_share_id) REFERENCES environment_shares
-);
-
-CREATE TABLE environment_share_revision_roles
-(
-    environment_share_id UUID   NOT NULL,
-    revision_id          BIGINT NOT NULL,
-    role                 INT    NOT NULL,
-
-    CONSTRAINT environment_share_revision_roles_pk
-        PRIMARY KEY (environment_share_id, revision_id, role),
-    CONSTRAINT environment_share_revision_roles_environment_share_revisions_fk
-        FOREIGN KEY (environment_share_id, revision_id) REFERENCES environment_share_revisions
+        FOREIGN KEY (environment_share_id) REFERENCES environment_shares,
+    CONSTRAINT environment_share_revisions_check_roles
+        CHECK ((roles & ~7) = 0) -- for 3 roles (bits 0,1,2)
 );

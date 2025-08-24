@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use crate::services::environment_share::EnvironmentShareService;
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::environment_share::{
     EnvironmentShare, EnvironmentShareId, UpdateEnvironmentShare,
 };
@@ -31,6 +32,7 @@ use uuid::Uuid;
 
 pub struct EnvironmentSharesApi {
     environment_share_service: Arc<EnvironmentShareService>,
+    auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
@@ -39,9 +41,13 @@ pub struct EnvironmentSharesApi {
     tag = ApiTags::EnvironmentShares
 )]
 impl EnvironmentSharesApi {
-    pub fn new(environment_share_service: Arc<EnvironmentShareService>) -> Self {
+    pub fn new(
+        environment_share_service: Arc<EnvironmentShareService>,
+        auth_service: Arc<AuthService>,
+    ) -> Self {
         Self {
             environment_share_service,
+            auth_service,
         }
     }
 
@@ -61,7 +67,7 @@ impl EnvironmentSharesApi {
             environment_share_id = environment_share_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_share_internal(environment_share_id.0, auth)
@@ -100,7 +106,7 @@ impl EnvironmentSharesApi {
             environment_share_id = environment_share_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .update_environment_share_internal(environment_share_id.0, data.0, auth)
@@ -140,7 +146,7 @@ impl EnvironmentSharesApi {
             environment_share_id = environment_share_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .delete_environment_share_internal(environment_share_id.0, auth)

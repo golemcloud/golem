@@ -15,15 +15,14 @@
 use super::plan::{PlanError, PlanService};
 use super::token::{TokenError, TokenService};
 use crate::config::AccountsConfig;
+use crate::model::auth::{AuthCtx, AuthorizationError, SYSTEM_ACCOUNT_ID};
 use crate::repo::account::AccountRepo;
-use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord, AccountRoleRecord};
-use crate::repo::model::audit::DeletableRevisionAuditFields;
+use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use golem_common::model::PlanId;
-use golem_common::model::account::{
-    Account, AccountId, AccountRevision, NewAccountData, UpdatedAccountData,
-};
-use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::account::{Account, AccountId, NewAccountData, UpdatedAccountData};
+use golem_common::model::auth::{AccountAction, AccountRole, GlobalAction, TokenSecret};
 use golem_common::{SafeDisplay, error_forwarding};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -38,6 +37,8 @@ pub enum AccountError {
     #[error("Concurrent update")]
     ConcurrentUpdate,
     #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
+    #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
 
@@ -47,6 +48,7 @@ impl SafeDisplay for AccountError {
             Self::AccountNotFound(_) => self.to_string(),
             Self::EmailAlreadyInUse => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
+            Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -76,7 +78,7 @@ impl AccountService {
         }
     }
 
-    pub async fn create_initial_accounts(&self) -> Result<(), AccountError> {
+    pub async fn create_initial_accounts(&self, auth: &AuthCtx) -> Result<(), AccountError> {
         for (name, account) in &self.config.accounts {
             let account_id = AccountId(account.id);
             let existing_account = self.get_optional(&account_id).await?;
@@ -92,7 +94,7 @@ impl AccountService {
                         },
                         vec![account.role.clone()],
                         PlanId(account.plan_id),
-                        account_id.clone(),
+                        auth,
                     )
                     .await?;
                     // TODO: Deal with failure here
@@ -101,6 +103,7 @@ impl AccountService {
                             account_id,
                             TokenSecret(account.token),
                             DateTime::<Utc>::MAX_UTC,
+                            auth,
                         )
                         .await?;
                 }
@@ -116,24 +119,14 @@ impl AccountService {
     pub async fn create(
         &self,
         account: NewAccountData,
-        actor: AccountId,
+        auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let id = AccountId::new_v4();
-        let plan_id = self.get_default_plan_id().await?;
-        info!("Creating account: {}", id);
-        self.create_internal(id, account, Vec::new(), plan_id, actor)
-            .await
-    }
+        auth.authorize_global_action(GlobalAction::CreateAccount)?;
 
-    /// create account with the account itself being the user creating it
-    pub async fn create_bootstrapped(
-        &self,
-        account: NewAccountData,
-    ) -> Result<Account, AccountError> {
         let id = AccountId::new_v4();
-        info!("Creating account: {}", id);
         let plan_id = self.get_default_plan_id().await?;
-        self.create_internal(id.clone(), account, Vec::new(), plan_id, id)
+        info!("Creating account: {}", id);
+        self.create_internal(id, account, Vec::new(), plan_id, auth)
             .await
     }
 
@@ -141,8 +134,10 @@ impl AccountService {
         &self,
         account_id: &AccountId,
         update: UpdatedAccountData,
-        actor: AccountId,
+        auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
+        auth.authorize_account_action(account_id, AccountAction::UpdateAccount)?;
+
         info!("Updating account: {}", account_id);
 
         let mut account: Account = self
@@ -155,15 +150,17 @@ impl AccountService {
         account.name = update.name;
         account.email = update.email;
 
-        self.update_internal(account, actor).await
+        self.update_internal(account, auth).await
     }
 
     pub async fn set_roles(
         &self,
         account_id: &AccountId,
         roles: Vec<AccountRole>,
-        actor: AccountId,
+        auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
+        auth.authorize_account_action(account_id, AccountAction::SetRoles)?;
+
         info!("Updating account: {}", account_id);
 
         let mut account: Account = self
@@ -175,7 +172,7 @@ impl AccountService {
 
         account.roles = roles;
 
-        self.update_internal(account, actor).await
+        self.update_internal(account, auth).await
     }
 
     pub async fn get(&self, account_id: &AccountId) -> Result<Account, AccountError> {
@@ -190,24 +187,24 @@ impl AccountService {
         account: NewAccountData,
         roles: Vec<AccountRole>,
         plan_id: PlanId,
-        actor: AccountId,
+        auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let revision = AccountRevision::INITIAL;
-        let result = self
-            .account_repo
-            .create(AccountRevisionRecord {
-                account_id: id.0,
-                revision_id: revision.0 as i64,
-                name: account.name,
-                email: account.email,
-                plan_id: plan_id.0,
-                audit: DeletableRevisionAuditFields::new(actor.0),
-                roles: roles
-                    .into_iter()
-                    .map(|role| AccountRoleRecord::from_model(id.clone(), revision, role))
-                    .collect(),
-            })
-            .await;
+        auth.authorize_global_action(GlobalAction::CreateAccount)?;
+
+        if id == SYSTEM_ACCOUNT_ID {
+            Err(anyhow!("Cannot create account with reserved account id"))?
+        };
+
+        let record = AccountRevisionRecord::new(
+            id,
+            account.name,
+            account.email,
+            plan_id,
+            roles,
+            auth.account_id.clone(),
+        );
+
+        let result = self.account_repo.create(record).await;
 
         match result {
             Ok(record) => Ok(record.try_into()?),
@@ -218,32 +215,30 @@ impl AccountService {
         }
     }
 
+    pub async fn get_optional(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Option<Account>, AccountError> {
+        let record = self.account_repo.get_by_id(&account_id.0).await?;
+        Ok(record.map(|r| r.try_into()).transpose()?)
+    }
+
     async fn update_internal(
         &self,
-        account: Account,
-        actor: AccountId,
+        mut account: Account,
+        auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let new_revision = account.revision.next()?;
+        auth.authorize_account_action(&account.id, AccountAction::UpdateAccount)?;
+
+        let current_revision = account.revision;
+
+        account.revision = account.revision.next()?;
+
+        let record = AccountRevisionRecord::from_model(account, auth.account_id.clone());
+
         let result = self
             .account_repo
-            .update(
-                account.revision.into(),
-                AccountRevisionRecord {
-                    account_id: account.id.0,
-                    revision_id: new_revision.into(),
-                    name: account.name,
-                    email: account.email,
-                    plan_id: account.plan_id.0,
-                    audit: DeletableRevisionAuditFields::new(actor.0),
-                    roles: account
-                        .roles
-                        .into_iter()
-                        .map(|role| {
-                            AccountRoleRecord::from_model(account.id.clone(), new_revision, role)
-                        })
-                        .collect(),
-                },
-            )
+            .update(current_revision.into(), record)
             .await;
 
         match result {
@@ -256,14 +251,6 @@ impl AccountService {
             }
             Err(other) => Err(other)?,
         }
-    }
-
-    pub async fn get_optional(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<Option<Account>, AccountError> {
-        let record = self.account_repo.get_by_id(&account_id.0).await?;
-        Ok(record.map(|r| r.try_into()).transpose()?)
     }
 
     async fn get_default_plan_id(&self) -> Result<PlanId, AccountError> {

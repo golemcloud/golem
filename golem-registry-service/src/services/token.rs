@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::model::token::TokenRecord;
 use crate::repo::token::TokenRepo;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::TokenId;
+use golem_common::model::auth::{AccountAction, TokenId};
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
@@ -32,6 +33,8 @@ pub enum TokenError {
     #[error("Token for secret not found")]
     TokenBySecretFound,
     #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
+    #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
 
@@ -41,6 +44,7 @@ impl SafeDisplay for TokenError {
             Self::TokenSecretAlreadyExists => self.to_string(),
             Self::TokenNotFound(_) => self.to_string(),
             Self::TokenBySecretFound => self.to_string(),
+            Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -82,9 +86,12 @@ impl TokenService {
         &self,
         account_id: AccountId,
         expires_at: DateTime<Utc>,
+        auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
+        auth.authorize_account_action(&account_id, AccountAction::CreateToken)?;
+
         let secret = TokenSecret::new_v4();
-        self.create_known_secret(account_id, secret, expires_at)
+        self.create_known_secret(account_id, secret, expires_at, auth)
             .await
     }
 
@@ -93,7 +100,10 @@ impl TokenService {
         account_id: AccountId,
         secret: TokenSecret,
         expires_at: DateTime<Utc>,
+        auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
+        auth.authorize_account_action(&account_id, AccountAction::CreateKnownSecret)?;
+
         let created_at = Utc::now();
         let token_id = TokenId::new_v4();
 
@@ -114,7 +124,16 @@ impl TokenService {
         Ok(record.into())
     }
 
-    pub async fn delete(&self, token_id: &TokenId) -> Result<(), TokenError> {
+    pub async fn delete(&self, token_id: &TokenId, auth: &AuthCtx) -> Result<(), TokenError> {
+        let token: TokenWithSecret = self
+            .token_repo
+            .get_by_id(&token_id.0)
+            .await?
+            .ok_or(TokenError::TokenNotFound(token_id.clone()))?
+            .into();
+
+        auth.authorize_account_action(&token.account_id, AccountAction::DeleteToken)?;
+
         self.token_repo.delete(&token_id.0).await?;
 
         Ok(())

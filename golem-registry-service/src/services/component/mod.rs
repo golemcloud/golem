@@ -16,10 +16,10 @@ pub mod error;
 mod utils;
 
 pub use self::error::ComponentError;
-use super::application::ApplicationService;
 use super::component_compilation::ComponentCompilationService;
 use super::component_object_store::ComponentObjectStore;
 use super::environment::EnvironmentService;
+use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;
@@ -28,8 +28,8 @@ use crate::services::account_usage::{AccountUsage, AccountUsageService};
 use anyhow::Context;
 use futures::stream::BoxStream;
 use golem_common::model::ComponentId;
-use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
+use golem_common::model::auth::EnvironmentAction;
 use golem_common::model::component::{
     ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentType,
     InitialComponentFile, InitialComponentFileKey,
@@ -56,7 +56,6 @@ pub struct ComponentService {
     _plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     account_usage_service: Arc<AccountUsageService>,
     environment_service: Arc<EnvironmentService>,
-    application_service: Arc<ApplicationService>,
 }
 
 impl ComponentService {
@@ -68,7 +67,6 @@ impl ComponentService {
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
         account_usage_service: Arc<AccountUsageService>,
         environment_service: Arc<EnvironmentService>,
-        application_service: Arc<ApplicationService>,
     ) -> Self {
         Self {
             component_repo,
@@ -78,7 +76,6 @@ impl ComponentService {
             _plugin_wasm_files_service: plugin_wasm_files_service,
             account_usage_service,
             environment_service,
-            application_service,
         }
     }
 
@@ -93,7 +90,7 @@ impl ComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         agent_types: Vec<AgentType>,
-        actor: &AccountId,
+        auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         info!(environment_id = %environment_id, "Create component");
 
@@ -106,15 +103,17 @@ impl ComponentService {
                 )))
             })?;
 
-        let environment = self.environment_service.get(environment_id).await?;
-        let application = self
-            .application_service
-            .get(&environment.application_id)
-            .await?;
+        let environment = self.environment_service.get(environment_id, auth).await?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_shares,
+            EnvironmentAction::CreateComponent,
+        )?;
 
         let mut account_usage = self
             .account_usage_service
-            .add_component(&application.account_id, wasm.len() as i64)
+            .add_component(&environment.owner_account_id, wasm.len() as i64)
             .await?;
 
         let initial_component_files: Vec<InitialComponentFile> = self
@@ -144,7 +143,8 @@ impl ComponentService {
             .finalize_new_component_revision(environment_id, new_revision, wasm)
             .await?;
 
-        let record = ComponentRevisionRecord::from_model(finalized_revision.clone(), actor);
+        let record =
+            ComponentRevisionRecord::from_model(finalized_revision.clone(), &auth.account_id);
 
         let result = self
             .component_repo
@@ -185,7 +185,7 @@ impl ComponentService {
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
         agent_types: Option<Vec<AgentType>>,
-        actor: &AccountId,
+        auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         let component: Component = self
             .component_repo
@@ -219,15 +219,18 @@ impl ComponentService {
         // }
 
         let (wasm, wasm_object_store_key, wasm_hash) = if let Some(new_data) = data {
-            let environment = self.environment_service.get(&environment_id).await?;
-            let application = self
-                .application_service
-                .get(&environment.application_id)
-                .await?;
+            // TODO: fetch with component
+            let environment = self.environment_service.get(&environment_id, auth).await?;
+
+            auth.authorize_environment_action(
+                &environment.owner_account_id,
+                &environment.roles_from_shares,
+                EnvironmentAction::UpdateComponent,
+            )?;
 
             let actual_account_usage = self
                 .account_usage_service
-                .add_component(&application.account_id, new_data.len() as i64)
+                .add_component(&environment.owner_account_id, new_data.len() as i64)
                 .await?;
 
             let _ = account_usage.insert(actual_account_usage);
@@ -269,7 +272,7 @@ impl ComponentService {
             .finalize_new_component_revision(&environment_id, new_revision, wasm)
             .await?;
 
-        let record = ComponentRevisionRecord::from_model(finalized_revision, actor);
+        let record = ComponentRevisionRecord::from_model(finalized_revision, &auth.account_id);
 
         let result = self
             .component_repo

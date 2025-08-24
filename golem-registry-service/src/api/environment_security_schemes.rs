@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use golem_common::api::Page;
 use golem_common::api::api_definition::{CreateSecuritySchemeRequest, SecuritySchemeResponseView};
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -23,9 +24,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct EnvironmentSecuritySchemesApi {}
+pub struct EnvironmentSecuritySchemesApi {
+    auth_service: Arc<AuthService>,
+}
 
 #[OpenApi(
     prefix_path = "/v1/envs",
@@ -34,6 +38,10 @@ pub struct EnvironmentSecuritySchemesApi {}
     tag = ApiTags::ApiSecurity
 )]
 impl EnvironmentSecuritySchemesApi {
+    pub fn new(auth_service: Arc<AuthService>) -> Self {
+        Self { auth_service }
+    }
+
     /// Get all security schemes in the environment
     #[oai(
         path = "/:environment_id/security-schemes",
@@ -50,7 +58,7 @@ impl EnvironmentSecuritySchemesApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_security_schemes_internal(environment_id.0, auth)
@@ -87,7 +95,7 @@ impl EnvironmentSecuritySchemesApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_security_scheme_internal(
@@ -127,7 +135,7 @@ impl EnvironmentSecuritySchemesApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .create_environment_security_scheme_internal(environment_id.0, payload.0, auth)
