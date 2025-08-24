@@ -194,7 +194,7 @@ mod grpc {
                 })
                 .await
                 .map_err(|err| {
-                    WorkerExecutorError::runtime(format!("Failed to get agent types 1: {err:?}"))
+                    WorkerExecutorError::runtime(format!("Failed to get agent types: {err:?}"))
                 })?
                 .into_inner();
 
@@ -212,7 +212,7 @@ mod grpc {
                         })?)
                 }
                 Some(get_all_response::Result::Error(err)) => Err(WorkerExecutorError::runtime(
-                    format!("Failed to get agent types 2: {err:?}"),
+                    format!("Failed to get agent types: {err:?}"),
                 )),
             }
         }
@@ -236,7 +236,7 @@ mod grpc {
                 })
                 .await
                 .map_err(|err| {
-                    WorkerExecutorError::runtime(format!("Failed to get agent types 3: {err:?}"))
+                    WorkerExecutorError::runtime(format!("Failed to get agent types: {err:?}"))
                 })?
                 .into_inner();
 
