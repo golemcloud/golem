@@ -26,6 +26,7 @@ use std::{
 };
 use tempfile::NamedTempFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
+use tracing::info;
 
 /// A uploaded file for multipart.
 ///
@@ -98,6 +99,7 @@ impl Type for TempFileUpload {
 
 impl ParseFromMultipartField for TempFileUpload {
     async fn parse_from_multipart(field: Option<PoemField>) -> ParseResult<Self> {
+        info!("parsing multipart");
         match field {
             Some(field) => {
                 let content_type = field.content_type().map(ToString::to_string);
@@ -115,6 +117,8 @@ impl ParseFromMultipartField for TempFileUpload {
 }
 
 async fn field_to_tempfile(field: PoemField) -> Result<NamedTempFile, std::io::Error> {
+    info!("parsing multipart");
+
     let mut reader = field.into_async_read();
 
     let file = tempfile::NamedTempFile::new()?;

@@ -34,7 +34,7 @@ use include_dir::{include_dir, Dir};
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
 use poem::listener::Listener;
-use poem::middleware::{CookieJarManager, Cors};
+use poem::middleware::{CookieJarManager, Cors, Tracing};
 use poem::{EndpointExt, Route};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
@@ -170,7 +170,8 @@ impl ComponentService {
             .nest("/specs", spec)
             .nest("/metrics", metrics)
             .with(CookieJarManager::new())
-            .with(cors);
+            .with(cors)
+            .with(Tracing);
 
         let poem_listener =
             poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.http_port));
