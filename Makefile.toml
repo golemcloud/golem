@@ -651,7 +651,6 @@ script = '''
 '''
 
 [tasks.diff-openapi.windows]
-description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
 dependencies = ["merge-openapi"]
 script_runner = "pwsh"
 script_extension = "ps1"
@@ -663,9 +662,8 @@ function Test-OpenApiSpec {
         [string]$ServiceName
     )
 
-    # Execute diff command and capture exit code, suppressing output
-    # Assumes 'diff.exe' is available in the system's PATH
-    & diff.exe $SourceFile $TargetFile *>$null
+    # Execute diff command ignoring line endings
+    & diff.exe --strip-trailing-cr $SourceFile $TargetFile *>$null
 
     if ($LASTEXITCODE -eq 0) {
         Write-Host "Latest $($ServiceName) OpenAPI spec version detected."
@@ -673,7 +671,6 @@ function Test-OpenApiSpec {
         Write-Error "$($SourceFile) is not the same as produced by $($ServiceName)."
         Write-Error "Run cargo make generate-openapi to generate new spec."
         
-        # Only output the diff for golem-service.yaml as in the original script
         if ($SourceFile -eq "openapi/golem-service.yaml") {
             & diff.exe $SourceFile $TargetFile
         }
@@ -1042,7 +1039,6 @@ export RUST_BACKTRACE=1
 '''
 
 [tasks.generate-configs.windows]
-description = "Generates default and exmaple config files"
 dependencies = ["build-bins"]
 script_runner = "pwsh"
 script_extension = "ps1"
@@ -1086,6 +1082,28 @@ git diff --exit-code \
     golem-debugging-service/config/debug-worker-executor.toml \
     golem-debugging-service/config/debug-worker-executor.sample.env \
     cloud-service/config/cloud-service.toml \
+    cloud-service/config/cloud-service.sample.env
+'''
+
+[tasks.check-configs.windows]
+dependencies = ["generate-configs"]
+script_runner = "pwsh"
+script_extension = "ps1"
+script = '''
+git diff --exit-code `
+    golem-shard-manager/config/shard-manager.toml `
+    golem-shard-manager/config/shard-manager.sample.env `
+    golem-component-compilation-service/config/component-compilation-service.toml `
+    golem-component-compilation-service/config/component-compilation-service.sample.env `
+    golem-component-service/config/component-service.toml `
+    golem-component-service/config/component-service.sample.env `
+    golem-worker-service/config/worker-service.toml `
+    golem-worker-service/config/worker-service.sample.env `
+    golem-worker-executor/config/worker-executor.toml `
+    golem-worker-executor/config/worker-executor.sample.env `
+    golem-debugging-service/config/debug-worker-executor.toml `
+    golem-debugging-service/config/debug-worker-executor.sample.env `
+    cloud-service/config/cloud-service.toml `
     cloud-service/config/cloud-service.sample.env
 '''
 
