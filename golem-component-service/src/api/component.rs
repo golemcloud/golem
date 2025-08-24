@@ -42,8 +42,8 @@ use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::Instrument;
 use tracing::info;
+use tracing::Instrument;
 
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]

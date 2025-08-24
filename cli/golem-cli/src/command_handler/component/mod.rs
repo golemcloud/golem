@@ -53,11 +53,16 @@ use golem_client::model::DynamicLinkedInstance as DynamicLinkedInstanceOss;
 use golem_client::model::DynamicLinkedWasmRpc as DynamicLinkedWasmRpcOss;
 use golem_client::model::DynamicLinking as DynamicLinkingOss;
 use golem_client::model::{AgentTypes, ComponentEnv as ComponentEnvCloud};
-use golem_common::model::agent::{AgentConstructor, AgentMethod, AgentType, ComponentModelElementSchema, ElementSchema, NamedElementSchema, NamedElementSchemas};
+use golem_common::model::agent::bindings::golem::agent::common::DataSchema;
+use golem_common::model::agent::{
+    AgentConstructor, AgentMethod, AgentType, ComponentModelElementSchema, ElementSchema,
+    NamedElementSchema, NamedElementSchemas,
+};
 use golem_common::model::component_metadata::WasmRpcTarget;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_templates::add_component_by_template;
 use golem_templates::model::{GuestLanguage, PackageName};
+use golem_wasm_ast::analysis::analysed_type::str;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -65,8 +70,6 @@ use std::sync::Arc;
 use tokio::fs::File;
 use tracing::debug;
 use url::Url;
-use golem_common::model::agent::bindings::golem::agent::common::DataSchema;
-use golem_wasm_ast::analysis::analysed_type::str;
 
 pub mod ifs;
 pub mod plugin;

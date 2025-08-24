@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::{AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor};
+use golem_common::model::agent::{
+    AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
+    DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
+};
 use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, r#enum, record, str, u32, unit_case, variant,
 };
@@ -75,7 +78,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                     elements: vec![NamedElementSchema {
                         name: "return".to_string(),
                         schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            type_info: location.clone()
+                            type_info: location.clone(),
                         }),
                     }],
                 }),
@@ -93,7 +96,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                     elements: vec![NamedElementSchema {
                         name: "person-group".to_string(),
                         schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            type_info: list(person)
+                            type_info: list(person),
                         }),
                     }],
                 }),
@@ -108,13 +111,13 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                         NamedElementSchema {
                             name: "place".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: location
+                                type_info: location,
                             }),
                         },
                         NamedElementSchema {
                             name: "color".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: color
+                                type_info: color,
                             }),
                         },
                     ],

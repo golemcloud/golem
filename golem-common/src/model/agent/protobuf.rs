@@ -1,4 +1,10 @@
-use crate::model::agent::{AgentConstructor, AgentDependency, AgentMethod, AgentType, BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, Url};
+use crate::model::agent::{
+    AgentConstructor, AgentDependency, AgentMethod, AgentType, BinaryDescriptor, BinaryReference,
+    BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema,
+    ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue,
+    NamedElementValues, RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType,
+    Url,
+};
 use golem_api_grpc::proto::golem::component::data_schema;
 use golem_api_grpc::proto::golem::component::element_schema;
 use golem_api_grpc::proto::golem::component::{
@@ -239,7 +245,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ElementSchema> for Element
             Some(schema) => match schema {
                 element_schema::Schema::ComponentModel(wit_type) => {
                     Ok(ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        type_info: (&wit_type).try_into()?
+                        type_info: (&wit_type).try_into()?,
                     }))
                 }
                 element_schema::Schema::UnstructuredText(text_descriptor) => {
@@ -258,7 +264,9 @@ impl From<ElementSchema> for golem_api_grpc::proto::golem::component::ElementSch
         match value {
             ElementSchema::ComponentModel(component_model_element_schema) => {
                 golem_api_grpc::proto::golem::component::ElementSchema {
-                    schema: Some(element_schema::Schema::ComponentModel((&component_model_element_schema.type_info).into())),
+                    schema: Some(element_schema::Schema::ComponentModel(
+                        (&component_model_element_schema.type_info).into(),
+                    )),
                 }
             }
             ElementSchema::UnstructuredText(text_descriptor) => {

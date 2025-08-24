@@ -690,7 +690,10 @@ fn add_golem_agent(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
 #[cfg(test)]
 mod tests {
     use crate::model::agent::test;
-    use golem_common::model::agent::{AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor};
+    use golem_common::model::agent::{
+        AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
+        DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
+    };
     use golem_wasm_ast::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
     };
@@ -758,7 +761,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "a".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: str()
+                                type_info: str(),
                             }),
                         }],
                     }),
@@ -771,15 +774,15 @@ mod tests {
                         elements: vec![
                             NamedElementSchema {
                                 name: "x".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    type_info: u32()
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema { type_info: u32() },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "y".to_string(),
-                                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                    type_info: u32()
-                                }),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema { type_info: u32() },
+                                ),
                             },
                         ],
                     }),
@@ -787,7 +790,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: u32()
+                                type_info: u32(),
                             }),
                         }],
                     }),
@@ -865,7 +868,7 @@ mod tests {
                         NamedElementSchema {
                             name: "person".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: person
+                                type_info: person,
                             }),
                         },
                         NamedElementSchema {
@@ -893,7 +896,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: location.clone()
+                                type_info: location.clone(),
                             }),
                         }],
                     }),
@@ -906,7 +909,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "location".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: location
+                                type_info: location,
                             }),
                         }],
                     }),
@@ -914,7 +917,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: color
+                                type_info: color,
                             }),
                         }],
                     }),

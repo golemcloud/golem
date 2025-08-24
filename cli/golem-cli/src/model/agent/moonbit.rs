@@ -504,7 +504,11 @@ fn to_moonbit_parameter_list(
                 let param_name = parameter.name.to_snake_case();
                 match &parameter.schema {
                     ElementSchema::ComponentModel(typ) => {
-                        write!(result, "{param_name}: {}", moonbit_type_ref(ctx, &typ.type_info)?)?;
+                        write!(
+                            result,
+                            "{param_name}: {}",
+                            moonbit_type_ref(ctx, &typ.type_info)?
+                        )?;
                     }
                     ElementSchema::UnstructuredText(_) => {
                         write!(result, "{param_name}: @common.TextReference")?;
