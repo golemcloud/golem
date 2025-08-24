@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_common::model::application::ApplicationId;
 use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
@@ -100,32 +101,27 @@ impl Deps {
             .unwrap()
     }
 
-    pub async fn create_application(&self) -> ApplicationRecord {
-        let owner = self.create_account().await;
+    pub async fn create_application(&self, owner_account_id: &Uuid) -> ApplicationRecord {
         let user = self.create_account().await;
         let app_name = format!("app-name-{}", new_repo_uuid());
 
         self.application_repo
-            .ensure(
-                &user.revision.account_id,
-                &owner.revision.account_id,
-                &app_name,
-            )
+            .ensure(&user.revision.account_id, &owner_account_id, &app_name)
             .await
             .unwrap()
     }
 
-    pub async fn create_env(&self) -> EnvironmentExtRevisionRecord {
-        let app = self.create_application().await;
+    pub async fn create_env(&self, parent_application_id: &Uuid) -> EnvironmentExtRevisionRecord {
+        let user = self.create_account().await;
         let env_name = format!("env-{}", new_repo_uuid());
         self.environment_repo
             .create(
-                &app.application_id,
+                parent_application_id,
                 &env_name,
                 EnvironmentRevisionRecord {
                     environment_id: new_repo_uuid(),
                     revision_id: 0,
-                    audit: DeletableRevisionAuditFields::new(app.audit.modified_by),
+                    audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     compatibility_check: true,
                     version_check: true,
                     security_overrides: true,

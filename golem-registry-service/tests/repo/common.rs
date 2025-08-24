@@ -205,8 +205,8 @@ pub async fn test_application_ensure_concurrent(deps: &Deps) {
 }
 
 pub async fn test_application_delete(deps: &Deps) {
-    let app = deps.create_application().await;
     let user = deps.create_account().await;
+    let app = deps.create_application(&user.revision.account_id).await;
 
     deps.application_repo
         .delete(&user.revision.account_id, &app.application_id)
@@ -244,7 +244,8 @@ pub async fn test_application_delete(deps: &Deps) {
 
 pub async fn test_environment_create(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+
     let env_name = "local";
 
     assert!(
@@ -313,7 +314,7 @@ pub async fn test_environment_create(deps: &Deps) {
 
 pub async fn test_environment_create_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application().await;
+    let app = deps.create_application(&user.revision.account_id).await;
     let env_name = "local";
     let concurrency = 20;
 
@@ -355,7 +356,8 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
 
 pub async fn test_environment_update(deps: &Deps) {
     let user = deps.create_account().await;
-    let env_rev_0 = deps.create_env().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+    let env_rev_0 = deps.create_env(&app.application_id).await;
 
     let env_rev_1 = EnvironmentRevisionRecord {
         environment_id: env_rev_0.revision.environment_id,
@@ -485,7 +487,8 @@ pub async fn test_environment_update(deps: &Deps) {
 
 pub async fn test_environment_update_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
-    let env_rev_0 = deps.create_env().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+    let env_rev_0 = deps.create_env(&app.application_id).await;
     let concurrency = 20;
 
     let results = join_all(
@@ -524,7 +527,8 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
 
 pub async fn test_component_stage(deps: &Deps) {
     let user = deps.create_account().await;
-    let env = deps.create_env().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+    let env = deps.create_env(&app.application_id).await;
     let app = deps
         .application_repo
         .get_by_id(&env.application_id)
@@ -836,7 +840,8 @@ pub async fn test_component_stage(deps: &Deps) {
 
 pub async fn test_http_api_definition_stage(deps: &Deps) {
     let user = deps.create_account().await;
-    let env = deps.create_env().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+    let env = deps.create_env(&app.application_id).await;
     let definition_name = "test-api-definition";
     let definition_id = new_repo_uuid();
 
@@ -1016,7 +1021,8 @@ pub async fn test_http_api_deployment_stage_has_sub(deps: &Deps) {
 
 async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: Option<&str>) {
     let user = deps.create_account().await;
-    let env = deps.create_env().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+    let env = deps.create_env(&app.application_id).await;
     let host = "test-host-1.com";
     let deployment_id = new_repo_uuid();
 

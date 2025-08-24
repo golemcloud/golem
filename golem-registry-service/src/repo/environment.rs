@@ -327,12 +327,12 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND r.revision_id = e.current_revision_id
                     LEFT JOIN environment_shares es
                         ON es.environment_id = e.environment_id
-                        AND es.grantee_account_id = $2
+                        AND es.grantee_account_id = $3
                     LEFT JOIN environment_share_revisions esr
-                        ON esr.environment_share_id = es.environment_id
+                        ON esr.environment_share_id = es.environment_share_id
                         AND esr.revision_id = es.current_revision_id
                     WHERE
-                        a.application_id = $1
+                        ap.application_id = $1
                         AND e.name = $2
                         -- check deletion
                         AND (
@@ -388,7 +388,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         ON es.environment_id = e.environment_id
                         AND es.grantee_account_id = $2
                     LEFT JOIN environment_share_revisions esr
-                        ON esr.environment_share_id = es.environment_id
+                        ON esr.environment_share_id = es.environment_share_id
                         AND esr.revision_id = es.current_revision_id
                     WHERE
                         e.environment_id = $1
@@ -445,7 +445,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         ON es.environment_id = e.environment_id
                         AND es.grantee_account_id = $2
                     LEFT JOIN environment_share_revisions esr
-                        ON esr.environment_share_id = es.environment_id
+                        ON esr.environment_share_id = es.environment_share_id
                         AND esr.revision_id = es.current_revision_id
                     WHERE
                         ap.application_id = $1
@@ -629,7 +629,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         ON es.environment_id = e.environment_id
                         AND es.grantee_account_id = $2
                     LEFT JOIN environment_share_revisions esr
-                        ON esr.environment_share_id = es.environment_id
+                        ON esr.environment_share_id = es.environment_share_id
                         AND esr.revision_id = es.current_revision_id
                     WHERE
                         e.environment_id = $1
