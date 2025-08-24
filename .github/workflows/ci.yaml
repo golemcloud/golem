@@ -22,7 +22,6 @@ env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
   VCPKG_DEFAULT_TRIPLET: "x64-mingw-dynamic"
   VCPKG_ENABLE_METRICS: 0
-  SEGMENT_DOWNLOAD_TIMEOUT_MINS: 2
   MINGW_PACKAGE: "https://github.com/niXman/mingw-builds-binaries/releases/download/14.2.0-rt_v12-rev2/x86_64-14.2.0-release-posix-seh-ucrt-rt_v12-rev2.7z"
 
 jobs:
