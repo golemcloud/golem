@@ -26,7 +26,7 @@ env:
 
 jobs:
   build:
-    if: false
+    # if: false
     env:
       CARGO_BUILD_JOBS: 2
       VCPKG_PKG_INSTALL_DIR: "${{ github.workspace }}/vcpkg_installed/"
