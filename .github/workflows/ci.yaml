@@ -68,8 +68,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
-          # key: vcpkg-${{ env.CACHE_KEY }}
-          key: vcpkg-golem-debug
+          key: vcpkg-${{ env.CACHE_KEY }}
 
       - name: Download MinGW
         if: ${{ steps.restore-build.outputs.cache-hit != 'true' && steps.restore-deps.outputs.cache-hit != 'true' }}
@@ -98,9 +97,8 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
-          # key: vcpkg-${{ env.CACHE_KEY }}
-          key: vcpkg-golem-debug
-      
+          key: vcpkg-${{ env.CACHE_KEY }}
+          
       - name: Setup Rust
         if: ${{ steps.restore-build.outputs.cache-hit != 'true' }}
         run: |
@@ -142,7 +140,7 @@ jobs:
       CACHE_KEY: golem-binaries
 #    runs-on: blacksmith-16vcpu-ubuntu-2204
     runs-on: self-hosted
-    # needs: [ build ]
+    needs: [ build ]
     defaults:
       run:
         shell: pwsh
@@ -174,8 +172,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_PKG_INSTALL_DIR }}
-          # key: vcpkg-${{ env.CACHE_KEY }}
-          key: vcpkg-golem-debug
+          key: vcpkg-${{ env.CACHE_KEY }}
           fail-on-cache-miss: true
       
       - name: Download MinGW
@@ -191,10 +188,10 @@ jobs:
           rustup set default-host x86_64-pc-windows-gnu
           rustup override set stable-x86_64-pc-windows-gnu
       
-      # - name: Unit tests
-        # run: cargo make --profile ci unit-tests
-      # - name: check formatting and clippy rules
-        # run: cargo make --profile ci check
+      - name: Unit tests
+        run: cargo make --profile ci unit-tests
+      - name: check formatting and clippy rules
+        run: cargo make --profile ci check
       - name: Check openapi is up to date
         run: cargo make --profile ci check-openapi
       - name: Check configs are up to date
