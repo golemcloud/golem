@@ -26,7 +26,7 @@ use golem_common::model::component_metadata::{
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
     ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
-    StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::TestDependencies;
@@ -80,7 +80,7 @@ async fn interruption(
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await(worker_id_clone, "run", vec![])
+                .invoke_and_await(&worker_id_clone, "run", vec![])
                 .await
         }
         .in_current_span(),
@@ -122,7 +122,7 @@ async fn simulated_crash(
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await(worker_id_clone, "run", vec![])
+                .invoke_and_await(&worker_id_clone, "run", vec![])
                 .await
         }
         .in_current_span(),
@@ -340,88 +340,6 @@ fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn dynamic_worker_creation_without_name(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
-
-    let component_id = executor.component("environment-service").store().await;
-    let worker_id = TargetWorkerId {
-        component_id: component_id.clone(),
-        worker_name: None,
-    };
-
-    let env1 = executor
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-    let env2 = executor
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-
-    drop(executor);
-
-    let env1 = get_env_result(env1);
-    let env2 = get_env_result(env2);
-
-    check!(env1.contains_key("GOLEM_WORKER_NAME"));
-    check!(env1.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env1.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env2.contains_key("GOLEM_WORKER_NAME"));
-    check!(env2.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env2.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
-async fn ephemeral_worker_creation_without_name(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
-
-    let component_id = executor
-        .component("environment-service")
-        .ephemeral()
-        .store()
-        .await;
-    let worker_id = TargetWorkerId {
-        component_id: component_id.clone(),
-        worker_name: None,
-    };
-
-    let env1 = executor
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-    let env2 = executor
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-
-    drop(executor);
-
-    let env1 = get_env_result(env1);
-    let env2 = get_env_result(env2);
-
-    check!(env1.contains_key("GOLEM_WORKER_NAME"));
-    check!(env1.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env1.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env2.contains_key("GOLEM_WORKER_NAME"));
-    check!(env2.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env2.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
 async fn ephemeral_worker_creation_with_name_is_not_persistent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -430,14 +348,14 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("counters").ephemeral().store().await;
-    let worker_id = TargetWorkerId {
+    let worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: Some("test".to_string()),
+        worker_name: "test".to_string(),
     };
 
     let _ = executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "rpc:counters-exports/api.{inc-global-by}",
             vec![2u64.into_value_and_type()],
         )
@@ -446,7 +364,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
 
     let result = executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "rpc:counters-exports/api.{get-global-value}",
             vec![],
         )
@@ -599,7 +517,7 @@ async fn get_workers_from_worker(
 
         let result = executor
             .invoke_and_await(
-                worker_id.clone(),
+                &worker_id,
                 "golem:it/api.{get-workers}",
                 vec![
                     component_id_val_and_type,
@@ -687,11 +605,7 @@ async fn get_metadata_from_worker(
         let worker_id_val1 = get_worker_id_val(worker_id1);
 
         let result = executor
-            .invoke_and_await(
-                worker_id1.clone(),
-                "golem:it/api.{get-self-metadata}",
-                vec![],
-            )
+            .invoke_and_await(&worker_id1, "golem:it/api.{get-self-metadata}", vec![])
             .await
             .unwrap();
 
@@ -709,7 +623,7 @@ async fn get_metadata_from_worker(
 
         let result = executor
             .invoke_and_await(
-                worker_id1.clone(),
+                &worker_id1,
                 "golem:it/api.{get-worker-metadata}",
                 vec![ValueAndType {
                     value: worker_id_val2.clone(),
@@ -1751,7 +1665,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    // case: WASM can be parsed but wasmtime does not support it
+    // case: WASM can be parsed, but wasmtime does not support it
     let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("write-stdout").store().await;
 
@@ -1803,7 +1717,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let worker_id = executor.start_worker(&component_id, "bad-wasm-2").await;
     let project_id = executor.default_project().await;
 
-    // worker is idle. if we restart the server it will get recovered
+    // worker is idle. if we restart the server, it will get recovered
     drop(executor);
 
     // corrupting the uploaded WASM

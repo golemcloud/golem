@@ -390,7 +390,7 @@ impl RibComponentFunctionInvoke for TestRibFunctionInvoke {
         args: EvaluatedFnArgs,
         _return_type: Option<AnalysedType>,
     ) -> RibFunctionInvokeResult {
-        let target_worker_id = WorkerId {
+        let worker_id = WorkerId {
             component_id: ComponentId(component_dependency_key.component_id),
             worker_name: worker_name.0,
         };
@@ -399,7 +399,7 @@ impl RibComponentFunctionInvoke for TestRibFunctionInvoke {
             .dependencies
             .admin()
             .await
-            .invoke_and_await_typed(target_worker_id, function_name.0.as_str(), args.0)
+            .invoke_and_await_typed(&worker_id, function_name.0.as_str(), args.0)
             .await;
 
         Ok(result.map_err(|err| {

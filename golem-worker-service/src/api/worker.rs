@@ -630,10 +630,7 @@ impl WorkerApi {
             )
             .await?;
 
-        Ok(Json(model::WorkersMetadataResponse {
-            workers,
-            cursor,
-        }))
+        Ok(Json(model::WorkersMetadataResponse { workers, cursor }))
     }
 
     /// Advanced search for workers
@@ -704,10 +701,7 @@ impl WorkerApi {
             )
             .await?;
 
-        Ok(Json(model::WorkersMetadataResponse {
-            workers,
-            cursor,
-        }))
+        Ok(Json(model::WorkersMetadataResponse { workers, cursor }))
     }
 
     /// Resume a worker

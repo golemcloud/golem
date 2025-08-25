@@ -86,7 +86,7 @@ async fn test_connect_invoked_worker(
 
     let _ = regular_worker_executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{initialize-cart}",
             vec!["test-user-1".into_value_and_type()],
         )
@@ -94,7 +94,7 @@ async fn test_connect_invoked_worker(
 
     let _ = regular_worker_executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{add-item}",
             vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
@@ -201,7 +201,7 @@ async fn test_connect_and_playback_raw(
 
     regular_worker_executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{add-item}",
             vec![Record(vec![
                 ("product-id", "G1001".into_value_and_type()),
@@ -216,7 +216,7 @@ async fn test_connect_and_playback_raw(
         .expect("Failed to invoke and await");
 
     regular_worker_executor
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{checkout}", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
         .await
         .unwrap()
         .expect("Failed to invoke and await");
@@ -591,7 +591,7 @@ async fn test_playback_and_fork(
     // invoke the forked worker with second invocation
     let _ = regular_worker_executor
         .invoke_and_await(
-            target_worker_id.clone(),
+            &target_worker_id,
             "golem:it/api.{add-item}",
             vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
@@ -801,7 +801,7 @@ async fn run_shopping_cart_initialize_and_add(
 ) {
     regular_worker_executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{initialize-cart}",
             vec!["test-user-1".into_value_and_type()],
         )
@@ -811,7 +811,7 @@ async fn run_shopping_cart_initialize_and_add(
 
     regular_worker_executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{add-item}",
             vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
@@ -835,14 +835,14 @@ async fn run_shopping_cart_workflow(
 
     // Checkout
     let _ = regular_worker_executor
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{checkout}", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
         .await
         .expect("Failed to invoke and await");
 
     // Add Item again
     let _ = regular_worker_executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{add-item}",
             vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),

@@ -656,6 +656,19 @@ pub struct WorkerNameMatch {
     pub worker_name: Option<WorkerName>,
 }
 
+impl WorkerNameMatch {
+    /// Gets the matched worker name, or generates a fresh name if it was `-`
+    pub fn worker_name(&self) -> WorkerName {
+        match &self.worker_name {
+            Some(name) => name.clone(),
+            None => {
+                let name = Uuid::new_v4().to_string();
+                WorkerName(name)
+            }
+        }
+    }
+}
+
 pub struct SelectedComponents {
     pub account: Option<AccountDetails>,
     pub project: Option<ProjectRefAndId>,

@@ -178,14 +178,14 @@ pub trait RpcDemand: Send + Sync {}
 
 pub struct RemoteInvocationRpc {
     worker_proxy: Arc<dyn WorkerProxy>,
-    shard_service: Arc<dyn ShardService>,
+    _shard_service: Arc<dyn ShardService>,
 }
 
 impl RemoteInvocationRpc {
     pub fn new(worker_proxy: Arc<dyn WorkerProxy>, shard_service: Arc<dyn ShardService>) -> Self {
         Self {
             worker_proxy,
-            shard_service,
+            _shard_service: shard_service,
         }
     }
 }

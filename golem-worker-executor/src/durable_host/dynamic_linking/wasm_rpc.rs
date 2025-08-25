@@ -220,25 +220,13 @@ async fn dynamic_function_call<
 ) -> anyhow::Result<()> {
     let mut store = store.as_context_mut();
     match call_type {
-        DynamicRpcCall::GlobalStubConstructor {
-            component_name,
-            component_type,
-        } => {
+        DynamicRpcCall::GlobalStubConstructor { component_name, .. } => {
             // Simple stub interface constructor
 
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let target_worker_name = params[0].clone();
-                    create_default_durable_rpc_target(
-                        &mut store,
-                        component_name,
-                        target_worker_name,
-                    )
+            let (remote_worker_id, demand) = {
+                let target_worker_name = params[0].clone();
+                create_default_durable_rpc_target(&mut store, component_name, target_worker_name)
                     .await?
-                }
-                ComponentType::Ephemeral => {
-                    create_default_ephemeral_rpc_target(&mut store, component_name).await?
-                }
             };
 
             let span =
@@ -252,18 +240,12 @@ async fn dynamic_function_call<
             )?;
             results[0] = Val::Resource(handle.try_into_resource_any(store)?);
         }
-        DynamicRpcCall::GlobalCustomConstructor { component_type } => {
+        DynamicRpcCall::GlobalCustomConstructor { .. } => {
             // Simple stub interface constructor that takes a worker-id or component-id as a parameter
 
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let worker_id = params[0].clone();
-                    create_durable_rpc_target(&mut store, worker_id).await?
-                }
-                ComponentType::Ephemeral => {
-                    let component_id = params[0].clone();
-                    create_ephemeral_rpc_target(&mut store, component_id).await?
-                }
+            let (remote_worker_id, demand) = {
+                let worker_id = params[0].clone();
+                create_durable_rpc_target(&mut store, worker_id).await?
             };
 
             let span =
@@ -287,19 +269,10 @@ async fn dynamic_function_call<
             // First parameter is the target uri
             // Rest of the parameters must be sent to the remote constructor
 
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let target_worker_name = params[0].clone();
-                    create_default_durable_rpc_target(
-                        &mut store,
-                        component_name,
-                        target_worker_name,
-                    )
+            let (remote_worker_id, demand) = {
+                let target_worker_name = params[0].clone();
+                create_default_durable_rpc_target(&mut store, component_name, target_worker_name)
                     .await?
-                }
-                ComponentType::Ephemeral => {
-                    create_default_ephemeral_rpc_target(&mut store, component_name).await?
-                }
             };
 
             let remote_component_metadata = store
@@ -359,19 +332,10 @@ async fn dynamic_function_call<
             let (resource_uri, resource_id) = unwrap_constructor_result(constructor_result)
                 .context(format!("Unwrapping constructor result of {function_name}"))?;
 
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let target_worker_name = params[0].clone();
-                    create_default_durable_rpc_target(
-                        &mut store,
-                        component_name,
-                        target_worker_name,
-                    )
+            let (remote_worker_id, demand) = {
+                let target_worker_name = params[0].clone();
+                create_default_durable_rpc_target(&mut store, component_name, target_worker_name)
                     .await?
-                }
-                ComponentType::Ephemeral => {
-                    create_default_ephemeral_rpc_target(&mut store, component_name).await?
-                }
             };
 
             let span =
@@ -405,15 +369,9 @@ async fn dynamic_function_call<
             // First parameter is the worker-id or component-id (for ephemeral)
             // Rest of the parameters must be sent to the remote constructor
 
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let worker_id = params[0].clone();
-                    create_durable_rpc_target(&mut store, worker_id).await?
-                }
-                ComponentType::Ephemeral => {
-                    let component_id = params[0].clone();
-                    create_ephemeral_rpc_target(&mut store, component_id).await?
-                }
+            let (remote_worker_id, demand) = {
+                let worker_id = params[0].clone();
+                create_durable_rpc_target(&mut store, worker_id).await?
             };
 
             let remote_component_metadata = store
@@ -473,15 +431,9 @@ async fn dynamic_function_call<
             let (resource_uri, resource_id) = unwrap_constructor_result(constructor_result)
                 .context(format!("Unwrapping constructor result of {function_name}"))?;
 
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let worker_id = params[0].clone();
-                    create_durable_rpc_target(&mut store, worker_id).await?
-                }
-                ComponentType::Ephemeral => {
-                    let component_id = params[0].clone();
-                    create_ephemeral_rpc_target(&mut store, component_id).await?
-                }
+            let (remote_worker_id, demand) = {
+                let worker_id = params[0].clone();
+                create_durable_rpc_target(&mut store, worker_id).await?
             };
 
             let span =
@@ -1183,105 +1135,12 @@ async fn create_durable_rpc_target<
     Ok((remote_worker_id, demand))
 }
 
-async fn create_default_ephemeral_rpc_target<
-    Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::environment::Host,
->(
-    store: &mut StoreContextMut<'_, Ctx>,
-    component_name: &String,
-) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
-    let result = store
-        .data()
-        .component_service()
-        .resolve_component(
-            component_name.clone(),
-            store.data().component_metadata().owner.clone(),
-        )
-        .await?;
-
-    if let Some(component_id) = result {
-        let remote_worker_id = store
-            .data_mut()
-            .generate_unique_local_worker_id(TargetWorkerId {
-                component_id,
-                worker_name: None,
-            })
-            .await?;
-        let remote_worker_id = OwnedWorkerId::new(
-            &store.data().owned_worker_id().project_id,
-            &remote_worker_id,
-        );
-        let self_created_by = store.data().created_by().clone();
-        let self_worker_id = store.data().owned_worker_id().worker_id();
-
-        let args = store.data_mut().get_arguments().await?;
-        let env = store.data_mut().get_environment().await?;
-        let config = store.data().wasi_config_vars();
-        let demand = store
-            .data()
-            .rpc()
-            .create_demand(
-                &remote_worker_id,
-                &self_created_by,
-                &self_worker_id,
-                &args,
-                &env,
-                config,
-            )
-            .await?;
-        Ok((remote_worker_id, demand))
-    } else {
-        Err(anyhow!("Failed to resolve component {component_name}"))
-    }
-}
-
-async fn create_ephemeral_rpc_target<
-    Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::environment::Host,
->(
-    store: &mut StoreContextMut<'_, Ctx>,
-    component_id: Val,
-) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
-    let component_id = decode_component_id(component_id.clone()).ok_or_else(|| anyhow!("Missing or invalid component id parameter. Expected to get a component-id value as a custom constructor parameter, got {component_id:?}"))?;
-    let remote_worker_id = store
-        .data_mut()
-        .generate_unique_local_worker_id(TargetWorkerId {
-            component_id,
-            worker_name: None,
-        })
-        .await?;
-    let remote_worker_id = OwnedWorkerId::new(
-        &store.data().owned_worker_id().project_id,
-        &remote_worker_id,
-    );
-    let self_created_by = store.data().created_by().clone();
-    let self_worker_id = store.data().owned_worker_id().worker_id();
-
-    let args = store.data_mut().get_arguments().await?;
-    let env = store.data_mut().get_environment().await?;
-    let config = store.data().wasi_config_vars();
-    let demand = store
-        .data()
-        .rpc()
-        .create_demand(
-            &remote_worker_id,
-            &self_created_by,
-            &self_worker_id,
-            &args,
-            &env,
-            config,
-        )
-        .await?;
-    Ok((remote_worker_id, demand))
-}
-
 #[derive(Debug, Clone)]
 enum DynamicRpcCall {
     GlobalStubConstructor {
         component_name: String,
-        component_type: ComponentType,
     },
-    GlobalCustomConstructor {
-        component_type: ComponentType,
-    },
+    GlobalCustomConstructor {},
     ResourceStubConstructor {
         component_name: String,
         component_type: ComponentType,
@@ -1340,7 +1199,6 @@ impl DynamicRpcCall {
 
                     Ok(Some(DynamicRpcCall::GlobalStubConstructor {
                         component_name: target.component_name,
-                        component_type: target.component_type,
                     }))
                 }
                 Some(DynamicRpcResource::ResourceStub) => {
@@ -1385,14 +1243,7 @@ impl DynamicRpcCall {
                     if stub_name.is_static_method().is_some() && method_name == "custom" {
                         match stub {
                             DynamicRpcResource::Stub => {
-                                let target = rpc_metadata
-                                    .target(resource_name)
-                                    .map_err(|err| anyhow!(err))
-                                    .context(context(rpc_metadata))?;
-
-                                Ok(Some(DynamicRpcCall::GlobalCustomConstructor {
-                                    component_type: target.component_type,
-                                }))
+                                Ok(Some(DynamicRpcCall::GlobalCustomConstructor {}))
                             }
                             DynamicRpcResource::ResourceStub => {
                                 let target = rpc_metadata

@@ -6,8 +6,8 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, TargetWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
@@ -177,15 +177,6 @@ impl WorkerCtx for TestWorkerCtx {
     fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.durable_ctx.worker_fork()
     }
-
-    async fn generate_unique_local_worker_id(
-        &mut self,
-        remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        self.durable_ctx
-            .generate_unique_local_worker_id(remote_worker_id)
-            .await
-    }
 }
 
 #[async_trait]
@@ -251,13 +242,6 @@ impl HostWasmRpc for TestWorkerCtx {
         worker_id: golem_wasm_rpc::WorkerId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
-    }
-
-    async fn ephemeral(
-        &mut self,
-        component_id: golem_wasm_rpc::ComponentId,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.ephemeral(component_id).await
     }
 
     async fn invoke_and_await(

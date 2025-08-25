@@ -369,7 +369,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
         args: Vec<ValueAndType>,
         _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
-        let target_worker_id = WorkerId {
+        let worker_id = WorkerId {
             component_id: ComponentId(component_id),
             worker_name: worker_name.to_string(),
         };
@@ -378,7 +378,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
             .embedded_worker_executor
             .admin()
             .await
-            .invoke_and_await_typed(target_worker_id, function_name, args)
+            .invoke_and_await_typed(&worker_id, function_name, args)
             .await;
 
         Ok(result.map_err(|err| {

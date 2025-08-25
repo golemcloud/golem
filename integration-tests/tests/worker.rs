@@ -87,35 +87,6 @@ async fn dynamic_worker_creation(deps: &EnvBasedTestDependencies, _tracing: &Tra
     );
 }
 
-fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
-    match env.into_iter().next() {
-        Some(Value::Result(Ok(Some(inner)))) => match *inner {
-            Value::List(items) => {
-                let pairs = items
-                    .into_iter()
-                    .filter_map(|item| match item {
-                        Value::Tuple(values) if values.len() == 2 => {
-                            let mut iter = values.into_iter();
-                            let key = iter.next();
-                            let value = iter.next();
-                            match (key, value) {
-                                (Some(Value::String(key)), Some(Value::String(value))) => {
-                                    Some((key, value))
-                                }
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<(String, String)>>();
-                HashMap::from_iter(pairs)
-            }
-            _ => panic!("Unexpected result value"),
-        },
-        _ => panic!("Unexpected result value"),
-    }
-}
-
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
@@ -1100,7 +1071,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let _ = admin
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
@@ -1108,7 +1079,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .unwrap();
     let _ = admin
         .invoke_and_await_with_key(
-            worker_id.clone(),
+            &worker_id,
             &idempotency_key1,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
@@ -1117,7 +1088,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .unwrap();
     let _ = admin
         .invoke_and_await_with_key(
-            worker_id.clone(),
+            &worker_id,
             &idempotency_key2,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],

@@ -356,7 +356,7 @@ impl WorkerCommandHandler {
         let result = self
             .invoke_worker(
                 &component,
-                &worker_name_match.worker_name,
+                &worker_name_match.worker_name(),
                 &function_name,
                 arguments,
                 idempotency_key.clone(),
@@ -908,65 +908,33 @@ impl WorkerCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        let result = match &worker_name {
-            Some(worker_name) => {
-                if enqueue {
-                    clients
-                        .worker
-                        .invoke_function(
-                            &component.versioned_component_id.component_id,
-                            &worker_name.0,
-                            Some(&idempotency_key.0),
-                            function_name,
-                            &InvokeParametersCloud { params: arguments },
-                        )
-                        .await
-                        .map_service_error()?;
-                    None
-                } else {
-                    Some(
-                        clients
-                            .worker_invoke
-                            .invoke_and_await_function(
-                                &component.versioned_component_id.component_id,
-                                &worker_name.0,
-                                Some(&idempotency_key.0),
-                                function_name,
-                                &InvokeParametersCloud { params: arguments },
-                            )
-                            .await
-                            .map_service_error()?,
+        let result = if enqueue {
+            clients
+                .worker
+                .invoke_function(
+                    &component.versioned_component_id.component_id,
+                    &worker_name.0,
+                    Some(&idempotency_key.0),
+                    function_name,
+                    &InvokeParametersCloud { params: arguments },
+                )
+                .await
+                .map_service_error()?;
+            None
+        } else {
+            Some(
+                clients
+                    .worker_invoke
+                    .invoke_and_await_function(
+                        &component.versioned_component_id.component_id,
+                        &worker_name.0,
+                        Some(&idempotency_key.0),
+                        function_name,
+                        &InvokeParametersCloud { params: arguments },
                     )
-                }
-            }
-            None => {
-                if enqueue {
-                    clients
-                        .worker
-                        .invoke_function_without_name(
-                            &component.versioned_component_id.component_id,
-                            Some(&idempotency_key.0),
-                            function_name,
-                            &InvokeParametersCloud { params: arguments },
-                        )
-                        .await
-                        .map_service_error()?;
-                    None
-                } else {
-                    Some(
-                        clients
-                            .worker_invoke
-                            .invoke_and_await_function_without_name(
-                                &component.versioned_component_id.component_id,
-                                Some(&idempotency_key.0),
-                                function_name,
-                                &InvokeParametersCloud { params: arguments },
-                            )
-                            .await
-                            .map_service_error()?,
-                    )
-                }
-            }
+                    .await
+                    .map_service_error()?,
+            )
         };
 
         if enqueue && connect_handle.is_some() {
