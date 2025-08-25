@@ -407,8 +407,8 @@ impl AgentWrapperGeneratorContextState {
         element: &ElementSchema,
     ) -> anyhow::Result<()> {
         match element {
-            ElementSchema::ComponentModel(typ) => {
-                write!(result, "{}", self.wit_type_reference(typ)?)?;
+            ElementSchema::ComponentModel(schema) => {
+                write!(result, "{}", self.wit_type_reference(&schema.type_info)?)?;
             }
             ElementSchema::UnstructuredText(_text_descriptor) => {
                 write!(result, "text-reference")?;
@@ -526,7 +526,7 @@ impl AgentWrapperGeneratorContextState {
         for named_element_schema in cases {
             let case_name = named_element_schema.name.to_kebab_case();
             let case_type = match &named_element_schema.schema {
-                ElementSchema::ComponentModel(typ) => typ.clone(),
+                ElementSchema::ComponentModel(schema) => schema.type_info.clone(),
                 ElementSchema::UnstructuredText(_) => variant(vec![]).named("text-reference"),
                 ElementSchema::UnstructuredBinary(_) => variant(vec![]).named("binary-reference"),
             };
@@ -691,8 +691,8 @@ fn add_golem_agent(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
 mod tests {
     use crate::model::agent::test;
     use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, DataSchema, ElementSchema,
-        NamedElementSchema, NamedElementSchemas, TextDescriptor,
+        AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
+        DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
     };
     use golem_wasm_ast::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
@@ -738,11 +738,15 @@ mod tests {
                     elements: vec![
                         NamedElementSchema {
                             name: "a".to_string(),
-                            schema: ElementSchema::ComponentModel(u32()),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                type_info: u32(),
+                            }),
                         },
                         NamedElementSchema {
                             name: "b".to_string(),
-                            schema: ElementSchema::ComponentModel(option(str())),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                type_info: option(str()),
+                            }),
                         },
                     ],
                 }),
@@ -756,7 +760,9 @@ mod tests {
                     output_schema: DataSchema::Tuple(NamedElementSchemas {
                         elements: vec![NamedElementSchema {
                             name: "a".to_string(),
-                            schema: ElementSchema::ComponentModel(str()),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                type_info: str(),
+                            }),
                         }],
                     }),
                 },
@@ -768,18 +774,24 @@ mod tests {
                         elements: vec![
                             NamedElementSchema {
                                 name: "x".to_string(),
-                                schema: ElementSchema::ComponentModel(u32()),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema { type_info: u32() },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "y".to_string(),
-                                schema: ElementSchema::ComponentModel(u32()),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema { type_info: u32() },
+                                ),
                             },
                         ],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
-                            schema: ElementSchema::ComponentModel(u32()),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                type_info: u32(),
+                            }),
                         }],
                     }),
                 },
@@ -855,7 +867,9 @@ mod tests {
                     elements: vec![
                         NamedElementSchema {
                             name: "person".to_string(),
-                            schema: ElementSchema::ComponentModel(person),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                type_info: person,
+                            }),
                         },
                         NamedElementSchema {
                             name: "description".to_string(),
@@ -881,7 +895,9 @@ mod tests {
                     output_schema: DataSchema::Tuple(NamedElementSchemas {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
-                            schema: ElementSchema::ComponentModel(location.clone()),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                type_info: location.clone(),
+                            }),
                         }],
                     }),
                 },
@@ -892,13 +908,17 @@ mod tests {
                     input_schema: DataSchema::Tuple(NamedElementSchemas {
                         elements: vec![NamedElementSchema {
                             name: "location".to_string(),
-                            schema: ElementSchema::ComponentModel(location),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                type_info: location,
+                            }),
                         }],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
-                            schema: ElementSchema::ComponentModel(color),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                type_info: color,
+                            }),
                         }],
                     }),
                 },
