@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use golem_common::tracing::init_tracing_with_default_env_filter;
+use golem_common::SafeDisplay;
 use golem_shard_manager::shard_manager_config::{make_config_loader, ShardManagerConfig};
 use prometheus::default_registry;
 use tokio::task::JoinSet;
+use tracing::info;
 
 fn main() -> Result<(), anyhow::Error> {
     rustls::crypto::ring::default_provider()
@@ -24,6 +26,8 @@ fn main() -> Result<(), anyhow::Error> {
     match make_config_loader().load_or_dump_config() {
         Some(config) => {
             init_tracing_with_default_env_filter(&config.tracing);
+            info!("Using configuration:\n{}", config.to_safe_string_indented());
+
             let registry = default_registry().clone();
 
             tokio::runtime::Builder::new_multi_thread()

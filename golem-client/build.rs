@@ -37,6 +37,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         true,
         &[
             ("AgentType", "golem_common::model::agent::AgentType"),
+            ("DataSchema", "golem_common::model::agent::DataSchema"),
             ("AgentInstanceKey", "golem_common::model::AgentInstanceKey"),
             (
                 "AgentInstanceDescription",

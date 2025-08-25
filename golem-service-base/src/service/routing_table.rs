@@ -12,21 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::time::Duration;
-
 use async_trait::async_trait;
-use http::Uri;
-use serde::Deserialize;
-use serde::Serialize;
-use tokio::sync::RwLock;
-use tokio::time::Instant;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
-use tonic::Status;
-
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error::Error;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
@@ -35,6 +21,19 @@ use golem_common::cache::*;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::{RetryConfig, RoutingTable};
 use golem_common::retriable_error::IsRetriableError;
+use golem_common::SafeDisplay;
+use http::Uri;
+use serde::Deserialize;
+use serde::Serialize;
+use std::fmt::{Display, Write};
+use std::ops::Deref;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
+use tokio::time::Instant;
+use tonic::codec::CompressionEncoding;
+use tonic::transport::Channel;
+use tonic::Status;
 
 #[derive(Debug, Clone)]
 pub enum RoutingTableError {
@@ -108,6 +107,23 @@ impl RoutingTableConfig {
         format!("http://{}:{}", self.host, self.port)
             .parse()
             .expect("Failed to parse shard manager URL")
+    }
+}
+
+impl SafeDisplay for RoutingTableConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(
+            &mut result,
+            "invalidation minimum delay: {:?}",
+            self.invalidation_min_delay
+        );
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
     }
 }
 
@@ -242,6 +258,6 @@ impl RoutingTableService for RoutingTableServiceNoop {
     }
 
     async fn try_invalidate_routing_table(&self) -> bool {
-        return false;
+        false
     }
 }

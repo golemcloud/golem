@@ -508,9 +508,17 @@ impl Display for ElementValue {
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum ElementSchema {
-    ComponentModel(AnalysedType),
+    ComponentModel(ComponentModelElementSchema),
     UnstructuredText(TextDescriptor),
     UnstructuredBinary(BinaryDescriptor),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentModelElementSchema {
+    pub type_info: AnalysedType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
