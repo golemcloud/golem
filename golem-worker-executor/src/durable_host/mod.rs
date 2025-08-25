@@ -37,7 +37,6 @@ pub mod wasm_rpc;
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
-use crate::durable_host::serialized::SerializableError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
@@ -90,6 +89,7 @@ use golem_common::model::oplog::{
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
+use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, PluginInstallationId, ProjectId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
@@ -98,7 +98,6 @@ use golem_common::model::{
     OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter,
     WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
-use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
@@ -540,35 +539,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                     }
                 }
-            }
-        }
-    }
-
-    pub async fn generate_unique_local_worker_id(
-        &mut self,
-        remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        match remote_worker_id.clone().try_into_worker_id() {
-            Some(worker_id) => Ok(worker_id),
-            None => {
-                let durability = Durability::<WorkerId, SerializableError>::new(
-                    self,
-                    "golem::rpc::wasm-rpc",
-                    "generate_unique_local_worker_id",
-                    DurableFunctionType::ReadLocal,
-                )
-                .await?;
-                let worker_id = if durability.is_live() {
-                    let result = self
-                        .rpc()
-                        .generate_unique_local_worker_id(remote_worker_id)
-                        .await;
-                    durability.persist(self, (), result).await
-                } else {
-                    durability.replay(self).await
-                }?;
-
-                Ok(worker_id)
             }
         }
     }

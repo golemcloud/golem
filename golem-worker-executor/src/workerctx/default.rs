@@ -53,7 +53,7 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+    OwnedWorkerId, PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -62,7 +62,7 @@ use golem_wasm_rpc::golem_rpc_0_2_x::types::{
 };
 use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{
-    CancellationTokenEntry, ComponentId, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
+    CancellationTokenEntry, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
@@ -462,10 +462,6 @@ impl HostWasmRpc for Context {
         self.durable_ctx.new(worker_id).await
     }
 
-    async fn ephemeral(&mut self, component_id: ComponentId) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.ephemeral(component_id).await
-    }
-
     async fn invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
@@ -743,14 +739,5 @@ impl WorkerCtx for Context {
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.durable_ctx.worker_fork()
-    }
-
-    async fn generate_unique_local_worker_id(
-        &mut self,
-        remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        self.durable_ctx
-            .generate_unique_local_worker_id(remote_worker_id)
-            .await
     }
 }

@@ -42,7 +42,7 @@ use std::fmt::Display;
 #[derive(PartialEq, Debug, Clone)]
 pub struct GatewayResolvedWorkerRequest {
     pub component_id: ComponentId,
-    pub worker_name: Option<String>,
+    pub worker_name: String,
     pub function_name: String,
     pub function_params: Vec<ValueAndType>,
     pub idempotency_key: Option<IdempotencyKey>,

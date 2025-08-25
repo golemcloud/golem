@@ -356,7 +356,7 @@ impl WorkerCommandHandler {
         let result = self
             .invoke_worker(
                 &component,
-                worker_name_match.worker_name.as_ref(),
+                &worker_name_match.worker_name,
                 &function_name,
                 arguments,
                 idempotency_key.clone(),
@@ -873,39 +873,36 @@ impl WorkerCommandHandler {
     pub async fn invoke_worker(
         &self,
         component: &Component,
-        worker_name: Option<&WorkerName>,
+        worker_name: &WorkerName,
         function_name: &str,
         arguments: Vec<OptionallyValueAndTypeJson>,
         idempotency_key: IdempotencyKey,
         enqueue: bool,
         stream_args: Option<StreamArgs>,
     ) -> anyhow::Result<Option<InvokeResult>> {
-        let mut connect_handle = match &worker_name {
-            Some(worker_name) => match stream_args {
-                Some(stream_args) => {
-                    let connection = WorkerConnection::new(
-                        self.ctx.worker_service_url().clone(),
-                        self.ctx.auth_token().await?,
-                        component.versioned_component_id.component_id,
-                        worker_name.0.clone(),
-                        stream_args.into(),
-                        self.ctx.allow_insecure(),
-                        self.ctx.format(),
-                        if enqueue {
-                            None
-                        } else {
-                            Some(golem_common::model::IdempotencyKey::new(
-                                idempotency_key.0.clone(),
-                            ))
-                        },
-                    )
-                    .await?;
-                    Some(tokio::task::spawn(
-                        async move { connection.run_forever().await },
-                    ))
-                }
-                None => None,
-            },
+        let mut connect_handle = match stream_args {
+            Some(stream_args) => {
+                let connection = WorkerConnection::new(
+                    self.ctx.worker_service_url().clone(),
+                    self.ctx.auth_token().await?,
+                    component.versioned_component_id.component_id,
+                    worker_name.0.clone(),
+                    stream_args.into(),
+                    self.ctx.allow_insecure(),
+                    self.ctx.format(),
+                    if enqueue {
+                        None
+                    } else {
+                        Some(golem_common::model::IdempotencyKey::new(
+                            idempotency_key.0.clone(),
+                        ))
+                    },
+                )
+                .await?;
+                Some(tokio::task::spawn(
+                    async move { connection.run_forever().await },
+                ))
+            }
             None => None,
         };
 

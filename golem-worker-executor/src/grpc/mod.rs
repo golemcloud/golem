@@ -51,8 +51,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
-    proto_plugin_installation_id_string, proto_promise_id_string, proto_target_worker_id_string,
-    proto_worker_id_string,
+    proto_plugin_installation_id_string, proto_promise_id_string, proto_worker_id_string,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
@@ -825,23 +824,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let target_worker_id = request.worker_id()?;
+        let worker_id = request.worker_id()?;
         let project_id = request.project_id()?;
-
-        let current_assignment = self.shard_service().current_assignment()?;
-
-        let unspecified_name = target_worker_id.worker_name.is_none();
-        let worker_id = target_worker_id.into_worker_id(
-            &current_assignment.shard_ids,
-            current_assignment.number_of_shards,
-        );
-
-        if unspecified_name {
-            info!(
-                worker_id = worker_id.to_string(),
-                "Generated new unique worker id"
-            );
-        }
 
         let account_id: AccountId = request.account_id()?;
         let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
@@ -1845,7 +1829,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_worker",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             account_id = proto_account_id_string(&request.account_id),
         );
@@ -1884,7 +1868,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_worker_typed",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             account_id = proto_account_id_string(&request.account_id),
         );
@@ -1925,7 +1909,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_worker",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             function = request.name,
             account_id = proto_account_id_string(&request.account_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
@@ -1967,7 +1951,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_worker_json",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             account_id = proto_account_id_string(&request.account_id),
         );
@@ -2008,7 +1992,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_worker_json",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             function = request.name,
             account_id = proto_account_id_string(&request.account_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
@@ -2633,7 +2617,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_file_system_node",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             path = request.path,
         );
 
@@ -2666,7 +2650,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_file_contents",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             path = request.file_path,
         );
 

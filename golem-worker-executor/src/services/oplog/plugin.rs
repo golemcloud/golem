@@ -36,18 +36,19 @@ use golem_common::model::plugin::{
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PluginInstallationId,
-    ProjectId, ScanCursor, ShardId, TargetWorkerId, WorkerId, WorkerMetadata,
+    ProjectId, ScanCursor, ShardId, WorkerId, WorkerMetadata,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{IntoValue, Value};
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::Instrument;
+use uuid::Uuid;
 
 #[async_trait]
 pub trait OplogProcessorPlugin: Send + Sync {
@@ -158,13 +159,9 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         &self,
         plugin_component_id: &ComponentId,
     ) -> Result<WorkerId, WorkerExecutorError> {
-        let target_worker_id = TargetWorkerId {
-            component_id: plugin_component_id.clone(),
-            worker_name: None,
-        };
-
         let current_assignment = self.shard_service.current_assignment()?;
-        let worker_id = target_worker_id.into_worker_id(
+        let worker_id = Self::generate_local_worker_id(
+            plugin_component_id.clone(),
             &current_assignment.shard_ids,
             current_assignment.number_of_shards,
         );
@@ -183,6 +180,40 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
             _ => Err(WorkerExecutorError::runtime(
                 "Plugin is not an oplog processor",
             )),
+        }
+    }
+
+    /// Converts a `TargetWorkerId` to a `WorkerId`. If the worker name was not specified,
+    /// it generates a new unique one, and if the `force_in_shard` set is not empty, it guarantees
+    /// that the generated worker ID will belong to one of the provided shards.
+    ///
+    /// If the worker name was specified, `force_in_shard` is ignored.
+    fn generate_local_worker_id(
+        component_id: ComponentId,
+        force_in_shard: &HashSet<ShardId>,
+        number_of_shards: usize,
+    ) -> WorkerId {
+        if force_in_shard.is_empty() || number_of_shards == 0 {
+            let worker_name = Uuid::new_v4().to_string();
+            WorkerId {
+                component_id,
+                worker_name,
+            }
+        } else {
+            let mut current = Uuid::new_v4().to_u128_le();
+            loop {
+                let uuid = Uuid::from_u128_le(current);
+                let worker_name = uuid.to_string();
+                let worker_id = WorkerId {
+                    component_id: component_id.clone(),
+                    worker_name,
+                };
+                let shard_id = ShardId::from_worker_id(&worker_id, number_of_shards);
+                if force_in_shard.contains(&shard_id) {
+                    return worker_id;
+                }
+                current += 1;
+            }
         }
     }
 }

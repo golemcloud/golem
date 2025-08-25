@@ -18,9 +18,9 @@ use crate::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentType, FilterComparator, IdempotencyKey,
     InitialComponentFile, InitialComponentFileKey, LogLevel, NumberOfShards, Pod, PromiseId,
-    RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, TargetWorkerId,
-    Timestamp, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId,
-    WorkerNameFilter, WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
+    RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
+    WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId, WorkerNameFilter,
+    WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
 };
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
@@ -70,29 +70,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
             component_id: value.component_id.unwrap().try_into()?,
             worker_name: value.name,
         })
-    }
-}
-
-impl TryFrom<golem::worker::TargetWorkerId> for TargetWorkerId {
-    type Error = String;
-
-    fn try_from(value: golem::worker::TargetWorkerId) -> Result<Self, Self::Error> {
-        Ok(Self {
-            component_id: value
-                .component_id
-                .ok_or("Missing component_id")?
-                .try_into()?,
-            worker_name: value.name,
-        })
-    }
-}
-
-impl From<TargetWorkerId> for golem::worker::TargetWorkerId {
-    fn from(value: TargetWorkerId) -> Self {
-        Self {
-            component_id: Some(value.component_id.into()),
-            name: value.worker_name,
-        }
     }
 }
 

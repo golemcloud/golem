@@ -15,7 +15,7 @@
 use crate::gateway_execution::GatewayResolvedWorkerRequest;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
-use golem_common::model::{TargetWorkerId, WorkerId};
+use golem_common::model::WorkerId;
 use golem_wasm_rpc::ValueAndType;
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -75,21 +75,17 @@ impl GatewayWorkerRequestExecutor for GatewayWorkerRequestExecutorDefault {
         &self,
         resolved_worker_request: GatewayResolvedWorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        let worker_name_opt_validated = resolved_worker_request
-            .worker_name
-            .map(|w| WorkerId::validate_worker_name(w.as_str()).map(|_| w))
-            .transpose()?;
-
+        WorkerId::validate_worker_name(&resolved_worker_request.worker_name)?;
         debug!(
             component_id = resolved_worker_request.component_id.to_string(),
             function_name = resolved_worker_request.function_name,
-            worker_name_opt_validated,
+            worker_name = resolved_worker_request.worker_name,
             "Executing invocation",
         );
 
-        let worker_id = TargetWorkerId {
+        let worker_id = WorkerId {
             component_id: resolved_worker_request.component_id.clone(),
-            worker_name: worker_name_opt_validated.clone(),
+            worker_name: resolved_worker_request.worker_name.clone(),
         };
 
         let type_annotated_value = self

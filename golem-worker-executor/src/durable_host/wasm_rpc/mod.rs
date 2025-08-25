@@ -35,7 +35,7 @@ use golem_common::model::invocation_context::{AttributeValue, InvocationContextS
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ProjectId, ScheduledAction,
-    TargetWorkerId, WorkerId,
+    WorkerId,
 };
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -70,27 +70,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let env = self.get_environment().await?;
         let wasi_config_vars = self.wasi_config_vars();
 
-        let worker_id: WorkerId = worker_id.into();
-        let remote_worker_id = worker_id.into_target_worker_id();
-
-        construct_wasm_rpc_resource(self, remote_worker_id, &args, &env, wasi_config_vars).await
-    }
-
-    async fn ephemeral(
-        &mut self,
-        component_id: golem_wasm_rpc::golem_rpc_0_2_x::types::ComponentId,
-    ) -> anyhow::Result<Resource<WasmRpcEntry>> {
-        self.observe_function_call("golem::rpc::wasm-rpc", "ephemeral");
-
-        let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
-        let wasi_config_vars = self.wasi_config_vars();
-
-        let component_id: ComponentId = component_id.into();
-        let remote_worker_id = TargetWorkerId {
-            component_id,
-            worker_name: None,
-        };
+        let remote_worker_id: WorkerId = worker_id.into();
 
         construct_wasm_rpc_resource(self, remote_worker_id, &args, &env, wasi_config_vars).await
     }
@@ -1137,15 +1117,11 @@ impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
 
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_worker_id: TargetWorkerId,
+    remote_worker_id: WorkerId,
     args: &[String],
     env: &[(String, String)],
     config: BTreeMap<String, String>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
-    let remote_worker_id = ctx
-        .generate_unique_local_worker_id(remote_worker_id)
-        .await?;
-
     let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
 
     let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.project_id, &remote_worker_id);

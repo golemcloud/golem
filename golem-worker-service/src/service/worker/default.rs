@@ -38,8 +38,8 @@ use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::RetryConfig;
 use golem_common::model::{
     ComponentFilePath, ComponentFileSystemNode, ComponentId, ComponentVersion, FilterComparator,
-    IdempotencyKey, PluginInstallationId, PromiseId, ScanCursor, TargetWorkerId, WorkerFilter,
-    WorkerId, WorkerStatus,
+    IdempotencyKey, PluginInstallationId, PromiseId, ScanCursor, WorkerFilter, WorkerId,
+    WorkerStatus,
 };
 use golem_service_base::clients::limit::LimitService;
 use golem_service_base::clients::project::ProjectService;
@@ -85,7 +85,7 @@ pub trait WorkerService: Send + Sync {
     /// invokes the worker and waits its results, returning it as a `TypeAnnotatedValue`.
     async fn validate_and_invoke_and_await_typed(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ValueAndType>,
@@ -108,7 +108,7 @@ pub trait WorkerService: Send + Sync {
     /// it as a `TypeAnnotatedValue`.
     async fn invoke_and_await_typed(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -120,7 +120,7 @@ pub trait WorkerService: Send + Sync {
     /// a `Val` values (without type information)
     async fn invoke_and_await(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -133,7 +133,7 @@ pub trait WorkerService: Send + Sync {
     /// without type information so they get forwarded to the executor.
     async fn invoke_and_await_json(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<String>,
@@ -145,7 +145,7 @@ pub trait WorkerService: Send + Sync {
     /// an invocation for the worker without awaiting its results.
     async fn validate_and_invoke(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ValueAndType>,
@@ -168,7 +168,7 @@ pub trait WorkerService: Send + Sync {
     /// parameters.
     async fn invoke(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -181,7 +181,7 @@ pub trait WorkerService: Send + Sync {
     /// be converted to `Val` so they get forwarded as-is to the executor.
     async fn invoke_json(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<String>,
@@ -255,14 +255,14 @@ pub trait WorkerService: Send + Sync {
 
     async fn get_file_system_node(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         path: ComponentFilePath,
         namespace: Namespace,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>>;
 
     async fn get_file_contents(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         path: ComponentFilePath,
         namespace: Namespace,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
@@ -638,7 +638,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_and_await_typed(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -701,7 +701,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_and_await(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -761,7 +761,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_and_await_json(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<String>,
@@ -826,7 +826,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -870,7 +870,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_json(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<String>,
@@ -1270,7 +1270,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn get_file_system_node(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         path: ComponentFilePath,
         namespace: Namespace,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
@@ -1331,7 +1331,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn get_file_contents(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         path: ComponentFilePath,
         namespace: Namespace,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {

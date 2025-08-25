@@ -129,12 +129,12 @@ impl RibComponentFunctionInvoke for WorkerServiceRibInvoke {
         &self,
         component_dependency_key: ComponentDependencyKey,
         _instruction_id: &InstructionId,
-        worker_name: Option<EvaluatedWorkerName>,
+        worker_name: EvaluatedWorkerName,
         function_name: EvaluatedFqFn,
         parameters: EvaluatedFnArgs,
         _return_type: Option<AnalysedType>,
     ) -> RibFunctionInvokeResult {
-        let worker_name: Option<String> = worker_name.map(|x| x.0);
+        let worker_name: String = worker_name.0;
         let idempotency_key = self.idempotency_key.clone();
         let invocation_context = self.invocation_context.clone();
         let executor = self.executor.clone();

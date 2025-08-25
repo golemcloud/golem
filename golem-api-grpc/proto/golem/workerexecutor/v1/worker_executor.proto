@@ -18,7 +18,6 @@ import public "golem/worker/cursor.proto";
 import public "golem/worker/oplog_cursor.proto";
 import public "golem/worker/public_oplog.proto";
 import public "golem/worker/update_mode.proto";
-import public "golem/worker/target_worker_id.proto";
 import public "golem/worker/worker_id.proto";
 import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/worker_status.proto";
@@ -145,7 +144,7 @@ message CreateWorkerResponse {
 
 
 message InvokeAndAwaitWorkerRequest {
-  golem.worker.TargetWorkerId worker_id = 1;
+  golem.worker.WorkerId worker_id = 1;
   string name = 2;
   repeated wasm.rpc.Val input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;
@@ -183,7 +182,7 @@ message InvokeAndAwaitWorkerSuccessTyped {
 
 
 message InvokeWorkerRequest {
-  golem.worker.TargetWorkerId worker_id = 1;
+  golem.worker.WorkerId worker_id = 1;
   string name = 2;
   repeated wasm.rpc.Val input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;
@@ -197,7 +196,7 @@ message InvokeWorkerRequest {
 }
 
 message InvokeJsonWorkerRequest {
-  golem.worker.TargetWorkerId worker_id = 1;
+  golem.worker.WorkerId worker_id = 1;
   string name = 2;
   repeated string input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;
@@ -211,7 +210,7 @@ message InvokeJsonWorkerRequest {
 }
 
 message InvokeAndAwaitWorkerJsonRequest {
-  golem.worker.TargetWorkerId worker_id = 1;
+  golem.worker.WorkerId worker_id = 1;
   string name = 2;
   repeated string input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;
@@ -387,7 +386,7 @@ message SearchOplogSuccessResponse {
 }
 
 message GetFileSystemNodeRequest {
-  golem.worker.TargetWorkerId worker_id = 1;
+  golem.worker.WorkerId worker_id = 1;
   // Account the request belongs to
   golem.common.AccountId account_id = 2;
   // Limits associated with the component's owner project's owner account
@@ -415,7 +414,7 @@ message ListFileDataSuccessResponse {
 }  
 
 message GetFileContentsRequest {
-  golem.worker.TargetWorkerId worker_id = 1;
+  golem.worker.WorkerId worker_id = 1;
   // Account the request belongs to
   golem.common.AccountId account_id = 2;
   // Limits associated with the component's owner project's owner account

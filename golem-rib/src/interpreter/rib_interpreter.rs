@@ -382,7 +382,7 @@ mod internal {
             &self,
             _component_dependency_key: ComponentDependencyKey,
             _instruction_id: &InstructionId,
-            _worker_name: Option<EvaluatedWorkerName>,
+            _worker_name: EvaluatedWorkerName,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
             _return_type: Option<AnalysedType>,
@@ -1251,7 +1251,7 @@ mod internal {
                     .invoke_worker_function_async(
                         component_info,
                         instruction_id,
-                        Some(worker_id_string),
+                        worker_id_string,
                         function_name_cloned,
                         parameter_values,
                         expected_result_type.clone(),
@@ -1276,7 +1276,7 @@ mod internal {
                     .invoke_worker_function_async(
                         component_info,
                         instruction_id,
-                        None,
+                        "___STATIC_WIT_RESOURCE".to_string(),
                         function_name_cloned,
                         parameter_values,
                         expected_result_type.clone(),
@@ -1326,7 +1326,7 @@ mod internal {
                             .invoke_worker_function_async(
                                 component_info,
                                 instruction_id,
-                                Some(worker_name.to_string()),
+                                worker_name.to_string(),
                                 function_name_cloned.clone(),
                                 final_args,
                                 expected_result_type.clone(),
@@ -5180,7 +5180,7 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                _worker_name: Option<EvaluatedWorkerName>,
+                _worker_name: EvaluatedWorkerName,
                 _fqn: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
@@ -5198,7 +5198,7 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                worker_name: Option<EvaluatedWorkerName>,
+                worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
@@ -5210,7 +5210,7 @@ mod tests {
                     field("args1", u32()),
                 ]);
 
-                let worker_name = Value::String(worker_name.map(|x| x.0).unwrap_or_default());
+                let worker_name = Value::String(worker_name.0);
                 let function_name = Value::String(function_name.0);
                 let args0 = args.0[0].value.clone();
                 let args1 = args.0[1].value.clone();
@@ -5229,14 +5229,14 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                worker_name: Option<EvaluatedWorkerName>,
+                worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 match function_name.0.as_str() {
                     "golem:it/api.{cart.new}" => {
-                        let worker_name = worker_name.map(|x| x.0).unwrap_or_default();
+                        let worker_name = worker_name.0;
 
                         let uri = format!(
                             "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{worker_name}"
@@ -5296,7 +5296,7 @@ mod tests {
                     "golem:it/api.{[static]cart.create}" => {
                         let uri = format!(
                             "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
-                            worker_name.map(|x| x.0).unwrap_or_default()
+                            worker_name.0
                         );
 
                         let value = Value::Handle {
@@ -5313,7 +5313,7 @@ mod tests {
                     "golem:it/api.{[static]cart.create-safe}" => {
                         let uri = format!(
                             "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
-                            worker_name.map(|x| x.0).unwrap_or_default()
+                            worker_name.0
                         );
 
                         let resource = Value::Handle {
@@ -5333,7 +5333,7 @@ mod tests {
                     }
 
                     "golem:it/api.{cart.pass-through}" => {
-                        let worker_name = worker_name.map(|x| x.0);
+                        let worker_name = worker_name.0;
                         let function_args = args.0[1..].to_vec();
 
                         let mut arg_types = vec![];
@@ -5347,15 +5347,13 @@ mod tests {
                         let function_name = function_name.0.into_value_and_type();
 
                         let mut analysed_type_pairs = vec![];
-                        analysed_type_pairs.push(field("worker-name", option(str())));
+                        analysed_type_pairs.push(field("worker-name", str()));
                         analysed_type_pairs.push(field("function-name", str()));
                         analysed_type_pairs.extend(arg_types);
 
                         let mut values = vec![];
 
-                        values.push(Value::Option(
-                            worker_name.map(|x| Box::new(Value::String(x))),
-                        ));
+                        values.push(Value::String(worker_name));
                         values.push(function_name.value);
 
                         for arg_value in function_args {
@@ -5381,7 +5379,7 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                _worker_name: Option<EvaluatedWorkerName>,
+                _worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
@@ -5634,7 +5632,7 @@ mod tests {
                 &self,
                 _component_dependency: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                _worker_name: Option<EvaluatedWorkerName>,
+                _worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,

@@ -58,8 +58,8 @@ use golem_api_grpc::proto::golem::worker::{
     file_system_node, update_record, Cursor, DirectoryFileSystemNode, FailedUpdate,
     FileFileSystemNode, FileSystemNode, IdempotencyKey, InvocationContext, InvokeParameters,
     InvokeResult, InvokeResultTyped, LogEvent, OplogCursor, OplogEntry, OplogEntryWithIndex,
-    PendingUpdate, SuccessfulUpdate, TargetWorkerId, UpdateMode, UpdateRecord,
-    WorkerCreatedAtFilter, WorkerEnvFilter, WorkerMetadata, WorkerNameFilter, WorkerStatusFilter,
+    PendingUpdate, SuccessfulUpdate, UpdateMode, UpdateRecord, WorkerCreatedAtFilter,
+    WorkerEnvFilter, WorkerId, WorkerMetadata, WorkerNameFilter, WorkerStatusFilter,
     WorkerVersionFilter, WorkerWasiConfigVarsFilter,
 };
 use golem_client::api::ApiDefinitionClient as ApiDefinitionServiceHttpClient;
@@ -318,7 +318,7 @@ pub trait WorkerService: Send + Sync {
     async fn invoke(
         &self,
         token: &Uuid,
-        worker_id: TargetWorkerId,
+        worker_id: WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         invoke_parameters: Vec<ValueAndType>,
@@ -347,7 +347,7 @@ pub trait WorkerService: Send + Sync {
                 client
                     .invoke_function(
                         &worker_id.component_id.unwrap().value.unwrap().into(),
-                        &worker_id.name.unwrap(),
+                        &worker_id.name,
                         idempotency_key.map(|key| key.value).as_deref(),
                         &function,
                         &invoke_parameters_to_http(invoke_parameters),
@@ -385,7 +385,7 @@ pub trait WorkerService: Send + Sync {
                             .value
                             .unwrap()
                             .into(),
-                        &request.worker_id.unwrap().name.unwrap(),
+                        &request.worker_id.unwrap().name,
                         request.idempotency_key.map(|key| key.value).as_deref(),
                         &request.function,
                         &invoke_json_parameters_to_http(request.invoke_parameters),
@@ -401,7 +401,7 @@ pub trait WorkerService: Send + Sync {
     async fn invoke_and_await(
         &self,
         token: &Uuid,
-        worker_id: TargetWorkerId,
+        worker_id: WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         invoke_parameters: Vec<ValueAndType>,
@@ -429,7 +429,7 @@ pub trait WorkerService: Send + Sync {
                 let result = client
                     .invoke_and_await_function(
                         &worker_id.component_id.unwrap().value.unwrap().into(),
-                        &worker_id.name.unwrap(),
+                        &worker_id.name,
                         idempotency_key.map(|key| key.value).as_deref(),
                         &function,
                         &invoke_parameters_to_http(invoke_parameters),
@@ -451,7 +451,7 @@ pub trait WorkerService: Send + Sync {
     async fn invoke_and_await_typed(
         &self,
         token: &Uuid,
-        worker_id: TargetWorkerId,
+        worker_id: WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         invoke_parameters: Vec<ValueAndType>,
@@ -478,7 +478,7 @@ pub trait WorkerService: Send + Sync {
                 let result = client
                     .invoke_and_await_function(
                         &worker_id.component_id.unwrap().value.unwrap().into(),
-                        &worker_id.name.unwrap(),
+                        &worker_id.name,
                         idempotency_key.map(|key| key.value).as_deref(),
                         &function,
                         &invoke_parameters_to_http(invoke_parameters),
@@ -520,7 +520,7 @@ pub trait WorkerService: Send + Sync {
                             .value
                             .unwrap()
                             .into(),
-                        &request.worker_id.unwrap().name.unwrap(),
+                        &request.worker_id.unwrap().name,
                         request.idempotency_key.map(|key| key.value).as_deref(),
                         &request.function,
                         &invoke_json_parameters_to_http(request.invoke_parameters),
@@ -819,7 +819,7 @@ pub trait WorkerService: Send + Sync {
                             .value
                             .unwrap()
                             .into(),
-                        &request.worker_id.unwrap().name.unwrap(),
+                        &request.worker_id.unwrap().name,
                         &request.path,
                     )
                     .await?;
@@ -903,7 +903,7 @@ pub trait WorkerService: Send + Sync {
                             .value
                             .unwrap()
                             .into(),
-                        &request.worker_id.unwrap().name.unwrap(),
+                        &request.worker_id.unwrap().name,
                         &request.file_path,
                     )
                     .await?;

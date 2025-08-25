@@ -27,8 +27,8 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::worker::WorkerCreationRequest;
 use golem_common::model::{
-    ComponentFilePath, ComponentId, IdempotencyKey, PluginInstallationId, ScanCursor,
-    TargetWorkerId, WorkerFilter, WorkerId,
+    ComponentFilePath, ComponentId, IdempotencyKey, PluginInstallationId, ScanCursor, WorkerFilter,
+    WorkerId,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -225,7 +225,7 @@ impl WorkerApi {
 
         let response = self
             .invoke_and_await_function_internal(
-                worker_id.into_target_worker_id(),
+                worker_id,
                 idempotency_key.0,
                 function.0,
                 params.0,
@@ -239,7 +239,7 @@ impl WorkerApi {
 
     async fn invoke_and_await_function_internal(
         &self,
-        target_worker_id: TargetWorkerId,
+        target_worker_id: WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         params: InvokeParameters,
@@ -287,46 +287,6 @@ impl WorkerApi {
         Ok(Json(InvokeResult { result }))
     }
 
-    /// Invoke a function and await its resolution on a new worker with a random generated name
-    ///
-    /// Ideal for invoking ephemeral components, but works with durable ones as well.
-    /// Supply the parameters in the request body as JSON.
-    #[oai(
-        path = "/:component_id/invoke-and-await",
-        method = "post",
-        operation_id = "invoke_and_await_function_without_name"
-    )]
-    async fn invoke_and_await_function_without_name(
-        &self,
-        component_id: Path<ComponentId>,
-        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
-        function: Query<String>,
-        params: Json<InvokeParameters>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<InvokeResult>> {
-        let target_worker_id = make_target_worker_id(component_id.0, None)?;
-
-        let record = recorded_http_api_request!(
-            "invoke_and_await_function_without_name",
-            worker_id = target_worker_id.to_string(),
-            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
-            function = function.0
-        );
-
-        let response = self
-            .invoke_and_await_function_internal(
-                target_worker_id,
-                idempotency_key.0,
-                function.0,
-                params.0,
-                token,
-            )
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
     /// Invoke a function
     ///
     /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
@@ -355,13 +315,7 @@ impl WorkerApi {
         );
 
         let response = self
-            .invoke_function_internal(
-                worker_id.into_target_worker_id(),
-                idempotency_key.0,
-                function.0,
-                params.0,
-                token,
-            )
+            .invoke_function_internal(worker_id, idempotency_key.0, function.0, params.0, token)
             .instrument(record.span.clone())
             .await;
 
@@ -370,7 +324,7 @@ impl WorkerApi {
 
     async fn invoke_function_internal(
         &self,
-        target_worker_id: TargetWorkerId,
+        target_worker_id: WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         params: InvokeParameters,
@@ -410,47 +364,6 @@ impl WorkerApi {
         }
         .await?;
         Ok(Json(InvokeResponse {}))
-    }
-
-    /// Invoke a function on a new worker with a random generated name
-    ///
-    /// Ideal for invoking ephemeral components, but works with durable ones as well.
-    /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
-    #[oai(
-        path = "/:component_id/invoke",
-        method = "post",
-        operation_id = "invoke_function_without_name"
-    )]
-    async fn invoke_function_without_name(
-        &self,
-        component_id: Path<ComponentId>,
-        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
-        /// name of the exported function to be invoked
-        function: Query<String>,
-        params: Json<InvokeParameters>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<InvokeResponse>> {
-        let target_worker_id = make_target_worker_id(component_id.0, None)?;
-
-        let record = recorded_http_api_request!(
-            "invoke_function_without_name",
-            worker_id = target_worker_id.to_string(),
-            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
-            function = function.0
-        );
-
-        let response = self
-            .invoke_function_internal(
-                target_worker_id,
-                idempotency_key.0,
-                function.0,
-                params.0,
-                token,
-            )
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
     }
 
     /// Complete a promise
@@ -681,7 +594,7 @@ impl WorkerApi {
         count: Option<u64>,
         precise: Option<bool>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
+    ) -> Result<Json<model::WorkersMetadataResponse>> {
         let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
@@ -717,7 +630,7 @@ impl WorkerApi {
             )
             .await?;
 
-        Ok(Json(crate::model::WorkersMetadataResponse {
+        Ok(Json(model::WorkersMetadataResponse {
             workers,
             cursor,
         }))
@@ -754,7 +667,7 @@ impl WorkerApi {
         component_id: Path<ComponentId>,
         params: Json<WorkersMetadataRequest>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
+    ) -> Result<Json<model::WorkersMetadataResponse>> {
         let record = recorded_http_api_request!(
             "find_workers_metadata",
             component_id = component_id.0.to_string()
@@ -773,7 +686,7 @@ impl WorkerApi {
         component_id: ComponentId,
         params: WorkersMetadataRequest,
         token: GolemSecurityScheme,
-    ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
+    ) -> Result<Json<model::WorkersMetadataResponse>> {
         let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
@@ -791,7 +704,7 @@ impl WorkerApi {
             )
             .await?;
 
-        Ok(Json(crate::model::WorkersMetadataResponse {
+        Ok(Json(model::WorkersMetadataResponse {
             workers,
             cursor,
         }))
@@ -1008,7 +921,7 @@ impl WorkerApi {
 
         let nodes = self
             .worker_service
-            .get_file_system_node(&worker_id.into_target_worker_id(), path, namespace)
+            .get_file_system_node(&worker_id, path, namespace)
             .await?;
 
         Ok(Json(GetFilesResponse {
@@ -1056,7 +969,7 @@ impl WorkerApi {
 
         let bytes = self
             .worker_service
-            .get_file_contents(&worker_id.into_target_worker_id(), path, namespace)
+            .get_file_contents(&worker_id, path, namespace)
             .await?;
 
         Ok(Binary(Body::from_bytes_stream(
@@ -1341,25 +1254,6 @@ fn validated_worker_id(component_id: ComponentId, worker_name: String) -> Result
         }))
     })?;
     Ok(WorkerId {
-        component_id,
-        worker_name,
-    })
-}
-
-// TODO: should be in a base library
-fn make_target_worker_id(
-    component_id: ComponentId,
-    worker_name: Option<String>,
-) -> Result<TargetWorkerId> {
-    if let Some(worker_name) = &worker_name {
-        WorkerId::validate_worker_name(worker_name).map_err(|error| {
-            ApiEndpointError::BadRequest(Json(ErrorsBody {
-                errors: vec![format!("Invalid worker name: {error}")],
-            }))
-        })?;
-    }
-
-    Ok(TargetWorkerId {
         component_id,
         worker_name,
     })

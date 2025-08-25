@@ -39,7 +39,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
@@ -86,11 +86,6 @@ pub trait Rpc: Send + Sync {
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError>;
-
-    async fn generate_unique_local_worker_id(
-        &self,
-        target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
@@ -298,17 +293,6 @@ impl Rpc for RemoteInvocationRpc {
                 self_stack,
             )
             .await?)
-    }
-
-    async fn generate_unique_local_worker_id(
-        &self,
-        target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        let current_assignment = self.shard_service.current_assignment()?;
-        Ok(target_worker_id.into_worker_id(
-            &current_assignment.shard_ids,
-            current_assignment.number_of_shards,
-        ))
     }
 }
 
@@ -866,15 +850,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await
         }
-    }
-
-    async fn generate_unique_local_worker_id(
-        &self,
-        target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        self.remote_rpc
-            .generate_unique_local_worker_id(target_worker_id)
-            .await
     }
 }
 
