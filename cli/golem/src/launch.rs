@@ -28,7 +28,8 @@ use golem_service_base::config::LocalFileSystemBlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
-    GolemConfig as WorkerExecutorConfig, ProjectServiceConfig, ProjectServiceGrpcConfig,
+    AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, ProjectServiceConfig,
+    ProjectServiceGrpcConfig,
 };
 use golem_worker_service::config::WorkerServiceConfig;
 use golem_worker_service::WorkerService;
@@ -313,6 +314,15 @@ fn worker_executor_config(
             batch_update_interval: Duration::from_secs(60),
             retries: RetryConfig::default(),
         }),
+        agent_types_service: AgentTypesServiceConfig::Grpc(
+            golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {
+                host: args.router_addr.clone(),
+                port: component_service_run_details.grpc_port,
+                access_token: ADMIN_TOKEN.to_string(),
+                retries: RetryConfig::default(),
+                ..Default::default()
+            },
+        ),
         ..Default::default()
     };
 
