@@ -115,6 +115,7 @@ pub enum PlanAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
 pub enum AccountAction {
+    ViewApplications,
     UpdateAccount,
     SetRoles,
     CreateApplication,

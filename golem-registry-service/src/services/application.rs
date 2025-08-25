@@ -80,15 +80,20 @@ impl ApplicationService {
     pub async fn get(
         &self,
         application_id: &ApplicationId,
+        auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
-        let record = self
+        let application: Application = self
             .application_repo
             .get_by_id(&application_id.0)
             .await?
             .ok_or(ApplicationError::ApplicationNotFound(
                 application_id.clone(),
-            ))?;
+            ))?
+            .into();
 
-        Ok(record.into())
+        auth.authorize_account_action(&application.account_id, AccountAction::ViewApplications)
+            .map_err(|_| ApplicationError::ApplicationNotFound(application_id.clone()))?;
+
+        Ok(application)
     }
 }
