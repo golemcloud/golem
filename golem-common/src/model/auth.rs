@@ -126,6 +126,7 @@ pub enum EnvironmentAction {
     ViewShares,
     UpdateShare,
     CreateShare,
+    DeleteShare,
     ViewEnvironment
 }
 

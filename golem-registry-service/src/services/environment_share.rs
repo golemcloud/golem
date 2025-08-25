@@ -34,7 +34,7 @@ pub enum EnvironmentShareError {
     #[error("There is already a share for the account")]
     ShareForAccountAlreadyExists,
     #[error("Environment {0} not found")]
-    EnvironmentNotFound(EnvironmentId),
+    ParentEnvironmentNotFound(EnvironmentId),
     #[error("Environment share {0} not found")]
     EnvironmentShareNotFound(EnvironmentShareId),
     #[error("Concurrent update attempt")]
@@ -49,7 +49,7 @@ impl SafeDisplay for EnvironmentShareError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::ShareForAccountAlreadyExists => self.to_string(),
-            Self::EnvironmentNotFound(_) => self.to_string(),
+            Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::EnvironmentShareNotFound(_) => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
@@ -81,9 +81,19 @@ impl EnvironmentShareService {
         environment_id: EnvironmentId,
         data: NewEnvironmentShare,
         actor: AccountId,
+        auth: &AuthCtx
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
-        let id = EnvironmentShareId::new_v4();
+        self
+            .environment_service
+            .get_parent_and_authorize(&environment_id, EnvironmentAction::CreateShare, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => EnvironmentShareError::ParentEnvironmentNotFound(environment_id.clone()),
+                EnvironmentError::Unauthorized(inner) => EnvironmentShareError::Unauthorized(inner),
+                other => other.into()
+            })?;
 
+        let id = EnvironmentShareId::new_v4();
         let record = EnvironmentShareRevisionRecord::creation(id, data.roles, actor);
 
         let result = self
@@ -105,6 +115,7 @@ impl EnvironmentShareService {
         environment_share_id: &EnvironmentShareId,
         update: UpdateEnvironmentShare,
         actor: AccountId,
+        auth: &AuthCtx
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         let mut environment_share: EnvironmentShare = self
             .environment_share_repo
@@ -114,6 +125,16 @@ impl EnvironmentShareService {
                 environment_share_id.clone(),
             ))?
             .try_into()?;
+
+        self
+            .environment_service
+            .get_parent_and_authorize(&environment_share.environment_id, EnvironmentAction::UpdateShare, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone()),
+                EnvironmentError::Unauthorized(inner) => EnvironmentShareError::Unauthorized(inner),
+                other => other.into()
+            })?;
 
         let current_revision = environment_share.revision;
 
@@ -141,6 +162,7 @@ impl EnvironmentShareService {
         &self,
         environment_share_id: &EnvironmentShareId,
         actor: AccountId,
+        auth: &AuthCtx
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         let mut environment_share: EnvironmentShare = self
             .environment_share_repo
@@ -150,6 +172,16 @@ impl EnvironmentShareService {
                 environment_share_id.clone(),
             ))?
             .try_into()?;
+
+        self
+            .environment_service
+            .get_parent_and_authorize(&environment_share.environment_id, EnvironmentAction::DeleteShare, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone()),
+                EnvironmentError::Unauthorized(inner) => EnvironmentShareError::Unauthorized(inner),
+                other => other.into()
+            })?;
 
         let current_revision = environment_share.revision;
 
@@ -186,7 +218,7 @@ impl EnvironmentShareService {
 
         self
             .environment_service
-            .get_and_authorize(&environment_share.environment_id, EnvironmentAction::ViewShares, auth)
+            .get_parent_and_authorize(&environment_share.environment_id, EnvironmentAction::ViewShares, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone()),
@@ -203,10 +235,11 @@ impl EnvironmentShareService {
     ) -> Result<Vec<EnvironmentShare>, EnvironmentShareError> {
         self
             .environment_service
-            .get_and_authorize(&environment_id, EnvironmentAction::ViewShares, auth)
+            .get_parent_and_authorize(&environment_id, EnvironmentAction::ViewShares, auth)
             .await
             .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => EnvironmentShareError::EnvironmentNotFound(environment_id.clone()),
+                EnvironmentError::EnvironmentNotFound(_) => EnvironmentShareError::ParentEnvironmentNotFound(environment_id.clone()),
+                EnvironmentError::Unauthorized(inner) => EnvironmentShareError::Unauthorized(inner),
                 other => other.into()
             })?;
 
@@ -225,7 +258,18 @@ impl EnvironmentShareService {
         &self,
         environment_id: &EnvironmentId,
         grantee_account_id: &AccountId,
+        auth: &AuthCtx,
     ) -> Result<Option<EnvironmentShare>, EnvironmentShareError> {
+        self
+            .environment_service
+            .get_parent_and_authorize(&environment_id, EnvironmentAction::ViewShares, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => EnvironmentShareError::ParentEnvironmentNotFound(environment_id.clone()),
+                EnvironmentError::Unauthorized(inner) => EnvironmentShareError::Unauthorized(inner),
+                other => other.into()
+            })?;
+
         let result = self
             .environment_share_repo
             .get_for_environment_and_grantee(&environment_id.0, &grantee_account_id.0)

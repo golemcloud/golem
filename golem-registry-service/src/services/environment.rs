@@ -25,6 +25,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::error;
 use golem_common::model::auth::EnvironmentAction;
+use std::env;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentError {
@@ -108,8 +109,9 @@ impl EnvironmentService {
         Ok(environment)
     }
 
-    // Convenience method for fetching environment and checking permissions against it
-    pub async fn get_and_authorize(
+    /// Convenience method for fetching environment and checking permissions against it.
+    /// This is mostly for checking access to subresources of an enviornment
+    pub async fn get_parent_and_authorize(
         &self,
         environment_id: &EnvironmentId,
         action: EnvironmentAction,

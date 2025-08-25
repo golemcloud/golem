@@ -334,7 +334,7 @@ impl ComponentService {
                 let component: Component = record.try_into()?;
 
                 self.environment_service
-                    .get_and_authorize(&component.environment_id, EnvironmentAction::ViewComponent, auth)
+                    .get_parent_and_authorize(&component.environment_id, EnvironmentAction::ViewComponent, auth)
                     .await
                     .map_err(|err| match err {
                          EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
@@ -365,7 +365,7 @@ impl ComponentService {
                 let component: Component = record.try_into()?;
 
                 self.environment_service
-                    .get_and_authorize(&component.environment_id, EnvironmentAction::ViewComponent, auth)
+                    .get_parent_and_authorize(&component.environment_id, EnvironmentAction::ViewComponent, auth)
                     .await
                     .map_err(|err| match err {
                          EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
@@ -386,7 +386,7 @@ impl ComponentService {
         info!(environment_id = %environment_id, "Get staged components");
 
         self.environment_service
-            .get_and_authorize(&environment_id, EnvironmentAction::ViewComponent, auth)
+            .get_parent_and_authorize(&environment_id, EnvironmentAction::ViewComponent, auth)
             .await
             .map_err(|err| match err {
                     EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
@@ -426,7 +426,7 @@ impl ComponentService {
                 let component: Component = record.try_into()?;
 
                 self.environment_service
-                    .get_and_authorize(&component.environment_id, EnvironmentAction::ViewComponent, auth)
+                    .get_parent_and_authorize(&component.environment_id, EnvironmentAction::ViewComponent, auth)
                     .await
                     .map_err(|err| match err {
                          EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
@@ -493,7 +493,7 @@ impl ComponentService {
                 let component: Component = record.try_into()?;
 
                 self.environment_service
-                    .get_and_authorize(&component.environment_id, EnvironmentAction::ViewComponent, auth)
+                    .get_parent_and_authorize(&component.environment_id, EnvironmentAction::ViewComponent, auth)
                     .await
                     .map_err(|err| match err {
                          EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
