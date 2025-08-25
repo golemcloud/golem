@@ -1961,6 +1961,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         None,
                         None,
                         None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                 }
@@ -1984,7 +1985,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     ) -> Result<(), WorkerExecutorError> {
         let worker = this
             .worker_activator()
-            .get_or_create_suspended(account_id, owned_worker_id, None, None, None, None, None)
+            .get_or_create_suspended(
+                account_id,
+                owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+            )
             .await?;
 
         let entry = OplogEntry::failed_update(target_version, details.clone());

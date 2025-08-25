@@ -57,6 +57,7 @@ pub trait Rpc: Send + Sync {
         self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
     ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
     async fn invoke_and_await(
@@ -220,6 +221,7 @@ impl Rpc for RemoteInvocationRpc {
         self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
+        _self_stack: InvocationContextStack, // TODO: make invocation context propagating through the worker start API
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         debug!("Ensuring remote target worker exists");
 
@@ -687,6 +689,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_args: &[String],
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         if self
             .shard_service()
@@ -704,8 +707,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
+                &self_stack
             )
-            .await?;
+                .await?;
 
             let demand = LoggingDemand::new(owned_worker_id.worker_id());
             Ok(Box::new(demand))
@@ -718,6 +722,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_args,
                     self_env,
                     self_config,
+                    self_stack
                 )
                 .await
         }
@@ -762,8 +767,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
+                &self_stack
             )
-            .await?;
+                .await?;
 
             let result_value = worker
                 .invoke_and_await(idempotency_key, function_name, input_values, self_stack)
@@ -827,8 +833,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
+                &self_stack
             )
-            .await?;
+                .await?;
 
             worker
                 .invoke(idempotency_key, function_name, input_values, self_stack)

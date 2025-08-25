@@ -39,6 +39,9 @@ pub trait CanStartWorker {
     fn env(&self) -> Option<Vec<(String, String)>>;
     fn wasi_config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError>;
     fn parent(&self) -> Option<WorkerId>;
+    fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
+        None
+    }
 }
 
 pub trait GrpcInvokeRequest: CanStartWorker {
@@ -49,6 +52,10 @@ pub trait GrpcInvokeRequest: CanStartWorker {
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError>;
     fn name(&self) -> String;
     fn invocation_context(&self) -> InvocationContextStack;
+
+    fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
+        Some(self.invocation_context())
+    }
 }
 
 trait ProtobufInvocationDetails {

@@ -1123,6 +1123,10 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     config: BTreeMap<String, String>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
+    let stack = ctx
+        .state
+        .invocation_context
+        .clone_as_inherited_stack(span.span_id());
 
     let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.project_id, &remote_worker_id);
     let demand = ctx
@@ -1134,6 +1138,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             args,
             env,
             config,
+            stack
         )
         .await?;
     let entry = ctx.table().push(WasmRpcEntry {

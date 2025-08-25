@@ -49,6 +49,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::runtime::Handle;
+use golem_common::model::invocation_context::InvocationContextStack;
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
@@ -445,6 +446,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             None,
             None,
             None,
+            &InvocationContextStack::fresh(),
         )
         .await?;
 

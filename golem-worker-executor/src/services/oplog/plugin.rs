@@ -246,6 +246,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 None,
                 Some(running_plugin.component_version),
                 None,
+                &InvocationContextStack::fresh(),
             )
             .await?;
 

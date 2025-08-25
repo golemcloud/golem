@@ -54,6 +54,7 @@ use golem_common::grpc::{
     proto_plugin_installation_id_string, proto_promise_id_string, proto_worker_id_string,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
@@ -301,6 +302,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ),
             Some(component_version),
             None,
+            &InvocationContextStack::fresh(),
         )
         .await?;
 
@@ -383,6 +385,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 None,
                 None,
                 None,
+                &InvocationContextStack::fresh(),
             )
             .await?;
         }
@@ -422,6 +425,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    &InvocationContextStack::fresh(),
                 )
                 .await?;
 
@@ -530,6 +534,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    &InvocationContextStack::fresh(),
                 )
                 .await?;
                 worker.revert(target).await?;
@@ -578,6 +583,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                     worker.cancel_invocation(idempotency_key).await?;
@@ -651,6 +657,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
@@ -668,6 +675,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
@@ -684,6 +692,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                     worker
@@ -737,6 +746,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    &InvocationContextStack::fresh(),
                 )
                 .await?;
                 Ok(())
@@ -755,6 +765,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    &InvocationContextStack::fresh(),
                 )
                 .await?;
                 Ok(())
@@ -841,6 +852,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ctx::record_last_known_limits(self, &project_id, &limits.into()).await?;
         }
 
+        let invocation_context = request
+            .maybe_invocation_context()
+            .unwrap_or_else(|| InvocationContextStack::fresh());
         Worker::get_or_create_suspended(
             self,
             &account_id,
@@ -850,6 +864,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             request.wasi_config_vars()?,
             None,
             request.parent(),
+            &invocation_context,
         )
         .await
     }
@@ -1113,6 +1128,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             Some(metadata.last_known_status.component_version),
                             None,
+                            &InvocationContextStack::fresh(),
                         )
                         .await?;
 
@@ -1150,6 +1166,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             None,
+                            &InvocationContextStack::fresh(),
                         )
                         .await?;
 
@@ -1186,6 +1203,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    &InvocationContextStack::fresh(),
                 )
                 .await?;
                 worker.enqueue_manual_update(request.target_version).await;
@@ -1222,6 +1240,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 None,
                 None,
                 None,
+                &InvocationContextStack::fresh(),
             )
             .await?
             .event_service();
@@ -1576,6 +1595,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             None,
+                            &InvocationContextStack::fresh(),
                         )
                         .await?;
                         worker.activate_plugin(plugin_installation_id).await?;
@@ -1650,6 +1670,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             None,
+                            &InvocationContextStack::fresh(),
                         )
                         .await?;
                         worker.deactivate_plugin(plugin_installation_id).await?;

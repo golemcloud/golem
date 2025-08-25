@@ -34,6 +34,7 @@ pub mod bindings {
     });
 }
 
+use crate::model::component_metadata::ComponentMetadata;
 use crate::model::ComponentId;
 use async_trait::async_trait;
 use base64::Engine;
@@ -46,7 +47,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
-
 // NOTE: The primary reason for duplicating the model with handwritten Rust types is to avoid the need
 // to work with WitValue and WitType directly in the application code. Instead, we are converting them
 // to Value and AnalysedType which are much more ergonomic to work with.
@@ -650,5 +650,13 @@ where
 {
     async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
         self(agent_type).await
+    }
+}
+
+#[async_trait]
+impl AgentTypeResolver for &ComponentMetadata {
+    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
+        let result = self.find_agent_type(agent_type).await?;
+        result.ok_or_else(|| format!("Agent type not found: {}", agent_type))
     }
 }
