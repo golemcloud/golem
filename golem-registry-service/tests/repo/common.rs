@@ -75,7 +75,7 @@ pub async fn test_create_and_get_account(deps: &Deps) {
 
     let requested_account = deps
         .account_repo
-        .get_by_id(&account.account_id)
+        .get_by_id(&account.account_id, false)
         .await
         .unwrap();
     let_assert!(Some(requested_account) = requested_account);
@@ -83,7 +83,7 @@ pub async fn test_create_and_get_account(deps: &Deps) {
 
     let requested_account = deps
         .account_repo
-        .get_by_email(&account.email)
+        .get_by_email(&account.email, false)
         .await
         .unwrap();
     let_assert!(Some(requested_account) = requested_account);

@@ -78,6 +78,9 @@ impl AuthCtx {
         };
 
         let is_allowed = match action {
+            AccountAction::ViewAccount => {
+                has_any_role(&self.account_roles, &[AccountRole::Admin])
+            }
             AccountAction::UpdateAccount => {
                 has_any_role(&self.account_roles, &[AccountRole::Admin])
             }

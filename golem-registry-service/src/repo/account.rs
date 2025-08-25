@@ -43,11 +43,13 @@ pub trait AccountRepo: Send + Sync {
     async fn get_by_id(
         &self,
         account_id: &Uuid,
+        include_deleted: bool,
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError>;
 
     async fn get_by_email(
         &self,
         email: &str,
+        include_deleted: bool,
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError>;
 }
 
@@ -96,9 +98,10 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn get_by_id(
         &self,
         account_id: &Uuid,
+        include_deleted: bool,
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
         self.repo
-            .get_by_id(account_id)
+            .get_by_id(account_id, include_deleted)
             .instrument(Self::span_account_id(account_id))
             .await
     }
@@ -106,9 +109,10 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn get_by_email(
         &self,
         email: &str,
+        include_deleted: bool,
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
         let span = Self::span_email(email);
-        self.repo.get_by_email(email).instrument(span).await
+        self.repo.get_by_email(email, include_deleted).instrument(span).await
     }
 }
 
@@ -245,6 +249,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         account_id: &Uuid,
+        include_deleted: bool
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
         let result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(
@@ -252,9 +257,12 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                     SELECT a.created_at AS entity_created_at, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.roles, ar.created_at, ar.created_by, ar.deleted
                     FROM accounts a
                     JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
-                    WHERE a.account_id = $1 AND a.deleted_at IS NULL
+                    WHERE
+                        a.account_id = $1
+                        AND ($2 OR a.deleted_at IS NULL) -- check deletion
                 "#})
-                    .bind(account_id),
+                    .bind(account_id)
+                    .bind(include_deleted)
             )
             .await?;
 
@@ -264,6 +272,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn get_by_email(
         &self,
         email: &str,
+        include_deleted: bool,
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
         let result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_email")
             .fetch_optional_as(
@@ -271,9 +280,12 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                     SELECT a.created_at AS entity_created_at, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.roles, ar.created_at, ar.created_by, ar.deleted
                     FROM accounts a
                     JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
-                    WHERE a.email = $1 AND a.deleted_at IS NULL
+                    WHERE
+                        a.email = $1
+                        AND ($2 OR a.deleted_at IS NULL) -- check deletion
                 "#})
-                    .bind(email),
+                    .bind(email)
+                    .bind(include_deleted)
             )
             .await?;
 

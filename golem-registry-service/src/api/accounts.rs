@@ -139,9 +139,9 @@ impl AccountsApi {
     async fn get_account_internal(
         &self,
         account_id: AccountId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        let result = self.account_service.get(&account_id).await?;
+        let result = self.account_service.get(&account_id, &auth).await?;
         Ok(Json(result))
     }
 
@@ -172,9 +172,9 @@ impl AccountsApi {
     async fn get_account_plan_internal(
         &self,
         account_id: AccountId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Plan>> {
-        let account = self.account_service.get(&account_id).await?;
+        let account = self.account_service.get(&account_id, &auth).await?;
         let plan = self.plan_service.get(&account.plan_id).await?;
 
         Ok(Json(plan))

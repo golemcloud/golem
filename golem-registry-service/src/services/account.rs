@@ -81,7 +81,7 @@ impl AccountService {
     pub async fn create_initial_accounts(&self, auth: &AuthCtx) -> Result<(), AccountError> {
         for (name, account) in &self.config.accounts {
             let account_id = AccountId(account.id);
-            let existing_account = self.get_optional(&account_id).await?;
+            let existing_account = self.get_optional(&account_id, auth).await?;
 
             match existing_account {
                 None => {
@@ -142,7 +142,7 @@ impl AccountService {
 
         let mut account: Account = self
             .account_repo
-            .get_by_id(&account_id.0)
+            .get_by_id(&account_id.0, false)
             .await?
             .ok_or(AccountError::AccountNotFound(account_id.clone()))?
             .try_into()?;
@@ -165,7 +165,7 @@ impl AccountService {
 
         let mut account: Account = self
             .account_repo
-            .get_by_id(&account_id.0)
+            .get_by_id(&account_id.0, false)
             .await?
             .ok_or(AccountError::AccountNotFound(account_id.clone()))?
             .try_into()?;
@@ -175,9 +175,13 @@ impl AccountService {
         self.update_internal(account, auth).await
     }
 
-    pub async fn get(&self, account_id: &AccountId) -> Result<Account, AccountError> {
+    pub async fn get(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx
+    ) -> Result<Account, AccountError> {
         self
-            .get_optional(account_id)
+            .get_optional(account_id, auth)
             .await?
             .ok_or(AccountError::AccountNotFound(account_id.clone()))
     }
@@ -219,8 +223,14 @@ impl AccountService {
     pub async fn get_optional(
         &self,
         account_id: &AccountId,
+        auth: &AuthCtx
     ) -> Result<Option<Account>, AccountError> {
-        let record = self.account_repo.get_by_id(&account_id.0).await?;
+        auth
+            .authorize_account_action(&account_id, AccountAction::ViewAccount)
+            // Visibility is not enforced in the repo, so we need to map permissions to visibility
+            .map_err(|_| AccountError::AccountNotFound(account_id.clone()))?;
+
+        let record = self.account_repo.get_by_id(&account_id.0, false).await?;
         Ok(record.map(|r| r.try_into()).transpose()?)
     }
 

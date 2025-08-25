@@ -71,7 +71,7 @@ impl AuthService {
 
         let account =
             self.account_service
-                .get(&token.account_id)
+                .get(&token.account_id, &AuthCtx::system())
                 .await
                 .map_err(|err| match err {
                     // This covers the account being deleted

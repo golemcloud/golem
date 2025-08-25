@@ -114,6 +114,7 @@ pub enum AccountAction {
     CreateToken,
     CreateKnownSecret,
     DeleteToken,
+    ViewAccount
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
