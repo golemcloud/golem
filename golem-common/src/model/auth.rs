@@ -123,7 +123,10 @@ pub enum EnvironmentAction {
     CreateComponent,
     UpdateComponent,
     ViewComponent,
-    GetComponentWasm
+    ViewShares,
+    UpdateShare,
+    CreateShare,
+    ViewEnvironment
 }
 
 // #[cfg(feature = "protobuf")]

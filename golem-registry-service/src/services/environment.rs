@@ -30,6 +30,8 @@ use golem_common::model::auth::EnvironmentAction;
 pub enum EnvironmentError {
     #[error("Environment not found for id {0}")]
     EnvironmentNotFound(EnvironmentId),
+    #[error("Environment not found")]
+    NotFound,
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -40,6 +42,7 @@ impl SafeDisplay for EnvironmentError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::EnvironmentNotFound(_) => self.to_string(),
+            Self::NotFound => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -84,30 +87,6 @@ impl EnvironmentService {
         environment_id: &EnvironmentId,
         auth: &AuthCtx,
     ) -> Result<WithEnvironmentAuth<Environment>, EnvironmentError> {
-        let result = self
-            .environment_repo
-            .get_by_id(
-                &environment_id.0,
-                &auth.account_id.0,
-                auth.should_override_storage_visibility_rules(),
-                false,
-            )
-            .await?
-            .ok_or(EnvironmentError::EnvironmentNotFound(
-                environment_id.clone(),
-            ))?
-            .into();
-
-        Ok(result)
-    }
-
-    // Convenience method for fetching environment and checking permissions against it
-    pub async fn get_and_authorize(
-        &self,
-        environment_id: &EnvironmentId,
-        action: EnvironmentAction,
-        auth: &AuthCtx,
-    ) -> Result<WithEnvironmentAuth<Environment>, EnvironmentError> {
         let environment: WithEnvironmentAuth<Environment> = self
             .environment_repo
             .get_by_id(
@@ -121,6 +100,22 @@ impl EnvironmentService {
                 environment_id.clone(),
             ))?
             .into();
+
+        auth
+            .authorize_environment_action(&environment.owner_account_id, &environment.roles_from_shares, EnvironmentAction::ViewEnvironment)
+            .map_err(|_| EnvironmentError::NotFound)?;
+
+        Ok(environment)
+    }
+
+    // Convenience method for fetching environment and checking permissions against it
+    pub async fn get_and_authorize(
+        &self,
+        environment_id: &EnvironmentId,
+        action: EnvironmentAction,
+        auth: &AuthCtx,
+    ) -> Result<WithEnvironmentAuth<Environment>, EnvironmentError> {
+        let environment: WithEnvironmentAuth<Environment> = self.get(environment_id, auth).await?;
 
         auth.authorize_environment_action(&environment.owner_account_id, &environment.roles_from_shares, action)?;
 

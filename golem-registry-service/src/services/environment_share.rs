@@ -25,15 +25,22 @@ use golem_common::{SafeDisplay, error_forwarding};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::error;
+use super::environment::{EnvironmentError, EnvironmentService};
+use crate::model::auth::{AuthCtx, AuthorizationError};
+use golem_common::model::auth::EnvironmentAction;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentShareError {
     #[error("There is already a share for the account")]
     ShareForAccountAlreadyExists,
-    #[error("Environment share for id not found: {0}")]
+    #[error("Environment {0} not found")]
+    EnvironmentNotFound(EnvironmentId),
+    #[error("Environment share {0} not found")]
     EnvironmentShareNotFound(EnvironmentShareId),
     #[error("Concurrent update attempt")]
     ConcurrentModification,
+    #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -42,23 +49,30 @@ impl SafeDisplay for EnvironmentShareError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::ShareForAccountAlreadyExists => self.to_string(),
+            Self::EnvironmentNotFound(_) => self.to_string(),
             Self::EnvironmentShareNotFound(_) => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
+            Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
 }
 
-error_forwarding!(EnvironmentShareError, EnvironmentShareRepoError);
+error_forwarding!(EnvironmentShareError, EnvironmentShareRepoError, EnvironmentError);
 
 pub struct EnvironmentShareService {
     environment_share_repo: Arc<dyn EnvironmentShareRepo>,
+    environment_service: Arc<EnvironmentService>
 }
 
 impl EnvironmentShareService {
-    pub fn new(environment_share_repo: Arc<dyn EnvironmentShareRepo>) -> Self {
+    pub fn new(
+        environment_share_repo: Arc<dyn EnvironmentShareRepo>,
+        environment_service: Arc<EnvironmentService>
+    ) -> Self {
         Self {
             environment_share_repo,
+            environment_service
         }
     }
 
@@ -161,23 +175,41 @@ impl EnvironmentShareService {
     pub async fn get(
         &self,
         environment_share_id: &EnvironmentShareId,
+        auth: &AuthCtx
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
-        let result = self
+        let environment_share: EnvironmentShare = self
             .environment_share_repo
             .get_by_id(&environment_share_id.0)
             .await?
-            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(
-                environment_share_id.clone(),
-            ))?
+            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone()))?
             .try_into()?;
 
-        Ok(result)
+        self
+            .environment_service
+            .get_and_authorize(&environment_share.environment_id, EnvironmentAction::ViewShares, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone()),
+                other => other.into()
+            })?;
+
+        Ok(environment_share)
     }
 
     pub async fn get_shares_in_environment(
         &self,
         environment_id: EnvironmentId,
+        auth: &AuthCtx,
     ) -> Result<Vec<EnvironmentShare>, EnvironmentShareError> {
+        self
+            .environment_service
+            .get_and_authorize(&environment_id, EnvironmentAction::ViewShares, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => EnvironmentShareError::EnvironmentNotFound(environment_id.clone()),
+                other => other.into()
+            })?;
+
         let result = self
             .environment_share_repo
             .get_for_environment(&environment_id.0)
