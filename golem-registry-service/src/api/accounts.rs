@@ -175,7 +175,7 @@ impl AccountsApi {
         auth: AuthCtx,
     ) -> ApiResult<Json<Plan>> {
         let account = self.account_service.get(&account_id, &auth).await?;
-        let plan = self.plan_service.get(&account.plan_id).await?;
+        let plan = self.plan_service.get(&account.plan_id, &auth).await?;
 
         Ok(Json(plan))
     }

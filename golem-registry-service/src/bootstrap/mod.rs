@@ -100,7 +100,7 @@ impl Services {
 
         let plan_service = Arc::new(PlanService::new(repos.plan_repo, config.plans.clone()));
         plan_service
-            .create_initial_plans()
+            .create_initial_plans(&bootstrap_auth)
             .await
             .map_err(|e| e.into_anyhow())?;
 
@@ -128,6 +128,7 @@ impl Services {
 
         let environment_share_service = Arc::new(EnvironmentShareService::new(
             repos.environment_share_repo.clone(),
+            environment_service.clone()
         ));
 
         let component_service = Arc::new(ComponentService::new(

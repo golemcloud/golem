@@ -58,7 +58,7 @@ impl AuthService {
     pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
         let token = self
             .token_service
-            .get_by_secret(&token)
+            .get_by_secret(&token, &AuthCtx::system())
             .await
             .map_err(|err| match err {
                 TokenError::TokenBySecretFound => AuthError::CouldNotAuthenticate,
@@ -84,6 +84,7 @@ impl AuthService {
         Ok(AuthCtx {
             account_id: account.id,
             account_roles,
+            account_plan_id: Some(account.plan_id)
         })
     }
 }

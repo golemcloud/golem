@@ -25,14 +25,11 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::error;
 use golem_common::model::auth::EnvironmentAction;
-use std::env;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentError {
     #[error("Environment not found for id {0}")]
     EnvironmentNotFound(EnvironmentId),
-    #[error("Environment not found")]
-    NotFound,
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -43,7 +40,6 @@ impl SafeDisplay for EnvironmentError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::EnvironmentNotFound(_) => self.to_string(),
-            Self::NotFound => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -104,14 +100,14 @@ impl EnvironmentService {
 
         auth
             .authorize_environment_action(&environment.owner_account_id, &environment.roles_from_shares, EnvironmentAction::ViewEnvironment)
-            .map_err(|_| EnvironmentError::NotFound)?;
+            .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id.clone()))?;
 
         Ok(environment)
     }
 
     /// Convenience method for fetching environment and checking permissions against it.
     /// This is mostly for checking access to subresources of an enviornment
-    pub async fn get_parent_and_authorize(
+    pub async fn get_and_authorize(
         &self,
         environment_id: &EnvironmentId,
         action: EnvironmentAction,

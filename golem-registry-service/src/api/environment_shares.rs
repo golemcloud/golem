@@ -80,11 +80,11 @@ impl EnvironmentSharesApi {
     async fn get_environment_share_internal(
         &self,
         environment_share_id: EnvironmentShareId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let share = self
             .environment_share_service
-            .get(&environment_share_id)
+            .get(&environment_share_id, &auth)
             .await?;
         Ok(Json(share))
     }
@@ -120,12 +120,12 @@ impl EnvironmentSharesApi {
         &self,
         environment_share_id: EnvironmentShareId,
         data: UpdateEnvironmentShare,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let actor = AccountId(Uuid::new_v4());
         let share = self
             .environment_share_service
-            .update(&environment_share_id, data, actor)
+            .update(&environment_share_id, data, actor, &auth)
             .await?;
         Ok(Json(share))
     }
@@ -159,12 +159,12 @@ impl EnvironmentSharesApi {
     async fn delete_environment_share_internal(
         &self,
         environment_share_id: EnvironmentShareId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let actor = AccountId(Uuid::new_v4());
         let share = self
             .environment_share_service
-            .delete(&environment_share_id, actor)
+            .delete(&environment_share_id, actor, &auth)
             .await?;
         Ok(Json(share))
     }

@@ -142,11 +142,11 @@ impl EnvironmentComponentsApi {
     async fn get_environment_components_internal(
         &self,
         environment_id: EnvironmentId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Page<Component>>> {
         let components: Vec<Component> = self
             .component_service
-            .list_staged_components(&environment_id)
+            .list_staged_components(&environment_id, &auth)
             .await?
             .into_iter()
             .map(Component::from)
@@ -187,11 +187,11 @@ impl EnvironmentComponentsApi {
         &self,
         environment_id: EnvironmentId,
         component_name: ComponentName,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         let component: Component = self
             .component_service
-            .get_staged_component(environment_id, component_name)
+            .get_staged_component(environment_id, component_name, &auth)
             .await?
             .into();
 
@@ -231,11 +231,11 @@ impl EnvironmentComponentsApi {
         &self,
         environment_id: EnvironmentId,
         deployment_revision_id: DeploymentRevisionId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Page<Component>>> {
         let components: Vec<Component> = self
             .component_service
-            .list_deployed_components(&environment_id, deployment_revision_id)
+            .list_deployed_components(&environment_id, deployment_revision_id, &auth)
             .await?
             .into_iter()
             .map(Component::from)
@@ -285,11 +285,11 @@ impl EnvironmentComponentsApi {
         environment_id: EnvironmentId,
         deployment_revision_id: DeploymentRevisionId,
         component_name: ComponentName,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         let component: Component = self
             .component_service
-            .get_deployed_component(environment_id, deployment_revision_id, component_name)
+            .get_deployed_component(environment_id, deployment_revision_id, component_name, &auth)
             .await?
             .into();
 

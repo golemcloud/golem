@@ -79,11 +79,11 @@ impl ComponentsApi {
     async fn get_component_internal(
         &self,
         component_id: ComponentId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         let component: Component = self
             .component_service
-            .get_component(&component_id)
+            .get_component(&component_id, &auth)
             .await?
             .into();
         Ok(Json(component))
@@ -155,11 +155,11 @@ impl ComponentsApi {
         &self,
         component_id: ComponentId,
         revision: ComponentRevision,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         let component: Component = self
             .component_service
-            .get_component_revision(&component_id, revision)
+            .get_component_revision(&component_id, revision, &auth)
             .await?
             .into();
 
@@ -198,11 +198,11 @@ impl ComponentsApi {
         &self,
         component_id: ComponentId,
         revision: ComponentRevision,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Binary<Body>> {
         let result = self
             .component_service
-            .download_component_wasm(&component_id, revision)
+            .download_component_wasm(&component_id, revision, &auth)
             .await?;
         let body =
             Body::from_bytes_stream(result.map_err(|e| std::io::Error::other(e.to_string())));

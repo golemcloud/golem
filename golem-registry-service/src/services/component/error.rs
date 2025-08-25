@@ -74,6 +74,8 @@ pub enum ComponentError {
     PluginInstallationNotFound {
         installation_id: PluginInstallationId,
     },
+    #[error("Environment not found: {0}")]
+    ParentEnvironmentNotFound(EnvironmentId),
     #[error("Requested component not found")]
     NotFound,
     #[error(transparent)]
@@ -98,6 +100,7 @@ impl SafeDisplay for ComponentError {
             Self::ConcurrentUpdate => self.to_string(),
             Self::InvalidCurrentRevision => self.to_string(),
             Self::PluginInstallationNotFound { .. } => self.to_string(),
+            Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::NotFound => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -109,14 +112,30 @@ error_forwarding!(
     ComponentError,
     RepoError,
     ApplicationError,
-    ComponentRepoError,
-    AccountUsageError
+    ComponentRepoError
 );
+
+impl From<AccountUsageError> for ComponentError {
+    fn from(value: AccountUsageError) -> Self {
+        match value {
+            AccountUsageError::LimitExceeded {
+                limit_name,
+                limit_value,
+                current_value,
+            } => Self::LimitExceeded {
+                limit_name,
+                limit_value,
+                current_value,
+            },
+            other => Self::InternalError(other.into_anyhow().context("AccountUsageError")),
+        }
+    }
+}
 
 impl From<EnvironmentError> for ComponentError {
     fn from(value: EnvironmentError) -> Self {
         match value {
-            EnvironmentError::EnvironmentNotFound(environment_id) => Self::NotFound,
+            EnvironmentError::EnvironmentNotFound(environment_id) => Self::ParentEnvironmentNotFound(environment_id),
             _ => Self::InternalError(value.into_anyhow().context("EnvironmentError")),
         }
     }

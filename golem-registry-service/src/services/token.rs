@@ -61,23 +61,28 @@ impl TokenService {
         Self { token_repo }
     }
 
-    pub async fn get(&self, token_id: &TokenId) -> Result<TokenWithSecret, TokenError> {
-        let record = self
+    pub async fn get(&self, token_id: &TokenId, auth: &AuthCtx) -> Result<TokenWithSecret, TokenError> {
+        let token: TokenWithSecret = self
             .token_repo
             .get_by_id(&token_id.0)
             .await?
-            .ok_or(TokenError::TokenNotFound(token_id.clone()))?;
+            .ok_or(TokenError::TokenNotFound(token_id.clone()))?
+            .into();
 
-        Ok(record.into())
+        auth.authorize_account_action(&token.account_id, AccountAction::ViewToken)?;
+
+        Ok(token.into())
     }
 
-    pub async fn get_by_secret(&self, secret: &TokenSecret) -> Result<TokenWithSecret, TokenError> {
-        let token = self
+    pub async fn get_by_secret(&self, secret: &TokenSecret, auth: &AuthCtx) -> Result<TokenWithSecret, TokenError> {
+        let token: TokenWithSecret = self
             .token_repo
             .get_by_secret(&secret.0)
             .await?
             .ok_or(TokenError::TokenBySecretFound)?
             .into();
+
+        auth.authorize_account_action(&token.account_id, AccountAction::ViewToken)?;
 
         Ok(token)
     }

@@ -185,6 +185,8 @@ impl From<EnvironmentError> for ApiError {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
+            EnvironmentError::Unauthorized(inner) => inner.into(),
+
             EnvironmentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("EnvironmentError")),
@@ -198,6 +200,9 @@ impl From<PlanError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             PlanError::PlanNotFound(_) => Self::NotFound(Json(ErrorBody { error, cause: None })),
+
+            PlanError::Unauthorized(inner) => inner.into(),
+
             PlanError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("PlanError")),
@@ -240,12 +245,11 @@ impl From<ComponentError> for ApiError {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
-            ComponentError::UnknownComponentId(_)
-            | ComponentError::UnknownVersionedComponentId(_)
-            | ComponentError::PluginNotFound { .. }
-            | ComponentError::UnknownEnvironmentComponentName { .. } => {
-                Self::NotFound(Json(ErrorBody { error, cause: None }))
-            }
+            ComponentError::NotFound
+            | ComponentError::ParentEnvironmentNotFound(_)
+            | ComponentError::PluginNotFound { .. } => Self::NotFound(Json(ErrorBody { error, cause: None })),
+
+            ComponentError::Unauthorized(inner) => inner.into(),
 
             ComponentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
@@ -302,9 +306,10 @@ impl From<EnvironmentShareError> for ApiError {
             | EnvironmentShareError::ShareForAccountAlreadyExists => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
-            EnvironmentShareError::EnvironmentShareNotFound(_) => {
+            EnvironmentShareError::EnvironmentShareNotFound(_) | EnvironmentShareError::ParentEnvironmentNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
+            EnvironmentShareError::Unauthorized(inner) => inner.into(),
             EnvironmentShareError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("EnvironmentShareError")),

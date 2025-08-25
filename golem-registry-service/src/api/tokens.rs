@@ -67,9 +67,9 @@ impl TokensApi {
     async fn get_token_internal(
         &self,
         token_id: TokenId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Token>> {
-        let result = self.token_service.get(&token_id).await?;
+        let result = self.token_service.get(&token_id, &auth).await?;
 
         Ok(Json(result.without_secret()))
     }

@@ -104,6 +104,13 @@ impl TryFrom<i32> for EnvironmentRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
 pub enum GlobalAction {
     CreateAccount,
+    GetDefaultPlan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
+pub enum PlanAction {
+    ViewPlan,
+    CreateOrUpdatePlan
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
@@ -114,6 +121,7 @@ pub enum AccountAction {
     CreateToken,
     CreateKnownSecret,
     DeleteToken,
+    ViewToken,
     ViewAccount,
     UpdateUsage
 }

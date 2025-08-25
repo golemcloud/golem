@@ -129,7 +129,7 @@ impl OAuth2Service {
         };
 
         let token = match existing_data.and_then(|token| token.token_id) {
-            Some(token_id) => self.token_service.get(&token_id).await?,
+            Some(token_id) => self.token_service.get(&token_id, &AuthCtx::system()).await?,
             None => {
                 // This will also link the external id to the account id, ensure that no additional
                 // accounts are created in the future.

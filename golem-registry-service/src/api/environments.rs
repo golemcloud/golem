@@ -334,13 +334,13 @@ impl EnvironmentsApi {
         &self,
         environment_id: EnvironmentId,
         payload: NewEnvironmentShare,
-        _token: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let actor = AccountId(Uuid::new_v4());
 
         let result = self
             .environment_share_service
-            .create(environment_id, payload, actor)
+            .create(environment_id, payload, actor, &auth)
             .await?;
 
         Ok(Json(result))
@@ -376,11 +376,11 @@ impl EnvironmentsApi {
     async fn get_environment_shares_internal(
         &self,
         environment_id: EnvironmentId,
-        _token: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Page<EnvironmentShare>>> {
         let result = self
             .environment_share_service
-            .get_shares_in_environment(environment_id)
+            .get_shares_in_environment(environment_id, &auth)
             .await?;
 
         Ok(Json(Page { values: result }))

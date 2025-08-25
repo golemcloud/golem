@@ -124,7 +124,7 @@ impl AccountService {
         auth.authorize_global_action(GlobalAction::CreateAccount)?;
 
         let id = AccountId::new_v4();
-        let plan_id = self.get_default_plan_id().await?;
+        let plan_id = self.get_default_plan_id(auth).await?;
         info!("Creating account: {}", id);
         self.create_internal(id, account, Vec::new(), plan_id, auth)
             .await
@@ -264,10 +264,10 @@ impl AccountService {
         }
     }
 
-    async fn get_default_plan_id(&self) -> Result<PlanId, AccountError> {
+    async fn get_default_plan_id(&self, auth: &AuthCtx) -> Result<PlanId, AccountError> {
         let plan_id = self
             .plan_service
-            .get_default_plan()
+            .get_default_plan(auth)
             .await
             .map(|plan| plan.plan_id)?;
 
