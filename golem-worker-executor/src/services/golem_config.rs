@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
 use anyhow::Context;
 use figment::providers::{Format, Toml};
 use figment::Figment;
@@ -24,9 +20,14 @@ use golem_common::config::{
 };
 use golem_common::model::{AccountId, ProjectId, RetryConfig};
 use golem_common::tracing::TracingConfig;
+use golem_common::SafeDisplay;
 use golem_service_base::config::BlobStorageConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use url::Url;
 
 /// The shared global Golem executor configuration
@@ -60,6 +61,120 @@ pub struct GolemConfig {
     pub http_port: u16,
 }
 
+impl SafeDisplay for GolemConfig {
+    fn to_safe_string(&self) -> String {
+        use std::fmt::Write;
+
+        let mut result = String::new();
+
+        let _ = writeln!(&mut result, "tracing:");
+        let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
+        let _ = writeln!(
+            &mut result,
+            "tracing file name with port: {}",
+            self.tracing_file_name_with_port
+        );
+        let _ = writeln!(&mut result, "key-value storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.key_value_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "indexed storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.indexed_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "blob storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.blob_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "limits:");
+        let _ = writeln!(&mut result, "{}", self.limits.to_safe_string_indented());
+        let _ = writeln!(&mut result, "retry:");
+        let _ = writeln!(&mut result, "{}", self.retry.to_safe_string_indented());
+        let _ = writeln!(&mut result, "compiled component service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.compiled_component_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "shard manager service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.shard_manager_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "plugin service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.plugin_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "oplog:");
+        let _ = writeln!(&mut result, "{}", self.oplog.to_safe_string_indented());
+        let _ = writeln!(&mut result, "suspend:");
+        let _ = writeln!(&mut result, "{}", self.suspend.to_safe_string_indented());
+        let _ = writeln!(&mut result, "active_workers:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.active_workers.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "scheduler:");
+        let _ = writeln!(&mut result, "{}", self.scheduler.to_safe_string_indented());
+        let _ = writeln!(&mut result, "public worker api:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.public_worker_api.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "memory:");
+        let _ = writeln!(&mut result, "{}", self.memory.to_safe_string_indented());
+        let _ = writeln!(&mut result, "rdbms:");
+        let _ = writeln!(&mut result, "{}", self.rdbms.to_safe_string_indented());
+        let _ = writeln!(&mut result, "resource limits:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.resource_limits.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "component service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.component_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "component cache:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.component_cache.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "project service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.project_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "agent types service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.agent_types_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "gRPC address: {}", self.grpc_address);
+        let _ = writeln!(&mut result, "gRPC port: {}", self.port);
+        let _ = writeln!(&mut result, "HTTP address: {}", self.http_address);
+        let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
+
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Limits {
     pub max_active_workers: usize,
@@ -74,11 +189,74 @@ pub struct Limits {
     pub max_oplog_query_pages_size: usize,
 }
 
+impl SafeDisplay for Limits {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+
+        let _ = writeln!(
+            &mut result,
+            "max active workers: {}",
+            self.max_active_workers
+        );
+        let _ = writeln!(
+            &mut result,
+            "invocation result broadcast capacity: {}",
+            self.invocation_result_broadcast_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "max concurrent streams: {}",
+            self.max_concurrent_streams
+        );
+        let _ = writeln!(
+            &mut result,
+            "event broadcast capacity: {}",
+            self.event_broadcast_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "event history size: {}",
+            self.event_history_size
+        );
+        let _ = writeln!(&mut result, "fuel to borrow: {}", self.fuel_to_borrow);
+        let _ = writeln!(
+            &mut result,
+            "epoch interval: {}",
+            self.epoch_interval.as_secs()
+        );
+        let _ = writeln!(&mut result, "epoch ticks: {}", self.epoch_ticks);
+        let _ = writeln!(
+            &mut result,
+            "max oplog query pages: {}",
+            self.max_oplog_query_pages_size
+        );
+
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum PluginServiceConfig {
     Grpc(PluginServiceGrpcConfig),
     Local(PluginServiceLocalConfig),
+}
+
+impl SafeDisplay for PluginServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            PluginServiceConfig::Grpc(grpc) => {
+                let _ = writeln!(&mut result, "grpc:");
+                let _ = writeln!(&mut result, "{}", grpc.to_safe_string_indented());
+            }
+            PluginServiceConfig::Local(local) => {
+                let _ = writeln!(&mut result, "local:");
+                let _ = writeln!(&mut result, "{}", local.to_safe_string_indented());
+            }
+        }
+        result
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -92,9 +270,29 @@ pub struct PluginServiceGrpcConfig {
     pub connect_timeout: Duration,
 }
 
+impl SafeDisplay for PluginServiceGrpcConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "access token: ****");
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "plugin cache size: {}", self.plugin_cache_size);
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PluginServiceLocalConfig {
     pub root: PathBuf,
+}
+
+impl SafeDisplay for PluginServiceLocalConfig {
+    fn to_safe_string(&self) -> String {
+        format!("root: {:?}", self.root)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -102,6 +300,15 @@ pub struct PluginServiceLocalConfig {
 pub enum CompiledComponentServiceConfig {
     Enabled(CompiledComponentServiceEnabledConfig),
     Disabled(CompiledComponentServiceDisabledConfig),
+}
+
+impl SafeDisplay for CompiledComponentServiceConfig {
+    fn to_safe_string(&self) -> String {
+        match self {
+            CompiledComponentServiceConfig::Enabled(_) => "enabled".to_string(),
+            CompiledComponentServiceConfig::Disabled(_) => "disabled".to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -117,11 +324,38 @@ pub enum ShardManagerServiceConfig {
     SingleShard(ShardManagerServiceSingleShardConfig),
 }
 
+impl SafeDisplay for ShardManagerServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            ShardManagerServiceConfig::Grpc(grpc) => {
+                let _ = writeln!(&mut result, "grpc:");
+                let _ = writeln!(&mut result, "{}", grpc.to_safe_string_indented());
+            }
+            ShardManagerServiceConfig::SingleShard(_) => {
+                let _ = writeln!(&mut result, "single shard");
+            }
+        }
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShardManagerServiceGrpcConfig {
     pub host: String,
     pub port: u16,
     pub retries: RetryConfig,
+}
+
+impl SafeDisplay for ShardManagerServiceGrpcConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "retries:",);
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -135,6 +369,19 @@ pub struct WorkerServiceGrpcConfig {
     pub retries: RetryConfig,
     #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
+}
+
+impl SafeDisplay for WorkerServiceGrpcConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "access token: ****");
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
 }
 
 impl GolemConfig {
@@ -212,6 +459,12 @@ pub struct SuspendConfig {
     pub suspend_after: Duration,
 }
 
+impl SafeDisplay for SuspendConfig {
+    fn to_safe_string(&self) -> String {
+        format!("suspend after: {:?}", self.suspend_after)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActiveWorkersConfig {
     pub drop_when_full: f64,
@@ -219,10 +472,27 @@ pub struct ActiveWorkersConfig {
     pub ttl: Duration,
 }
 
+impl SafeDisplay for ActiveWorkersConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "drop when full: {}", self.drop_when_full);
+        let _ = writeln!(&mut result, "ttl: {:?}", self.ttl);
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SchedulerConfig {
     #[serde(with = "humantime_serde")]
     pub refresh_interval: Duration,
+}
+
+impl SafeDisplay for SchedulerConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "refresh interval: {:?}", self.refresh_interval);
+        result
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -237,6 +507,36 @@ pub struct OplogConfig {
     pub archive_interval: Duration,
 }
 
+impl SafeDisplay for OplogConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "max operations before commit: {}",
+            self.max_operations_before_commit
+        );
+        let _ = writeln!(
+            &mut result,
+            "max operations before commit for ephemerals: {}",
+            self.max_operations_before_commit_ephemeral
+        );
+        let _ = writeln!(&mut result, "max payload size: {}", self.max_payload_size);
+        let _ = writeln!(
+            &mut result,
+            "indexed storage layers: {}",
+            self.indexed_storage_layers
+        );
+        let _ = writeln!(
+            &mut result,
+            "blob storage layers: {}",
+            self.blob_storage_layers
+        );
+        let _ = writeln!(&mut result, "entry count limit: {}", self.entry_count_limit);
+        let _ = writeln!(&mut result, "archive interval: {:?}", self.archive_interval);
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum KeyValueStorageConfig {
@@ -245,8 +545,35 @@ pub enum KeyValueStorageConfig {
     InMemory(KeyValueStorageInMemoryConfig),
 }
 
+impl SafeDisplay for KeyValueStorageConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            KeyValueStorageConfig::Redis(inner) => {
+                let _ = writeln!(&mut result, "redis:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageConfig::Sqlite(inner) => {
+                let _ = writeln!(&mut result, "sqlite:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageConfig::InMemory(inner) => {
+                let _ = writeln!(&mut result, "in-memory:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+        }
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyValueStorageInMemoryConfig {}
+
+impl SafeDisplay for KeyValueStorageInMemoryConfig {
+    fn to_safe_string(&self) -> String {
+        "".to_string()
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
@@ -258,14 +585,61 @@ pub enum IndexedStorageConfig {
     InMemory(IndexedStorageInMemoryConfig),
 }
 
+impl SafeDisplay for IndexedStorageConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            IndexedStorageConfig::KVStoreRedis(inner) => {
+                let _ = writeln!(&mut result, "redis kv-store:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            IndexedStorageConfig::Redis(inner) => {
+                let _ = writeln!(&mut result, "redis:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            IndexedStorageConfig::KVStoreSqlite(inner) => {
+                let _ = writeln!(&mut result, "sqlite kv-store:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            IndexedStorageConfig::Sqlite(inner) => {
+                let _ = writeln!(&mut result, "sqlite:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            IndexedStorageConfig::InMemory(inner) => {
+                let _ = writeln!(&mut result, "in-memory:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+        }
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IndexedStorageKVStoreRedisConfig {}
+
+impl SafeDisplay for IndexedStorageKVStoreRedisConfig {
+    fn to_safe_string(&self) -> String {
+        "".to_string()
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IndexedStorageKVStoreSqliteConfig {}
 
+impl SafeDisplay for IndexedStorageKVStoreSqliteConfig {
+    fn to_safe_string(&self) -> String {
+        "".to_string()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IndexedStorageInMemoryConfig {}
+
+impl SafeDisplay for IndexedStorageInMemoryConfig {
+    fn to_safe_string(&self) -> String {
+        "".to_string()
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MemoryConfig {
@@ -297,15 +671,66 @@ impl MemoryConfig {
     }
 }
 
+impl SafeDisplay for MemoryConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        if let Some(ovrd) = &self.system_memory_override {
+            let _ = writeln!(&mut result, "system memory override: {ovrd}");
+        }
+        let _ = writeln!(
+            &mut result,
+            "worker memory ratio: {}",
+            self.worker_memory_ratio
+        );
+        let _ = writeln!(
+            &mut result,
+            "worker estimate coefficient: {}",
+            self.worker_estimate_coefficient
+        );
+        let _ = writeln!(
+            &mut result,
+            "acquire retry delay: {:?}",
+            self.acquire_retry_delay
+        );
+        let _ = writeln!(&mut result, "oom retry config:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.oom_retry_config.to_safe_string_indented()
+        );
+
+        result
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct RdbmsConfig {
     pub pool: RdbmsPoolConfig,
     pub query: RdbmsQueryConfig,
 }
 
+impl SafeDisplay for RdbmsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "pool:");
+        let _ = writeln!(&mut result, "{}", self.pool.to_safe_string_indented());
+        let _ = writeln!(&mut result, "query:");
+        let _ = writeln!(&mut result, "{}", self.query.to_safe_string_indented());
+        result
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct RdbmsQueryConfig {
     pub query_batch: usize,
+}
+
+impl SafeDisplay for RdbmsQueryConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "batch size: {}", self.query_batch);
+        result
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -317,11 +742,37 @@ pub struct RdbmsPoolConfig {
     pub eviction_period: Duration,
 }
 
+impl SafeDisplay for RdbmsPoolConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "max connections: {}", self.max_connections);
+        let _ = writeln!(&mut result, "eviction ttl: {:?}", self.eviction_ttl);
+        let _ = writeln!(&mut result, "eviction period: {:?}", self.eviction_period);
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ResourceLimitsConfig {
     Grpc(ResourceLimitsGrpcConfig),
     Disabled(ResourceLimitsDisabledConfig),
+}
+
+impl SafeDisplay for ResourceLimitsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            ResourceLimitsConfig::Grpc(grpc) => {
+                let _ = writeln!(&mut result, "grpc:");
+                let _ = writeln!(&mut result, "{}", grpc.to_safe_string_indented());
+            }
+            ResourceLimitsConfig::Disabled(_) => {
+                let _ = writeln!(&mut result, "disabled");
+            }
+        }
+        result
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -332,6 +783,23 @@ pub struct ResourceLimitsGrpcConfig {
     pub retries: RetryConfig,
     #[serde(with = "humantime_serde")]
     pub batch_update_interval: Duration,
+}
+
+impl SafeDisplay for ResourceLimitsGrpcConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "access token: ****");
+        let _ = writeln!(
+            &mut result,
+            "batch update interval: {:?}",
+            self.batch_update_interval
+        );
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
 }
 
 impl ResourceLimitsGrpcConfig {
@@ -356,11 +824,47 @@ pub struct ComponentCacheConfig {
     pub time_to_idle: Duration,
 }
 
+impl SafeDisplay for ComponentCacheConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "max capacity: {}", self.max_capacity);
+        let _ = writeln!(
+            &mut result,
+            "max metadata capacity: {}",
+            self.max_metadata_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "max resolved component capacity: {}",
+            self.max_resolved_component_capacity
+        );
+        let _ = writeln!(&mut result, "time to idle: {:?}", self.time_to_idle);
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ProjectServiceConfig {
     Grpc(ProjectServiceGrpcConfig),
     Disabled(ProjectServiceDisabledConfig),
+}
+
+impl SafeDisplay for ProjectServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            ProjectServiceConfig::Grpc(grpc) => {
+                let _ = writeln!(&mut result, "grpc:");
+                let _ = writeln!(&mut result, "{}", grpc.to_safe_string_indented());
+            }
+            ProjectServiceConfig::Disabled(disabled) => {
+                let _ = writeln!(&mut result, "disabled:");
+                let _ = writeln!(&mut result, "{}", disabled.to_safe_string_indented());
+            }
+        }
+        result
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -386,6 +890,29 @@ impl ProjectServiceGrpcConfig {
     }
 }
 
+impl SafeDisplay for ProjectServiceGrpcConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "access token: ****");
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(
+            &mut result,
+            "max resolved project cache capacity: {}",
+            self.max_resolved_project_cache_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "cache time to idle: {:?}",
+            self.cache_time_to_idle
+        );
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectServiceDisabledConfig {
     pub account_id: AccountId,
@@ -393,11 +920,37 @@ pub struct ProjectServiceDisabledConfig {
     pub project_name: String,
 }
 
+impl SafeDisplay for ProjectServiceDisabledConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "account_id: {}", self.account_id);
+        let _ = writeln!(&mut result, "project id: {}", self.project_id);
+        let _ = writeln!(&mut result, "project name: {}", self.project_name);
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum AgentTypesServiceConfig {
     Grpc(AgentTypesServiceGrpcConfig),
     Local(AgentTypesServiceLocalConfig),
+}
+
+impl SafeDisplay for AgentTypesServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            AgentTypesServiceConfig::Grpc(grpc) => {
+                let _ = writeln!(&mut result, "grpc:");
+                let _ = writeln!(&mut result, "{}", grpc.to_safe_string_indented());
+            }
+            AgentTypesServiceConfig::Local(_) => {
+                let _ = writeln!(&mut result, "local");
+            }
+        }
+        result
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -422,6 +975,24 @@ impl AgentTypesServiceGrpcConfig {
     }
 }
 
+impl SafeDisplay for AgentTypesServiceGrpcConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "access token: ****");
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(
+            &mut result,
+            "cache time to idle: {:?}",
+            self.cache_time_to_idle
+        );
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentTypesServiceLocalConfig {}
 
@@ -432,9 +1003,34 @@ pub enum ComponentServiceConfig {
     Grpc(ComponentServiceGrpcConfig),
 }
 
+impl SafeDisplay for ComponentServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            ComponentServiceConfig::Local(local) => {
+                let _ = writeln!(&mut result, "local:");
+                let _ = writeln!(&mut result, "{}", local.to_safe_string_indented());
+            }
+            ComponentServiceConfig::Grpc(grpc) => {
+                let _ = writeln!(&mut result, "grpc:");
+                let _ = writeln!(&mut result, "{}", grpc.to_safe_string_indented());
+            }
+        }
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceLocalConfig {
     pub root: PathBuf,
+}
+
+impl SafeDisplay for ComponentServiceLocalConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "root: {:?}", self.root);
+        result
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -455,6 +1051,23 @@ impl ComponentServiceGrpcConfig {
 
     pub fn uri(&self) -> Uri {
         build_uri("component service", &self.host, self.port)
+    }
+}
+
+impl SafeDisplay for ComponentServiceGrpcConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "access token: ****");
+        let _ = writeln!(
+            &mut result,
+            "max component size: {}",
+            self.max_component_size
+        );
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
     }
 }
 

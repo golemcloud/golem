@@ -34,8 +34,7 @@ fn main() -> anyhow::Result<()> {
 
         let exporter = opentelemetry_prometheus::exporter()
             .with_registry(prometheus.clone())
-            .build()
-            .unwrap();
+            .build()?;
 
         global::set_meter_provider(
             MeterProviderBuilder::default()

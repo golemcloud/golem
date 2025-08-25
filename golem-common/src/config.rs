@@ -13,19 +13,22 @@
 // limitations under the License.
 
 use crate::model::RetryConfig;
+use crate::SafeDisplay;
 use figment::providers::{Env, Format, Serialized, Toml};
 use figment::value::Value;
 use figment::Figment;
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tracing::info;
 use url::Url;
 
 const ENV_VAR_PREFIX: &str = "GOLEM__";
 const ENV_VAR_NESTED_SEPARATOR: &str = "__";
 
-pub trait ConfigLoaderConfig: Default + Serialize + Deserialize<'static> {}
-impl<T: Default + Serialize + Deserialize<'static>> ConfigLoaderConfig for T {}
+pub trait ConfigLoaderConfig: Default + Serialize + Deserialize<'static> + SafeDisplay {}
+impl<T: Default + Serialize + Deserialize<'static> + SafeDisplay> ConfigLoaderConfig for T {}
 
 pub type ConfigExample<T> = (&'static str, T);
 
@@ -85,7 +88,12 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
     }
 
     pub fn load(&self) -> figment::Result<T> {
-        self.figment().extract()
+        let result = self.figment().extract::<T>();
+        if let Ok(config) = &result {
+            info!("Using configuration:\n{}", config.to_safe_string_indented());
+        }
+
+        result
     }
 
     fn default_dump_source(&self) -> dump::Source {
@@ -463,6 +471,15 @@ impl DbSqliteConfig {
             .filename(&self.database)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .create_if_missing(true)
+    }
+}
+
+impl SafeDisplay for DbSqliteConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "database: {}", self.database);
+        let _ = writeln!(&mut result, "max connections: {}", self.max_connections);
+        result
     }
 }
 
