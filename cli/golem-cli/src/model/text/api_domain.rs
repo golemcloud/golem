@@ -34,7 +34,7 @@ impl MessageWithFields for ApiDomainNewView {
 
         fields
             .fmt_field("Domain name", &self.0.domain_name, format_main_id)
-            .fmt_field("Project ID", &self.0.project_id, format_id)
+            .fmt_field("Environment ID", &self.0.environment_id, format_id)
             .fmt_field_option("Created at", &self.0.created_at, |d| d.to_string())
             .fmt_field_optional(
                 "Name servers",

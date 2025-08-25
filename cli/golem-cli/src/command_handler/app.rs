@@ -30,10 +30,10 @@ use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::Component;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
-use crate::model::{ComponentName, WorkerUpdateMode};
+use crate::model::WorkerUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_client::api::AgentTypesClient;
+use golem_common::model::component::ComponentName;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
     ComposableAppGroupName, GuestLanguage, PackageName, Template, TemplateName,

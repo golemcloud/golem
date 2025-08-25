@@ -10,7 +10,7 @@ use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::naming::wit::package_dep_dir_name_from_parser;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::anyhow;
-use golem_common::model::{ComponentFilePathWithPermissions, ComponentFilePermissions};
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1129,6 +1129,18 @@ impl ComponentProperties {
                 (upper_case_key, value)
             })
             .collect::<HashMap<_, _>>()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ComponentFilePathWithPermissions {
+    pub path: ComponentFilePath,
+    pub permissions: ComponentFilePermissions,
+}
+
+impl ComponentFilePathWithPermissions {
+    pub fn extend_path(&mut self, path: &str) -> Result<(), String> {
+        self.path.extend(path)
     }
 }
 

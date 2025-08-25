@@ -4,7 +4,7 @@ use crate::log::LogColorize;
 use crate::model::component::AppComponentType;
 use crate::model::Format;
 use anyhow::{anyhow, Context};
-use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;

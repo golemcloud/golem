@@ -39,6 +39,7 @@ use clap::{Arg, Error};
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::PluginTypeSpecificDefinition;
+use golem_common::model::account::AccountId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::{
     AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
@@ -230,27 +231,6 @@ impl Display for ProjectReference {
                 project_name,
             } => write!(f, "{}/{}", account_email, project_name.0),
         }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
-pub struct ComponentName(pub String);
-
-impl From<&str> for ComponentName {
-    fn from(name: &str) -> Self {
-        ComponentName(name.to_string())
-    }
-}
-
-impl From<String> for ComponentName {
-    fn from(name: String) -> Self {
-        ComponentName(name)
-    }
-}
-
-impl Display for ComponentName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
     }
 }
 
@@ -808,42 +788,6 @@ impl From<golem_client::model::PluginDefinition> for PluginDefinition {
 pub struct NewInteractiveApp {
     pub app_name: String,
     pub templated_component_names: Vec<(ComponentTemplateName, PackageName)>,
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct AccountId(pub String);
-
-impl From<String> for AccountId {
-    fn from(id: String) -> Self {
-        Self(id)
-    }
-}
-
-impl From<&str> for AccountId {
-    fn from(value: &str) -> Self {
-        Self(value.into())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProjectId(pub Uuid);
-
-impl From<Uuid> for ProjectId {
-    fn from(uuid: Uuid) -> Self {
-        ProjectId(uuid)
-    }
-}
-
-impl From<ProjectId> for Uuid {
-    fn from(project_id: ProjectId) -> Self {
-        project_id.0
-    }
-}
-
-impl Display for ProjectId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
