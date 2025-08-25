@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::account::{AccountError, AccountService};
 use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::application::ApplicationRepo;
 use golem_common::model::account::AccountId;
@@ -27,6 +28,8 @@ use tracing::error;
 pub enum ApplicationError {
     #[error("Application not found for id {0}")]
     ApplicationNotFound(ApplicationId),
+    #[error("Parent account not found {0}")]
+    ParentAccountNotFound(AccountId),
     #[error("{0}")]
     Unauthorized(AuthorizationError),
     #[error(transparent)]
@@ -37,13 +40,14 @@ impl SafeDisplay for ApplicationError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::ApplicationNotFound(_) => self.to_string(),
+            Self::ParentAccountNotFound(_) => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
 }
 
-error_forwarding!(ApplicationError, RepoError);
+error_forwarding!(ApplicationError, RepoError, AccountError);
 
 impl From<AuthorizationError> for ApplicationError {
     fn from(value: AuthorizationError) -> Self {
@@ -53,11 +57,18 @@ impl From<AuthorizationError> for ApplicationError {
 
 pub struct ApplicationService {
     application_repo: Arc<dyn ApplicationRepo>,
+    account_service: Arc<AccountService>,
 }
 
 impl ApplicationService {
-    pub fn new(application_repo: Arc<dyn ApplicationRepo>) -> Self {
-        Self { application_repo }
+    pub fn new(
+        application_repo: Arc<dyn ApplicationRepo>,
+        account_service: Arc<AccountService>,
+    ) -> Self {
+        Self {
+            application_repo,
+            account_service,
+        }
     }
 
     pub async fn create(
@@ -66,6 +77,16 @@ impl ApplicationService {
         data: NewApplicationData,
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
+        self.account_service
+            .get(&account_id, auth)
+            .await
+            .map_err(|err| match err {
+                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                    ApplicationError::ParentAccountNotFound(account_id.clone())
+                }
+                other => other.into(),
+            })?;
+
         auth.authorize_account_action(&account_id, AccountAction::CreateApplication)?;
 
         // TODO: dedicated create function
@@ -84,7 +105,7 @@ impl ApplicationService {
     ) -> Result<Application, ApplicationError> {
         let application: Application = self
             .application_repo
-            .get_by_id(&application_id.0)
+            .get_by_id(&application_id.0, false)
             .await?
             .ok_or(ApplicationError::ApplicationNotFound(
                 application_id.clone(),

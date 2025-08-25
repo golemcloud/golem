@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::WithEnvironmentAuth;
+use crate::model::WithEnvironmentCtx;
 use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use anyhow::anyhow;
@@ -83,8 +83,8 @@ impl EnvironmentService {
         &self,
         environment_id: &EnvironmentId,
         auth: &AuthCtx,
-    ) -> Result<WithEnvironmentAuth<Environment>, EnvironmentError> {
-        let environment: WithEnvironmentAuth<Environment> = self
+    ) -> Result<WithEnvironmentCtx<Environment>, EnvironmentError> {
+        let environment: WithEnvironmentCtx<Environment> = self
             .environment_repo
             .get_by_id(
                 &environment_id.0,
@@ -109,14 +109,16 @@ impl EnvironmentService {
     }
 
     /// Convenience method for fetching environment and checking permissions against it.
-    /// This is mostly for checking access to subresources of an enviornment
+    /// This is mostly for checking access to subresources of an enviornment.
+    /// Note that lack of permissions to see the parent is already mapped to EnvironmentNotFound here,
+    /// so an Unauthorized error comes purely from checking the provided action.
     pub async fn get_and_authorize(
         &self,
         environment_id: &EnvironmentId,
         action: EnvironmentAction,
         auth: &AuthCtx,
-    ) -> Result<WithEnvironmentAuth<Environment>, EnvironmentError> {
-        let environment: WithEnvironmentAuth<Environment> = self.get(environment_id, auth).await?;
+    ) -> Result<WithEnvironmentCtx<Environment>, EnvironmentError> {
+        let environment: WithEnvironmentCtx<Environment> = self.get(environment_id, auth).await?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,

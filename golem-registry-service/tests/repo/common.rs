@@ -127,7 +127,7 @@ pub async fn test_application_ensure(deps: &Deps) {
 
     let app = deps
         .application_repo
-        .get_by_name(&owner.revision.account_id, &app_name)
+        .get_by_name(&owner.revision.account_id, &app_name, false)
         .await
         .unwrap();
     assert!(app.is_none());
@@ -163,7 +163,7 @@ pub async fn test_application_ensure(deps: &Deps) {
 
     let app_3 = deps
         .application_repo
-        .get_by_name(&owner.revision.account_id, &app_name)
+        .get_by_name(&owner.revision.account_id, &app_name, false)
         .await
         .unwrap();
     let_assert!(Some(app_3) = app_3);
@@ -215,13 +215,13 @@ pub async fn test_application_delete(deps: &Deps) {
 
     let get_by_id = deps
         .application_repo
-        .get_by_id(&app.application_id)
+        .get_by_id(&app.application_id, false)
         .await
         .unwrap();
     assert!(get_by_id.is_none());
     let get_by_name = deps
         .application_repo
-        .get_by_name(&user.revision.account_id, &app.name)
+        .get_by_name(&user.revision.account_id, &app.name, false)
         .await
         .unwrap();
     assert!(get_by_name.is_none());
@@ -531,7 +531,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let env = deps.create_env(&app.application_id).await;
     let app = deps
         .application_repo
-        .get_by_id(&env.application_id)
+        .get_by_id(&env.application_id, false)
         .await
         .unwrap()
         .unwrap();

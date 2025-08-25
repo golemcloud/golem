@@ -116,7 +116,6 @@ impl ComponentService {
                 )))
             })?;
 
-        // TODO: Bubble up limitexceeded
         let mut account_usage = self
             .account_usage_service
             .add_component(&environment.owner_account_id, wasm.len() as i64)

@@ -13,13 +13,11 @@
 // limitations under the License.
 
 use super::plan::{PlanError, PlanService};
-use super::token::{TokenError, TokenService};
 use crate::config::AccountsConfig;
 use crate::model::auth::{AuthCtx, AuthorizationError, SYSTEM_ACCOUNT_ID};
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use anyhow::anyhow;
-use chrono::{DateTime, Utc};
 use golem_common::model::PlanId;
 use golem_common::model::account::{Account, AccountId, NewAccountData, UpdatedAccountData};
 use golem_common::model::auth::{AccountAction, AccountRole, GlobalAction, TokenSecret};
@@ -54,12 +52,11 @@ impl SafeDisplay for AccountError {
     }
 }
 
-error_forwarding!(AccountError, PlanError, TokenError, AccountRepoError);
+error_forwarding!(AccountError, PlanError, AccountRepoError);
 
 pub struct AccountService {
     account_repo: Arc<dyn AccountRepo>,
     plan_service: Arc<PlanService>,
-    token_service: Arc<TokenService>,
     config: AccountsConfig,
 }
 
@@ -67,13 +64,11 @@ impl AccountService {
     pub fn new(
         account_repo: Arc<dyn AccountRepo>,
         plan_service: Arc<PlanService>,
-        token_service: Arc<TokenService>,
         config: AccountsConfig,
     ) -> Self {
         Self {
             account_repo,
             plan_service,
-            token_service,
             config,
         }
     }
@@ -83,37 +78,30 @@ impl AccountService {
             let account_id = AccountId(account.id);
             let existing_account = self.get_optional(&account_id, auth).await?;
 
-            match existing_account {
-                None => {
-                    info!("Creating initial account {} with id {}", name, account.id);
-                    self.create_internal(
-                        account_id.clone(),
-                        NewAccountData {
-                            name: account.name.clone(),
-                            email: account.email.clone(),
-                        },
-                        vec![account.role.clone()],
-                        PlanId(account.plan_id),
-                        auth,
-                    )
-                    .await?;
-                    // TODO: Deal with failure here
-                    self.token_service
-                        .create_known_secret(
-                            account_id,
-                            TokenSecret(account.token),
-                            DateTime::<Utc>::MAX_UTC,
-                            auth,
-                        )
-                        .await?;
-                }
-                Some(_existing_account) => {
-                    // TODO: We need to update the account here
-                    // TODO: We need to rotate the secret here
-                }
+            if existing_account.is_none() {
+                info!("Creating initial account {} with id {}", name, account.id);
+                self.create_internal(
+                    account_id.clone(),
+                    NewAccountData {
+                        name: account.name.clone(),
+                        email: account.email.clone(),
+                    },
+                    vec![account.role.clone()],
+                    PlanId(account.plan_id),
+                    auth,
+                )
+                .await?;
             }
         }
         Ok(())
+    }
+
+    pub(super) fn initial_tokens(&self) -> Vec<(AccountId, TokenSecret)> {
+        let mut result = Vec::with_capacity(self.config.accounts.len());
+        for account in self.config.accounts.values() {
+            result.push((AccountId(account.id), TokenSecret(account.token)));
+        }
+        result
     }
 
     pub async fn create(

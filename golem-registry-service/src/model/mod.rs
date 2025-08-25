@@ -22,7 +22,7 @@ use golem_common::model::auth::EnvironmentRole;
 use std::collections::HashSet;
 
 #[derive(Debug)]
-pub struct WithEnvironmentAuth<A> {
+pub struct WithEnvironmentCtx<A> {
     pub value: A,
 
     pub owner_account_id: AccountId,

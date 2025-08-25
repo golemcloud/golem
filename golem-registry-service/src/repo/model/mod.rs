@@ -108,7 +108,7 @@ where
 }
 
 #[derive(Debug, Clone, FromRow)]
-pub struct RecordWithEnvironmentAuth<A> {
+pub struct RecordWithEnvironmentCtx<A> {
     #[sqlx(flatten)]
     pub value: A,
 

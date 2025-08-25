@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::RecordWithEnvironmentAuth;
+use super::RecordWithEnvironmentCtx;
 use super::environment_share::environment_roles_from_bit_vector;
-use crate::model::WithEnvironmentAuth;
+use crate::model::WithEnvironmentCtx;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::model::account::AccountId;
@@ -135,10 +135,10 @@ impl From<EnvironmentExtRevisionRecord> for Environment {
     }
 }
 
-impl From<RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>>
-    for WithEnvironmentAuth<Environment>
+impl From<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>
+    for WithEnvironmentCtx<Environment>
 {
-    fn from(record: RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>) -> Self {
+    fn from(record: RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>) -> Self {
         Self {
             value: record.value.into(),
             owner_account_id: AccountId(record.owner_account_id),

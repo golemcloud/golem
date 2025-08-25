@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::account::{AccountError, AccountService};
 use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::model::token::TokenRecord;
 use crate::repo::token::TokenRepo;
@@ -32,6 +33,8 @@ pub enum TokenError {
     TokenNotFound(TokenId),
     #[error("Token for secret not found")]
     TokenBySecretFound,
+    #[error("Parent account not found")]
+    ParentAccountNotFound(AccountId),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -44,21 +47,26 @@ impl SafeDisplay for TokenError {
             Self::TokenSecretAlreadyExists => self.to_string(),
             Self::TokenNotFound(_) => self.to_string(),
             Self::TokenBySecretFound => self.to_string(),
+            Self::ParentAccountNotFound(_) => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
 }
 
-error_forwarding!(TokenError, RepoError);
+error_forwarding!(TokenError, RepoError, AccountError);
 
 pub struct TokenService {
     token_repo: Arc<dyn TokenRepo>,
+    account_service: Arc<AccountService>,
 }
 
 impl TokenService {
-    pub fn new(token_repo: Arc<dyn TokenRepo>) -> Self {
-        Self { token_repo }
+    pub fn new(token_repo: Arc<dyn TokenRepo>, account_service: Arc<AccountService>) -> Self {
+        Self {
+            token_repo,
+            account_service,
+        }
     }
 
     pub async fn get(
@@ -68,12 +76,13 @@ impl TokenService {
     ) -> Result<TokenWithSecret, TokenError> {
         let token: TokenWithSecret = self
             .token_repo
-            .get_by_id(&token_id.0)
+            .get_by_id(&token_id.0, false)
             .await?
             .ok_or(TokenError::TokenNotFound(token_id.clone()))?
             .into();
 
-        auth.authorize_account_action(&token.account_id, AccountAction::ViewToken)?;
+        auth.authorize_account_action(&token.account_id, AccountAction::ViewToken)
+            .map_err(|_| TokenError::TokenNotFound(token_id.clone()))?;
 
         Ok(token)
     }
@@ -85,14 +94,29 @@ impl TokenService {
     ) -> Result<TokenWithSecret, TokenError> {
         let token: TokenWithSecret = self
             .token_repo
-            .get_by_secret(&secret.0)
+            .get_by_secret(&secret.0, false)
             .await?
             .ok_or(TokenError::TokenBySecretFound)?
             .into();
 
-        auth.authorize_account_action(&token.account_id, AccountAction::ViewToken)?;
+        auth.authorize_account_action(&token.account_id, AccountAction::ViewToken)
+            .map_err(|_| TokenError::TokenBySecretFound)?;
 
         Ok(token)
+    }
+
+    pub async fn get_optional_by_secret(
+        &self,
+        secret: &TokenSecret,
+        auth: &AuthCtx,
+    ) -> Result<Option<TokenWithSecret>, TokenError> {
+        self.get_by_secret(secret, auth)
+            .await
+            .map(Some)
+            .or_else(|err| match err {
+                TokenError::TokenBySecretFound => Ok(None),
+                other => Err(other),
+            })
     }
 
     pub async fn create(
@@ -101,6 +125,16 @@ impl TokenService {
         expires_at: DateTime<Utc>,
         auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
+        self.account_service
+            .get(&account_id, auth)
+            .await
+            .map_err(|err| match err {
+                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                    TokenError::ParentAccountNotFound(account_id.clone())
+                }
+                other => other.into(),
+            })?;
+
         auth.authorize_account_action(&account_id, AccountAction::CreateToken)?;
 
         let secret = TokenSecret::new_v4();
@@ -115,6 +149,16 @@ impl TokenService {
         expires_at: DateTime<Utc>,
         auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
+        self.account_service
+            .get(&account_id, auth)
+            .await
+            .map_err(|err| match err {
+                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                    TokenError::ParentAccountNotFound(account_id.clone())
+                }
+                other => other.into(),
+            })?;
+
         auth.authorize_account_action(&account_id, AccountAction::CreateKnownSecret)?;
 
         let created_at = Utc::now();
@@ -137,10 +181,21 @@ impl TokenService {
         Ok(record.into())
     }
 
+    pub async fn create_initial_tokens(&self, auth: &AuthCtx) -> Result<(), TokenError> {
+        for (account_id, secret) in self.account_service.initial_tokens() {
+            let existing = self.get_optional_by_secret(&secret, auth).await?;
+            if existing.is_none() {
+                self.create_known_secret(account_id, secret, DateTime::<Utc>::MAX_UTC, auth)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn delete(&self, token_id: &TokenId, auth: &AuthCtx) -> Result<(), TokenError> {
         let token: TokenWithSecret = self
             .token_repo
-            .get_by_id(&token_id.0)
+            .get_by_id(&token_id.0, false)
             .await?
             .ok_or(TokenError::TokenNotFound(token_id.clone()))?
             .into();

@@ -104,16 +104,19 @@ impl Services {
             .await
             .map_err(|e| e.into_anyhow())?;
 
-        let token_service = Arc::new(TokenService::new(repos.token_repo));
-
         let account_service = Arc::new(AccountService::new(
             repos.account_repo.clone(),
             plan_service.clone(),
-            token_service.clone(),
             config.accounts.clone(),
         ));
         account_service
             .create_initial_accounts(&bootstrap_auth)
+            .await
+            .map_err(|e| e.into_anyhow())?;
+
+        let token_service = Arc::new(TokenService::new(repos.token_repo, account_service.clone()));
+        token_service
+            .create_initial_tokens(&bootstrap_auth)
             .await
             .map_err(|e| e.into_anyhow())?;
 
@@ -122,7 +125,10 @@ impl Services {
             token_service.clone(),
         ));
 
-        let application_service = Arc::new(ApplicationService::new(repos.application_repo.clone()));
+        let application_service = Arc::new(ApplicationService::new(
+            repos.application_repo.clone(),
+            account_service.clone(),
+        ));
 
         let environment_service = Arc::new(EnvironmentService::new(repos.environment_repo.clone()));
 

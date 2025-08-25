@@ -165,7 +165,8 @@ impl From<ApplicationError> for ApiError {
         match value {
             ApplicationError::Unauthorized(inner) => inner.into(),
 
-            ApplicationError::ApplicationNotFound(_) => {
+            ApplicationError::ApplicationNotFound(_)
+            | ApplicationError::ParentAccountNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
@@ -264,7 +265,9 @@ impl From<TokenError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             TokenError::Unauthorized(inner) => inner.into(),
-            TokenError::TokenNotFound(_) => Self::NotFound(Json(ErrorBody { error, cause: None })),
+            TokenError::TokenNotFound(_) | TokenError::ParentAccountNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
             TokenError::TokenBySecretFound => {
                 Self::InternalError(Json(ErrorBody { error, cause: None }))
             }

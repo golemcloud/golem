@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::RecordWithEnvironmentAuth;
+use super::model::RecordWithEnvironmentCtx;
 use crate::repo::model::BindFields;
 pub use crate::repo::model::environment::{
     EnvironmentExtRevisionRecord, EnvironmentPluginInstallationRecord,
@@ -40,7 +40,7 @@ pub trait EnvironmentRepo: Send + Sync {
         actor: &Uuid,
         override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Option<RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>>>;
+    ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>>;
 
     async fn get_by_id(
         &self,
@@ -48,7 +48,7 @@ pub trait EnvironmentRepo: Send + Sync {
         actor: &Uuid,
         override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Option<RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>>>;
+    ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>>;
 
     async fn list_by_app(
         &self,
@@ -56,7 +56,7 @@ pub trait EnvironmentRepo: Send + Sync {
         actor: &Uuid,
         override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Vec<RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>>>;
+    ) -> RepoResult<Vec<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>>;
 
     async fn create(
         &self,
@@ -136,7 +136,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         actor: &Uuid,
         override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Option<RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>>> {
+    ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.repo
             .get_by_name(
                 application_id,
@@ -155,7 +155,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         actor: &Uuid,
         override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Option<RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>>> {
+    ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.repo
             .get_by_id(environment_id, actor, override_visibility, include_deleted)
             .instrument(Self::span_env(environment_id))
@@ -168,7 +168,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         actor: &Uuid,
         override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Vec<RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>>> {
+    ) -> RepoResult<Vec<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.repo
             .list_by_app(application_id, actor, override_visibility, include_deleted)
             .instrument(Self::span_env(application_id))
@@ -297,7 +297,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         actor: &Uuid,
         override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Option<RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>>> {
+    ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.with_ro("get_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -356,7 +356,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         actor: &Uuid,
         override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Option<RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>>> {
+    ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -413,7 +413,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         actor: &Uuid,
         override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Vec<RecordWithEnvironmentAuth<EnvironmentExtRevisionRecord>>> {
+    ) -> RepoResult<Vec<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.with_ro("list_by_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
