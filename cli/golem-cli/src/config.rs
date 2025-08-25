@@ -15,6 +15,7 @@
 use crate::model::Format;
 use anyhow::{anyhow, bail, Context};
 use chrono::{DateTime, Utc};
+use golem_client::model::TokenWithSecret;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -432,6 +433,18 @@ impl AuthenticationConfig {
             secret: AuthSecret(token),
         })
     }
+
+    pub fn from_token_with_secret(token_with_secret: TokenWithSecret) -> Self {
+        Self::OAuth2(OAuth2AuthenticationConfig {
+            data: Some(OAuth2AuthenticationData {
+                id: token_with_secret.id.0,
+                account_id: token_with_secret.account_id.0,
+                created_at: token_with_secret.created_at,
+                expires_at: token_with_secret.expires_at,
+                secret: token_with_secret.secret.0.into(),
+            }),
+        })
+    }
 }
 
 impl Default for AuthenticationConfig {
@@ -450,7 +463,7 @@ pub struct OAuth2AuthenticationConfig {
 #[serde(rename_all = "camelCase")]
 pub struct OAuth2AuthenticationData {
     pub id: Uuid,
-    pub account_id: String,
+    pub account_id: Uuid,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub secret: AuthSecret,
@@ -464,6 +477,12 @@ pub struct StaticAuthenticationConfig {
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct AuthSecret(pub Uuid);
+
+impl From<Uuid> for AuthSecret {
+    fn from(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+}
 
 impl Display for AuthSecret {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

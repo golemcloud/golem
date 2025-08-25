@@ -1543,17 +1543,19 @@ pub mod profile {
 
 pub mod cloud {
     use crate::command::cloud::account::AccountSubcommand;
-    use crate::command::cloud::project::ProjectSubcommand;
     use crate::command::cloud::token::TokenSubcommand;
     use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
     pub enum CloudSubcommand {
+        // TODO: atomic
+        /*
         /// Manage Cloud Projects
         Project {
             #[clap(subcommand)]
             subcommand: ProjectSubcommand,
         },
+        */
         /// Manage Cloud Account
         Account {
             #[clap(subcommand)]
@@ -1660,6 +1662,8 @@ pub mod cloud {
         }
     }
 
+    // TODO: atomic
+    /*
     pub mod project {
         use crate::command::cloud::project::plugin::ProjectPluginSubcommand;
         use crate::command::cloud::project::policy::PolicySubcommand;
@@ -1796,6 +1800,7 @@ pub mod cloud {
             }
         }
     }
+    */
 }
 
 pub mod server {

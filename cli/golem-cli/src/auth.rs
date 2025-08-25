@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{
-    AuthSecret, AuthenticationConfig, OAuth2AuthenticationConfig, OAuth2AuthenticationData,
-};
+use crate::config::{AuthenticationConfig, OAuth2AuthenticationData};
 use crate::config::{Config, ProfileName};
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::LogColorize;
 use anyhow::{anyhow, bail, Context};
 use colored::Colorize;
-use golem_client::api::{LoginClient, LoginClientLive};
-use golem_client::model::{Token, TokenWithSecret};
+use golem_client::api::{LoginClient, LoginClientLive, LoginPollOauth2WebflowError};
+use golem_client::model::{OAuth2Provider, OAuth2WebflowData, Token, TokenWithSecret};
 use golem_client::Security;
 use golem_common::model::account::AccountId;
+use golem_common::model::auth::TokenSecret;
 use indoc::printdoc;
 use std::path::Path;
 use tracing::info;
@@ -33,24 +32,32 @@ use uuid::Uuid;
 pub struct Authentication(pub TokenWithSecret);
 
 impl Authentication {
+    pub fn from_token_and_secret(token: Token, secret: TokenSecret) -> Self {
+        Self(TokenWithSecret {
+            id: token.id.into(),
+            secret,
+            account_id: token.account_id.into(),
+            created_at: token.created_at,
+            expires_at: token.expires_at,
+        })
+    }
+
+    pub fn from_oauth2_config(auth: OAuth2AuthenticationData) -> Self {
+        Self(TokenWithSecret {
+            id: auth.id.into(),
+            secret: auth.secret.0.into(),
+            account_id: auth.account_id.into(),
+            created_at: auth.created_at,
+            expires_at: auth.expires_at,
+        })
+    }
+
     pub fn header(&self) -> String {
-        token_header(&self.0.secret)
+        format!("bearer {}", self.0.secret)
     }
 
     pub fn account_id(&self) -> &AccountId {
         &self.0.account_id
-    }
-}
-
-impl From<OAuth2AuthenticationData> for Authentication {
-    fn from(value: OAuth2AuthenticationData) -> Self {
-        Authentication(TokenWithSecret {
-            id: value.id.into(),
-            account_id: value.account_id.into(),
-            created_at: value.created_at,
-            expires_at: value.expires_at,
-            secret: value.secret.0.into(),
-        })
     }
 }
 
@@ -70,13 +77,12 @@ impl Auth {
         config_dir: &Path,
         profile_name: &ProfileName,
     ) -> anyhow::Result<Authentication> {
-        if let Some(token_override) = token_override {
-            let secret = TokenSecret {
-                value: token_override,
-            };
-            let data = self.token_details(secret.clone()).await?;
-
-            Ok(Authentication(TokenWithSecret { data, secret }))
+        if let Some(secret) = token_override {
+            let secret: TokenSecret = secret.into();
+            Ok(Authentication::from_token_and_secret(
+                self.token_details(&secret).await?,
+                secret,
+            ))
         } else {
             self.profile_authentication(auth_config, config_dir, profile_name)
                 .await
@@ -85,7 +91,7 @@ impl Auth {
 
     fn save_auth(
         &self,
-        token: &UnsafeToken,
+        token: TokenWithSecret,
         profile_name: &ProfileName,
         config_dir: &Path,
     ) -> anyhow::Result<()> {
@@ -96,9 +102,7 @@ impl Auth {
 
         let mut profile = named_profile.profile;
 
-        profile.auth = AuthenticationConfig::OAuth2(OAuth2AuthenticationConfig {
-            data: Some(unsafe_token_to_auth_data(token)),
-        });
+        profile.auth = AuthenticationConfig::from_token_with_secret(token);
         Config::set_profile(profile_name.clone(), profile, config_dir)
             .with_context(|| "Failed to save auth token")?;
 
@@ -113,7 +117,7 @@ impl Auth {
         let data = self.start_oauth2().await?;
         inform_user(&data);
         let token = self.complete_oauth2(data.state).await?;
-        self.save_auth(&token, profile_name, config_dir)?;
+        self.save_auth(token.clone(), profile_name, config_dir)?;
         Ok(Authentication(token))
     }
 
@@ -125,13 +129,15 @@ impl Auth {
     ) -> anyhow::Result<Authentication> {
         match auth_config {
             AuthenticationConfig::Static(inner) => {
-                let secret: TokenSecret = inner.secret.into();
-                let data = self.token_details(secret.clone()).await?;
-                Ok(Authentication(UnsafeToken { data, secret }))
+                let secret: TokenSecret = inner.secret.0.into();
+                Ok(Authentication::from_token_and_secret(
+                    self.token_details(&secret).await?,
+                    secret,
+                ))
             }
             AuthenticationConfig::OAuth2(inner) => {
                 if let Some(data) = &inner.data {
-                    Ok(data.into())
+                    Ok(Authentication::from_oauth2_config(data.clone()))
                 } else {
                     self.oauth2(profile_name, config_dir).await
                 }
@@ -139,25 +145,25 @@ impl Auth {
         }
     }
 
-    async fn token_details(&self, token_secret: TokenSecret) -> anyhow::Result<Token> {
+    async fn token_details(&self, token_secret: &TokenSecret) -> anyhow::Result<Token> {
         info!("Getting token info");
         let mut context = self.login_client.context.clone();
-        context.security_token = Security::Bearer(token_secret.value.to_string());
+        context.security_token = Security::Bearer(token_secret.to_string());
 
         let client = LoginClientLive { context };
 
         client.current_login_token().await.map_service_error()
     }
 
-    async fn start_oauth2(&self) -> anyhow::Result<WebFlowAuthorizeUrlResponse> {
+    async fn start_oauth2(&self) -> anyhow::Result<OAuth2WebflowData> {
         info!("Start OAuth2 workflow");
         self.login_client
-            .oauth_2_web_flow_start("github", Some("https://golem.cloud"))
+            .start_oauth_2_webflow(&OAuth2Provider::Github, Some("https://golem.cloud"))
             .await
             .map_service_error()
     }
 
-    async fn complete_oauth2(&self, state: String) -> anyhow::Result<UnsafeToken> {
+    async fn complete_oauth2(&self, state: Uuid) -> anyhow::Result<TokenWithSecret> {
         use tokio::time::{sleep, Duration};
 
         info!("Complete OAuth2 workflow");
@@ -166,11 +172,11 @@ impl Auth {
         let delay = Duration::from_secs(1);
 
         loop {
-            let status = self.login_client.oauth_2_web_flow_poll(&state).await;
+            let status = self.login_client.poll_oauth_2_webflow(&state).await;
             match status {
                 Ok(token) => return Ok(token),
                 Err(err) => match err {
-                    golem_client::Error::Item(LoginOauth2WebFlowPollError::Error202(_)) => {
+                    golem_client::Error::Item(LoginPollOauth2WebflowError::Error202(_)) => {
                         attempts += 1;
                         if attempts >= max_attempts {
                             bail!("OAuth2 workflow timeout")
@@ -185,7 +191,7 @@ impl Auth {
     }
 }
 
-fn inform_user(data: &WebFlowAuthorizeUrlResponse) {
+fn inform_user(data: &OAuth2WebflowData) {
     let url = &data.url.underline();
 
     printdoc! {
@@ -202,18 +208,4 @@ fn inform_user(data: &WebFlowAuthorizeUrlResponse) {
     }
 
     println!("Waiting for authentication...");
-}
-
-fn token_header(secret: &TokenSecret) -> String {
-    format!("bearer {}", secret.value)
-}
-
-fn unsafe_token_to_auth_data(value: &UnsafeToken) -> OAuth2AuthenticationData {
-    OAuth2AuthenticationData {
-        id: value.data.id,
-        account_id: value.data.account_id.to_string(),
-        created_at: value.data.created_at,
-        expires_at: value.data.expires_at,
-        secret: AuthSecret(value.secret.value),
-    }
 }

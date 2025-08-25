@@ -39,6 +39,7 @@ use clap::{Arg, Error};
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::PluginTypeSpecificDefinition;
+use golem_common::model::account::AccountId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::{
     AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
@@ -230,27 +231,6 @@ impl Display for ProjectReference {
                 project_name,
             } => write!(f, "{}/{}", account_email, project_name.0),
         }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
-pub struct ComponentName(pub String);
-
-impl From<&str> for ComponentName {
-    fn from(name: &str) -> Self {
-        ComponentName(name.to_string())
-    }
-}
-
-impl From<String> for ComponentName {
-    fn from(name: String) -> Self {
-        ComponentName(name)
-    }
-}
-
-impl Display for ComponentName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
     }
 }
 

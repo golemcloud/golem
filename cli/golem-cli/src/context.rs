@@ -50,6 +50,7 @@ use golem_client::api::{AccountClient, AccountSummaryClientLive as AccountSummar
 use golem_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
 use golem_client::{Context as ContextCloud, Security};
 use golem_common::model::account::AccountId;
+use golem_common::model::auth::TokenSecret;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
@@ -350,11 +351,11 @@ impl Context {
     }
 
     pub async fn account_id(&self) -> anyhow::Result<AccountId> {
-        Ok(self.golem_clients().await?.account_id())
+        Ok(self.golem_clients().await?.account_id().clone())
     }
 
-    pub async fn auth_token(&self) -> anyhow::Result<String> {
-        Ok(self.golem_clients().await?.auth_token())
+    pub async fn auth_token(&self) -> anyhow::Result<TokenSecret> {
+        Ok(self.golem_clients().await?.auth_token().clone())
     }
 
     pub async fn app_context_lock(
@@ -653,12 +654,12 @@ impl GolemClients {
         })
     }
 
-    pub fn account_id(&self) -> AccountId {
+    pub fn account_id(&self) -> &AccountId {
         self.authentication.account_id()
     }
 
-    pub fn auth_token(&self) -> String {
-        self.authentication.0.secret.0.to_string()
+    pub fn auth_token(&self) -> &TokenSecret {
+        &self.authentication.0.secret
     }
 }
 

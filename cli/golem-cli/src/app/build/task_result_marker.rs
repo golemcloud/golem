@@ -16,10 +16,11 @@ use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash
 use crate::fs;
 use crate::log::log_warn_action;
 use crate::model::app::{AppComponentName, DependentComponent};
+use crate::model::app_raw;
 use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS};
-use crate::model::ProjectId;
-use crate::model::{app_raw, ComponentName};
 use anyhow::{anyhow, bail, Context};
+use golem_common::model::component::ComponentName;
+use golem_common::model::environment::EnvironmentId;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -201,7 +202,7 @@ impl TaskResultMarkerHashSource for AddMetadataMarkerHash<'_> {
 }
 
 pub struct GetServerComponentHash<'a> {
-    pub project_id: Option<&'a ProjectId>,
+    pub environment_id: Option<&'a EnvironmentId>,
     pub component_name: &'a ComponentName,
     pub component_version: u64,
     // NOTE: use None for querying
@@ -216,7 +217,7 @@ impl TaskResultMarkerHashSource for GetServerComponentHash<'_> {
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(Some(format!(
             "{:?}#{}#{}",
-            self.project_id, self.component_name, self.component_version
+            self.environment_id, self.component_name, self.component_version
         )))
     }
 
@@ -229,7 +230,7 @@ impl TaskResultMarkerHashSource for GetServerComponentHash<'_> {
 }
 
 pub struct GetServerIfsFileHash<'a> {
-    pub project_id: Option<&'a ProjectId>,
+    pub environment_id: Option<&'a EnvironmentId>,
     pub component_name: &'a ComponentName,
     pub component_version: u64,
     pub target_path: &'a str,
@@ -245,7 +246,7 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(Some(format!(
             "{:?}#{}#{}#{}",
-            self.project_id, self.component_name, self.component_version, self.target_path
+            self.environment_id, self.component_name, self.component_version, self.target_path
         )))
     }
 

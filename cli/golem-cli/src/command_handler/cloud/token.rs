@@ -46,7 +46,7 @@ impl CloudTokenCommandHandler {
 
         let tokens = clients
             .token
-            .get_tokens(&clients.account_id().0)
+            .get_account_tokens(&clients.account_id().0)
             .await
             .map_service_error()?;
 
