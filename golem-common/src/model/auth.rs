@@ -114,13 +114,16 @@ pub enum AccountAction {
     CreateToken,
     CreateKnownSecret,
     DeleteToken,
-    ViewAccount
+    ViewAccount,
+    UpdateUsage
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
 pub enum EnvironmentAction {
     CreateComponent,
     UpdateComponent,
+    ViewComponent,
+    GetComponentWasm
 }
 
 // #[cfg(feature = "protobuf")]

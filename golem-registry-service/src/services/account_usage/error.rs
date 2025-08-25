@@ -15,6 +15,7 @@
 use golem_common::model::account::AccountId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
+use crate::model::auth::AuthorizationError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AccountUsageError {
@@ -27,6 +28,8 @@ pub enum AccountUsageError {
     #[error("Account {0} not found")]
     AccountNotfound(AccountId),
     #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
+    #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
 
@@ -35,6 +38,7 @@ impl SafeDisplay for AccountUsageError {
         match self {
             Self::LimitExceeded { .. } => self.to_string(),
             Self::AccountNotfound(_) => self.to_string(),
+            Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }

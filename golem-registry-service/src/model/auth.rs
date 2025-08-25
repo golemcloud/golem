@@ -19,6 +19,7 @@ use golem_common::model::auth::{
 use std::collections::HashSet;
 use std::hash::Hash;
 use uuid::uuid;
+use golem_common::SafeDisplay;
 
 pub const SYSTEM_ACCOUNT_ID: AccountId = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
 
@@ -30,6 +31,12 @@ pub enum AuthorizationError {
     AccountActionNotAllowed(AccountAction),
     #[error("The environment action {0} is not allowed")]
     EnvironmentActionNotAllowed(EnvironmentAction),
+}
+
+impl SafeDisplay for AuthorizationError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
 }
 
 #[derive(Debug)]

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::WithEnvironmentAuth;
-use crate::model::auth::AuthCtx;
+use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use anyhow::anyhow;
 use golem_common::model::account::AccountId;
@@ -24,11 +24,14 @@ use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::error;
+use golem_common::model::auth::EnvironmentAction;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentError {
     #[error("Environment not found for id {0}")]
     EnvironmentNotFound(EnvironmentId),
+    #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -37,6 +40,7 @@ impl SafeDisplay for EnvironmentError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::EnvironmentNotFound(_) => self.to_string(),
+            Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -95,5 +99,31 @@ impl EnvironmentService {
             .into();
 
         Ok(result)
+    }
+
+    // Convenience method for fetching environment and checking permissions against it
+    pub async fn get_and_authorize(
+        &self,
+        environment_id: &EnvironmentId,
+        action: EnvironmentAction,
+        auth: &AuthCtx,
+    ) -> Result<WithEnvironmentAuth<Environment>, EnvironmentError> {
+        let environment: WithEnvironmentAuth<Environment> = self
+            .environment_repo
+            .get_by_id(
+                &environment_id.0,
+                &auth.account_id.0,
+                auth.should_override_storage_visibility_rules(),
+                false,
+            )
+            .await?
+            .ok_or(EnvironmentError::EnvironmentNotFound(
+                environment_id.clone(),
+            ))?
+            .into();
+
+        auth.authorize_environment_action(&environment.owner_account_id, &environment.roles_from_shares, action)?;
+
+        Ok(environment)
     }
 }

@@ -24,22 +24,13 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentId, PluginInstallationId};
-use golem_common::{SafeDisplay, error_forwarding};
+use golem_common::{error_forwarding, IntoAnyhow, SafeDisplay};
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
     #[error("Component already exists: {0}")]
     AlreadyExists(ComponentId),
-    #[error("Unknown component id: {0}")]
-    UnknownComponentId(ComponentId),
-    #[error("Component {component_name} not found in environment {environment_id}")]
-    UnknownEnvironmentComponentName {
-        environment_id: EnvironmentId,
-        component_name: ComponentName,
-    },
-    #[error("Unknown versioned component id: {0}")]
-    UnknownVersionedComponentId(VersionedComponentId),
     #[error(transparent)]
     ComponentProcessingError(#[from] ComponentProcessingError),
     #[error("Malformed component archive: {message}")]
@@ -83,6 +74,8 @@ pub enum ComponentError {
     PluginInstallationNotFound {
         installation_id: PluginInstallationId,
     },
+    #[error("Requested component not found")]
+    NotFound,
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -93,9 +86,6 @@ impl SafeDisplay for ComponentError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::AlreadyExists(_) => self.to_string(),
-            Self::UnknownComponentId(_) => self.to_string(),
-            Self::UnknownEnvironmentComponentName { .. } => self.to_string(),
-            Self::UnknownVersionedComponentId(_) => self.to_string(),
             Self::ComponentProcessingError(inner) => inner.to_safe_string(),
             Self::MalformedComponentArchive { .. } => self.to_string(),
             Self::InitialComponentFileNotFound { .. } => self.to_string(),
@@ -108,6 +98,7 @@ impl SafeDisplay for ComponentError {
             Self::ConcurrentUpdate => self.to_string(),
             Self::InvalidCurrentRevision => self.to_string(),
             Self::PluginInstallationNotFound { .. } => self.to_string(),
+            Self::NotFound => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -117,27 +108,16 @@ impl SafeDisplay for ComponentError {
 error_forwarding!(
     ComponentError,
     RepoError,
-    EnvironmentError,
     ApplicationError,
-    ComponentRepoError
+    ComponentRepoError,
+    AccountUsageError
 );
 
-impl From<AccountUsageError> for ComponentError {
-    fn from(value: AccountUsageError) -> Self {
+impl From<EnvironmentError> for ComponentError {
+    fn from(value: EnvironmentError) -> Self {
         match value {
-            AccountUsageError::LimitExceeded {
-                limit_name,
-                limit_value,
-                current_value,
-            } => Self::LimitExceeded {
-                limit_name,
-                limit_value,
-                current_value,
-            },
-            AccountUsageError::InternalError(inner) => {
-                Self::InternalError(inner.context("AccountUsageError"))
-            }
-            _ => Self::InternalError(anyhow::Error::from(value).context("AccountUsageError")),
+            EnvironmentError::EnvironmentNotFound(environment_id) => Self::NotFound,
+            _ => Self::InternalError(value.into_anyhow().context("EnvironmentError")),
         }
     }
 }
