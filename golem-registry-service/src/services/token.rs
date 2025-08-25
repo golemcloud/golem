@@ -61,7 +61,11 @@ impl TokenService {
         Self { token_repo }
     }
 
-    pub async fn get(&self, token_id: &TokenId, auth: &AuthCtx) -> Result<TokenWithSecret, TokenError> {
+    pub async fn get(
+        &self,
+        token_id: &TokenId,
+        auth: &AuthCtx,
+    ) -> Result<TokenWithSecret, TokenError> {
         let token: TokenWithSecret = self
             .token_repo
             .get_by_id(&token_id.0)
@@ -71,10 +75,14 @@ impl TokenService {
 
         auth.authorize_account_action(&token.account_id, AccountAction::ViewToken)?;
 
-        Ok(token.into())
+        Ok(token)
     }
 
-    pub async fn get_by_secret(&self, secret: &TokenSecret, auth: &AuthCtx) -> Result<TokenWithSecret, TokenError> {
+    pub async fn get_by_secret(
+        &self,
+        secret: &TokenSecret,
+        auth: &AuthCtx,
+    ) -> Result<TokenWithSecret, TokenError> {
         let token: TokenWithSecret = self
             .token_repo
             .get_by_secret(&secret.0)

@@ -112,7 +112,10 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
         include_deleted: bool,
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
         let span = Self::span_email(email);
-        self.repo.get_by_email(email, include_deleted).instrument(span).await
+        self.repo
+            .get_by_email(email, include_deleted)
+            .instrument(span)
+            .await
     }
 }
 
@@ -249,7 +252,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         account_id: &Uuid,
-        include_deleted: bool
+        include_deleted: bool,
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
         let result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(

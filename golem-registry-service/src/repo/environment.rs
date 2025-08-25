@@ -218,10 +218,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         include_deleted: bool,
     ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
         self.repo
-            .get_current_plugin_installations(
-                environment_id,
-                include_deleted,
-            )
+            .get_current_plugin_installations(environment_id, include_deleted)
             .instrument(Self::span_env(environment_id))
             .await
     }

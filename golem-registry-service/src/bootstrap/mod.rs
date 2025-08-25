@@ -128,7 +128,7 @@ impl Services {
 
         let environment_share_service = Arc::new(EnvironmentShareService::new(
             repos.environment_share_repo.clone(),
-            environment_service.clone()
+            environment_service.clone(),
         ));
 
         let component_service = Arc::new(ComponentService::new(

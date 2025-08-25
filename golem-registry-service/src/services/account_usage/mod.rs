@@ -19,8 +19,6 @@ use crate::services::account_usage::error::AccountUsageError;
 use golem_common::model::account::AccountId;
 use std::sync::Arc;
 use tracing::error;
-use crate::model::auth::AuthCtx;
-use golem_common::model::auth::AccountAction;
 
 pub mod error;
 
@@ -65,7 +63,7 @@ impl AccountUsageService {
 
     pub async fn add_application(
         &self,
-        account_id: &AccountId
+        account_id: &AccountId,
     ) -> Result<AccountUsage, AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalAppCount))
@@ -78,7 +76,7 @@ impl AccountUsageService {
 
     pub async fn add_environment(
         &self,
-        account_id: &AccountId
+        account_id: &AccountId,
     ) -> Result<AccountUsage, AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalEnvCount))
@@ -92,7 +90,7 @@ impl AccountUsageService {
     pub async fn add_component(
         &self,
         account_id: &AccountId,
-        component_size_bytes: i64
+        component_size_bytes: i64,
     ) -> Result<AccountUsage, AccountUsageError> {
         let mut account_usage = self.get_account_usage(account_id, None).await?;
 
@@ -109,7 +107,7 @@ impl AccountUsageService {
     pub async fn add_component_version(
         &self,
         account_id: &AccountId,
-        component_size_bytes: i64
+        component_size_bytes: i64,
     ) -> Result<AccountUsage, AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalComponentStorageBytes))
@@ -127,7 +125,7 @@ impl AccountUsageService {
     async fn get_account_usage(
         &self,
         account_id: &AccountId,
-        usage_type: Option<UsageType>
+        usage_type: Option<UsageType>,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
         let usage = match usage_type {
             Some(usage_type) => {

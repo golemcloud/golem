@@ -64,11 +64,7 @@ impl TokensApi {
         record.result(response)
     }
 
-    async fn get_token_internal(
-        &self,
-        token_id: TokenId,
-        auth: AuthCtx,
-    ) -> ApiResult<Json<Token>> {
+    async fn get_token_internal(&self, token_id: TokenId, auth: AuthCtx) -> ApiResult<Json<Token>> {
         let result = self.token_service.get(&token_id, &auth).await?;
 
         Ok(Json(result.without_secret()))

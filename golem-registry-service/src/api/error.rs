@@ -215,8 +215,6 @@ impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            ComponentError::Unauthorized(inner) => inner.into(),
-
             ComponentError::LimitExceeded { .. } => Self::BadRequest(Json(ErrorsBody {
                 errors: vec![error],
                 cause: None,
@@ -247,7 +245,9 @@ impl From<ComponentError> for ApiError {
 
             ComponentError::NotFound
             | ComponentError::ParentEnvironmentNotFound(_)
-            | ComponentError::PluginNotFound { .. } => Self::NotFound(Json(ErrorBody { error, cause: None })),
+            | ComponentError::PluginNotFound { .. } => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
 
             ComponentError::Unauthorized(inner) => inner.into(),
 
@@ -306,7 +306,8 @@ impl From<EnvironmentShareError> for ApiError {
             | EnvironmentShareError::ShareForAccountAlreadyExists => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
-            EnvironmentShareError::EnvironmentShareNotFound(_) | EnvironmentShareError::ParentEnvironmentNotFound(_) => {
+            EnvironmentShareError::EnvironmentShareNotFound(_)
+            | EnvironmentShareError::ParentEnvironmentNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
             EnvironmentShareError::Unauthorized(inner) => inner.into(),

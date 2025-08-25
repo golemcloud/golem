@@ -18,13 +18,13 @@ use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use anyhow::anyhow;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
+use golem_common::model::auth::EnvironmentAction;
 use golem_common::model::environment::{Environment, EnvironmentId, NewEnvironmentData};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::error;
-use golem_common::model::auth::EnvironmentAction;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentError {
@@ -98,9 +98,12 @@ impl EnvironmentService {
             ))?
             .into();
 
-        auth
-            .authorize_environment_action(&environment.owner_account_id, &environment.roles_from_shares, EnvironmentAction::ViewEnvironment)
-            .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id.clone()))?;
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_shares,
+            EnvironmentAction::ViewEnvironment,
+        )
+        .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id.clone()))?;
 
         Ok(environment)
     }
@@ -115,7 +118,11 @@ impl EnvironmentService {
     ) -> Result<WithEnvironmentAuth<Environment>, EnvironmentError> {
         let environment: WithEnvironmentAuth<Environment> = self.get(environment_id, auth).await?;
 
-        auth.authorize_environment_action(&environment.owner_account_id, &environment.roles_from_shares, action)?;
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_shares,
+            action,
+        )?;
 
         Ok(environment)
     }

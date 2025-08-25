@@ -69,22 +69,22 @@ impl AuthService {
             Err(AuthError::CouldNotAuthenticate)?
         };
 
-        let account =
-            self.account_service
-                .get(&token.account_id, &AuthCtx::system())
-                .await
-                .map_err(|err| match err {
-                    // This covers the account being deleted
-                    AccountError::AccountNotFound(_) => AuthError::CouldNotAuthenticate,
-                    other => other.into(),
-                })?;
+        let account = self
+            .account_service
+            .get(&token.account_id, &AuthCtx::system())
+            .await
+            .map_err(|err| match err {
+                // This covers the account being deleted
+                AccountError::AccountNotFound(_) => AuthError::CouldNotAuthenticate,
+                other => other.into(),
+            })?;
 
         let account_roles: HashSet<AccountRole> = HashSet::from_iter(account.roles.clone());
 
         Ok(AuthCtx {
             account_id: account.id,
             account_roles,
-            account_plan_id: Some(account.plan_id)
+            account_plan_id: Some(account.plan_id),
         })
     }
 }

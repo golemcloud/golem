@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::SafeDisplay;
+use golem_common::model::PlanId;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{
     AccountAction, AccountRole, EnvironmentAction, EnvironmentRole, GlobalAction, PlanAction,
@@ -19,8 +21,6 @@ use golem_common::model::auth::{
 use std::collections::HashSet;
 use std::hash::Hash;
 use uuid::uuid;
-use golem_common::SafeDisplay;
-use golem_common::model::PlanId;
 
 pub const SYSTEM_ACCOUNT_ID: AccountId = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
 
@@ -69,14 +69,10 @@ impl AuthCtx {
 
     pub fn authorize_global_action(&self, action: GlobalAction) -> Result<(), AuthorizationError> {
         let is_allowed = match action {
-            GlobalAction::CreateAccount => has_any_role(
-                &self.account_roles,
-                &[AccountRole::Admin]
-            ),
-            GlobalAction::GetDefaultPlan => has_any_role(
-                &self.account_roles,
-                &[AccountRole::Admin]
-            ),
+            GlobalAction::CreateAccount => has_any_role(&self.account_roles, &[AccountRole::Admin]),
+            GlobalAction::GetDefaultPlan => {
+                has_any_role(&self.account_roles, &[AccountRole::Admin])
+            }
         };
 
         if !is_allowed {
@@ -86,17 +82,23 @@ impl AuthCtx {
         Ok(())
     }
 
-    pub fn authorize_plan_action(&self, plan_id: &PlanId, action: PlanAction) -> Result<(), AuthorizationError> {
+    pub fn authorize_plan_action(
+        &self,
+        plan_id: &PlanId,
+        action: PlanAction,
+    ) -> Result<(), AuthorizationError> {
         match action {
             PlanAction::ViewPlan => {
                 // Users are allowed to see their own plan
-                if let Some(account_plan_id) = &self.account_plan_id && account_plan_id == plan_id {
-                    return Ok(())
+                if let Some(account_plan_id) = &self.account_plan_id
+                    && account_plan_id == plan_id
+                {
+                    return Ok(());
                 }
 
                 // admins are allowed to see all plans
                 if has_any_role(&self.account_roles, &[AccountRole::Admin]) {
-                    return Ok(())
+                    return Ok(());
                 }
 
                 Err(AuthorizationError::PlanActionNotAllowed(action))
@@ -107,7 +109,6 @@ impl AuthCtx {
                     Ok(())
                 } else {
                     Err(AuthorizationError::PlanActionNotAllowed(action))
-
                 }
             }
         }
@@ -124,42 +125,21 @@ impl AuthCtx {
         };
 
         let is_allowed = match action {
-            AccountAction::ViewAccount => has_any_role(
-                &self.account_roles,
-                &[AccountRole::Admin]
-            ),
-            AccountAction::UpdateAccount =>  has_any_role(
-                &self.account_roles,
-                &[AccountRole::Admin]
-            ),
-            AccountAction::CreateApplication =>  has_any_role(
-                &self.account_roles,
-                &[AccountRole::Admin]
-            ),
-            AccountAction::SetRoles =>  has_any_role(
-                &self.account_roles,
-                &[AccountRole::Admin]
-            ),
-            AccountAction::ViewToken =>  has_any_role(
-                &self.account_roles,
-                &[AccountRole::Admin]
-            ),
-            AccountAction::CreateToken =>  has_any_role(
-                &self.account_roles,
-                &[AccountRole::Admin]
-            ),
-            AccountAction::DeleteToken =>  has_any_role(
-                &self.account_roles,
-                &[AccountRole::Admin]
-            ),
-            AccountAction::CreateKnownSecret =>  has_any_role(
-                &self.account_roles,
-                &[AccountRole::Admin]
-            ),
-            AccountAction::UpdateUsage =>  has_any_role(
-                &self.account_roles,
-                &[AccountRole::Admin]
-            ),
+            AccountAction::ViewAccount => has_any_role(&self.account_roles, &[AccountRole::Admin]),
+            AccountAction::UpdateAccount => {
+                has_any_role(&self.account_roles, &[AccountRole::Admin])
+            }
+            AccountAction::CreateApplication => {
+                has_any_role(&self.account_roles, &[AccountRole::Admin])
+            }
+            AccountAction::SetRoles => has_any_role(&self.account_roles, &[AccountRole::Admin]),
+            AccountAction::ViewToken => has_any_role(&self.account_roles, &[AccountRole::Admin]),
+            AccountAction::CreateToken => has_any_role(&self.account_roles, &[AccountRole::Admin]),
+            AccountAction::DeleteToken => has_any_role(&self.account_roles, &[AccountRole::Admin]),
+            AccountAction::CreateKnownSecret => {
+                has_any_role(&self.account_roles, &[AccountRole::Admin])
+            }
+            AccountAction::UpdateUsage => has_any_role(&self.account_roles, &[AccountRole::Admin]),
         };
 
         if !is_allowed {
@@ -183,7 +163,11 @@ impl AuthCtx {
         let is_allowed = match action {
             EnvironmentAction::ViewEnvironment => has_any_role(
                 roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer, EnvironmentRole::Viewer],
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
             ),
             EnvironmentAction::CreateComponent => has_any_role(
                 roles_from_shares,
@@ -195,24 +179,24 @@ impl AuthCtx {
             ),
             EnvironmentAction::ViewComponent => has_any_role(
                 roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer, EnvironmentRole::Viewer],
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
             ),
-            EnvironmentAction::ViewShares => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin],
-            ),
-            EnvironmentAction::UpdateShare => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin],
-            ),
-            EnvironmentAction::CreateShare => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin],
-            ),
-            EnvironmentAction::DeleteShare => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin],
-            ),
+            EnvironmentAction::ViewShares => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::UpdateShare => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::CreateShare => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::DeleteShare => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
         };
 
         if !is_allowed {

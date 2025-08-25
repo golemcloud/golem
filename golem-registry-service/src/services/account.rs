@@ -178,10 +178,9 @@ impl AccountService {
     pub async fn get(
         &self,
         account_id: &AccountId,
-        auth: &AuthCtx
+        auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        self
-            .get_optional(account_id, auth)
+        self.get_optional(account_id, auth)
             .await?
             .ok_or(AccountError::AccountNotFound(account_id.clone()))
     }
@@ -223,10 +222,9 @@ impl AccountService {
     pub async fn get_optional(
         &self,
         account_id: &AccountId,
-        auth: &AuthCtx
+        auth: &AuthCtx,
     ) -> Result<Option<Account>, AccountError> {
-        auth
-            .authorize_account_action(&account_id, AccountAction::ViewAccount)
+        auth.authorize_account_action(account_id, AccountAction::ViewAccount)
             // Visibility is not enforced in the repo, so we need to map permissions to visibility
             .map_err(|_| AccountError::AccountNotFound(account_id.clone()))?;
 

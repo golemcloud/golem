@@ -18,13 +18,11 @@ use crate::services::account_usage::error::AccountUsageError;
 use crate::services::application::ApplicationError;
 use crate::services::environment::EnvironmentError;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::{
-    ComponentFilePath, ComponentName, InitialComponentFileKey, VersionedComponentId,
-};
+use golem_common::model::component::{ComponentFilePath, InitialComponentFileKey};
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentId, PluginInstallationId};
-use golem_common::{error_forwarding, IntoAnyhow, SafeDisplay};
+use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
@@ -112,7 +110,8 @@ error_forwarding!(
     ComponentError,
     RepoError,
     ApplicationError,
-    ComponentRepoError
+    ComponentRepoError,
+    EnvironmentError
 );
 
 impl From<AccountUsageError> for ComponentError {
@@ -128,15 +127,6 @@ impl From<AccountUsageError> for ComponentError {
                 current_value,
             },
             other => Self::InternalError(other.into_anyhow().context("AccountUsageError")),
-        }
-    }
-}
-
-impl From<EnvironmentError> for ComponentError {
-    fn from(value: EnvironmentError) -> Self {
-        match value {
-            EnvironmentError::EnvironmentNotFound(environment_id) => Self::ParentEnvironmentNotFound(environment_id),
-            _ => Self::InternalError(value.into_anyhow().context("EnvironmentError")),
         }
     }
 }

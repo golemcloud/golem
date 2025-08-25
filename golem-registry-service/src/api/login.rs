@@ -15,6 +15,7 @@
 use super::ApiResult;
 use super::error::ApiError;
 use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
+use crate::model::auth::AuthCtx;
 use crate::services::token::TokenService;
 use golem_common::model::Empty;
 use golem_common::model::auth::{Token, TokenWithSecret};
@@ -31,7 +32,6 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
-use crate::model::auth::AuthCtx;
 
 pub struct LoginApi {
     pub login_system: LoginSystem,
@@ -109,7 +109,10 @@ impl LoginApi {
     }
 
     async fn current_token_internal(&self, token: GolemSecurityScheme) -> ApiResult<Json<Token>> {
-        let token_info = self.token_service.get_by_secret(&token.secret(), &AuthCtx::system()).await?;
+        let token_info = self
+            .token_service
+            .get_by_secret(&token.secret(), &AuthCtx::system())
+            .await?;
         Ok(Json(token_info.without_secret()))
     }
 

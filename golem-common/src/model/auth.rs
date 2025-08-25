@@ -110,7 +110,7 @@ pub enum GlobalAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
 pub enum PlanAction {
     ViewPlan,
-    CreateOrUpdatePlan
+    CreateOrUpdatePlan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
@@ -123,7 +123,7 @@ pub enum AccountAction {
     DeleteToken,
     ViewToken,
     ViewAccount,
-    UpdateUsage
+    UpdateUsage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
@@ -135,7 +135,7 @@ pub enum EnvironmentAction {
     UpdateShare,
     CreateShare,
     DeleteShare,
-    ViewEnvironment
+    ViewEnvironment,
 }
 
 // #[cfg(feature = "protobuf")]

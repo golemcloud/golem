@@ -289,7 +289,12 @@ impl EnvironmentComponentsApi {
     ) -> ApiResult<Json<Component>> {
         let component: Component = self
             .component_service
-            .get_deployed_component(environment_id, deployment_revision_id, component_name, &auth)
+            .get_deployed_component(
+                environment_id,
+                deployment_revision_id,
+                component_name,
+                &auth,
+            )
             .await?
             .into();
 
