@@ -30,6 +30,7 @@ pub enum ApiTags {
     Component,
     Deployment,
     Environment,
+    EnvironmentShares,
     Debugging,
     Grant,
     HealthCheck,

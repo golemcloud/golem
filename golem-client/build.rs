@@ -154,7 +154,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         ],
         &["/v1/components/{component_id}/workers/{worker_name}/connect"],
     )
-    .expect("Failed to generate client code from OpenAPI spec.");
+        .expect("Failed to generate client code from OpenAPI spec.");
 }
 
 fn copy_if_different(

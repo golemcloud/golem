@@ -16,6 +16,7 @@ use crate::model::component::{Component, FinalizedComponentRevision};
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
+use golem_common::error_forwarding;
 use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
@@ -37,13 +38,18 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, thiserror::Error, PartialEq)]
-pub enum ComponentRevisionRepoError {
+#[derive(Debug, thiserror::Error)]
+pub enum ComponentRepoError {
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
+
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error),
 }
+
+error_forwarding!(ComponentRepoError, RepoError);
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct SqlComponentFilePermissions {

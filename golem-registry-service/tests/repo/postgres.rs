@@ -27,12 +27,15 @@ use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
-use std::time::Duration;
+use sqlx::ConnectOptions;
+use sqlx::postgres::PgConnectOptions;
+use std::time::{Duration, Instant};
 use test_r::test;
 use test_r::{inherit_test_dep, test_dep};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
+use tracing::{error, info};
 
 inherit_test_dep!(Tracing);
 
@@ -46,6 +49,8 @@ struct PostgresDb {
 impl PostgresDb {
     async fn new() -> Self {
         let (db_config, container) = Self::start_docker_postgres().await;
+
+        Self::wait_for_postgres(&db_config, Duration::from_secs(30)).await;
 
         db::postgres::migrate(
             &db_config,
@@ -84,6 +89,56 @@ impl PostgresDb {
         };
 
         (config, container)
+    }
+
+    async fn wait_for_postgres(info: &DbPostgresConfig, timeout: Duration) {
+        info!(
+            "Waiting for Postgres start on host {}:{}, timeout: {}s",
+            info.host,
+            info.port,
+            timeout.as_secs()
+        );
+        let start = Instant::now();
+        loop {
+            let running = Self::check_if_postgres_ready(info).await;
+
+            match running {
+                Ok(_) => break,
+                Err(e) => {
+                    if start.elapsed() > timeout {
+                        error!(
+                            "Failed to verify that Postgres host {}:{} is running: {}",
+                            info.host, info.port, e
+                        );
+                        std::panic!(
+                            "Failed to verify that Postgres host {}:{} is running",
+                            info.host,
+                            info.port
+                        );
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+
+    async fn check_if_postgres_ready(info: &DbPostgresConfig) -> Result<(), sqlx::Error> {
+        use sqlx::Executor;
+        let connection_options = PgConnectOptions::new()
+            .username(&info.username)
+            .password(&info.password)
+            .database(&info.database)
+            .host(&info.host)
+            .port(info.port);
+
+        let mut conn = connection_options.connect().await?;
+
+        let r = conn.execute(sqlx::query("SELECT 1;")).await;
+        if let Err(e) = r {
+            error!("Postgres connection error: {}", e);
+        }
+
+        Ok(())
     }
 }
 

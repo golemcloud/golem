@@ -27,6 +27,7 @@ pub mod environment_api_domains;
 pub mod environment_certificates;
 pub mod environment_components;
 pub mod environment_security_schemes;
+pub mod environment_shares;
 pub mod environments;
 pub mod error;
 pub mod login;
@@ -49,6 +50,7 @@ use self::environment_api_domains::EnvironmentApiDomainsApi;
 use self::environment_certificates::EnvironmentCertificatesApi;
 use self::environment_components::EnvironmentComponentsApi;
 use self::environment_security_schemes::EnvironmentSecuritySchemesApi;
+use self::environment_shares::EnvironmentSharesApi;
 use self::environments::EnvironmentsApi;
 use self::error::ApiError;
 use self::login::LoginApi;
@@ -76,6 +78,7 @@ pub type Apis = (
         EnvironmentComponentsApi,
         EnvironmentsApi,
         EnvironmentSecuritySchemesApi,
+        EnvironmentSharesApi,
     ),
     LoginApi,
     PluginRegistrationApi,
@@ -107,8 +110,12 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 EnvironmentApiDomainsApi {},
                 EnvironmentCertificatesApi {},
                 EnvironmentComponentsApi::new(services.component_service.clone()),
-                EnvironmentsApi {},
+                EnvironmentsApi::new(
+                    services.environment_service.clone(),
+                    services.environment_share_service.clone(),
+                ),
                 EnvironmentSecuritySchemesApi {},
+                EnvironmentSharesApi::new(services.environment_share_service.clone()),
             ),
             LoginApi::new(
                 services.login_system.clone(),

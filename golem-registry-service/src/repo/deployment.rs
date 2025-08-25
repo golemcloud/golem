@@ -32,14 +32,12 @@ use futures::future::BoxFuture;
 use golem_common::model::diff::Hashable;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{
-    LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi, ToBusiness, TxError, TxResult,
-};
-use golem_service_base::repo::{BusinessResult, RepoResult, ResultExt};
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
+use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::collections::HashSet;
-use std::fmt::Display;
+use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -75,21 +73,21 @@ pub trait DeploymentRepo: Send + Sync {
         current_staged_deployment_revision_id: Option<i64>,
         version: String,
         expected_deployment_hash: SqlBlake3Hash,
-    ) -> BusinessResult<CurrentDeploymentRevisionRecord, DeployRepoError>;
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError>;
 
     async fn deploy_by_revision_id(
         &self,
         user_account_id: &Uuid,
         environment_id: &Uuid,
         revision_id: i64,
-    ) -> BusinessResult<CurrentDeploymentRevisionRecord, DeployRepoError>;
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError>;
 
     async fn deploy_by_version(
         &self,
         user_account_id: &Uuid,
         environment_id: &Uuid,
         version: &str,
-    ) -> BusinessResult<CurrentDeploymentRevisionRecord, DeployRepoError>;
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError>;
 }
 
 pub struct LoggedDeploymentRepo<Repo: DeploymentRepo> {
@@ -209,7 +207,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         current_staged_deployment_revision_id: Option<i64>,
         version: String,
         expected_deployment_hash: SqlBlake3Hash,
-    ) -> BusinessResult<CurrentDeploymentRevisionRecord, DeployRepoError> {
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
         self.repo
             .deploy(
                 user_account_id,
@@ -227,7 +225,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         user_account_id: &Uuid,
         environment_id: &Uuid,
         revision_id: i64,
-    ) -> BusinessResult<CurrentDeploymentRevisionRecord, DeployRepoError> {
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
         self.repo
             .deploy_by_revision_id(user_account_id, environment_id, revision_id)
             .instrument(Self::span_user_env_revision(
@@ -243,7 +241,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         user_account_id: &Uuid,
         environment_id: &Uuid,
         version: &str,
-    ) -> BusinessResult<CurrentDeploymentRevisionRecord, DeployRepoError> {
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
         self.repo
             .deploy_by_version(user_account_id, environment_id, version)
             .instrument(Self::span_user_env_version(
@@ -274,24 +272,13 @@ impl<DBP: Pool> DbDeploymentRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> RepoResult<R>
+    async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> Result<R, E>
     where
         R: Send,
+        E: Debug + Send + From<RepoError>,
         F: for<'f> FnOnce(
                 &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, RepoResult<R>>
-            + Send,
-    {
-        self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
-    }
-
-    async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> TxResult<R, E>
-    where
-        R: Send,
-        E: Display + Send,
-        F: for<'f> FnOnce(
-                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, TxResult<R, E>>
+            ) -> BoxFuture<'f, Result<R, E>>
             + Send,
     {
         self.db_pool
@@ -410,7 +397,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         current_staged_deployment_revision_id: Option<i64>,
         version: String,
         expected_deployment_hash: SqlBlake3Hash,
-    ) -> BusinessResult<CurrentDeploymentRevisionRecord, DeployRepoError> {
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
         let actual_current_staged_revision_id_row = self
             .with_ro("deploy - get current staged revision")
             .fetch_optional(
@@ -426,12 +413,12 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
         let actual_current_staged_revision_id: Option<i64> =
             match actual_current_staged_revision_id_row {
-                Some(row) => Some(row.try_get("revision_id")?),
+                Some(row) => Some(row.try_get("revision_id").map_err(RepoError::from)?),
                 None => None,
             };
 
         if current_staged_deployment_revision_id != actual_current_staged_revision_id {
-            return Ok(Err(DeployRepoError::ConcurrentModification));
+            return Err(DeployRepoError::ConcurrentModification);
         };
 
         let revision_id = current_staged_deployment_revision_id.unwrap_or(-1) + 1;
@@ -440,7 +427,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         if environment.revision.version_check
             && self.version_exists(environment_id, &version).await?
         {
-            return Ok(Err(DeployRepoError::VersionAlreadyExists { version }));
+            return Err(DeployRepoError::VersionAlreadyExists { version });
         }
 
         let user_account_id = *user_account_id;
@@ -462,19 +449,17 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
                 let validation_errors = Self::validate_stage(&environment, &staged_deployment);
                 if !validation_errors.is_empty() {
-                    return Err(TxError::Business(DeployRepoError::ValidationErrors(
-                        validation_errors,
-                    )));
+                    return Err(DeployRepoError::ValidationErrors(validation_errors));
                 }
 
                 let diffable_deployment = staged_deployment.to_diffable();
 
                 let hash = diffable_deployment.hash();
                 if hash.as_blake3_hash() != deployment_revision.hash.as_blake3_hash() {
-                    return Err(TxError::Business(DeployRepoError::DeploymentHashMismatch {
+                    return Err(DeployRepoError::DeploymentHashMismatch {
                         requested_hash: (*hash.as_blake3_hash()).into(),
                         actual_hash: deployment_revision.hash,
-                    }));
+                    });
                 }
 
                 Self::create_deployment_relations(
@@ -499,7 +484,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .to_business_result_on_unique_violation(|| DeployRepoError::ConcurrentModification)
     }
 
     async fn deploy_by_revision_id(
@@ -507,20 +491,18 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         user_account_id: &Uuid,
         environment_id: &Uuid,
         revision_id: i64,
-    ) -> BusinessResult<CurrentDeploymentRevisionRecord, DeployRepoError> {
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
         let Some(deployment_revision) = self
             .get_deployment_revision(environment_id, revision_id)
             .await?
         else {
-            return Ok(Err(DeployRepoError::DeploymentNotFoundByRevision {
-                revision_id,
-            }));
+            return Err(DeployRepoError::DeploymentNotFoundByRevision { revision_id });
         };
 
         let user_account_id = *user_account_id;
         let environment_id = *environment_id;
 
-        self.with_tx("deploy_by_revision_id", |tx| {
+        self.with_tx_err("deploy_by_revision_id", |tx| {
             async move {
                 Self::set_current_deployment(
                     tx,
@@ -530,11 +512,11 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     &deployment_revision.version,
                 )
                 .await
+                .to_error_on_unique_violation(DeployRepoError::ConcurrentModification)
             }
             .boxed()
         })
         .await
-        .to_business_result_on_unique_violation(|| DeployRepoError::ConcurrentModification)
     }
 
     async fn deploy_by_version(
@@ -542,25 +524,25 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         user_account_id: &Uuid,
         environment_id: &Uuid,
         version: &str,
-    ) -> BusinessResult<CurrentDeploymentRevisionRecord, DeployRepoError> {
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
         let mut deployment_revisions = self
             .get_deployment_revisions_by_version(environment_id, version)
             .await?;
         if deployment_revisions.len() > 1 {
-            return Ok(Err(DeployRepoError::DeploymentIsNotUniqueByVersion {
+            return Err(DeployRepoError::DeploymentIsNotUniqueByVersion {
                 version: version.to_string(),
-            }));
+            });
         }
         let Some(deployment_revision) = deployment_revisions.pop() else {
-            return Ok(Err(DeployRepoError::DeploymentNotfoundByVersion {
+            return Err(DeployRepoError::DeploymentNotfoundByVersion {
                 version: version.to_string(),
-            }));
+            });
         };
 
         let user_account_id = *user_account_id;
         let environment_id = *environment_id;
 
-        self.with_tx("deploy_by_version", |tx| {
+        self.with_tx_err("deploy_by_version", |tx| {
             async move {
                 Self::set_current_deployment(
                     tx,
@@ -570,11 +552,11 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     &deployment_revision.version,
                 )
                 .await
+                .to_error_on_unique_violation(DeployRepoError::ConcurrentModification)
             }
             .boxed()
         })
         .await
-        .to_business_result_on_unique_violation(|| DeployRepoError::ConcurrentModification)
     }
 }
 
@@ -602,7 +584,7 @@ trait DeploymentRepoInternal: DeploymentRepo {
         revision_id: i64,
         version: String,
         hash: SqlBlake3Hash,
-    ) -> RepoResult<DeploymentRevisionRecord>;
+    ) -> Result<DeploymentRevisionRecord, DeployRepoError>;
 
     async fn get_staged_deployment(
         tx: &mut Self::Tx,
@@ -768,7 +750,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         revision_id: i64,
         version: String,
         hash: SqlBlake3Hash,
-    ) -> RepoResult<DeploymentRevisionRecord> {
+    ) -> Result<DeploymentRevisionRecord, DeployRepoError> {
         let revision = DeploymentRevisionRecord {
             environment_id,
             revision_id,
@@ -791,6 +773,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .bind_revision_audit(revision.audit),
         )
         .await
+        .to_error_on_unique_violation(DeployRepoError::ConcurrentModification)
     }
 
     async fn get_staged_deployment(

@@ -24,7 +24,7 @@ use golem_common::model::account::{
     Account, AccountId, AccountRevision, NewAccountData, UpdatedAccountData,
 };
 use golem_common::model::auth::{AccountRole, TokenSecret};
-use golem_common::{SafeDisplay, error_forwarders, into_internal_error};
+use golem_common::{SafeDisplay, error_forwarding};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -52,9 +52,7 @@ impl SafeDisplay for AccountError {
     }
 }
 
-into_internal_error!(AccountError);
-
-error_forwarders!(AccountError, PlanError, TokenError, AccountRepoError);
+error_forwarding!(AccountError, PlanError, TokenError, AccountRepoError);
 
 pub struct AccountService {
     account_repo: Arc<dyn AccountRepo>,

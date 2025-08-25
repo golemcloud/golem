@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenId;
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
-use golem_common::{SafeDisplay, error_forwarders, into_internal_error};
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -46,9 +46,7 @@ impl SafeDisplay for TokenError {
     }
 }
 
-into_internal_error!(TokenError);
-
-error_forwarders!(TokenError, RepoError);
+error_forwarding!(TokenError, RepoError);
 
 pub struct TokenService {
     token_repo: Arc<dyn TokenRepo>,

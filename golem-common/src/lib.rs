@@ -104,6 +104,9 @@ pub fn widen_infallible<T>(_inf: Infallible) -> T {
     panic!("impossible")
 }
 
-pub trait IntoInternalError {
-    fn into_internal(self) -> anyhow::Error;
+pub trait IntoAnyhow {
+    /// Direct conversion to anyhow::Error. This is preferred over going through the blanket Into<anyhow::Error> impl for std::err::Error,
+    /// as it can preserve more information depending on the implementor.
+    /// Can be removed when specialization is stable or std::err::Error has backtraces.
+    fn into_anyhow(self) -> anyhow::Error;
 }
