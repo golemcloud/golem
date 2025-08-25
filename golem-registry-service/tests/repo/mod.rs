@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::model::application::ApplicationId;
 use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
@@ -106,7 +105,7 @@ impl Deps {
         let app_name = format!("app-name-{}", new_repo_uuid());
 
         self.application_repo
-            .ensure(&user.revision.account_id, &owner_account_id, &app_name)
+            .ensure(&user.revision.account_id, owner_account_id, &app_name)
             .await
             .unwrap()
     }
