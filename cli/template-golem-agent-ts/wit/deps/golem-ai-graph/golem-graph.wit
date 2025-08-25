@@ -1,0 +1,636 @@
+package golem:graph@1.0.0;
+
+/// Core data types and structures unified across graph databases
+interface types {
+    /// Universal property value types that can be represented across all graph databases
+    variant property-value {
+        null-value,
+        boolean(bool),
+        int8(s8),
+        int16(s16), 
+        int32(s32),
+        int64(s64),
+        uint8(u8),
+        uint16(u16),
+        uint32(u32),
+        uint64(u64),
+        float32-value(f32),
+        float64-value(f64),
+        string-value(string),
+        bytes(list<u8>),
+        
+        // Temporal types (unified representation)
+        date(date),
+        time(time),
+        datetime(datetime),
+        duration(duration),
+        
+        // Geospatial types (unified GeoJSON-like representation)
+        point(point),
+        linestring(linestring),
+        polygon(polygon),
+    }
+
+    /// Temporal types with unified representation
+    record date {
+        year: u32,
+        month: u8,  // 1-12
+        day: u8,    // 1-31
+    }
+
+    record time {
+        hour: u8,        // 0-23
+        minute: u8,      // 0-59
+        second: u8,      // 0-59
+        nanosecond: u32, // 0-999,999,999
+    }
+
+    record datetime {
+        date: date,
+        time: time,
+        timezone-offset-minutes: option<s16>, // UTC offset in minutes
+    }
+
+    record duration {
+        seconds: s64,
+        nanoseconds: u32,
+    }
+
+    /// Geospatial types (WGS84 coordinates)
+    record point {
+        longitude: f64,
+        latitude: f64,
+        altitude: option<f64>,
+    }
+
+    record linestring {
+        coordinates: list<point>,
+    }
+
+    record polygon {
+        exterior: list<point>,
+        holes: option<list<list<point>>>,
+    }
+
+    /// Universal element ID that can represent various database ID schemes
+    variant element-id {
+        string-value(string),
+        int64(s64),
+        uuid(string),
+    }
+
+    /// Property map - consistent with insertion format
+    type property-map = list<tuple<string, property-value>>;
+
+    /// Vertex representation
+    record vertex {
+        id: element-id,
+        vertex-type: string,         // Primary type (collection/tag/label)
+        additional-labels: list<string>, // Secondary labels (Neo4j-style)
+        properties: property-map,
+    }
+
+    /// Edge representation
+    record edge {
+        id: element-id,
+        edge-type: string,           // Edge type/relationship type
+        from-vertex: element-id,
+        to-vertex: element-id,
+        properties: property-map,
+    }
+
+    /// Path through the graph
+    record path {
+        vertices: list<vertex>,
+        edges: list<edge>,
+        length: u32,
+    }
+
+    /// Direction for traversals
+    enum direction {
+        outgoing,
+        incoming,
+        both,
+    }
+
+    /// Comparison operators for filtering
+    enum comparison-operator {
+        equal,
+        not-equal,
+        less-than,
+        less-than-or-equal,
+        greater-than,
+        greater-than-or-equal,
+        contains,
+        starts-with,
+        ends-with,
+        regex-match,
+        in-list,
+        not-in-list,
+    }
+
+    /// Filter condition for queries
+    record filter-condition {
+        property: string,
+        operator: comparison-operator,
+        value: property-value,
+    }
+
+    /// Sort specification
+    record sort-spec {
+        property: string,
+        ascending: bool,
+    }
+}
+
+/// Error handling unified across all graph database providers
+interface errors {
+    use types.{element-id};
+
+    /// Comprehensive error types that can represent failures across different graph databases
+    variant graph-error {
+        // Feature/operation not supported by current provider
+        unsupported-operation(string),
+        
+        // Connection and authentication errors
+        connection-failed(string),
+        authentication-failed(string),
+        authorization-failed(string),
+        
+        // Data and schema errors
+        element-not-found(element-id),
+        duplicate-element(element-id),
+        schema-violation(string),
+        constraint-violation(string),
+        invalid-property-type(string),
+        invalid-query(string),
+        
+        // Transaction errors
+        transaction-failed(string),
+        transaction-conflict,
+        transaction-timeout,
+        deadlock-detected,
+        
+        // System errors
+        timeout,
+        resource-exhausted(string),
+        internal-error(string),
+        service-unavailable(string),
+    }
+}
+
+/// Connection management and graph instance creation
+interface connection {
+    use errors.{graph-error};
+    use transactions.{transaction};
+
+    /// Configuration for connecting to graph databases
+    record connection-config {
+        // Connection parameters
+        hosts: list<string>,
+        port: option<u16>,
+        database-name: option<string>,
+        
+        // Authentication
+        username: option<string>,
+        password: option<string>,
+        
+        // Connection behavior
+        timeout-seconds: option<u32>,
+        max-connections: option<u32>,
+        
+        // Provider-specific configuration as key-value pairs
+        provider-config: list<tuple<string, string>>,
+    }
+
+    /// Main graph database resource
+    resource graph {
+        /// Create a new transaction for performing operations
+        begin-transaction: func() -> result<transaction, graph-error>;
+        
+        /// Create a read-only transaction (may be optimized by provider)
+        begin-read-transaction: func() -> result<transaction, graph-error>;
+        
+        /// Test connection health
+        ping: func() -> result<_, graph-error>;
+        
+        /// Close the graph connection
+        close: func() -> result<_, graph-error>;
+        
+        /// Get basic graph statistics if supported
+        get-statistics: func() -> result<graph-statistics, graph-error>;
+    }
+
+    /// Basic graph statistics
+    record graph-statistics {
+        vertex-count: option<u64>,
+        edge-count: option<u64>,
+        label-count: option<u32>,
+        property-count: option<u64>,
+    }
+
+    /// Connect to a graph database with the specified configuration
+    connect: func(config: connection-config) -> result<graph, graph-error>;
+}
+
+/// All graph operations performed within transaction contexts
+interface transactions {
+    use types.{vertex, edge, path, element-id, property-map, property-value, filter-condition, sort-spec, direction};
+    use errors.{graph-error};
+
+    /// Transaction resource - all operations go through transactions
+    resource transaction {
+        // === VERTEX OPERATIONS ===
+        
+        /// Create a new vertex
+        create-vertex: func(vertex-type: string, properties: property-map) -> result<vertex, graph-error>;
+        
+        /// Create vertex with additional labels (for multi-label systems like Neo4j)
+        create-vertex-with-labels: func(vertex-type: string, additional-labels: list<string>, properties: property-map) -> result<vertex, graph-error>;
+        
+        /// Get vertex by ID
+        get-vertex: func(id: element-id) -> result<option<vertex>, graph-error>;
+        
+        /// Update vertex properties (replaces all properties)
+        update-vertex: func(id: element-id, properties: property-map) -> result<vertex, graph-error>;
+        
+        /// Update specific vertex properties (partial update)
+        update-vertex-properties: func(id: element-id, updates: property-map) -> result<vertex, graph-error>;
+        
+        /// Delete vertex (and optionally its edges)
+        delete-vertex: func(id: element-id, delete-edges: bool) -> result<_, graph-error>;
+        
+        /// Find vertices by type and optional filters
+        find-vertices: func(
+            vertex-type: option<string>,
+            filters: option<list<filter-condition>>,
+            sort: option<list<sort-spec>>,
+            limit: option<u32>,
+            offset: option<u32>
+        ) -> result<list<vertex>, graph-error>;
+
+        // === EDGE OPERATIONS ===
+        
+        /// Create a new edge
+        create-edge: func(
+            edge-type: string,
+            from-vertex: element-id,
+            to-vertex: element-id,
+            properties: property-map
+        ) -> result<edge, graph-error>;
+        
+        /// Get edge by ID
+        get-edge: func(id: element-id) -> result<option<edge>, graph-error>;
+        
+        /// Update edge properties
+        update-edge: func(id: element-id, properties: property-map) -> result<edge, graph-error>;
+        
+        /// Update specific edge properties (partial update)
+        update-edge-properties: func(id: element-id, updates: property-map) -> result<edge, graph-error>;
+        
+        /// Delete edge
+        delete-edge: func(id: element-id) -> result<_, graph-error>;
+        
+        /// Find edges by type and optional filters
+        find-edges: func(
+            edge-types: option<list<string>>,
+            filters: option<list<filter-condition>>,
+            sort: option<list<sort-spec>>,
+            limit: option<u32>,
+            offset: option<u32>
+        ) -> result<list<edge>, graph-error>;
+
+        // === TRAVERSAL OPERATIONS ===
+        
+        /// Get adjacent vertices through specified edge types
+        get-adjacent-vertices: func(
+            vertex-id: element-id,
+            direction: direction,
+            edge-types: option<list<string>>,
+            limit: option<u32>
+        ) -> result<list<vertex>, graph-error>;
+        
+        /// Get edges connected to a vertex
+        get-connected-edges: func(
+            vertex-id: element-id,
+            direction: direction,
+            edge-types: option<list<string>>,
+            limit: option<u32>
+        ) -> result<list<edge>, graph-error>;
+
+        // === BATCH OPERATIONS ===
+        
+        /// Create multiple vertices in a single operation
+        create-vertices: func(vertices: list<vertex-spec>) -> result<list<vertex>, graph-error>;
+        
+        /// Create multiple edges in a single operation
+        create-edges: func(edges: list<edge-spec>) -> result<list<edge>, graph-error>;
+        
+        /// Upsert vertex (create or update)
+        upsert-vertex: func(
+            id: option<element-id>,
+            vertex-type: string,
+            properties: property-map
+        ) -> result<vertex, graph-error>;
+        
+        /// Upsert edge (create or update)
+        upsert-edge: func(
+            id: option<element-id>,
+            edge-type: string,
+            from-vertex: element-id,
+            to-vertex: element-id,
+            properties: property-map
+        ) -> result<edge, graph-error>;
+
+        // === TRANSACTION CONTROL ===
+        
+        /// Commit the transaction
+        commit: func() -> result<_, graph-error>;
+        
+        /// Rollback the transaction
+        rollback: func() -> result<_, graph-error>;
+        
+        /// Check if transaction is still active
+        is-active: func() -> bool;
+    }
+
+    /// Vertex specification for batch creation
+    record vertex-spec {
+        vertex-type: string,
+        additional-labels: option<list<string>>,
+        properties: property-map,
+    }
+
+    /// Edge specification for batch creation
+    record edge-spec {
+        edge-type: string,
+        from-vertex: element-id,
+        to-vertex: element-id,
+        properties: property-map,
+    }
+}
+
+/// Schema management operations (optional/emulated for schema-free databases)
+interface schema {
+    use types.{property-value};
+    use errors.{graph-error};
+    use connection.{connection-config};
+
+    /// Property type definitions for schema
+    enum property-type {
+        boolean,
+        int32,
+        int64,
+        float32-type,
+        float64-type,
+        string-type,
+        bytes,
+        date,
+        datetime,
+        point,
+        list-type,
+        map-type,
+    }
+
+    /// Index types
+    enum index-type {
+        exact,      // Exact match index
+        range,      // Range queries (>, <, etc.)
+        text,       // Text search
+        geospatial, // Geographic queries
+    }
+
+    /// Property definition for schema
+    record property-definition {
+        name: string,
+        property-type: property-type,
+        required: bool,
+        unique: bool,
+        default-value: option<property-value>,
+    }
+
+    /// Vertex label schema
+    record vertex-label-schema {
+        label: string,
+        properties: list<property-definition>,
+        /// Container/collection this label maps to (for container-based systems)
+        container: option<string>,
+    }
+
+    /// Edge label schema
+    record edge-label-schema {
+        label: string,
+        properties: list<property-definition>,
+        from-labels: option<list<string>>, // Allowed source vertex labels
+        to-labels: option<list<string>>,   // Allowed target vertex labels
+        /// Container/collection this label maps to (for container-based systems)
+        container: option<string>,
+    }
+
+    /// Index definition
+    record index-definition {
+        name: string,
+        label: string,          // Vertex or edge label
+        properties: list<string>, // Properties to index
+        index-type: index-type,
+        unique: bool,
+        /// Container/collection this index applies to
+        container: option<string>,
+    }
+
+    /// Definition for an edge type in a structural graph database.
+    record edge-type-definition {
+        /// The name of the edge collection/table.
+        collection: string,
+        /// The names of vertex collections/tables that can be at the 'from' end of an edge.
+        from-collections: list<string>,
+        /// The names of vertex collections/tables that can be at the 'to' end of an edge.
+        to-collections: list<string>,
+    }
+
+    /// Schema management resource
+    resource schema-manager {
+        /// Define or update vertex label schema
+        define-vertex-label: func(schema: vertex-label-schema) -> result<_, graph-error>;
+        
+        /// Define or update edge label schema
+        define-edge-label: func(schema: edge-label-schema) -> result<_, graph-error>;
+        
+        /// Get vertex label schema
+        get-vertex-label-schema: func(label: string) -> result<option<vertex-label-schema>, graph-error>;
+        
+        /// Get edge label schema
+        get-edge-label-schema: func(label: string) -> result<option<edge-label-schema>, graph-error>;
+        
+        /// List all vertex labels
+        list-vertex-labels: func() -> result<list<string>, graph-error>;
+        
+        /// List all edge labels
+        list-edge-labels: func() -> result<list<string>, graph-error>;
+        
+        /// Create index
+        create-index: func(index: index-definition) -> result<_, graph-error>;
+        
+        /// Drop index
+        drop-index: func(name: string) -> result<_, graph-error>;
+        
+        /// List indexes
+        list-indexes: func() -> result<list<index-definition>, graph-error>;
+        
+        /// Get index by name
+        get-index: func(name: string) -> result<option<index-definition>, graph-error>;
+        
+        /// Define edge type for structural databases (ArangoDB-style)
+        define-edge-type: func(definition: edge-type-definition) -> result<_, graph-error>;
+        
+        /// List edge type definitions
+        list-edge-types: func() -> result<list<edge-type-definition>, graph-error>;
+        
+        /// Create container/collection for organizing data
+        create-container: func(name: string, container-type: container-type) -> result<_, graph-error>;
+        
+        /// List containers/collections
+        list-containers: func() -> result<list<container-info>, graph-error>;
+    }
+
+    /// Container/collection types
+    enum container-type {
+        vertex-container,
+        edge-container,
+    }
+
+    /// Container information
+    record container-info {
+        name: string,
+        container-type: container-type,
+        element-count: option<u64>,
+    }
+
+    /// Get schema manager for the graph
+    get-schema-manager: func(config: option<connection-config>) -> result<schema-manager, graph-error>;
+}
+
+/// Generic query interface for database-specific query languages
+interface query {
+    use types.{vertex, edge, path, property-value};
+    use errors.{graph-error};
+    use transactions.{transaction};
+
+    /// Query result that maintains symmetry with data insertion formats
+    variant query-result {
+        vertices(list<vertex>),
+        edges(list<edge>),
+        paths(list<path>),
+        values(list<property-value>),
+        maps(list<list<tuple<string, property-value>>>), // For tabular results
+    }
+
+    /// Query parameters for parameterized queries
+    type query-parameters = list<tuple<string, property-value>>;
+
+    /// Query execution options
+    record query-options {
+        timeout-seconds: option<u32>,
+        max-results: option<u32>,
+        explain: bool,     // Return execution plan instead of results
+        profile: bool,     // Include performance metrics
+    }
+
+    /// Query execution result with metadata
+    record query-execution-result {
+        query-result-value: query-result,
+        execution-time-ms: option<u32>,
+        rows-affected: option<u32>,
+        explanation: option<string>,  // Execution plan if requested
+        profile-data: option<string>, // Performance data if requested
+    }
+
+    /// Execute a database-specific query string
+    execute-query: func(
+        transaction: borrow<transaction>,
+        query: string,
+        parameters: option<query-parameters>,
+        options: option<query-options>
+    ) -> result<query-execution-result, graph-error>;
+}
+
+/// Graph traversal and pathfinding operations
+interface traversal {
+    use types.{vertex, edge, path, element-id, direction, filter-condition};
+    use errors.{graph-error};
+    use transactions.{transaction};
+
+    /// Path finding options
+    record path-options {
+        max-depth: option<u32>,
+        edge-types: option<list<string>>,
+        vertex-types: option<list<string>>,
+        vertex-filters: option<list<filter-condition>>,
+        edge-filters: option<list<filter-condition>>,
+    }
+
+    /// Neighborhood exploration options
+    record neighborhood-options {
+        depth: u32,
+        direction: direction,
+        edge-types: option<list<string>>,
+        max-vertices: option<u32>,
+    }
+
+    /// Subgraph containing related vertices and edges
+    record subgraph {
+        vertices: list<vertex>,
+        edges: list<edge>,
+    }
+
+    /// Find shortest path between two vertices
+    find-shortest-path: func(
+        transaction: borrow<transaction>,
+        from-vertex: element-id,
+        to-vertex: element-id,
+        options: option<path-options>
+    ) -> result<option<path>, graph-error>;
+
+    /// Find all paths between two vertices (up to limit)
+    find-all-paths: func(
+        transaction: borrow<transaction>,
+        from-vertex: element-id,
+        to-vertex: element-id,
+        options: option<path-options>,
+        limit: option<u32>
+    ) -> result<list<path>, graph-error>;
+
+    /// Get k-hop neighborhood around a vertex
+    get-neighborhood: func(
+        transaction: borrow<transaction>,
+        center: element-id,
+        options: neighborhood-options
+    ) -> result<subgraph, graph-error>;
+
+    /// Check if path exists between vertices
+    path-exists: func(
+        transaction: borrow<transaction>,
+        from-vertex: element-id,
+        to-vertex: element-id,
+        options: option<path-options>
+    ) -> result<bool, graph-error>;
+
+    /// Get vertices at specific distance from source
+    get-vertices-at-distance: func(
+        transaction: borrow<transaction>,
+        source: element-id,
+        distance: u32,
+        direction: direction,
+        edge-types: option<list<string>>
+    ) -> result<list<vertex>, graph-error>;
+}
+
+world graph-library {
+    export types;
+    export errors;
+    export connection;
+    export transactions;
+    export schema;
+    export query;
+    export traversal;
+}

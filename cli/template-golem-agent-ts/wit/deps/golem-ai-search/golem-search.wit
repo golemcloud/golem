@@ -1,0 +1,140 @@
+package golem:search@1.0.0;
+
+/// Core types and error handling for universal search interfaces
+interface types {
+  /// Common structured errors for search operations
+  variant search-error {
+    index-not-found,
+    invalid-query(string),
+    unsupported,
+    internal(string),
+    timeout,
+    rate-limited,
+  }
+
+  /// Identifier types
+  type index-name = string;
+  type document-id = string;
+  type json = string;
+
+  /// Document payload
+  record doc {
+    id: document-id,
+    content: json,
+  }
+
+  /// Highlight configuration
+  record highlight-config {
+    fields: list<string>,
+    pre-tag: option<string>,
+    post-tag: option<string>,
+    max-length: option<u32>,
+  }
+
+  /// Advanced search tuning
+  record search-config {
+    timeout-ms: option<u32>,
+    boost-fields: list<tuple<string, f32>>,
+    attributes-to-retrieve: list<string>,
+    language: option<string>,
+    typo-tolerance: option<bool>,
+    exact-match-boost: option<f32>,
+    provider-params: option<json>,
+  }
+
+  /// Search request
+  record search-query {
+    q: option<string>,
+    filters: list<string>,
+    sort: list<string>,
+    facets: list<string>,
+    page: option<u32>,
+    per-page: option<u32>,
+    offset: option<u32>,
+    highlight: option<highlight-config>,
+    config: option<search-config>,
+  }
+
+  /// Search hit
+  record search-hit {
+    id: document-id,
+    score: option<f64>,
+    content: option<json>,
+    highlights: option<json>,
+  }
+
+  /// Search result set
+  record search-results {
+    total: option<u32>,
+    page: option<u32>,
+    per-page: option<u32>,
+    hits: list<search-hit>,
+    facets: option<json>,
+    took-ms: option<u32>,
+  }
+
+  /// Field schema types
+  enum field-type {
+    text,
+    keyword,
+    integer,
+    float,
+    boolean,
+    date,
+    geo-point,
+  }
+
+  /// Field definition
+  record schema-field {
+    name: string,
+    field-type: field-type,
+    required: bool,
+    facet: bool,
+    sort: bool,
+    index: bool,
+  }
+
+  /// Index schema
+  record schema {
+    fields: list<schema-field>,
+    primary-key: option<string>,
+  }
+}
+
+/// Unified search interface
+interface core {
+  use types.{
+    index-name, document-id, doc, search-query, search-results,
+    search-hit, schema, search-error
+  };
+
+  // Index lifecycle
+  create-index: func(name: index-name, schema: option<schema>) -> result<_, search-error>;
+  delete-index: func(name: index-name) -> result<_, search-error>;
+  list-indexes: func() -> result<list<index-name>, search-error>;
+
+  // Document operations
+  upsert: func(index: index-name, doc: doc) -> result<_, search-error>;
+  upsert-many: func(index: index-name, docs: list<doc>) -> result<_, search-error>;
+  delete: func(index: index-name, id: document-id) -> result<_, search-error>;
+  delete-many: func(index: index-name, ids: list<document-id>) -> result<_, search-error>;
+  get: func(index: index-name, id: document-id) -> result<option<doc>, search-error>;
+  
+  resource search-stream {
+    get-next: func() -> option<list<search-hit>>;
+    blocking-get-next: func() -> list<search-hit>;
+  } 
+
+  // Query
+  search: func(index: index-name, query: search-query) -> result<search-results, search-error>;
+  stream-search: func(index: index-name, query: search-query) -> result<search-stream, search-error>;
+
+  // Schema inspection
+  get-schema: func(index: index-name) -> result<schema, search-error>;
+  update-schema: func(index: index-name, schema: schema) -> result<_, search-error>;
+}
+
+world search-library {
+    export types;
+    export core;
+}

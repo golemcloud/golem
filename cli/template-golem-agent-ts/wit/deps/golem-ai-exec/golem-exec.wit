@@ -1,0 +1,133 @@
+package golem:exec@1.0.0;
+
+interface types {
+  /// Supported language types and optional version
+  record language {
+    kind: language-kind,
+    version: option<string>,
+  }
+
+  enum language-kind {
+    javascript,
+    python,
+  }
+
+  /// Supported encodings for file contents
+  enum encoding {
+    utf8,
+    base64,
+    hex,
+  }
+
+  /// Code or data file
+  record file {
+    name: string,
+    content: list<u8>,
+    encoding: option<encoding>, // defaults to utf8
+  }
+
+  /// Resource limits and execution constraints
+  record limits {
+    time-ms: option<u64>,
+    memory-bytes: option<u64>,
+    file-size-bytes: option<u64>,
+    max-processes: option<u32>,
+  }
+
+  /// Execution outcome per stage
+  record stage-result {
+    stdout: string,
+    stderr: string,
+    exit-code: option<s32>,
+    signal: option<string>,
+  }
+
+  /// Complete execution result
+  record exec-result {
+    compile: option<stage-result>,
+    run: stage-result,
+    time-ms: option<u64>,
+    memory-bytes: option<u64>,
+  }
+
+  /// Execution error types
+  variant error {
+    unsupported-language,
+    compilation-failed(stage-result),
+    runtime-failed(stage-result),
+    timeout,
+    resource-exceeded,
+    internal(string),
+  }
+}
+
+interface executor {
+  use types.{language, file, limits, exec-result, error};
+
+  /// Blocking, non-streaming execution
+  ///
+  /// - `lang` specifies the programming language and version.
+  /// - `snippet` is the top level code to execute.
+  /// - `modules` are additional code files to include in the execution context. these can be imported in `snippet` in a language-specific way.
+  /// - `stdin` is optional input to provide to the program.
+  /// - `args` are command line arguments passed to the program.
+  /// - `env` is a list of environment variables to set for the execution.
+  /// - `constraints` are optional resource limits for the execution.
+  ///
+  /// The returned value captures the stdout and stderr of the executed snippet.
+  run: func(
+    lang: language,
+    snippet: string,
+    modules: list<file>,
+    stdin: option<string>,
+    args: list<string>,
+    env: list<tuple<string, string>>,
+    constraints: option<limits>
+  ) -> result<exec-result, error>;
+
+  /// Session for executing multiple code snippets in it.
+  ///
+  /// The session is preserved between the `run` calls, and it also maintains a set of arbitrary data files
+  /// accessible in both the executed snippets and for the caller.
+  resource session {
+    /// Create a new session for executing code snippets in the specified language, with a set of additional
+    /// code files that can be imported in the executed snippets.
+    constructor(lang: language, modules: list<file>);
+
+    /// Upload a data file to the session, which can be accessed in the executed snippets through standard file system APIs.
+    upload: func(file: file) -> result<_, error>;
+
+    /// Execute a code snippet in the session in a blocking way
+    ///
+    /// - `snippet` is the top level code to execute.
+    /// - `args` are command line arguments passed to the program.
+    /// - `stdin` is optional input to provide to the program.
+    /// - `env` is a list of environment variables to set for the execution.
+    /// - `constraints` are optional resource limits for the execution.
+    ///
+    /// The returned value captures the stdout and stderr of the executed snippet.
+    run: func(
+      snippet: string,
+      args: list<string>,
+      stdin: option<string>,
+      env: list<tuple<string, string>>,
+      constraints: option<limits>
+    ) -> result<exec-result, error>;
+
+    /// Downloads a data file from the session.
+    download: func(path: string) -> result<list<u8>, error>;
+
+    /// Lists all the data files available in the session. These will include the ones that were `upload`ed and also
+    /// any other file created by the executed snippets.
+    list-files: func(dir: string) -> result<list<string>, error>;
+
+    /// Sets the current working directory within the session.
+    set-working-dir: func(path: string) -> result<_, error>;
+  }
+}
+
+
+world exec-library {
+  export types;
+  export executor;
+}
