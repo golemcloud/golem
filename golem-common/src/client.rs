@@ -28,7 +28,7 @@ use tracing::{debug, debug_span, warn, Instrument};
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
     endpoint: Uri,
-    pub config: GrpcClientConfig,
+    config: GrpcClientConfig,
     client: Arc<Mutex<Option<GrpcClientConnection<T>>>>,
     client_factory: Arc<dyn Fn(Channel) -> T + Send + Sync + 'static>,
     target_name: String,
