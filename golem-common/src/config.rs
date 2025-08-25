@@ -17,11 +17,11 @@ use crate::SafeDisplay;
 use figment::providers::{Env, Format, Serialized, Toml};
 use figment::value::Value;
 use figment::Figment;
+use poem_openapi::types::Type;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tracing::info;
 use url::Url;
 
 const ENV_VAR_PREFIX: &str = "GOLEM__";
@@ -88,12 +88,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
     }
 
     pub fn load(&self) -> figment::Result<T> {
-        let result = self.figment().extract::<T>();
-        if let Ok(config) = &result {
-            info!("Using configuration:\n{}", config.to_safe_string_indented());
-        }
-
-        result
+        self.figment().extract::<T>()
     }
 
     fn default_dump_source(&self) -> dump::Source {
@@ -370,6 +365,27 @@ impl RedisConfig {
     }
 }
 
+impl SafeDisplay for RedisConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "database: {}", self.database);
+        let _ = writeln!(&mut result, "tracing: {}", self.tracing);
+        let _ = writeln!(&mut result, "pool size: {}", self.pool_size);
+        if !self.key_prefix.is_empty() {
+            let _ = writeln!(&mut result, "key prefix: {}", self.key_prefix);
+        }
+        if !self.username.is_empty() {
+            let _ = writeln!(&mut result, "username: ****");
+        }
+        if !self.password.is_empty() {
+            let _ = writeln!(&mut result, "password: ****");
+        }
+        result
+    }
+}
+
 impl Default for RedisConfig {
     fn default() -> Self {
         Self {
@@ -433,6 +449,23 @@ pub fn env_config_provider() -> Env {
 pub enum DbConfig {
     Postgres(DbPostgresConfig),
     Sqlite(DbSqliteConfig),
+}
+
+impl SafeDisplay for DbConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            DbConfig::Postgres(postgres) => {
+                let _ = writeln!(&mut result, "postgres:");
+                let _ = writeln!(&mut result, "{}", postgres.to_safe_string_indented());
+            }
+            DbConfig::Sqlite(sqlite) => {
+                let _ = writeln!(&mut result, "sqlite:");
+                let _ = writeln!(&mut result, "{}", sqlite.to_safe_string_indented());
+            }
+        }
+        result
+    }
 }
 
 impl Default for DbConfig {
@@ -503,5 +536,21 @@ impl DbPostgresConfig {
             .database(&self.database)
             .username(&self.username)
             .password(&self.password)
+    }
+}
+
+impl SafeDisplay for DbPostgresConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "database: {}", self.database);
+        let _ = writeln!(&mut result, "username: ****");
+        let _ = writeln!(&mut result, "password: ****");
+        let _ = writeln!(&mut result, "max connections: {}", self.max_connections);
+        if let Some(schema) = &self.schema {
+            let _ = writeln!(&mut result, "schema: {}", schema);
+        }
+        result
     }
 }
