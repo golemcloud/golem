@@ -170,8 +170,7 @@ impl ComponentService {
             .nest("/specs", spec)
             .nest("/metrics", metrics)
             .with(CookieJarManager::new())
-            .with(cors)
-            .with(Tracing);
+            .with(cors);
 
         let poem_listener =
             poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.http_port));

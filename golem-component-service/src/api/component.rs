@@ -251,7 +251,6 @@ impl ComponentApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<dto::Component>> {
         let auth = AuthCtx::new(token.secret());
-        info!("in create, auth context is {:?}", &auth.token_secret);
 
         let record = recorded_http_api_request!(
             "create_component",
@@ -507,7 +506,7 @@ impl ComponentApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<dto::Component>>> {
         let auth = AuthCtx::new(token.secret());
-        tracing::info!("the auth context is {:?}", &auth.token_secret);
+
         let record = recorded_http_api_request!(
             "search_components",
             search_components = components_search
