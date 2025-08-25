@@ -40,6 +40,7 @@ use crate::model::agent::DataValue;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
+use crate::SafeDisplay;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
@@ -53,7 +54,7 @@ use rand::prelude::IteratorRandom;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::fmt::{Display, Formatter};
+use std::fmt::{Display, Formatter, Write};
 use std::ops::Add;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
@@ -684,6 +685,22 @@ pub struct RetryConfig {
     pub max_delay: Duration,
     pub multiplier: f64,
     pub max_jitter_factor: Option<f64>,
+}
+
+impl SafeDisplay for RetryConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+
+        let _ = writeln!(&mut result, "max attempts: {}", self.max_attempts);
+        let _ = writeln!(&mut result, "min delay: {:?}", self.min_delay);
+        let _ = writeln!(&mut result, "max delay: {:?}", self.max_delay);
+        let _ = writeln!(&mut result, "multiplier: {}", self.multiplier);
+        if let Some(max_jitter_factor) = &self.max_jitter_factor {
+            let _ = writeln!(&mut result, "max jitter factor: {:?}", max_jitter_factor);
+        }
+
+        result
+    }
 }
 
 /// Contains status information about a worker according to a given oplog index.

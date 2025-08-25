@@ -15,6 +15,7 @@
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
+use golem_common::SafeDisplay;
 use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_worker_executor::services::golem_config::{
@@ -26,6 +27,7 @@ use golem_worker_executor::services::golem_config::{
     WorkerServiceGrpcConfig,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 use std::path::PathBuf;
 
 // A wrapper over golem config with a few custom behaviour
@@ -50,14 +52,14 @@ pub struct DebugConfig {
     pub rdbms: RdbmsConfig,
     pub http_address: String,
     pub http_port: u16,
-
-    // debug service specific fields
-    pub cloud_service: RemoteServiceConfig,
     pub component_service: ComponentServiceGrpcConfig,
     pub component_cache: ComponentCacheConfig,
     pub project_service: ProjectServiceConfig,
     pub agent_types_service: AgentTypesServiceConfig,
     pub resource_limits: ResourceLimitsConfig,
+
+    // debug service specific fields
+    pub cloud_service: RemoteServiceConfig,
     pub cors_origin_regex: String,
 }
 
@@ -96,6 +98,25 @@ impl DebugConfig {
                 ShardManagerServiceSingleShardConfig {},
             ),
         }
+    }
+}
+
+impl SafeDisplay for DebugConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.clone().into_golem_config().to_safe_string()
+        );
+        let _ = writeln!(&mut result, "cloud service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.cloud_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
+        result
     }
 }
 
