@@ -16,20 +16,21 @@ pub mod error;
 mod utils;
 
 pub use self::error::ComponentError;
-use super::application::ApplicationService;
 use super::component_compilation::ComponentCompilationService;
 use super::component_object_store::ComponentObjectStore;
 use super::environment::EnvironmentService;
+use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::{AccountUsage, AccountUsageService};
+use crate::services::environment::EnvironmentError;
 use anyhow::Context;
 use futures::stream::BoxStream;
 use golem_common::model::ComponentId;
-use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
+use golem_common::model::auth::EnvironmentAction;
 use golem_common::model::component::{
     ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentType,
     InitialComponentFile, InitialComponentFileKey,
@@ -56,7 +57,6 @@ pub struct ComponentService {
     _plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     account_usage_service: Arc<AccountUsageService>,
     environment_service: Arc<EnvironmentService>,
-    application_service: Arc<ApplicationService>,
 }
 
 impl ComponentService {
@@ -68,7 +68,6 @@ impl ComponentService {
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
         account_usage_service: Arc<AccountUsageService>,
         environment_service: Arc<EnvironmentService>,
-        application_service: Arc<ApplicationService>,
     ) -> Self {
         Self {
             component_repo,
@@ -78,7 +77,6 @@ impl ComponentService {
             _plugin_wasm_files_service: plugin_wasm_files_service,
             account_usage_service,
             environment_service,
-            application_service,
         }
     }
 
@@ -93,9 +91,21 @@ impl ComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         agent_types: Vec<AgentType>,
-        actor: &AccountId,
+        auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         info!(environment_id = %environment_id, "Create component");
+
+        let environment = self
+            .environment_service
+            .get_and_authorize(environment_id, EnvironmentAction::CreateComponent, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    ComponentError::ParentEnvironmentNotFound(environment_id)
+                }
+                EnvironmentError::Unauthorized(inner) => ComponentError::Unauthorized(inner),
+                other => other.into(),
+            })?;
 
         self.component_repo
             .get_staged_by_name(&environment_id.0, &component_name.0)
@@ -106,15 +116,9 @@ impl ComponentService {
                 )))
             })?;
 
-        let environment = self.environment_service.get(environment_id).await?;
-        let application = self
-            .application_service
-            .get(&environment.application_id)
-            .await?;
-
         let mut account_usage = self
             .account_usage_service
-            .add_component(&application.account_id, wasm.len() as i64)
+            .add_component(&environment.owner_account_id, wasm.len() as i64)
             .await?;
 
         let initial_component_files: Vec<InitialComponentFile> = self
@@ -144,7 +148,8 @@ impl ComponentService {
             .finalize_new_component_revision(environment_id, new_revision, wasm)
             .await?;
 
-        let record = ComponentRevisionRecord::from_model(finalized_revision.clone(), actor);
+        let record =
+            ComponentRevisionRecord::from_model(finalized_revision.clone(), &auth.account_id);
 
         let result = self
             .component_repo
@@ -185,14 +190,28 @@ impl ComponentService {
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
         agent_types: Option<Vec<AgentType>>,
-        actor: &AccountId,
+        auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         let component: Component = self
             .component_repo
             .get_staged_by_id(&component_id.0)
             .await?
-            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?
+            .ok_or(ComponentError::NotFound)?
             .try_into()?;
+
+        let environment = self
+            .environment_service
+            .get_and_authorize(
+                &component.environment_id,
+                EnvironmentAction::UpdateComponent,
+                auth,
+            )
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => ComponentError::NotFound,
+                EnvironmentError::Unauthorized(inner) => ComponentError::Unauthorized(inner),
+                other => other.into(),
+            })?;
 
         let environment_id = component.environment_id.clone();
         let component_id = component.versioned_component_id.component_id.clone();
@@ -219,15 +238,9 @@ impl ComponentService {
         // }
 
         let (wasm, wasm_object_store_key, wasm_hash) = if let Some(new_data) = data {
-            let environment = self.environment_service.get(&environment_id).await?;
-            let application = self
-                .application_service
-                .get(&environment.application_id)
-                .await?;
-
             let actual_account_usage = self
                 .account_usage_service
-                .add_component(&application.account_id, new_data.len() as i64)
+                .add_component(&environment.owner_account_id, new_data.len() as i64)
                 .await?;
 
             let _ = account_usage.insert(actual_account_usage);
@@ -269,7 +282,7 @@ impl ComponentService {
             .finalize_new_component_revision(&environment_id, new_revision, wasm)
             .await?;
 
-        let record = ComponentRevisionRecord::from_model(finalized_revision, actor);
+        let record = ComponentRevisionRecord::from_model(finalized_revision, &auth.account_id);
 
         let result = self
             .component_repo
@@ -305,6 +318,7 @@ impl ComponentService {
     pub async fn get_component(
         &self,
         component_id: &ComponentId,
+        auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         info!(component_id = %component_id, "Get component");
 
@@ -314,8 +328,25 @@ impl ComponentService {
             .await?;
 
         match record {
-            Some(record) => Ok(record.try_into()?),
-            None => Err(ComponentError::UnknownComponentId(component_id.clone())),
+            Some(record) => {
+                let component: Component = record.try_into()?;
+
+                self.environment_service
+                    .get_and_authorize(
+                        &component.environment_id,
+                        EnvironmentAction::ViewComponent,
+                        auth,
+                    )
+                    .await
+                    .map_err(|err| match err {
+                        EnvironmentError::EnvironmentNotFound(_)
+                        | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
+                        other => other.into(),
+                    })?;
+
+                Ok(component)
+            }
+            None => Err(ComponentError::NotFound),
         }
     }
 
@@ -323,6 +354,7 @@ impl ComponentService {
         &self,
         component_id: &ComponentId,
         revision: ComponentRevision,
+        auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         info!(component_id = %component_id, "Get component revision");
 
@@ -332,16 +364,44 @@ impl ComponentService {
             .await?;
 
         match record {
-            Some(record) => Ok(record.try_into()?),
-            None => Err(ComponentError::UnknownComponentId(component_id.clone())),
+            Some(record) => {
+                let component: Component = record.try_into()?;
+
+                self.environment_service
+                    .get_and_authorize(
+                        &component.environment_id,
+                        EnvironmentAction::ViewComponent,
+                        auth,
+                    )
+                    .await
+                    .map_err(|err| match err {
+                        EnvironmentError::EnvironmentNotFound(_)
+                        | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
+                        other => other.into(),
+                    })?;
+
+                Ok(component)
+            }
+            None => Err(ComponentError::NotFound),
         }
     }
 
     pub async fn list_staged_components(
         &self,
         environment_id: &EnvironmentId,
+        auth: &AuthCtx,
     ) -> Result<Vec<Component>, ComponentError> {
         info!(environment_id = %environment_id, "Get staged components");
+
+        self.environment_service
+            .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => {
+                    ComponentError::NotFound
+                }
+                other => other.into(),
+            })?;
 
         let result = self
             .component_repo
@@ -358,6 +418,7 @@ impl ComponentService {
         &self,
         environment_id: EnvironmentId,
         component_name: ComponentName,
+        auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         info!(
             environment_id = %environment_id,
@@ -371,11 +432,25 @@ impl ComponentService {
             .await?;
 
         match record {
-            Some(record) => Ok(record.try_into()?),
-            None => Err(ComponentError::UnknownEnvironmentComponentName {
-                environment_id,
-                component_name,
-            })?,
+            Some(record) => {
+                let component: Component = record.try_into()?;
+
+                self.environment_service
+                    .get_and_authorize(
+                        &component.environment_id,
+                        EnvironmentAction::ViewComponent,
+                        auth,
+                    )
+                    .await
+                    .map_err(|err| match err {
+                        EnvironmentError::EnvironmentNotFound(_)
+                        | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
+                        other => other.into(),
+                    })?;
+
+                Ok(component)
+            }
+            None => Err(ComponentError::NotFound)?,
         }
     }
 
@@ -383,12 +458,24 @@ impl ComponentService {
         &self,
         environment_id: &EnvironmentId,
         deployment_revision_id: DeploymentRevisionId,
+        auth: &AuthCtx,
     ) -> Result<Vec<Component>, ComponentError> {
         info!(
             environment_id = %environment_id,
             deployment_revision_id = %deployment_revision_id.0.to_string(),
             "Get deployed components"
         );
+
+        self.environment_service
+            .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    ComponentError::ParentEnvironmentNotFound(environment_id)
+                }
+                EnvironmentError::Unauthorized(inner) => ComponentError::Unauthorized(inner),
+                other => other.into(),
+            })?;
 
         let result = self
             .component_repo
@@ -406,6 +493,7 @@ impl ComponentService {
         environment_id: EnvironmentId,
         deployment_revision_id: DeploymentRevisionId,
         component_name: ComponentName,
+        auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         info!(
             environment_id = %environment_id,
@@ -424,11 +512,25 @@ impl ComponentService {
             .await?;
 
         match record {
-            Some(record) => Ok(record.try_into()?),
-            None => Err(ComponentError::UnknownEnvironmentComponentName {
-                environment_id,
-                component_name,
-            })?,
+            Some(record) => {
+                let component: Component = record.try_into()?;
+
+                self.environment_service
+                    .get_and_authorize(
+                        &component.environment_id,
+                        EnvironmentAction::ViewComponent,
+                        auth,
+                    )
+                    .await
+                    .map_err(|err| match err {
+                        EnvironmentError::EnvironmentNotFound(_)
+                        | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
+                        other => other.into(),
+                    })?;
+
+                Ok(component)
+            }
+            None => Err(ComponentError::NotFound)?,
         }
     }
 
@@ -436,8 +538,11 @@ impl ComponentService {
         &self,
         component_id: &ComponentId,
         revision: ComponentRevision,
+        auth: &AuthCtx,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
-        let component = self.get_component_revision(component_id, revision).await?;
+        let component = self
+            .get_component_revision(component_id, revision, auth)
+            .await?;
 
         let stream = self
             .object_store

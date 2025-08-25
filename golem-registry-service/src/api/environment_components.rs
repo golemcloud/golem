@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use golem_common::api::Page;
 use golem_common::api::component::CreateComponentRequestMetadata;
-use golem_common::model::account::AccountId;
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::Component;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::ComponentType;
@@ -33,10 +33,10 @@ use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
-use uuid::uuid;
 
 pub struct EnvironmentComponentsApi {
     component_service: Arc<ComponentService>,
+    auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
@@ -46,8 +46,11 @@ pub struct EnvironmentComponentsApi {
     tag = ApiTags::Component
 )]
 impl EnvironmentComponentsApi {
-    pub fn new(component_service: Arc<ComponentService>) -> Self {
-        Self { component_service }
+    pub fn new(component_service: Arc<ComponentService>, auth_service: Arc<AuthService>) -> Self {
+        Self {
+            component_service,
+            auth_service,
+        }
     }
 
     /// Create a new component in the environment
@@ -69,7 +72,7 @@ impl EnvironmentComponentsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .create_component_internal(environment_id.0, payload, auth)
@@ -83,13 +86,10 @@ impl EnvironmentComponentsApi {
         &self,
         environment_id: EnvironmentId,
         payload: CreateComponentRequest,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         let data = payload.component_wasm.into_vec().await?;
         let files_archive = payload.files.map(|f| f.into_file());
-
-        // TODO
-        let account_id: AccountId = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
 
         let metadata = payload.metadata.0;
 
@@ -105,7 +105,7 @@ impl EnvironmentComponentsApi {
                 metadata.dynamic_linking.unwrap_or_default(),
                 metadata.env.unwrap_or_default(),
                 metadata.agent_types.unwrap_or_default(),
-                &account_id,
+                &auth,
             )
             .await?
             .into();
@@ -129,7 +129,7 @@ impl EnvironmentComponentsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_components_internal(environment_id.0, auth)
@@ -142,11 +142,11 @@ impl EnvironmentComponentsApi {
     async fn get_environment_components_internal(
         &self,
         environment_id: EnvironmentId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Page<Component>>> {
         let components: Vec<Component> = self
             .component_service
-            .list_staged_components(&environment_id)
+            .list_staged_components(&environment_id, &auth)
             .await?
             .into_iter()
             .map(Component::from)
@@ -173,7 +173,7 @@ impl EnvironmentComponentsApi {
             component_name = component_name.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_component_internal(environment_id.0, component_name.0, auth)
@@ -187,11 +187,11 @@ impl EnvironmentComponentsApi {
         &self,
         environment_id: EnvironmentId,
         component_name: ComponentName,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         let component: Component = self
             .component_service
-            .get_staged_component(environment_id, component_name)
+            .get_staged_component(environment_id, component_name, &auth)
             .await?
             .into();
 
@@ -217,7 +217,7 @@ impl EnvironmentComponentsApi {
             deployment_revision_id = deployment_revision_id.0.0,
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_deployment_components_internal(environment_id.0, deployment_revision_id.0, auth)
@@ -231,11 +231,11 @@ impl EnvironmentComponentsApi {
         &self,
         environment_id: EnvironmentId,
         deployment_revision_id: DeploymentRevisionId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Page<Component>>> {
         let components: Vec<Component> = self
             .component_service
-            .list_deployed_components(&environment_id, deployment_revision_id)
+            .list_deployed_components(&environment_id, deployment_revision_id, &auth)
             .await?
             .into_iter()
             .map(Component::from)
@@ -265,7 +265,7 @@ impl EnvironmentComponentsApi {
             component_name = component_name.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_deployment_component_internal(
@@ -285,11 +285,16 @@ impl EnvironmentComponentsApi {
         environment_id: EnvironmentId,
         deployment_revision_id: DeploymentRevisionId,
         component_name: ComponentName,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Component>> {
         let component: Component = self
             .component_service
-            .get_deployed_component(environment_id, deployment_revision_id, component_name)
+            .get_deployed_component(
+                environment_id,
+                deployment_revision_id,
+                component_name,
+                &auth,
+            )
             .await?
             .into();
 

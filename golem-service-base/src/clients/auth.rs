@@ -12,137 +12,122 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::RemoteServiceConfig;
-use super::authorised_request;
-use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
-use golem_api_grpc::proto::golem::auth::v1::{
-    AuthorizeAccountActionRequest, GetAccountRequest, authorize_account_action_response,
-    get_account_response,
-};
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::worker::v1::{
     UnknownError, WorkerExecutionError, worker_error, worker_execution_error,
 };
 use golem_common::SafeDisplay;
-use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::RetryConfig;
-use golem_common::model::account::AccountId;
-use golem_common::model::auth::AccountAction;
-use golem_common::model::auth::AuthCtx;
-use golem_common::retries::with_retries;
 use std::fmt::Display;
 use tonic::Status;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
 
 #[derive(Clone)]
 pub struct AuthService {
-    auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>>,
-    retry_config: RetryConfig,
+    // auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>>,
+    // retry_config: RetryConfig,
 }
 
 impl AuthService {
-    pub fn new(config: &RemoteServiceConfig) -> Self {
-        let auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>> = GrpcClient::new(
-            "auth",
-            |channel| {
-                CloudAuthServiceClient::new(channel)
-                    .send_compressed(CompressionEncoding::Gzip)
-                    .accept_compressed(CompressionEncoding::Gzip)
-            },
-            config.uri(),
-            GrpcClientConfig {
-                retries_on_unavailable: config.retries.clone(),
-                ..Default::default() // TODO
-            },
-        );
-        Self {
-            auth_service_client,
-            retry_config: config.retries.clone(),
-        }
-    }
+    // pub fn new(config: &RemoteServiceConfig) -> Self {
+    //     let auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>> = GrpcClient::new(
+    //         "auth",
+    //         |channel| {
+    //             CloudAuthServiceClient::new(channel)
+    //                 .send_compressed(CompressionEncoding::Gzip)
+    //                 .accept_compressed(CompressionEncoding::Gzip)
+    //         },
+    //         config.uri(),
+    //         GrpcClientConfig {
+    //             retries_on_unavailable: config.retries.clone(),
+    //             ..Default::default() // TODO
+    //         },
+    //     );
+    //     Self {
+    //         auth_service_client,
+    //         retry_config: config.retries.clone(),
+    //     }
+    // }
 
-    pub async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
-        let result: Result<AccountId, AuthClientError> = with_retries(
-            "auth",
-            "get-account",
-            None,
-            &self.retry_config,
-            &(self.auth_service_client.clone(), ctx.token_secret.0),
-            |(client, token)| {
-                Box::pin(async move {
-                    let response = client
-                        .call("get-account", move |client| {
-                            let request = authorised_request(GetAccountRequest {}, token);
+    // pub async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
+    //     let result: Result<AccountId, AuthClientError> = with_retries(
+    //         "auth",
+    //         "get-account",
+    //         None,
+    //         &self.retry_config,
+    //         &(self.auth_service_client.clone(), ctx.token_secret.0),
+    //         |(client, token)| {
+    //             Box::pin(async move {
+    //                 let response = client
+    //                     .call("get-account", move |client| {
+    //                         let request = authorised_request(GetAccountRequest {}, token);
 
-                            Box::pin(client.get_account(request))
-                        })
-                        .await?
-                        .into_inner();
-                    match response.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(get_account_response::Result::Success(payload)) => {
-                            Ok(payload.account_id.unwrap().try_into()?)
-                        }
-                        Some(get_account_response::Result::Error(error)) => Err(error.into()),
-                    }
-                })
-            },
-            AuthClientError::is_retriable,
-        )
-        .await;
+    //                         Box::pin(client.get_account(request))
+    //                     })
+    //                     .await?
+    //                     .into_inner();
+    //                 match response.result {
+    //                     None => Err("Empty response".to_string().into()),
+    //                     Some(get_account_response::Result::Success(payload)) => {
+    //                         Ok(payload.account_id.unwrap().try_into()?)
+    //                     }
+    //                     Some(get_account_response::Result::Error(error)) => Err(error.into()),
+    //                 }
+    //             })
+    //         },
+    //         AuthClientError::is_retriable,
+    //     )
+    //     .await;
 
-        result.map_err(|e| e.into())
-    }
+    //     result.map_err(|e| e.into())
+    // }
 
-    pub async fn authorize_account_action(
-        &self,
-        account_id: &AccountId,
-        action: AccountAction,
-        ctx: &AuthCtx,
-    ) -> Result<(), AuthServiceError> {
-        let result: Result<(), AuthClientError> = with_retries(
-            "auth",
-            "authorize-project-action",
-            Some(format!("{action:?}")),
-            &self.retry_config,
-            &(
-                self.auth_service_client.clone(),
-                account_id.clone(),
-                action.clone(),
-                ctx.token_secret.0,
-            ),
-            |(client, account_id, action, token)| {
-                Box::pin(async move {
-                    let response = client
-                        .call("authorize-account-action", move |client| {
-                            let request = authorised_request(
-                                AuthorizeAccountActionRequest {
-                                    account_id: Some(account_id.clone().into()),
-                                    action: action.clone() as i32,
-                                },
-                                token,
-                            );
+    // pub async fn authorize_account_action(
+    //     &self,
+    //     account_id: &AccountId,
+    //     action: AccountAction,
+    //     ctx: &AuthCtx,
+    // ) -> Result<(), AuthServiceError> {
+    //     let result: Result<(), AuthClientError> = with_retries(
+    //         "auth",
+    //         "authorize-project-action",
+    //         Some(format!("{action:?}")),
+    //         &self.retry_config,
+    //         &(
+    //             self.auth_service_client.clone(),
+    //             account_id.clone(),
+    //             action,
+    //             ctx.token_secret.0,
+    //         ),
+    //         |(client, account_id, action, token)| {
+    //             Box::pin(async move {
+    //                 let response = client
+    //                     .call("authorize-account-action", move |client| {
+    //                         let request = authorised_request(
+    //                             AuthorizeAccountActionRequest {
+    //                                 account_id: Some(account_id.clone().into()),
+    //                                 action: *action as i32,
+    //                             },
+    //                             token,
+    //                         );
 
-                            Box::pin(client.authorize_account_action(request))
-                        })
-                        .await?
-                        .into_inner();
-                    match response.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(authorize_account_action_response::Result::Success(_)) => Ok(()),
-                        Some(authorize_account_action_response::Result::Error(error)) => {
-                            Err(error.into())
-                        }
-                    }
-                })
-            },
-            AuthClientError::is_retriable,
-        )
-        .await;
+    //                         Box::pin(client.authorize_account_action(request))
+    //                     })
+    //                     .await?
+    //                     .into_inner();
+    //                 match response.result {
+    //                     None => Err("Empty response".to_string().into()),
+    //                     Some(authorize_account_action_response::Result::Success(_)) => Ok(()),
+    //                     Some(authorize_account_action_response::Result::Error(error)) => {
+    //                         Err(error.into())
+    //                     }
+    //                 }
+    //             })
+    //         },
+    //         AuthClientError::is_retriable,
+    //     )
+    //     .await;
 
-        result.map_err(|e| e.into())
-    }
+    //     result.map_err(|e| e.into())
+    // }
 
     // TODO:
     // pub async fn authorize_project_action(
@@ -284,12 +269,12 @@ impl From<String> for AuthClientError {
 }
 
 impl AuthClientError {
-    fn is_retriable(error: &AuthClientError) -> bool {
-        matches!(
-            error,
-            AuthClientError::Connection(_) | AuthClientError::Transport(_)
-        )
-    }
+    // fn is_retriable(error: &AuthClientError) -> bool {
+    //     matches!(
+    //         error,
+    //         AuthClientError::Connection(_) | AuthClientError::Transport(_)
+    //     )
+    // }
 }
 
 impl From<AuthClientError> for AuthServiceError {

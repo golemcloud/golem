@@ -12,33 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::auth::AuthorizationError;
 use crate::repo::model::component::ComponentRepoError;
 use crate::services::account_usage::error::AccountUsageError;
 use crate::services::application::ApplicationError;
 use crate::services::environment::EnvironmentError;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::{
-    ComponentFilePath, ComponentName, InitialComponentFileKey, VersionedComponentId,
-};
+use golem_common::model::component::{ComponentFilePath, InitialComponentFileKey};
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentId, PluginInstallationId};
-use golem_common::{SafeDisplay, error_forwarding};
+use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
     #[error("Component already exists: {0}")]
     AlreadyExists(ComponentId),
-    #[error("Unknown component id: {0}")]
-    UnknownComponentId(ComponentId),
-    #[error("Component {component_name} not found in environment {environment_id}")]
-    UnknownEnvironmentComponentName {
-        environment_id: EnvironmentId,
-        component_name: ComponentName,
-    },
-    #[error("Unknown versioned component id: {0}")]
-    UnknownVersionedComponentId(VersionedComponentId),
     #[error(transparent)]
     ComponentProcessingError(#[from] ComponentProcessingError),
     #[error("Malformed component archive: {message}")]
@@ -54,8 +44,6 @@ pub enum ComponentError {
         "The component name {actual} did not match the component's root package name: {expected}"
     )]
     InvalidComponentName { expected: String, actual: String },
-    #[error("Unauthorized: {0}")]
-    Unauthorized(String),
     #[error("Limit {limit_name} exceeded, limit: {limit_value}, current: {current_value}")]
     LimitExceeded {
         limit_name: String,
@@ -84,6 +72,12 @@ pub enum ComponentError {
     PluginInstallationNotFound {
         installation_id: PluginInstallationId,
     },
+    #[error("Environment not found: {0}")]
+    ParentEnvironmentNotFound(EnvironmentId),
+    #[error("Requested component not found")]
+    NotFound,
+    #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -92,15 +86,11 @@ impl SafeDisplay for ComponentError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::AlreadyExists(_) => self.to_string(),
-            Self::UnknownComponentId(_) => self.to_string(),
-            Self::UnknownEnvironmentComponentName { .. } => self.to_string(),
-            Self::UnknownVersionedComponentId(_) => self.to_string(),
             Self::ComponentProcessingError(inner) => inner.to_safe_string(),
             Self::MalformedComponentArchive { .. } => self.to_string(),
             Self::InitialComponentFileNotFound { .. } => self.to_string(),
             Self::InvalidFilePath(_) => self.to_string(),
             Self::InvalidComponentName { .. } => self.to_string(),
-            Self::Unauthorized(_) => self.to_string(),
             Self::LimitExceeded { .. } => self.to_string(),
             Self::InvalidOplogProcessorPlugin => self.to_string(),
             Self::PluginNotFound { .. } => self.to_string(),
@@ -108,6 +98,9 @@ impl SafeDisplay for ComponentError {
             Self::ConcurrentUpdate => self.to_string(),
             Self::InvalidCurrentRevision => self.to_string(),
             Self::PluginInstallationNotFound { .. } => self.to_string(),
+            Self::ParentEnvironmentNotFound(_) => self.to_string(),
+            Self::NotFound => self.to_string(),
+            Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -116,9 +109,9 @@ impl SafeDisplay for ComponentError {
 error_forwarding!(
     ComponentError,
     RepoError,
-    EnvironmentError,
     ApplicationError,
-    ComponentRepoError
+    ComponentRepoError,
+    EnvironmentError
 );
 
 impl From<AccountUsageError> for ComponentError {
@@ -133,10 +126,7 @@ impl From<AccountUsageError> for ComponentError {
                 limit_value,
                 current_value,
             },
-            AccountUsageError::InternalError(inner) => {
-                Self::InternalError(inner.context("AccountUsageError"))
-            }
-            _ => Self::InternalError(anyhow::Error::from(value).context("AccountUsageError")),
+            other => Self::InternalError(other.into_anyhow().context("AccountUsageError")),
         }
     }
 }

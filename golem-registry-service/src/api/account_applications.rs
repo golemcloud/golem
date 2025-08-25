@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
 use crate::services::application::ApplicationService;
+use crate::services::auth::AuthService;
 use golem_common::api::Page;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{Application, NewApplicationData};
-use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -26,10 +27,10 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
-use uuid::Uuid;
 
 pub struct AccountApplicationsApi {
     application_service: Arc<ApplicationService>,
+    auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
@@ -39,9 +40,13 @@ pub struct AccountApplicationsApi {
     tag = ApiTags::Application
 )]
 impl AccountApplicationsApi {
-    pub fn new(application_service: Arc<ApplicationService>) -> Self {
+    pub fn new(
+        application_service: Arc<ApplicationService>,
+        auth_service: Arc<AuthService>,
+    ) -> Self {
         Self {
             application_service,
+            auth_service,
         }
     }
 
@@ -61,7 +66,7 @@ impl AccountApplicationsApi {
             account_id = account_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_applications_in_account_internal(account_id.0, auth)
@@ -97,7 +102,7 @@ impl AccountApplicationsApi {
             application_name = application_name.0
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_application_internal(account_id.0, application_name.0, auth)
@@ -133,7 +138,7 @@ impl AccountApplicationsApi {
             account_id = account_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .create_application_internal(account_id.0, data.0, auth)
@@ -147,13 +152,11 @@ impl AccountApplicationsApi {
         &self,
         account_id: AccountId,
         data: NewApplicationData,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Application>> {
-        // TODO
-        let actor = AccountId(Uuid::nil());
         let result = self
             .application_service
-            .create(account_id, data, actor)
+            .create(account_id, data, &auth)
             .await?;
 
         Ok(Json(result))

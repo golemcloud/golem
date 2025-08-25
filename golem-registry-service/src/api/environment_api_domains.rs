@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use golem_common::api::Page;
 use golem_common::api::api_domain::CreateApiDomainRequest;
 use golem_common::model::api_domain::{ApiDomain, ApiDomainName};
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -24,9 +25,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct EnvironmentApiDomainsApi {}
+pub struct EnvironmentApiDomainsApi {
+    auth_service: Arc<AuthService>,
+}
 
 #[OpenApi(
     prefix_path = "/v1/envs",
@@ -35,6 +39,10 @@ pub struct EnvironmentApiDomainsApi {}
     tag = ApiTags::ApiDomain
 )]
 impl EnvironmentApiDomainsApi {
+    pub fn new(auth_service: Arc<AuthService>) -> Self {
+        Self { auth_service }
+    }
+
     /// Get all API domains
     #[oai(
         path = "/:environment_id/domains",
@@ -51,7 +59,7 @@ impl EnvironmentApiDomainsApi {
             environment_id = environment_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_domains_internal(environment_id.0, auth)
@@ -86,7 +94,7 @@ impl EnvironmentApiDomainsApi {
             environment_id = environment_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_domain_internal(environment_id.0, domain.0, auth)
@@ -122,7 +130,7 @@ impl EnvironmentApiDomainsApi {
             environment_id = environment_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .create_domain_internal(environment_id.0, payload.0, auth)

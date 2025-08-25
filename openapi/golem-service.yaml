@@ -8144,6 +8144,8 @@ components:
         planId:
           type: string
           format: uuid
+        name:
+          type: string
         appLimit:
           type: integer
           format: int64
@@ -8167,6 +8169,7 @@ components:
           format: int64
       required:
       - planId
+      - name
       - appLimit
       - envLimit
       - componentLimit

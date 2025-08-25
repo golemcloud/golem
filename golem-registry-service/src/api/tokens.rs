@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use crate::api::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use crate::services::token::TokenService;
 use golem_common::model::Empty;
-use golem_common::model::auth::{AuthCtx, Token, TokenId};
+use golem_common::model::auth::{Token, TokenId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -27,6 +29,7 @@ use tracing::Instrument;
 
 pub struct TokensApi {
     token_service: Arc<TokenService>,
+    auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
@@ -35,8 +38,11 @@ pub struct TokensApi {
     tag = ApiTags::Token
 )]
 impl TokensApi {
-    pub fn new(token_service: Arc<TokenService>) -> Self {
-        Self { token_service }
+    pub fn new(token_service: Arc<TokenService>, auth_service: Arc<AuthService>) -> Self {
+        Self {
+            token_service,
+            auth_service,
+        }
     }
 
     /// Get token by id
@@ -48,7 +54,7 @@ impl TokensApi {
     ) -> ApiResult<Json<Token>> {
         let record = recorded_http_api_request!("get_token", token_id = token_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_token_internal(token_id.0, auth)
@@ -58,12 +64,8 @@ impl TokensApi {
         record.result(response)
     }
 
-    async fn get_token_internal(
-        &self,
-        token_id: TokenId,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Token>> {
-        let result = self.token_service.get(&token_id).await?;
+    async fn get_token_internal(&self, token_id: TokenId, auth: AuthCtx) -> ApiResult<Json<Token>> {
+        let result = self.token_service.get(&token_id, &auth).await?;
 
         Ok(Json(result.without_secret()))
     }
@@ -78,8 +80,11 @@ impl TokensApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Empty>> {
         let record = recorded_http_api_request!("delete_token", token_id = token_id.0.to_string());
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
         let response = self
-            .delete_token_internal(token_id.0, token)
+            .delete_token_internal(token_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -89,9 +94,9 @@ impl TokensApi {
     async fn delete_token_internal(
         &self,
         token_id: TokenId,
-        _token: GolemSecurityScheme,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Empty>> {
-        self.token_service.delete(&token_id).await?;
+        self.token_service.delete(&token_id, &auth).await?;
         Ok(Json(Empty {}))
     }
 }

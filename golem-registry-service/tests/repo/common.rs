@@ -52,7 +52,7 @@ pub async fn test_create_and_get_account(deps: &Deps) {
         email: new_repo_uuid().to_string(),
         audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
         name: new_repo_uuid().to_string(),
-        roles: Vec::new(),
+        roles: 0,
         plan_id: deps.test_plan_id(),
     };
 
@@ -67,7 +67,7 @@ pub async fn test_create_and_get_account(deps: &Deps) {
             email: account.email.clone(),
             audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
             name: new_repo_uuid().to_string(),
-            roles: Vec::new(),
+            roles: 0,
             plan_id: deps.test_plan_id(),
         })
         .await;
@@ -75,7 +75,7 @@ pub async fn test_create_and_get_account(deps: &Deps) {
 
     let requested_account = deps
         .account_repo
-        .get_by_id(&account.account_id)
+        .get_by_id(&account.account_id, false)
         .await
         .unwrap();
     let_assert!(Some(requested_account) = requested_account);
@@ -83,7 +83,7 @@ pub async fn test_create_and_get_account(deps: &Deps) {
 
     let requested_account = deps
         .account_repo
-        .get_by_email(&account.email)
+        .get_by_email(&account.email, false)
         .await
         .unwrap();
     let_assert!(Some(requested_account) = requested_account);
@@ -97,7 +97,7 @@ pub async fn test_update(deps: &Deps) {
         email: new_repo_uuid().to_string(),
         audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
         name: new_repo_uuid().to_string(),
-        roles: Vec::new(),
+        roles: 0,
         plan_id: deps.test_plan_id(),
     };
 
@@ -127,7 +127,7 @@ pub async fn test_application_ensure(deps: &Deps) {
 
     let app = deps
         .application_repo
-        .get_by_name(&owner.revision.account_id, &app_name)
+        .get_by_name(&owner.revision.account_id, &app_name, false)
         .await
         .unwrap();
     assert!(app.is_none());
@@ -163,7 +163,7 @@ pub async fn test_application_ensure(deps: &Deps) {
 
     let app_3 = deps
         .application_repo
-        .get_by_name(&owner.revision.account_id, &app_name)
+        .get_by_name(&owner.revision.account_id, &app_name, false)
         .await
         .unwrap();
     let_assert!(Some(app_3) = app_3);
@@ -205,8 +205,8 @@ pub async fn test_application_ensure_concurrent(deps: &Deps) {
 }
 
 pub async fn test_application_delete(deps: &Deps) {
-    let app = deps.create_application().await;
     let user = deps.create_account().await;
+    let app = deps.create_application(&user.revision.account_id).await;
 
     deps.application_repo
         .delete(&user.revision.account_id, &app.application_id)
@@ -215,13 +215,13 @@ pub async fn test_application_delete(deps: &Deps) {
 
     let get_by_id = deps
         .application_repo
-        .get_by_id(&app.application_id)
+        .get_by_id(&app.application_id, false)
         .await
         .unwrap();
     assert!(get_by_id.is_none());
     let get_by_name = deps
         .application_repo
-        .get_by_name(&user.revision.account_id, &app.name)
+        .get_by_name(&user.revision.account_id, &app.name, false)
         .await
         .unwrap();
     assert!(get_by_name.is_none());
@@ -244,12 +244,19 @@ pub async fn test_application_delete(deps: &Deps) {
 
 pub async fn test_environment_create(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+
     let env_name = "local";
 
     assert!(
         deps.environment_repo
-            .get_by_name(&app.application_id, env_name)
+            .get_by_name(
+                &app.application_id,
+                env_name,
+                &user.revision.account_id,
+                false,
+                false
+            )
             .await
             .unwrap()
             .is_none()
@@ -279,24 +286,35 @@ pub async fn test_environment_create(deps: &Deps) {
 
     let env_by_name = deps
         .environment_repo
-        .get_by_name(&app.application_id, env_name)
+        .get_by_name(
+            &app.application_id,
+            env_name,
+            &user.revision.account_id,
+            false,
+            false,
+        )
         .await
         .unwrap();
     let_assert!(Some(env_by_name) = env_by_name);
-    check!(env == env_by_name);
+    check!(env == env_by_name.value);
 
     let env_by_id = deps
         .environment_repo
-        .get_by_id(&env.revision.environment_id)
+        .get_by_id(
+            &env.revision.environment_id,
+            &user.revision.account_id,
+            false,
+            false,
+        )
         .await
         .unwrap();
     let_assert!(Some(env_by_id) = env_by_id);
-    check!(env == env_by_id);
+    check!(env == env_by_id.value);
 }
 
 pub async fn test_environment_create_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
-    let app = deps.create_application().await;
+    let app = deps.create_application(&user.revision.account_id).await;
     let env_name = "local";
     let concurrency = 20;
 
@@ -338,7 +356,8 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
 
 pub async fn test_environment_update(deps: &Deps) {
     let user = deps.create_account().await;
-    let env_rev_0 = deps.create_env().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+    let env_rev_0 = deps.create_env(&app.application_id).await;
 
     let env_rev_1 = EnvironmentRevisionRecord {
         environment_id: env_rev_0.revision.environment_id,
@@ -370,23 +389,34 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_1_by_name = deps
         .environment_repo
-        .get_by_name(&env_rev_0.application_id, &env_rev_0.name)
+        .get_by_name(
+            &env_rev_0.application_id,
+            &env_rev_0.name,
+            &user.revision.account_id,
+            false,
+            false,
+        )
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_name) = rev_1_by_name);
-    assert!(env_rev_1 == rev_1_by_name.revision);
-    assert!(env_rev_0.name == rev_1_by_name.name);
-    assert!(env_rev_0.application_id == rev_1_by_name.application_id);
+    assert!(env_rev_1 == rev_1_by_name.value.revision);
+    assert!(env_rev_0.name == rev_1_by_name.value.name);
+    assert!(env_rev_0.application_id == rev_1_by_name.value.application_id);
 
     let rev_1_by_id = deps
         .environment_repo
-        .get_by_id(&env_rev_1.environment_id)
+        .get_by_id(
+            &env_rev_1.environment_id,
+            &user.revision.account_id,
+            false,
+            false,
+        )
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_id) = rev_1_by_id);
-    assert!(env_rev_1 == rev_1_by_id.revision);
-    assert!(env_rev_0.name == rev_1_by_id.name);
-    assert!(env_rev_0.application_id == rev_1_by_id.application_id);
+    assert!(env_rev_1 == rev_1_by_id.value.revision);
+    assert!(env_rev_0.name == rev_1_by_id.value.name);
+    assert!(env_rev_0.application_id == rev_1_by_id.value.application_id);
 
     let env_rev_2 = EnvironmentRevisionRecord {
         environment_id: env_rev_0.revision.environment_id,
@@ -425,28 +455,40 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_2_by_name = deps
         .environment_repo
-        .get_by_name(&env_rev_0.application_id, &env_rev_0.name)
+        .get_by_name(
+            &env_rev_0.application_id,
+            &env_rev_0.name,
+            &user.revision.account_id,
+            false,
+            false,
+        )
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_name) = rev_2_by_name);
-    assert!(env_rev_2 == rev_2_by_name.revision);
-    assert!(env_rev_0.name == rev_2_by_name.name);
-    assert!(env_rev_0.application_id == rev_2_by_name.application_id);
+    assert!(env_rev_2 == rev_2_by_name.value.revision);
+    assert!(env_rev_0.name == rev_2_by_name.value.name);
+    assert!(env_rev_0.application_id == rev_2_by_name.value.application_id);
 
     let rev_2_by_id = deps
         .environment_repo
-        .get_by_id(&env_rev_2.environment_id)
+        .get_by_id(
+            &env_rev_2.environment_id,
+            &user.revision.account_id,
+            false,
+            false,
+        )
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_id) = rev_2_by_id);
-    assert!(env_rev_2 == rev_2_by_id.revision);
-    assert!(env_rev_0.name == rev_2_by_id.name);
-    assert!(env_rev_0.application_id == rev_2_by_id.application_id);
+    assert!(env_rev_2 == rev_2_by_id.value.revision);
+    assert!(env_rev_0.name == rev_2_by_id.value.name);
+    assert!(env_rev_0.application_id == rev_2_by_id.value.application_id);
 }
 
 pub async fn test_environment_update_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
-    let env_rev_0 = deps.create_env().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+    let env_rev_0 = deps.create_env(&app.application_id).await;
     let concurrency = 20;
 
     let results = join_all(
@@ -485,10 +527,11 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
 
 pub async fn test_component_stage(deps: &Deps) {
     let user = deps.create_account().await;
-    let env = deps.create_env().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+    let env = deps.create_env(&app.application_id).await;
     let app = deps
         .application_repo
-        .get_by_id(&env.application_id)
+        .get_by_id(&env.application_id, false)
         .await
         .unwrap()
         .unwrap();
@@ -797,7 +840,8 @@ pub async fn test_component_stage(deps: &Deps) {
 
 pub async fn test_http_api_definition_stage(deps: &Deps) {
     let user = deps.create_account().await;
-    let env = deps.create_env().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+    let env = deps.create_env(&app.application_id).await;
     let definition_name = "test-api-definition";
     let definition_id = new_repo_uuid();
 
@@ -977,7 +1021,8 @@ pub async fn test_http_api_deployment_stage_has_sub(deps: &Deps) {
 
 async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: Option<&str>) {
     let user = deps.create_account().await;
-    let env = deps.create_env().await;
+    let app = deps.create_application(&user.revision.account_id).await;
+    let env = deps.create_env(&app.application_id).await;
     let host = "test-host-1.com";
     let deployment_id = new_repo_uuid();
 

@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use golem_common::api::Page;
 use golem_common::api::certificate::{CertificateResponseView, UpdateCertificateRequest};
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::certificate::CertificateId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -23,9 +24,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct CertificatesApi {}
+pub struct CertificatesApi {
+    auth_service: Arc<AuthService>,
+}
 
 #[OpenApi(
     prefix_path = "/v1/certificates",
@@ -33,6 +37,10 @@ pub struct CertificatesApi {}
     tag = ApiTags::ApiCertificate
 )]
 impl CertificatesApi {
+    pub fn new(auth_service: Arc<AuthService>) -> Self {
+        Self { auth_service }
+    }
+
     /// Get a certificate by id
     #[oai(
         path = "/:certificate_id",
@@ -49,7 +57,7 @@ impl CertificatesApi {
             certificate_id = certificate_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_certificate_internal(certificate_id.0, auth)
@@ -83,7 +91,7 @@ impl CertificatesApi {
             certificate_id = certificate_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_certificate_revisions_internal(certificate_id.0, auth)
@@ -118,7 +126,7 @@ impl CertificatesApi {
             certificate_id = certificate_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .update_certificate_internal(certificate_id.0, payload.0, auth)

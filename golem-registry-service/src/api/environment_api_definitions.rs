@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use golem_common::api::Page;
 use golem_common::api::api_definition::{
     CreateHttpApiDefinitionRequest, HttpApiDefinitionResponseView,
 };
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::deployment::DeploymentRevisionId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
@@ -26,9 +27,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct EnvironmentApiDefinitionsApi {}
+pub struct EnvironmentApiDefinitionsApi {
+    auth_service: Arc<AuthService>,
+}
 
 #[OpenApi(
     prefix_path = "/v1/envs",
@@ -37,6 +41,10 @@ pub struct EnvironmentApiDefinitionsApi {}
     tag = ApiTags::ApiDefinition
 )]
 impl EnvironmentApiDefinitionsApi {
+    pub fn new(auth_service: Arc<AuthService>) -> Self {
+        Self { auth_service }
+    }
+
     /// Create a new api-definition in the environment
     #[oai(
         path = "/:environment_id/api-definitions",
@@ -54,7 +62,7 @@ impl EnvironmentApiDefinitionsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .create_api_definition_internal(environment_id.0, payload.0, auth)
@@ -89,7 +97,7 @@ impl EnvironmentApiDefinitionsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_api_definitions_internal(environment_id.0, auth)
@@ -125,7 +133,7 @@ impl EnvironmentApiDefinitionsApi {
             api_definition_name = api_definition_name.0
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_api_definition_internal(environment_id.0, api_definition_name.0, auth)
@@ -163,7 +171,7 @@ impl EnvironmentApiDefinitionsApi {
             deployment_revision_id = deployment_revision_id.0.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_deployment_api_definitions_internal(
@@ -207,7 +215,7 @@ impl EnvironmentApiDefinitionsApi {
             api_definition_name = api_definition_name.0
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_deployment_api_definition_internal(

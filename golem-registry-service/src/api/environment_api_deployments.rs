@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use golem_common::api::{CreateApiDeploymentRequest, Page};
 use golem_common::model::api_deployment::{ApiDeployment, ApiSiteString};
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::deployment::DeploymentRevisionId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
@@ -24,9 +25,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct EnvironmentApiDeploymentsApi {}
+pub struct EnvironmentApiDeploymentsApi {
+    auth_service: Arc<AuthService>,
+}
 
 #[OpenApi(
     prefix_path = "/v1/envs",
@@ -35,6 +39,10 @@ pub struct EnvironmentApiDeploymentsApi {}
     tag = ApiTags::ApiDeployment
 )]
 impl EnvironmentApiDeploymentsApi {
+    pub fn new(auth_service: Arc<AuthService>) -> Self {
+        Self { auth_service }
+    }
+
     /// Create a new api deployment
     #[oai(
         path = "/:environment_id/api-deployments",
@@ -52,7 +60,7 @@ impl EnvironmentApiDeploymentsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .create_api_deployment_internal(environment_id.0, payload.0, auth)
@@ -87,7 +95,7 @@ impl EnvironmentApiDeploymentsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_api_deployments_internal(environment_id.0, auth)
@@ -123,7 +131,7 @@ impl EnvironmentApiDeploymentsApi {
             site = site.0.0
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_api_deployment_internal(environment_id.0, site.0, auth)
@@ -161,7 +169,7 @@ impl EnvironmentApiDeploymentsApi {
             deployment_revision_id = deployment_revision_id.0.0,
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_deployment_api_deployments_internal(
@@ -205,7 +213,7 @@ impl EnvironmentApiDeploymentsApi {
             site = site.0.0
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_deployment_api_deployment_internal(

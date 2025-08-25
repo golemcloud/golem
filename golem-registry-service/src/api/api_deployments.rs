@@ -13,19 +13,23 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use golem_common::api::{Page, UpdateApiDeploymentRequest};
 use golem_common::model::api_deployment::ApiDeploymentRevision;
 use golem_common::model::api_deployment::{ApiDeployment, ApiDeploymentId};
-use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct ApiDeploymentsApi {}
+pub struct ApiDeploymentsApi {
+    auth_service: Arc<AuthService>,
+}
 
 #[OpenApi(
     prefix_path = "/v1/api-deployments",
@@ -33,6 +37,10 @@ pub struct ApiDeploymentsApi {}
     tag = ApiTags::ApiDeployment
 )]
 impl ApiDeploymentsApi {
+    pub fn new(auth_service: Arc<AuthService>) -> Self {
+        Self { auth_service }
+    }
+
     /// Get an api-deployment by id
     #[oai(
         path = "/:api_deployment_id",
@@ -49,7 +57,7 @@ impl ApiDeploymentsApi {
             api_deployment_id = api_deployment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_api_deployment_internal(api_deployment_id.0, auth)
@@ -83,7 +91,7 @@ impl ApiDeploymentsApi {
             api_deployment_id = api_deployment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_api_deployment_revisions_internal(api_deployment_id.0, auth)
@@ -119,7 +127,7 @@ impl ApiDeploymentsApi {
             revision = revision.0.0
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_api_deployment_revision_internal(api_deployment_id.0, revision.0, auth)
@@ -155,7 +163,7 @@ impl ApiDeploymentsApi {
             api_deployment_id = api_deployment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .update_api_deployment_internal(api_deployment_id.0, payload.0, auth)

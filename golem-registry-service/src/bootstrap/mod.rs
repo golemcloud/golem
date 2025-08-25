@@ -16,6 +16,7 @@ pub mod login;
 
 use self::login::LoginSystem;
 use crate::config::RegistryServiceConfig;
+use crate::model::auth::AuthCtx;
 use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
 use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
@@ -29,6 +30,7 @@ use crate::repo::token::{DbTokenRepo, TokenRepo};
 use crate::services::account::AccountService;
 use crate::services::account_usage::AccountUsageService;
 use crate::services::application::ApplicationService;
+use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use crate::services::component_compilation::ComponentCompilationServiceDisabled;
 use crate::services::component_object_store::ComponentObjectStore;
@@ -57,6 +59,7 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 pub struct Services {
     pub account_service: Arc<AccountService>,
     pub application_service: Arc<ApplicationService>,
+    pub auth_service: Arc<AuthService>,
     pub component_service: Arc<ComponentService>,
     pub environment_service: Arc<EnvironmentService>,
     pub login_system: LoginSystem,
@@ -80,6 +83,8 @@ struct Repos {
 
 impl Services {
     pub async fn new(config: &RegistryServiceConfig) -> anyhow::Result<Self> {
+        let bootstrap_auth = AuthCtx::system();
+
         let repos = make_repos(&config.db).await?;
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
@@ -95,29 +100,41 @@ impl Services {
 
         let plan_service = Arc::new(PlanService::new(repos.plan_repo, config.plans.clone()));
         plan_service
-            .create_initial_plans()
+            .create_initial_plans(&bootstrap_auth)
             .await
             .map_err(|e| e.into_anyhow())?;
-
-        let token_service = Arc::new(TokenService::new(repos.token_repo));
 
         let account_service = Arc::new(AccountService::new(
             repos.account_repo.clone(),
             plan_service.clone(),
-            token_service.clone(),
             config.accounts.clone(),
         ));
         account_service
-            .create_initial_accounts()
+            .create_initial_accounts(&bootstrap_auth)
             .await
             .map_err(|e| e.into_anyhow())?;
 
-        let application_service = Arc::new(ApplicationService::new(repos.application_repo.clone()));
+        let token_service = Arc::new(TokenService::new(repos.token_repo, account_service.clone()));
+        token_service
+            .create_initial_tokens(&bootstrap_auth)
+            .await
+            .map_err(|e| e.into_anyhow())?;
+
+        let auth_service = Arc::new(AuthService::new(
+            account_service.clone(),
+            token_service.clone(),
+        ));
+
+        let application_service = Arc::new(ApplicationService::new(
+            repos.application_repo.clone(),
+            account_service.clone(),
+        ));
 
         let environment_service = Arc::new(EnvironmentService::new(repos.environment_repo.clone()));
 
         let environment_share_service = Arc::new(EnvironmentShareService::new(
             repos.environment_share_repo.clone(),
+            environment_service.clone(),
         ));
 
         let component_service = Arc::new(ComponentService::new(
@@ -128,7 +145,6 @@ impl Services {
             plugin_wasm_files,
             account_usage_service,
             environment_service.clone(),
-            application_service.clone(),
         ));
 
         let login_system = LoginSystem::new(
@@ -148,6 +164,7 @@ impl Services {
             login_system,
             plan_service,
             environment_share_service,
+            auth_service,
         })
     }
 }

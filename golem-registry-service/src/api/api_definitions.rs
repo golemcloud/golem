@@ -13,22 +13,26 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use golem_common::api::Page;
 use golem_common::api::api_definition::{
     HttpApiDefinitionResponseView, UpdateHttpApiDefinitionRequest,
 };
 use golem_common::model::api_definition::ApiDefinitionId;
 use golem_common::model::api_definition::ApiDefinitionRevision;
-use golem_common::model::auth::AuthCtx;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct ApiDefinitionsApi {}
+pub struct ApiDefinitionsApi {
+    auth_service: Arc<AuthService>,
+}
 
 #[OpenApi(
     prefix_path = "/v1/api-definitions",
@@ -36,6 +40,10 @@ pub struct ApiDefinitionsApi {}
     tag = ApiTags::ApiDefinition
 )]
 impl ApiDefinitionsApi {
+    pub fn new(auth_service: Arc<AuthService>) -> Self {
+        Self { auth_service }
+    }
+
     /// Get api-definition by id
     #[oai(
         path = "/:api_definition_id",
@@ -52,7 +60,7 @@ impl ApiDefinitionsApi {
             api_definition_id = api_definition_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_api_definition_internal(api_definition_id.0, auth)
@@ -86,7 +94,7 @@ impl ApiDefinitionsApi {
             api_definition_id = api_definition_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_api_definition_revisions_internal(api_definition_id.0, auth)
@@ -122,7 +130,7 @@ impl ApiDefinitionsApi {
             revision = revision.0.0
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_api_definition_revision_internal(api_definition_id.0, revision.0, auth)
@@ -158,7 +166,7 @@ impl ApiDefinitionsApi {
             api_definition_id = api_definition_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .update_api_definition_internal(api_definition_id.0, payload.0, auth)
