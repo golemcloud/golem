@@ -25,7 +25,8 @@ interface oplog {
         /// writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
         /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
         /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
-        write-remote-batched(option<oplog-index>)
+        write-remote-batched(option<oplog-index>),
+        write-remote-transaction(option<oplog-index>)
     }
 
     record plugin-installation-description {
@@ -250,6 +251,16 @@ interface oplog {
         persistence-level: persistence-level
     }
 
+    record begin-remote-transaction-parameters {
+        timestamp: datetime,
+        transaction-id: string
+    }
+
+    record remote-transaction-parameters {
+        timestamp: datetime,
+        begin-index: oplog-index
+    }
+
     variant oplog-entry {
         /// The initial worker oplog entry
         create(create-parameters),
@@ -326,7 +337,17 @@ interface oplog {
         /// Set an attribute on an open span in the invocation context
         set-span-attribute(set-span-attribute-parameters),
         /// Change the current persistence level
-        change-persistence-level(change-persistence-level-parameters)
+        change-persistence-level(change-persistence-level-parameters),
+        /// Begins a transaction operation
+        begin-remote-transaction(begin-remote-transaction-parameters),
+        /// Pre-Commit of the transaction, indicating that the transaction will be committed
+        pre-commit-remote-transaction(remote-transaction-parameters),
+        /// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
+        pre-rollback-remote-transaction(remote-transaction-parameters),
+        /// Committed transaction operation, indicating that the transaction was committed
+        committed-remote-transaction(remote-transaction-parameters),
+        /// Rolled back transaction operation, indicating that the transaction was rolled back
+        rolled-back-remote-transaction(remote-transaction-parameters)
     }
 
     resource get-oplog {

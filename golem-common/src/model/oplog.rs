@@ -18,7 +18,7 @@ use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, Sp
 use crate::model::regions::OplogRegion;
 use crate::model::{
     AccountId, AgentInstanceKey, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp,
-    WorkerId, WorkerInvocation,
+    TransactionId, WorkerId, WorkerInvocation,
 };
 use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;
@@ -481,6 +481,26 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         key: AgentInstanceKey,
     },
+    BeginRemoteTransaction {
+        timestamp: Timestamp,
+        transaction_id: TransactionId,
+    },
+    PreCommitRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
+    PreRollbackRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
+    CommittedRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
+    RolledBackRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
 }
 
 impl OplogEntry {
@@ -752,12 +772,71 @@ impl OplogEntry {
         }
     }
 
+    pub fn begin_remote_transaction(transaction_id: TransactionId) -> OplogEntry {
+        OplogEntry::BeginRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            transaction_id,
+        }
+    }
+
+    pub fn pre_commit_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::PreCommitRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn pre_rollback_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::PreRollbackRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn committed_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::CommittedRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn rolled_back_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::RolledBackRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
 
     pub fn is_end_remote_write(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_pre_commit_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::PreCommitRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_pre_rollback_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::PreRollbackRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_pre_remote_transaction(&self, idx: OplogIndex) -> bool {
+        self.is_pre_commit_remote_transaction(idx) || self.is_pre_rollback_remote_transaction(idx)
+    }
+
+    pub fn is_committed_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::CommittedRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_rolled_back_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::RolledBackRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_end_remote_transaction(&self, idx: OplogIndex) -> bool {
+        self.is_committed_remote_transaction(idx) || self.is_rolled_back_remote_transaction(idx)
     }
 
     /// Checks that an "intermediate oplog entry" between a `BeginRemoteWrite` and an `EndRemoteWrite`
@@ -769,6 +848,11 @@ impl OplogEntry {
                 ..
             } => match durable_function_type {
                 DurableFunctionType::WriteRemoteBatched(Some(begin_index))
+                    if *begin_index == idx =>
+                {
+                    true
+                }
+                DurableFunctionType::WriteRemoteTransaction(Some(begin_index))
                     if *begin_index == idx =>
                 {
                     true
@@ -846,7 +930,12 @@ impl OplogEntry {
             | OplogEntry::SetSpanAttribute { timestamp, .. }
             | OplogEntry::ChangePersistenceLevel { timestamp, .. }
             | OplogEntry::CreateAgentInstance { timestamp, .. }
-            | OplogEntry::DropAgentInstance { timestamp, .. } => *timestamp,
+            | OplogEntry::DropAgentInstance { timestamp, .. }
+            | OplogEntry::BeginRemoteTransaction { timestamp, .. }
+            | OplogEntry::PreCommitRemoteTransaction { timestamp, .. }
+            | OplogEntry::PreRollbackRemoteTransaction { timestamp, .. }
+            | OplogEntry::CommittedRemoteTransaction { timestamp, .. }
+            | OplogEntry::RolledBackRemoteTransaction { timestamp, .. } => *timestamp,
         }
     }
 
@@ -954,6 +1043,8 @@ pub enum DurableFunctionType {
     /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
     /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
     WriteRemoteBatched(Option<OplogIndex>),
+
+    WriteRemoteTransaction(Option<OplogIndex>),
 }
 
 /// Describes the error that occurred in the worker

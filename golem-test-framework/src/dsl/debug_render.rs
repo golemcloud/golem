@@ -378,6 +378,31 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}agent type:        {}", &params.key.agent_type);
             let _ = writeln!(result, "{pad}agent id:          {}", &params.key.agent_id);
         }
+        PublicOplogEntry::BeginRemoteTransaction(params) => {
+            let _ = writeln!(result, "BEGIN REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}transaction id:    {}", &params.transaction_id);
+        }
+        PublicOplogEntry::PreCommitRemoteTransaction(params) => {
+            let _ = writeln!(result, "PRE COMMIT REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
+        PublicOplogEntry::PreRollbackRemoteTransaction(params) => {
+            let _ = writeln!(result, "PRE ROLLBACK REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
+        PublicOplogEntry::CommittedRemoteTransaction(params) => {
+            let _ = writeln!(result, "COMMITED REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
+        PublicOplogEntry::RolledBackRemoteTransaction(params) => {
+            let _ = writeln!(result, "ROLLED BACK REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
     }
 
     result

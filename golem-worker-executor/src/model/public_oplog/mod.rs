@@ -43,18 +43,19 @@ use golem_common::model::exports::find_resource_site;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
-    ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
-    ChangeRetryPolicyParameters, CreateAgentInstanceParameters, CreateParameters,
-    DeactivatePluginParameters, DescribeResourceParameters, DropAgentInstanceParameters,
-    EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
-    ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
-    FinishSpanParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters,
-    LogParameters, ManualUpdateParameters, PendingUpdateParameters,
-    PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttribute,
-    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
-    PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
-    SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters,
-    SuccessfulUpdateParameters, TimestampParameter,
+    ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
+    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateAgentInstanceParameters,
+    CreateParameters, DeactivatePluginParameters, DescribeResourceParameters,
+    DropAgentInstanceParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
+    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+    PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
+    PublicUpdateDescription, PublicWorkerInvocation, RemoteTransactionParameters,
+    ResourceParameters, RevertParameters, SetSpanAttributeParameters,
+    SnapshotBasedUpdateParameters, StartSpanParameters, SuccessfulUpdateParameters,
+    TimestampParameter,
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation,
@@ -809,6 +810,51 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::DropAgentInstance { timestamp, key } => Ok(
                 PublicOplogEntry::DropAgentInstance(DropAgentInstanceParameters { timestamp, key }),
             ),
+            OplogEntry::BeginRemoteTransaction {
+                timestamp,
+                transaction_id,
+            } => Ok(PublicOplogEntry::BeginRemoteTransaction(
+                BeginRemoteTransactionParameters {
+                    timestamp,
+                    transaction_id,
+                },
+            )),
+            OplogEntry::PreCommitRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(PublicOplogEntry::PreCommitRemoteTransaction(
+                RemoteTransactionParameters {
+                    timestamp,
+                    begin_index,
+                },
+            )),
+            OplogEntry::PreRollbackRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(PublicOplogEntry::PreRollbackRemoteTransaction(
+                RemoteTransactionParameters {
+                    timestamp,
+                    begin_index,
+                },
+            )),
+            OplogEntry::CommittedRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(PublicOplogEntry::CommittedRemoteTransaction(
+                RemoteTransactionParameters {
+                    timestamp,
+                    begin_index,
+                },
+            )),
+            OplogEntry::RolledBackRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(PublicOplogEntry::RolledBackRemoteTransaction(
+                RemoteTransactionParameters {
+                    timestamp,
+                    begin_index,
+                },
+            )),
         }
     }
 }
@@ -1148,9 +1194,7 @@ fn encode_host_function_request_as_value(
             let payload: Option<RdbmsRequest<MysqlType>> = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        "rdbms::mysql::db-transaction::rollback"
-        | "rdbms::mysql::db-transaction::commit"
-        | "rdbms::mysql::db-result-stream::get-columns"
+        "rdbms::mysql::db-result-stream::get-columns"
         | "rdbms::mysql::db-result-stream::get-next" => no_payload(),
         "rdbms::postgres::db-connection::query"
         | "rdbms::postgres::db-connection::execute"
@@ -1161,9 +1205,7 @@ fn encode_host_function_request_as_value(
             let payload: Option<RdbmsRequest<PostgresType>> = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        "rdbms::postgres::db-transaction::rollback"
-        | "rdbms::postgres::db-transaction::commit"
-        | "rdbms::postgres::db-result-stream::get-columns"
+        "rdbms::postgres::db-result-stream::get-columns"
         | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
         _ => {
             // For everything else we assume that payload is a serialized ValueAndType
@@ -1548,10 +1590,6 @@ fn encode_host_function_response_as_value(
                 try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        "rdbms::mysql::db-transaction::rollback" | "rdbms::mysql::db-transaction::commit" => {
-            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
-        }
         "rdbms::mysql::db-result-stream::get-columns" => {
             let payload: Result<Vec<mysql_types::DbColumn>, SerializableError> =
                 try_deserialize(bytes)?;
@@ -1578,10 +1616,6 @@ fn encode_host_function_response_as_value(
             let payload: Result<RdbmsRequest<PostgresType>, SerializableError> =
                 try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
-        }
-        "rdbms::postgres::db-transaction::rollback" | "rdbms::postgres::db-transaction::commit" => {
-            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
         }
         "rdbms::postgres::db-result-stream::get-columns" => {
             let payload: Result<Vec<postgres_types::DbColumn>, SerializableError> =
