@@ -20,7 +20,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     InvokeAndAwaitResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
     LaunchNewWorkerSuccessResponse,
 };
-use golem_api_grpc::proto::golem::worker::{log_event, InvokeResult, LogEvent, TargetWorkerId};
+use golem_api_grpc::proto::golem::worker::{log_event, InvokeResult, LogEvent, WorkerId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
@@ -75,9 +75,9 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
         .worker_service()
         .invoke_and_await(
             &admin.token,
-            TargetWorkerId {
+            WorkerId {
                 component_id: Some(component_id.clone().into()),
-                name: Some(create_result.worker_id.as_ref().unwrap().name.to_string()),
+                name: create_result.worker_id.as_ref().unwrap().name.to_string(),
             },
             None,
             "golem:it/api.{get-arguments}".to_string(),
@@ -103,9 +103,9 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
         .worker_service()
         .invoke_and_await(
             &admin.token,
-            TargetWorkerId {
+            WorkerId {
                 component_id: Some(component_id.clone().into()),
-                name: Some(create_result.worker_id.as_ref().unwrap().name.to_string()),
+                name: create_result.worker_id.as_ref().unwrap().name.to_string(),
             },
             None,
             "golem:it/api.{get-environment}".to_string(),

@@ -122,12 +122,9 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
             {
                 let mut constructor = ResourceFunc::constructor();
                 let mut params = entity.constructor_params().to_encoder(def)?;
-
-                if !def.config.is_ephemeral {
-                    params
-                        .items_mut()
-                        .insert(0, (Ident::new("worker-name"), Type::String));
-                }
+                params
+                    .items_mut()
+                    .insert(0, (Ident::new("worker-name"), Type::String));
                 constructor.set_params(params);
                 stub_functions.push(constructor);
             }
@@ -138,16 +135,8 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                 params.items_mut().insert(
                     0,
                     (
-                        if def.config.is_ephemeral {
-                            Ident::new("component-id")
-                        } else {
-                            Ident::new("worker-id")
-                        },
-                        Type::Named(Ident::new(if def.config.is_ephemeral {
-                            "golem-rpc-component-id"
-                        } else {
-                            "golem-rpc-worker-id"
-                        })),
+                        Ident::new("worker-id"),
+                        Type::Named(Ident::new("golem-rpc-worker-id")),
                     ),
                 );
                 custom_constructor.set_params(params);

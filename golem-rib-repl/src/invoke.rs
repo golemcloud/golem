@@ -29,7 +29,7 @@ pub trait WorkerFunctionInvoke {
         &self,
         component_id: Uuid,
         component_name: &str,
-        worker_name: Option<String>,
+        worker_name: &str,
         function_name: &str,
         args: Vec<ValueAndType>,
         return_type: Option<AnalysedType>,
@@ -68,7 +68,7 @@ impl RibComponentFunctionInvoke for ReplRibFunctionInvoke {
         &self,
         component_dependency: ComponentDependencyKey,
         instruction_id: &InstructionId,
-        worker_name: Option<EvaluatedWorkerName>,
+        worker_name: EvaluatedWorkerName,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
         return_type: Option<AnalysedType>,
@@ -81,9 +81,9 @@ impl RibComponentFunctionInvoke for ReplRibFunctionInvoke {
                     .worker_function_invoke()
                     .invoke(
                         component_dependency.component_id,
-                        component_dependency.component_name.as_str(),
-                        worker_name.map(|x| x.0),
-                        function_name.0.as_str(),
+                        &component_dependency.component_name,
+                        &worker_name.0,
+                        &function_name.0,
                         args.0,
                         return_type,
                     )

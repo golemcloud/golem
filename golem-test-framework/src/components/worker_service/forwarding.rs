@@ -37,8 +37,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{
-    IdempotencyKey, InvocationContext, InvokeResult, InvokeResultTyped, LogEvent, TargetWorkerId,
-    WorkerId,
+    IdempotencyKey, InvocationContext, InvokeResult, InvokeResultTyped, LogEvent, WorkerId,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
@@ -349,7 +348,7 @@ impl WorkerService for ForwardingWorkerService {
     async fn invoke(
         &self,
         token: &Uuid,
-        worker_id: TargetWorkerId,
+        worker_id: WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         invoke_parameters: Vec<ValueAndType>,
@@ -423,7 +422,7 @@ impl WorkerService for ForwardingWorkerService {
     async fn invoke_and_await(
         &self,
         token: &Uuid,
-        worker_id: TargetWorkerId,
+        worker_id: WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         invoke_parameters: Vec<ValueAndType>,
@@ -494,7 +493,7 @@ impl WorkerService for ForwardingWorkerService {
     async fn invoke_and_await_typed(
         &self,
         token: &Uuid,
-        worker_id: TargetWorkerId,
+        worker_id: WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         invoke_parameters: Vec<ValueAndType>,

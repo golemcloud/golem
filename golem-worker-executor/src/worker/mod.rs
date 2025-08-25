@@ -39,6 +39,7 @@ use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
@@ -55,7 +56,7 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -123,6 +124,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -137,6 +139,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_wasi_config_vars,
                 component_version,
                 parent,
+                invocation_context_stack,
             )
             .await
     }
@@ -151,6 +154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
@@ -164,6 +168,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_wasi_config_vars,
             component_version,
             parent,
+            invocation_context_stack,
         )
         .await?;
         Self::start_if_needed(worker.clone()).await?;
@@ -202,6 +207,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context_stack: &InvocationContextStack,
     ) -> Result<Self, WorkerExecutorError> {
         let (worker_metadata, execution_status) = Self::get_or_create_worker_metadata(
             deps,
@@ -212,6 +218,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_env,
             worker_config,
             parent,
+            invocation_context_stack,
         )
         .await?;
 
@@ -367,7 +374,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Here we first acquire the `instance` lock. This means the worker cannot be started/stopped while we
     /// are processing this method.
     /// If it was not running, then we don't have to stop it.
-    /// If it was running then we recheck the conditions and then stop the worker.
+    /// If it was running, then we recheck the conditions and then stop the worker.
     ///
     /// We know that the conditions remain true because:
     /// - the invocation queue is empty, so it cannot get into `ExecutionStatus::Running`, as there is nothing to run
@@ -1287,6 +1294,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         parent: Option<WorkerId>,
+        invocation_context: &InvocationContextStack,
     ) -> Result<(WorkerMetadata, Arc<std::sync::RwLock<ExecutionStatus>>), WorkerExecutorError>
     {
         let component_id = owned_worker_id.component_id();
@@ -1303,8 +1311,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         match this.worker_service().get(owned_worker_id).await {
             None => {
-                let initial_status =
+                let mut initial_status =
                     calculate_last_known_status(this, owned_worker_id, &None).await?;
+
+                let created_at = Timestamp::now_utc();
+                if component.metadata.is_agent() {
+                    let agent_id =
+                        AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
+                            .await
+                            .map_err(|err| {
+                                WorkerExecutorError::invalid_request(format!(
+                                    "Invalid agent id: {}",
+                                    err
+                                ))
+                            })?;
+
+                    info!(
+                        "Enqueuing agent initialization for agent type {} with parameters {}",
+                        agent_id.agent_type, agent_id.parameters
+                    );
+
+                    initial_status
+                        .pending_invocations
+                        .push(TimestampedWorkerInvocation {
+                            timestamp: created_at,
+                            invocation: WorkerInvocation::ExportedFunction {
+                                idempotency_key: IdempotencyKey::fresh(),
+                                full_function_name: "golem:agent/guest.{initialize}".to_string(),
+                                function_input: vec![agent_id.parameters.into_value()],
+                                invocation_context: invocation_context.clone(),
+                            },
+                        });
+                }
+
                 let worker_metadata = WorkerMetadata {
                     worker_id: owned_worker_id.worker_id(),
                     args: worker_args.unwrap_or_default(),
@@ -1312,7 +1351,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
                     project_id: owned_worker_id.project_id(),
                     created_by: account_id.clone(),
-                    created_at: Timestamp::now_utc(),
+                    created_at,
                     parent,
                     last_known_status: WorkerStatusRecord {
                         component_version: component.versioned_component_id.version,

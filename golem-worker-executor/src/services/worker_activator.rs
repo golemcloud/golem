@@ -16,6 +16,7 @@ use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
@@ -39,6 +40,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
 
     /// Gets or creates a worker and starts it
@@ -51,6 +53,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
 }
 
@@ -99,6 +102,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
         match maybe_worker_activator {
@@ -112,6 +116,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                         worker_config,
                         component_version,
                         parent,
+                        invocation_context,
                     )
                     .await
             }
@@ -130,6 +135,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
         match maybe_worker_activator {
@@ -143,6 +149,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                         worker_config,
                         component_version,
                         parent,
+                        invocation_context,
                     )
                     .await
             }
@@ -185,6 +192,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                     None,
                     None,
                     None,
+                    &InvocationContextStack::fresh(),
                 )
                 .await
                 {
@@ -206,6 +214,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         Worker::get_or_create_suspended(
             &self.all,
@@ -216,6 +225,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             worker_config,
             component_version,
             parent,
+            invocation_context,
         )
         .await
     }
@@ -229,6 +239,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         Worker::get_or_create_running(
             &self.all,
@@ -239,6 +250,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             worker_config,
             component_version,
             parent,
+            invocation_context,
         )
         .await
     }

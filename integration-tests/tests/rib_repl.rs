@@ -17,7 +17,7 @@ use test_r::test;
 use crate::Tracing;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::{ComponentId, TargetWorkerId};
+use golem_common::model::{ComponentId, WorkerId};
 use golem_rib_repl::{ComponentSource, RibRepl};
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
@@ -364,26 +364,21 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
         &self,
         component_id: Uuid,
         _component_name: &str,
-        worker_name: Option<String>,
+        worker_name: &str,
         function_name: &str,
         args: Vec<ValueAndType>,
         _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
-        let target_worker_id = worker_name
-            .map(|w| TargetWorkerId {
-                component_id: ComponentId(component_id),
-                worker_name: Some(w),
-            })
-            .unwrap_or_else(|| TargetWorkerId {
-                component_id: ComponentId(component_id),
-                worker_name: None,
-            });
+        let worker_id = WorkerId {
+            component_id: ComponentId(component_id),
+            worker_name: worker_name.to_string(),
+        };
 
         let result = self
             .embedded_worker_executor
             .admin()
             .await
-            .invoke_and_await_typed(target_worker_id, function_name, args)
+            .invoke_and_await_typed(&worker_id, function_name, args)
             .await;
 
         Ok(result.map_err(|err| {

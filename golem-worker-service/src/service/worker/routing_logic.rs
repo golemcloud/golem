@@ -28,7 +28,7 @@ use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::RetryConfig;
-use golem_common::model::{Pod, ShardId, TargetWorkerId, WorkerId};
+use golem_common::model::{Pod, ShardId, WorkerId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
 use golem_common::SafeDisplay;
@@ -134,49 +134,6 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
 
     fn tracing_kind(&self) -> &'static str {
         "WorkerId"
-    }
-}
-
-#[async_trait]
-impl<Out: Send + 'static> CallOnExecutor<Out> for TargetWorkerId {
-    type ResultOut = Out;
-
-    async fn call_on_worker_executor<F>(
-        &self,
-        description: impl AsRef<str> + Send,
-        context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
-        f: F,
-    ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
-    where
-        F: for<'a> Fn(
-                &'a mut WorkerExecutorClient<Channel>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Out, Status>> + 'a + Send>>
-            + Send
-            + Sync
-            + Clone
-            + 'static,
-    {
-        if let Some(worker_id) = self.clone().try_into_worker_id() {
-            // The TargetWorkerId had a worker name so we know which shard we need to call it on
-            worker_id
-                .call_on_worker_executor(description, context, f)
-                .await
-        } else {
-            // The TargetWorkerId did not have a worker name specified so we can forward the call to a random
-            // executor
-            RandomExecutor
-                .call_on_worker_executor(description, context, f)
-                .await
-        }
-    }
-
-    fn tracing_kind(&self) -> &'static str {
-        if self.worker_name.is_none() {
-            "RandomExecutor"
-        } else {
-            "WorkerId"
-        }
     }
 }
 

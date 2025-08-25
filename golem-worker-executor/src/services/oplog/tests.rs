@@ -253,17 +253,6 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
             id,
             resource_type_id,
         },
-        OplogEntry::DescribeResource {
-            timestamp,
-            id,
-            resource_type_id,
-            indexed_resource_parameters,
-        } => OplogEntry::DescribeResource {
-            timestamp: rounded_ts(timestamp),
-            id,
-            resource_type_id,
-            indexed_resource_parameters,
-        },
         OplogEntry::Log {
             timestamp,
             level,
@@ -334,19 +323,6 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
                 level,
             }
         }
-        OplogEntry::CreateAgentInstance {
-            timestamp,
-            key,
-            parameters,
-        } => OplogEntry::CreateAgentInstance {
-            timestamp: rounded_ts(timestamp),
-            key,
-            parameters,
-        },
-        OplogEntry::DropAgentInstance { timestamp, key } => OplogEntry::DropAgentInstance {
-            timestamp: rounded_ts(timestamp),
-            key,
-        },
     }
 }
 

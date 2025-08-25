@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerServi
 use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, WorkerError, WorkerExecutionError,
 };
-use golem_common::model::{ComponentFilePath, TargetWorkerId, WorkerId};
+use golem_common::model::{ComponentFilePath, WorkerId};
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -90,20 +90,6 @@ pub fn validated_worker_id(
     })
 }
 
-pub fn validated_target_worker_id(
-    component_id: golem_common::model::ComponentId,
-    worker_name: Option<String>,
-) -> Result<TargetWorkerId, WorkerError> {
-    if let Some(worker_name) = &worker_name {
-        WorkerId::validate_worker_name(worker_name)
-            .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))?;
-    }
-    Ok(TargetWorkerId {
-        component_id,
-        worker_name,
-    })
-}
-
 pub fn validate_protobuf_worker_id(
     worker_id: Option<golem_api_grpc::proto::golem::worker::WorkerId>,
 ) -> Result<WorkerId, WorkerError> {
@@ -112,16 +98,6 @@ pub fn validate_protobuf_worker_id(
         .try_into()
         .map_err(|e| bad_request_error(format!("Invalid worker id: {e}")))?;
     validated_worker_id(worker_id.component_id, worker_id.worker_name)
-}
-
-pub fn validate_protobuf_target_worker_id(
-    worker_id: Option<golem_api_grpc::proto::golem::worker::TargetWorkerId>,
-) -> Result<TargetWorkerId, WorkerError> {
-    let worker_id = worker_id.ok_or_else(|| bad_request_error("Missing worker id"))?;
-    let worker_id: TargetWorkerId = worker_id
-        .try_into()
-        .map_err(|e| bad_request_error(format!("Invalid target worker id: {e}")))?;
-    validated_target_worker_id(worker_id.component_id, worker_id.worker_name)
 }
 
 pub fn validate_protobuf_plugin_installation_id(

@@ -2555,7 +2555,7 @@ mod internal {
             if function_name == "bigw:shopping/api.{store.new}" {
                 let uri = format!(
                     "urn:worker:71a31a33-28a5-4978-8a58-83424a149c8b/{}",
-                    resolved_worker_request.worker_name.unwrap_or_default()
+                    resolved_worker_request.worker_name
                 );
                 let handle = golem_wasm_rpc::Value::Handle {
                     uri,
@@ -2615,7 +2615,7 @@ mod internal {
         async fn handle_file_server_binding_result(
             &self,
             _namespace: Namespace,
-            _worker_name: Option<&str>,
+            _worker_name: &str,
             _component_id: &ComponentId,
             _original_result: RibResult,
         ) -> FileServerBindingResult {
@@ -2703,9 +2703,10 @@ mod internal {
             ),
         ];
 
-        if let Some(worker_name) = worker_request.clone().worker_name {
-            record_elems.push(("worker_name", worker_name.into_value_and_type()))
-        };
+        record_elems.push((
+            "worker_name",
+            worker_request.worker_name.clone().into_value_and_type(),
+        ));
 
         if let Some(idempotency_key) = worker_request.clone().idempotency_key {
             record_elems.push((

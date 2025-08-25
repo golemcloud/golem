@@ -59,7 +59,7 @@ async fn get_oplog_1(
 
     let _ = executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
@@ -67,7 +67,7 @@ async fn get_oplog_1(
         .unwrap();
     let _ = executor
         .invoke_and_await_with_key(
-            worker_id.clone(),
+            &worker_id,
             &idempotency_key1,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
@@ -76,7 +76,7 @@ async fn get_oplog_1(
         .unwrap();
     let _ = executor
         .invoke_and_await_with_key(
-            worker_id.clone(),
+            &worker_id,
             &idempotency_key2,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],

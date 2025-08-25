@@ -43,6 +43,20 @@ impl TestWorkerProxy {
 
 #[async_trait]
 impl WorkerProxy for TestWorkerProxy {
+    async fn start(
+        &self,
+        _owned_worker_id: &OwnedWorkerId,
+        _caller_args: Vec<String>,
+        _caller_env: HashMap<String, String>,
+        _caller_wasi_config_vars: BTreeMap<String, String>,
+    ) -> Result<(), WorkerProxyError> {
+        Err(WorkerProxyError::InternalError(
+            WorkerExecutorError::unknown(
+                "Not implemented in tests as debug service is not expected to call start through proxy",
+            )
+        ))
+    }
+
     async fn invoke_and_await(
         &self,
         _owned_worker_id: &OwnedWorkerId,

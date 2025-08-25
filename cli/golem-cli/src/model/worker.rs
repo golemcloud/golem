@@ -48,10 +48,7 @@ pub fn fuzzy_match_function_name(
             match parsed_function_name {
                 // if we have a match, but it is non-exact _or_ we have a parsed function name, we customize the parsed function name and render it
                 // because it may have resource parameters
-                Some(mut parsed_function_name)
-                    if !matched.exact_match
-                        || parsed_function_name.function.is_indexed_resource() =>
-                {
+                Some(mut parsed_function_name) if !matched.exact_match => {
                     let parsed_matched_function_name = ParsedFunctionName::parse(&matched.option)
                         .expect("The rendered component export names should always be parseable");
 
@@ -104,15 +101,6 @@ fn static_as_method(name: ParsedFunctionName) -> ParsedFunctionName {
             ParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
                 ParsedFunctionReference::RawResourceMethod { resource, method }
             }
-            ParsedFunctionReference::IndexedResourceStaticMethod {
-                resource,
-                method,
-                resource_params,
-            } => ParsedFunctionReference::IndexedResourceMethod {
-                resource,
-                method,
-                resource_params,
-            },
             other => other,
         },
     }
@@ -169,15 +157,10 @@ fn adjust_parsed_function_name(
         ParsedFunctionReference::Function { function } => {
             *function = matched.function.function_name();
         }
-        ParsedFunctionReference::RawResourceConstructor { resource }
-        | ParsedFunctionReference::IndexedResourceConstructor { resource, .. } => {
+        ParsedFunctionReference::RawResourceConstructor { resource } => {
             match matched.function {
                 ParsedFunctionReference::RawResourceConstructor {
                     resource: parsed_resource,
-                }
-                | ParsedFunctionReference::IndexedResourceConstructor {
-                    resource: parsed_resource,
-                    ..
                 } => {
                     *resource = parsed_resource;
                 }
@@ -189,15 +172,10 @@ fn adjust_parsed_function_name(
                 }
             }
         }
-        ParsedFunctionReference::RawResourceDrop { resource }
-        | ParsedFunctionReference::IndexedResourceDrop { resource, .. } => {
+        ParsedFunctionReference::RawResourceDrop { resource } => {
             match matched.function {
                 ParsedFunctionReference::RawResourceDrop {
                     resource: parsed_resource,
-                }
-                | ParsedFunctionReference::IndexedResourceDrop {
-                    resource: parsed_resource,
-                    ..
                 } => {
                     *resource = parsed_resource;
                 }
@@ -210,31 +188,15 @@ fn adjust_parsed_function_name(
             }
         }
         ParsedFunctionReference::RawResourceMethod { resource, method }
-        | ParsedFunctionReference::RawResourceStaticMethod { resource, method }
-        | ParsedFunctionReference::IndexedResourceMethod {
-            resource, method, ..
-        }
-        | ParsedFunctionReference::IndexedResourceStaticMethod {
-            resource, method, ..
-        } => {
+        | ParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
             match matched.function {
                 ParsedFunctionReference::RawResourceMethod {
                     resource: parsed_resource,
                     method: parsed_method,
                 }
-                | ParsedFunctionReference::IndexedResourceMethod {
-                    resource: parsed_resource,
-                    method: parsed_method,
-                    ..
-                }
                 | ParsedFunctionReference::RawResourceStaticMethod {
                     resource: parsed_resource,
                     method: parsed_method,
-                }
-                | ParsedFunctionReference::IndexedResourceStaticMethod {
-                    resource: parsed_resource,
-                    method: parsed_method,
-                    ..
                 } => {
                     *resource = parsed_resource;
                     *method = parsed_method;
@@ -262,11 +224,7 @@ fn duplicate_names_with_syntax_sugar(names: Vec<String>) -> Vec<String> {
             ParsedFunctionReference::RawResourceConstructor { .. }
             | ParsedFunctionReference::RawResourceDrop { .. }
             | ParsedFunctionReference::RawResourceMethod { .. }
-            | ParsedFunctionReference::RawResourceStaticMethod { .. }
-            | ParsedFunctionReference::IndexedResourceConstructor { .. }
-            | ParsedFunctionReference::IndexedResourceMethod { .. }
-            | ParsedFunctionReference::IndexedResourceStaticMethod { .. }
-            | ParsedFunctionReference::IndexedResourceDrop { .. } => {
+            | ParsedFunctionReference::RawResourceStaticMethod { .. } => {
                 // the Display instance is using the syntax sugared version, while the original list
                 // contains the raw function names
                 result.push(item);
@@ -511,90 +469,6 @@ mod tests {
                 .option,
             "golem:it/api.{[method]cart.merge-with}"
         );
-    }
-
-    #[test]
-    fn test_fuzzy_match_indexed_constructor() {
-        assert_eq!(
-            fuzzy_match_function_name(
-                "golem:it/api.{cart(\"owner\").new}",
-                &example_exported_resource()
-            )
-            .unwrap()
-            .option,
-            "golem:it/api.{cart(\"owner\").new}"
-        );
-        assert_eq!(
-            fuzzy_match_function_name("api.{cart(\"owner\").new}", &example_exported_resource())
-                .unwrap()
-                .option,
-            "golem:it/api.{cart(\"owner\").new}"
-        );
-
-        // Indexed resource syntax cannot be fuzzy-matched without being a somewhat parseable function name
-        assert!(
-            fuzzy_match_function_name("cart(\"owner\").new", &example_exported_resource()).is_err()
-        );
-    }
-
-    #[test]
-    fn test_fuzzy_match_indexed_drop() {
-        assert_eq!(
-            fuzzy_match_function_name(
-                "golem:it/api.{cart(\"owner\").drop}",
-                &example_exported_resource()
-            )
-            .unwrap()
-            .option,
-            "golem:it/api.{cart(\"owner\").drop}"
-        );
-        assert_eq!(
-            fuzzy_match_function_name("api.{cart(\"owner\").drop}", &example_exported_resource())
-                .unwrap()
-                .option,
-            "golem:it/api.{cart(\"owner\").drop}"
-        );
-
-        // Indexed resource syntax cannot be fuzzy-matched without being a somewhat parseable function name
-        assert!(
-            fuzzy_match_function_name("cart(\"owner\").drop", &example_exported_resource())
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_fuzzy_match_indexed_method() {
-        assert_eq!(
-            fuzzy_match_function_name(
-                "golem:it/api.{cart(\"owner\").add-item}",
-                &example_exported_resource()
-            )
-            .unwrap()
-            .option,
-            "golem:it/api.{cart(\"owner\").add-item}"
-        );
-        assert_eq!(
-            fuzzy_match_function_name(
-                "api.{cart(\"owner\").add-item}",
-                &example_exported_resource()
-            )
-            .unwrap()
-            .option,
-            "golem:it/api.{cart(\"owner\").add-item}"
-        );
-        assert_eq!(
-            fuzzy_match_function_name("api.{cart(\"owner\").add}", &example_exported_resource())
-                .unwrap()
-                .option,
-            "golem:it/api.{cart(\"owner\").add-item}"
-        );
-
-        // Indexed resource syntax cannot be fuzzy-matched without being a somewhat parseable function name
-        assert!(fuzzy_match_function_name(
-            "cart(\"owner\").add-item",
-            &example_exported_resource()
-        )
-        .is_err());
     }
 
     fn example_exported_global() -> Vec<AnalysedExport> {

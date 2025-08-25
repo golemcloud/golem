@@ -14,7 +14,6 @@
 
 use crate::newtype_uuid;
 use bincode::{Decode, Encode};
-use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
@@ -123,14 +122,6 @@ impl WorkerId {
         format!("urn:worker:{}/{}", self.component_id, self.worker_name)
     }
 
-    /// The dual of `TargetWorkerId::into_worker_id`
-    pub fn into_target_worker_id(self) -> TargetWorkerId {
-        TargetWorkerId {
-            component_id: self.component_id,
-            worker_name: Some(self.worker_name),
-        }
-    }
-
     pub fn validate_worker_name(name: &str) -> Result<(), &'static str> {
         let length = name.len();
         if !(1..=512).contains(&length) {
@@ -196,118 +187,6 @@ impl golem_wasm_rpc::IntoValue for WorkerId {
             field("component_id", ComponentId::get_type()),
             field("worker_name", String::get_type()),
         ])
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
-#[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
-pub struct TargetWorkerId {
-    pub component_id: ComponentId,
-    pub worker_name: Option<String>,
-}
-
-impl TargetWorkerId {
-    /// Converts a `TargetWorkerId` to a `WorkerId` if the worker name is specified
-    pub fn try_into_worker_id(self) -> Option<WorkerId> {
-        self.worker_name.map(|worker_name| WorkerId {
-            component_id: self.component_id,
-            worker_name,
-        })
-    }
-
-    /// Converts a `TargetWorkerId` to a `WorkerId`. If the worker name was not specified,
-    /// it generates a new unique one, and if the `force_in_shard` set is not empty, it guarantees
-    /// that the generated worker ID will belong to one of the provided shards.
-    ///
-    /// If the worker name was specified, `force_in_shard` is ignored.
-    pub fn into_worker_id(
-        self,
-        force_in_shard: &HashSet<ShardId>,
-        number_of_shards: usize,
-    ) -> WorkerId {
-        let TargetWorkerId {
-            component_id,
-            worker_name,
-        } = self;
-        match worker_name {
-            Some(worker_name) => WorkerId {
-                component_id,
-                worker_name,
-            },
-            None => {
-                if force_in_shard.is_empty() || number_of_shards == 0 {
-                    let worker_name = Uuid::new_v4().to_string();
-                    WorkerId {
-                        component_id,
-                        worker_name,
-                    }
-                } else {
-                    let mut current = Uuid::new_v4().to_u128_le();
-                    loop {
-                        let uuid = Uuid::from_u128_le(current);
-                        let worker_name = uuid.to_string();
-                        let worker_id = WorkerId {
-                            component_id: component_id.clone(),
-                            worker_name,
-                        };
-                        let shard_id = ShardId::from_worker_id(&worker_id, number_of_shards);
-                        if force_in_shard.contains(&shard_id) {
-                            return worker_id;
-                        }
-                        current += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    // NOTE: Deprecated, to be removed once the wasm-rpc constructor is changed to accept worker-id
-    pub fn parse_worker_urn(urn: &str) -> Option<TargetWorkerId> {
-        if !urn.starts_with("urn:worker:") {
-            None
-        } else {
-            let remaining = &urn[11..];
-            let parts: Vec<&str> = remaining.split('/').collect();
-            match parts.len() {
-                2 => {
-                    let component_id = ComponentId::from_str(parts[0]).ok()?;
-                    let worker_name = parts[1];
-                    Some(TargetWorkerId {
-                        component_id,
-                        worker_name: Some(worker_name.to_string()),
-                    })
-                }
-                1 => {
-                    let component_id = ComponentId::from_str(parts[0]).ok()?;
-                    Some(TargetWorkerId {
-                        component_id,
-                        worker_name: None,
-                    })
-                }
-                _ => None,
-            }
-        }
-    }
-}
-
-impl Display for TargetWorkerId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match &self.worker_name {
-            Some(worker_name) => write!(f, "{}/{}", self.component_id, worker_name),
-            None => write!(f, "{}/*", self.component_id),
-        }
-    }
-}
-
-impl From<WorkerId> for TargetWorkerId {
-    fn from(value: WorkerId) -> Self {
-        value.into_target_worker_id()
-    }
-}
-
-impl From<&WorkerId> for TargetWorkerId {
-    fn from(value: &WorkerId) -> Self {
-        value.clone().into_target_worker_id()
     }
 }
 
@@ -383,37 +262,5 @@ impl Display for OplogIndex {
 impl From<OplogIndex> for u64 {
     fn from(value: OplogIndex) -> Self {
         value.0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ComponentId, TargetWorkerId};
-    use test_r::test;
-
-    #[test]
-    fn test_parse_worker_urn() {
-        let component_id = ComponentId::new_v4();
-
-        fn check(urn: String, expected: Option<TargetWorkerId>) {
-            assert_eq!(TargetWorkerId::parse_worker_urn(&urn), expected, "{urn}");
-        }
-
-        check(
-            format!("urn:worker:{component_id}"),
-            Some(TargetWorkerId {
-                component_id: component_id.clone(),
-                worker_name: None,
-            }),
-        );
-        check(
-            format!("urn:worker:{component_id}/worker1"),
-            Some(TargetWorkerId {
-                component_id: component_id.clone(),
-                worker_name: Some("worker1".to_string()),
-            }),
-        );
-        check(format!("urn:worker:{component_id}/worker1/worker2"), None);
-        check(format!("urn:component:{component_id}"), None);
     }
 }

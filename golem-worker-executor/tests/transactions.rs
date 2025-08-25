@@ -20,7 +20,7 @@ use axum::routing::{delete, get, post};
 use axum::Router;
 use bytes::Bytes;
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{IdempotencyKey, TargetWorkerId};
+use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
     drain_connection, stdout_event_starting_with, stdout_events, worker_error_logs,
@@ -874,9 +874,9 @@ async fn idempotency_keys_in_ephemeral_workers(
         .store()
         .await;
 
-    let target_worker_id = TargetWorkerId {
+    let target_worker_id = WorkerId {
         component_id,
-        worker_name: None,
+        worker_name: "ephemeral".to_string(),
     };
 
     let idempotency_key1 = IdempotencyKey::fresh();
@@ -884,7 +884,7 @@ async fn idempotency_keys_in_ephemeral_workers(
 
     let result11 = executor
         .invoke_and_await(
-            target_worker_id.clone(),
+            &target_worker_id,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
@@ -892,7 +892,7 @@ async fn idempotency_keys_in_ephemeral_workers(
         .unwrap();
     let result21 = executor
         .invoke_and_await_with_key(
-            target_worker_id.clone(),
+            &target_worker_id,
             &idempotency_key1,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
@@ -901,7 +901,7 @@ async fn idempotency_keys_in_ephemeral_workers(
         .unwrap();
     let result31 = executor
         .invoke_and_await_with_key(
-            target_worker_id.clone(),
+            &target_worker_id,
             &idempotency_key2,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
@@ -910,7 +910,7 @@ async fn idempotency_keys_in_ephemeral_workers(
         .unwrap();
     let result12 = executor
         .invoke_and_await(
-            target_worker_id.clone(),
+            &target_worker_id,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
@@ -918,7 +918,7 @@ async fn idempotency_keys_in_ephemeral_workers(
         .unwrap();
     let result22 = executor
         .invoke_and_await_with_key(
-            target_worker_id.clone(),
+            &target_worker_id,
             &idempotency_key1,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
@@ -927,7 +927,7 @@ async fn idempotency_keys_in_ephemeral_workers(
         .unwrap();
     let result32 = executor
         .invoke_and_await_with_key(
-            target_worker_id.clone(),
+            &target_worker_id,
             &idempotency_key2,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],

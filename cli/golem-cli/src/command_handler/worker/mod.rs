@@ -356,7 +356,7 @@ impl WorkerCommandHandler {
         let result = self
             .invoke_worker(
                 &component,
-                worker_name_match.worker_name.as_ref(),
+                &worker_name_match.worker_name(),
                 &function_name,
                 arguments,
                 idempotency_key.clone(),
@@ -873,103 +873,68 @@ impl WorkerCommandHandler {
     pub async fn invoke_worker(
         &self,
         component: &Component,
-        worker_name: Option<&WorkerName>,
+        worker_name: &WorkerName,
         function_name: &str,
         arguments: Vec<OptionallyValueAndTypeJson>,
         idempotency_key: IdempotencyKey,
         enqueue: bool,
         stream_args: Option<StreamArgs>,
     ) -> anyhow::Result<Option<InvokeResult>> {
-        let mut connect_handle = match &worker_name {
-            Some(worker_name) => match stream_args {
-                Some(stream_args) => {
-                    let connection = WorkerConnection::new(
-                        self.ctx.worker_service_url().clone(),
-                        self.ctx.auth_token().await?,
-                        component.versioned_component_id.component_id,
-                        worker_name.0.clone(),
-                        stream_args.into(),
-                        self.ctx.allow_insecure(),
-                        self.ctx.format(),
-                        if enqueue {
-                            None
-                        } else {
-                            Some(golem_common::model::IdempotencyKey::new(
-                                idempotency_key.0.clone(),
-                            ))
-                        },
-                    )
-                    .await?;
-                    Some(tokio::task::spawn(
-                        async move { connection.run_forever().await },
-                    ))
-                }
-                None => None,
-            },
+        let mut connect_handle = match stream_args {
+            Some(stream_args) => {
+                let connection = WorkerConnection::new(
+                    self.ctx.worker_service_url().clone(),
+                    self.ctx.auth_token().await?,
+                    component.versioned_component_id.component_id,
+                    worker_name.0.clone(),
+                    stream_args.into(),
+                    self.ctx.allow_insecure(),
+                    self.ctx.format(),
+                    if enqueue {
+                        None
+                    } else {
+                        Some(golem_common::model::IdempotencyKey::new(
+                            idempotency_key.0.clone(),
+                        ))
+                    },
+                )
+                .await?;
+                Some(tokio::task::spawn(
+                    async move { connection.run_forever().await },
+                ))
+            }
             None => None,
         };
 
         let clients = self.ctx.golem_clients().await?;
 
-        let result = match &worker_name {
-            Some(worker_name) => {
-                if enqueue {
-                    clients
-                        .worker
-                        .invoke_function(
-                            &component.versioned_component_id.component_id,
-                            &worker_name.0,
-                            Some(&idempotency_key.0),
-                            function_name,
-                            &InvokeParametersCloud { params: arguments },
-                        )
-                        .await
-                        .map_service_error()?;
-                    None
-                } else {
-                    Some(
-                        clients
-                            .worker_invoke
-                            .invoke_and_await_function(
-                                &component.versioned_component_id.component_id,
-                                &worker_name.0,
-                                Some(&idempotency_key.0),
-                                function_name,
-                                &InvokeParametersCloud { params: arguments },
-                            )
-                            .await
-                            .map_service_error()?,
+        let result = if enqueue {
+            clients
+                .worker
+                .invoke_function(
+                    &component.versioned_component_id.component_id,
+                    &worker_name.0,
+                    Some(&idempotency_key.0),
+                    function_name,
+                    &InvokeParametersCloud { params: arguments },
+                )
+                .await
+                .map_service_error()?;
+            None
+        } else {
+            Some(
+                clients
+                    .worker_invoke
+                    .invoke_and_await_function(
+                        &component.versioned_component_id.component_id,
+                        &worker_name.0,
+                        Some(&idempotency_key.0),
+                        function_name,
+                        &InvokeParametersCloud { params: arguments },
                     )
-                }
-            }
-            None => {
-                if enqueue {
-                    clients
-                        .worker
-                        .invoke_function_without_name(
-                            &component.versioned_component_id.component_id,
-                            Some(&idempotency_key.0),
-                            function_name,
-                            &InvokeParametersCloud { params: arguments },
-                        )
-                        .await
-                        .map_service_error()?;
-                    None
-                } else {
-                    Some(
-                        clients
-                            .worker_invoke
-                            .invoke_and_await_function_without_name(
-                                &component.versioned_component_id.component_id,
-                                Some(&idempotency_key.0),
-                                function_name,
-                                &InvokeParametersCloud { params: arguments },
-                            )
-                            .await
-                            .map_service_error()?,
-                    )
-                }
-            }
+                    .await
+                    .map_service_error()?,
+            )
         };
 
         if enqueue && connect_handle.is_some() {
