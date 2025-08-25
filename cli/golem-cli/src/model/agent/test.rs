@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use golem_common::model::agent::{
-    AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, DataSchema, ElementSchema,
-    NamedElementSchema, NamedElementSchemas, TextDescriptor,
+    AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
+    DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, r#enum, record, str, u32, unit_case, variant,
@@ -50,7 +50,9 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                     elements: vec![
                         NamedElementSchema {
                             name: "person".to_string(),
-                            schema: ElementSchema::ComponentModel(person.clone()),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                type_info: person.clone(),
+                            }),
                         },
                         NamedElementSchema {
                             name: "description".to_string(),
@@ -75,7 +77,9 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                 output_schema: DataSchema::Tuple(NamedElementSchemas {
                     elements: vec![NamedElementSchema {
                         name: "return".to_string(),
-                        schema: ElementSchema::ComponentModel(location.clone()),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            type_info: location.clone(),
+                        }),
                     }],
                 }),
             }],
@@ -91,7 +95,9 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                 input_schema: DataSchema::Tuple(NamedElementSchemas {
                     elements: vec![NamedElementSchema {
                         name: "person-group".to_string(),
-                        schema: ElementSchema::ComponentModel(list(person)),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            type_info: list(person),
+                        }),
                     }],
                 }),
             },
@@ -104,11 +110,15 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                     elements: vec![
                         NamedElementSchema {
                             name: "place".to_string(),
-                            schema: ElementSchema::ComponentModel(location),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                type_info: location,
+                            }),
                         },
                         NamedElementSchema {
                             name: "color".to_string(),
-                            schema: ElementSchema::ComponentModel(color),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                type_info: color,
+                            }),
                         },
                     ],
                 }),
