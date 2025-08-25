@@ -34,7 +34,7 @@ use include_dir::{include_dir, Dir};
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
 use poem::listener::Listener;
-use poem::middleware::{CookieJarManager, Cors, Tracing};
+use poem::middleware::{CookieJarManager, Cors};
 use poem::{EndpointExt, Route};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;

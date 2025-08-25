@@ -26,7 +26,6 @@ use std::{
 };
 use tempfile::NamedTempFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
-use tracing::info;
 
 /// A uploaded file for multipart.
 ///
