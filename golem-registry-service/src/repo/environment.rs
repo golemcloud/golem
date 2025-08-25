@@ -81,10 +81,8 @@ pub trait EnvironmentRepo: Send + Sync {
     async fn get_current_plugin_installations(
         &self,
         environment_id: &Uuid,
-        actor: &Uuid,
-        override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Option<RecordWithEnvironmentAuth<EnvironmentPluginInstallationRecord>>>;
+    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>>;
 
     async fn create_plugin_installations(
         &self,
@@ -217,15 +215,11 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn get_current_plugin_installations(
         &self,
         environment_id: &Uuid,
-        actor: &Uuid,
-        override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Option<RecordWithEnvironmentAuth<EnvironmentPluginInstallationRecord>>> {
+    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
         self.repo
             .get_current_plugin_installations(
                 environment_id,
-                actor,
-                override_visibility,
                 include_deleted,
             )
             .instrument(Self::span_env(environment_id))
@@ -603,65 +597,26 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_current_plugin_installations(
         &self,
         environment_id: &Uuid,
-        actor: &Uuid,
-        override_visibility: bool,
         include_deleted: bool,
-    ) -> RepoResult<Option<RecordWithEnvironmentAuth<EnvironmentPluginInstallationRecord>>> {
-        let plugin_installation: Option<
-            RecordWithEnvironmentAuth<EnvironmentPluginInstallationRecord>,
-        > = self
-            .with_ro("get_current_plugin_installations")
-            .fetch_optional_as(
+    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
+        let plugin_installation: Option<EnvironmentPluginInstallationRecord> =
+            self.with_ro("get_current_plugin_installations").fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT
-                        epi.environment_id, epi.hash, epi.created_at, epi.updated_at,
-                        epi.deleted_at, epi.modified_by, epi.current_revision_id,
-                        a.account_id as owner_account_id,
-                        COALESCE(esr.roles, 0) AS environment_roles_from_shares
-                    FROM accounts a
-                    JOIN applications ap
-                        ON ap.account_id = a.account_id
-                    JOIN environments e
-                        ON e.application_id = ap.application_id
-                    JOIN environment_plugin_installations epi
-                        ON epi.envionment_id = e.environment_id
-                    LEFT JOIN environment_shares es
-                        ON es.environment_id = e.environment_id
-                        AND es.grantee_account_id = $2
-                    LEFT JOIN environment_share_revisions esr
-                        ON esr.environment_share_id = es.environment_share_id
-                        AND esr.revision_id = es.current_revision_id
+                    SELECT environment_id, hash, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                    FROM environment_plugin_installations
                     WHERE
-                        e.environment_id = $1
-                        -- check deletion
+                        environment_id = $1
                         AND (
-                            $4
-                            OR (
-                                a.deleted_at IS NULL
-                                AND ap.deleted_at IS NULL
-                                AND e.deleted_at IS NULL
-                                AND epi.deleted_at IS NULL
-                            )
-                        )
-                        -- check visibility
-                        AND (
-                            $3                                 -- override
-                            OR a.account_id = $2      -- owner is querying
-                            OR esr.roles IS NOT NULL  -- share exists
+                            $2
+                            OR deleted_at IS NULL
                         )
                 "#})
                 .bind(environment_id)
-                .bind(actor)
-                .bind(override_visibility)
-                .bind(include_deleted),
-            )
-            .await?;
+                .bind(include_deleted)
+            ).await?;
 
         match plugin_installation {
-            Some(mut plugin_installation) => {
-                plugin_installation.value = self.with_plugins(plugin_installation.value).await?;
-                Ok(Some(plugin_installation))
-            }
+            Some(plugin_installation) => Ok(Some(self.with_plugins(plugin_installation).await?)),
             None => Ok(None),
         }
     }

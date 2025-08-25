@@ -176,7 +176,8 @@ impl AccountService {
     }
 
     pub async fn get(&self, account_id: &AccountId) -> Result<Account, AccountError> {
-        self.get_optional(account_id)
+        self
+            .get_optional(account_id)
             .await?
             .ok_or(AccountError::AccountNotFound(account_id.clone()))
     }
