@@ -2349,9 +2349,9 @@ components:
       type: object
       title: ComponentModelElementSchema
       required:
-      - typeInfo
+      - elementType
       properties:
-        typeInfo:
+        elementType:
           $ref: '#/components/schemas/AnalysedType'
     ComponentPluginScope:
       type: object

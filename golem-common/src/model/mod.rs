@@ -36,7 +36,6 @@ pub mod trim_date;
 pub mod worker;
 
 pub use crate::base_model::*;
-use crate::model::agent::DataValue;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
@@ -564,116 +563,14 @@ impl IntoValue for WorkerMetadata {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct ExportedResourceInstanceKey {
-    pub resource_id: WorkerResourceId,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct ExportedResourceInstanceDescription {
+pub struct WorkerResourceDescription {
     pub created_at: Timestamp,
     pub resource_owner: String,
     pub resource_name: String,
-    pub resource_params: Option<Vec<String>>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    Encode,
-    Decode,
-    IntoValue,
-)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct AgentInstanceKey {
-    pub agent_type: String,
-    pub agent_id: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct AgentInstanceDescription {
-    pub created_at: Timestamp,
-    pub agent_parameters: DataValue,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-pub enum WorkerResourceKey {
-    /// A living resource instance that has been returned through invocation
-    /// and can be referenced to from outside the worker
-    ExportedResourceInstanceKey(ExportedResourceInstanceKey),
-    /// An agent instance
-    AgentInstanceKey(AgentInstanceKey),
-}
-
-impl Display for WorkerResourceKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WorkerResourceKey::ExportedResourceInstanceKey(key) => {
-                write!(f, "resource({})", key.resource_id)
-            }
-            WorkerResourceKey::AgentInstanceKey(key) => {
-                write!(f, "agent({}, {})", key.agent_type, key.agent_id)
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-pub enum WorkerResourceDescription {
-    /// A living resource instance that has been returned through invocation
-    /// and can be referenced to from outside the worker
-    ExportedResourceInstance(ExportedResourceInstanceDescription),
-    /// An agent instance
-    AgentInstance(AgentInstanceDescription),
-}
-
-impl WorkerResourceDescription {
-    pub fn with_timestamp(&self, new_timestamp: Timestamp) -> Self {
-        match self {
-            WorkerResourceDescription::ExportedResourceInstance(desc) => {
-                WorkerResourceDescription::ExportedResourceInstance(
-                    ExportedResourceInstanceDescription {
-                        created_at: new_timestamp,
-                        resource_owner: desc.resource_owner.clone(),
-                        resource_name: desc.resource_name.clone(),
-                        resource_params: desc.resource_params.clone(),
-                    },
-                )
-            }
-            WorkerResourceDescription::AgentInstance(desc) => {
-                WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
-                    created_at: new_timestamp,
-                    agent_parameters: desc.agent_parameters.clone(),
-                })
-            }
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
@@ -722,12 +619,12 @@ pub struct WorkerStatusRecord {
     pub component_version: ComponentVersion,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub owned_resources: HashMap<WorkerResourceKey, WorkerResourceDescription>,
+    pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
     pub oplog_idx: OplogIndex,
     pub active_plugins: HashSet<PluginInstallationId>,
     pub deleted_regions: DeletedRegions,
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
-    /// if only automatic updates were used or the version of the latest snapshot based update
+    /// if only automatic updates were used or the version of the latest snapshot-based update
     pub component_version_for_replay: ComponentVersion,
 }
 
@@ -2155,23 +2052,20 @@ impl From<ComponentId> for golem_wasm_rpc::ComponentId {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::BTreeMap;
     use std::str::FromStr;
-    use std::time::SystemTime;
     use std::vec;
     use test_r::test;
-    use tracing::info;
 
     use crate::model::oplog::OplogIndex;
 
     use crate::model::{
         AccountId, ComponentFilePath, ComponentId, FilterComparator, IdempotencyKey, ProjectId,
-        ShardId, StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId,
-        WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+        StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+        WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
 
-    use rand::{rng, Rng};
     use serde::{Deserialize, Serialize};
 
     #[test]
@@ -2424,41 +2318,6 @@ mod tests {
             "value2".to_string(),
         )
         .matches(&worker_metadata));
-    }
-
-    #[test]
-    fn target_worker_id_force_shards() {
-        let mut rng = rng();
-        const SHARD_COUNT: usize = 1000;
-        const EXAMPLE_COUNT: usize = 1000;
-        for _ in 0..EXAMPLE_COUNT {
-            let mut shard_ids = HashSet::new();
-            let count = rng.random_range(0..100);
-            for _ in 0..count {
-                let shard_id = rng.random_range(0..SHARD_COUNT);
-                shard_ids.insert(ShardId {
-                    value: shard_id as i64,
-                });
-            }
-
-            let component_id = ComponentId::new_v4();
-            let target_worker_id = TargetWorkerId {
-                component_id,
-                worker_name: None,
-            };
-
-            let start = SystemTime::now();
-            let worker_id = target_worker_id.into_worker_id(&shard_ids, SHARD_COUNT);
-            let end = SystemTime::now();
-            info!(
-                "Time with {count} valid shards: {:?}",
-                end.duration_since(start).unwrap()
-            );
-
-            if !shard_ids.is_empty() {
-                assert!(shard_ids.contains(&ShardId::from_worker_id(&worker_id, SHARD_COUNT)));
-            }
-        }
     }
 
     #[test]

@@ -41,6 +41,7 @@ use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRange};
 use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata, WorkerStatusRecord};
 use golem_common::model::{OwnedWorkerId, WorkerId};
@@ -445,6 +446,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             None,
             None,
             None,
+            &InvocationContextStack::fresh(),
         )
         .await?;
 

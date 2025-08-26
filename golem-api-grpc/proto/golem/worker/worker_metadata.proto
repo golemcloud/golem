@@ -54,33 +54,11 @@ message FailedUpdate {
 message SuccessfulUpdate {
 }
 
-message ExportedResourceInstanceDescription {
+message ResourceDescription {
   google.protobuf.Timestamp created_at = 1;
   uint64 resource_id = 2;
   string resource_owner = 3;
   string resource_name = 4;
-  bool is_indexed = 5;
-  repeated string resource_params = 6;
-}
-
-message AgentInstanceDescription {
-  google.protobuf.Timestamp created_at = 1;
-  string agent_type = 2;
-  string agent_id = 3;
-  golem.component.DataValue agent_parameters = 4;
-}
-
-message ResourceDescription {
-  oneof description {
-    ExportedResourceInstanceDescription exported_resource_instance = 1;
-    AgentInstanceDescription agent_instance = 2;
-  }
-}
-
-message IndexedResourceMetadata {
-  string resource_name = 1;
-  repeated string resource_params = 2;
-  string resource_owner = 3;
 }
 
 message OplogRegion {

@@ -289,7 +289,7 @@ impl From<super::bindings::golem::agent::common::ElementSchema> for ElementSchem
         match value {
             crate::model::agent::bindings::golem::agent::common::ElementSchema::ComponentModel(wit_type) => {
                 ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    type_info: wit_type.into(),
+                    element_type: wit_type.into(),
                 })
             }
             crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredText(text) => {
@@ -307,7 +307,7 @@ impl From<ElementSchema> for super::bindings::golem::agent::common::ElementSchem
         match value {
             ElementSchema::ComponentModel(component_model_element_schema) => {
                 super::bindings::golem::agent::common::ElementSchema::ComponentModel(
-                    component_model_element_schema.type_info.into(),
+                    component_model_element_schema.element_type.into(),
                 )
             }
             ElementSchema::UnstructuredText(text) => {

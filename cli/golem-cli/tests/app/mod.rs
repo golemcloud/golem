@@ -500,6 +500,7 @@ fn wasm_library_dependency_type() -> anyhow::Result<()> {
 }
 
 #[test]
+#[ignore] // TODO: temporarily ignored until a new golem-rust is released
 fn adding_and_changing_rpc_deps_retriggers_build() {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";

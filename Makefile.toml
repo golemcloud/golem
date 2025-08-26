@@ -69,6 +69,7 @@ run_task = [
         "wit-template-golem-agent-ts",
         "wit-test-components",
         "wit-golem-templates",
+        "wit-sdks"
     ] },
 ]
 
@@ -104,6 +105,18 @@ script = """
 rm -r cli/golem-templates/wit/deps
 mkdir cli/golem-templates/wit/deps
 glob_cp wit/deps/**/* cli/golem-templates/wit/deps
+"""
+
+[tasks.wit-sdks]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r sdks/rust/golem-rust/wit/deps
+rm -r sdks/ts/wit/deps
+mkdir sdks/rust/golem-rust/wit/deps
+mkdir sdks/ts/wit/deps
+glob_cp wit/deps/**/* sdks/rust/golem-rust/wit/deps
+glob_cp wit/deps/**/* sdks/ts/wit/deps
 """
 
 [tasks.wit-golem-cli]

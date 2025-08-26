@@ -442,8 +442,8 @@ pub struct HttpBodyAndTrailers {
 impl HttpBodyAndTrailers {
     pub fn analysed_type() -> AnalysedType {
         record(vec![
-            field("content", option(HttpBodyContent::analyzed_type())),
-            field("trailers", HttpFields::analyzed_type()),
+            field("content", HttpBodyContent::analyzed_type()),
+            field("trailers", option(HttpFields::analyzed_type())),
         ])
         .named("HttpBodyAndTrailers")
     }
