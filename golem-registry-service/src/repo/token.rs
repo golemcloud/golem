@@ -148,9 +148,13 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT token_id, secret, account_id, created_at, expires_at
-                    FROM tokens
-                    WHERE token_id = $1
+                    SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at
+                    FROM accounts a
+                    JOIN tokens t
+                        ON t.account_id = a.account_id
+                    WHERE
+                        t.token_id = $1
+                        AND a.deleted_at IS NULL
                 "#})
                 .bind(token_id),
             )
@@ -161,9 +165,13 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT token_id, secret, account_id, created_at, expires_at
-                    FROM tokens
-                    WHERE secret = $1
+                    SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at
+                    FROM accounts a
+                    JOIN tokens t
+                        ON t.account_id = a.account_id
+                    WHERE
+                        t.secret = $1
+                        AND a.deleted_at IS NULL
                 "#})
                 .bind(secret),
             )
@@ -174,9 +182,13 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
         self.with_ro("get_by_account")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT token_id, secret, account_id, created_at, expires_at
-                    FROM tokens
-                    WHERE account_id = $1
+                    SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at
+                    FROM accounts a
+                    JOIN tokens t
+                        ON t.account_id = a.account_id
+                    WHERE
+                        a.account_id = $1
+                        AND a.deleted_at IS NULL
                     ORDER BY token_id
                 "#})
                 .bind(account_id),

@@ -182,12 +182,20 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         self.with_ro("get_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT application_id, name, account_id, created_at, updated_at, deleted_at, modified_by
-                    FROM applications
-                    WHERE account_id = $1 AND name = $2 AND deleted_at IS NULL
+                    SELECT
+                        ap.application_id, ap.name, ap.account_id, ap.created_at,
+                        ap.updated_at, ap.deleted_at, ap.modified_by
+                    FROM accounts a
+                    JOIN applications ap
+                        ON ap.account_id = a.account_id
+                    WHERE
+                        a.account_id = $1
+                        AND ap.name = $2
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
                 "#})
-                    .bind(owner_account_id)
-                    .bind(name),
+                .bind(owner_account_id)
+                .bind(name),
             )
             .await
     }
@@ -196,11 +204,18 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT application_id, name, account_id, created_at, updated_at, deleted_at, modified_by
-                    FROM applications
-                    WHERE application_id = $1 AND deleted_at IS NULL
+                    SELECT
+                        ap.application_id, ap.name, ap.account_id, ap.created_at,
+                        ap.updated_at, ap.deleted_at, ap.modified_by
+                    FROM accounts a
+                    JOIN applications ap
+                        ON ap.account_id = a.account_id
+                    WHERE
+                        ap.application_id = $1
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
                 "#})
-                    .bind(application_id),
+                .bind(application_id),
             )
             .await
     }
@@ -209,13 +224,21 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         self.with_ro("list_by_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT application_id, name, account_id, created_at, updated_at, deleted_at, modified_by
-                    FROM applications
-                    WHERE account_id = $1 AND deleted_at IS NULL
+                    SELECT
+                        ap.application_id, ap.name, ap.account_id, ap.created_at,
+                        ap.updated_at, ap.deleted_at, ap.modified_by
+                    FROM accounts a
+                    JOIN applications ap
+                        ON ap.account_id = a.account_id
+                    WHERE
+                        a.account_id = $1
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
                     ORDER BY name
                 "#})
-                    .bind(owner_account_id),
-            ).await
+                .bind(owner_account_id),
+            )
+            .await
     }
 
     async fn get_revisions(
@@ -225,13 +248,23 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         self.with_ro("get_revisions")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT application_id, revision_id, name, account_id, created_at, created_by, deleted
-                    FROM application_revisions
-                    WHERE application_id = $1 AND deleted = false
+                    SELECT
+                        apr.application_id, apr.revision_id, apr.name,
+                        apr.account_id, apr.created_at, apr.created_by, apr.deleted
+                    FROM accounts a
+                    JOIN applications ap
+                        ON ap.account_id = a.account_id
+                    JOIN application_revisions apr
+                        ON apr.application_id = ap.application_id
+                    WHERE
+                        ap.application_id = $1
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
                     ORDER BY revision_id DESC
                 "#})
-                    .bind(application_id),
-            ).await
+                .bind(application_id),
+            )
+            .await
     }
 
     async fn ensure(

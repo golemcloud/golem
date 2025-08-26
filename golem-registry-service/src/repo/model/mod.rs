@@ -34,6 +34,7 @@ use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, Revis
 use crate::repo::model::datetime::SqlDateTime;
 use chrono::NaiveDateTime;
 use sqlx::Database;
+use sqlx::prelude::FromRow;
 use sqlx::query::{Query, QueryAs};
 use uuid::Uuid;
 
@@ -104,4 +105,13 @@ where
             .bind(fields.created_by)
             .bind(fields.deleted)
     }
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct RecordWithEnvironmentCtx<A> {
+    #[sqlx(flatten)]
+    pub value: A,
+
+    pub owner_account_id: Uuid,
+    pub environment_roles_from_shares: i32,
 }

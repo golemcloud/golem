@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::WithEnvironmentCtx;
+use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use anyhow::anyhow;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
+use golem_common::model::auth::EnvironmentAction;
 use golem_common::model::environment::{Environment, EnvironmentId, NewEnvironmentData};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
@@ -28,6 +31,8 @@ pub enum EnvironmentError {
     #[error("Environment not found for id {0}")]
     EnvironmentNotFound(EnvironmentId),
     #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
+    #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
 
@@ -35,6 +40,7 @@ impl SafeDisplay for EnvironmentError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::EnvironmentNotFound(_) => self.to_string(),
+            Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -76,15 +82,49 @@ impl EnvironmentService {
     pub async fn get(
         &self,
         environment_id: &EnvironmentId,
-    ) -> Result<Environment, EnvironmentError> {
-        let record = self
+        auth: &AuthCtx,
+    ) -> Result<WithEnvironmentCtx<Environment>, EnvironmentError> {
+        let environment: WithEnvironmentCtx<Environment> = self
             .environment_repo
-            .get_by_id(&environment_id.0)
+            .get_by_id(
+                &environment_id.0,
+                &auth.account_id.0,
+                auth.should_override_storage_visibility_rules(),
+            )
             .await?
             .ok_or(EnvironmentError::EnvironmentNotFound(
                 environment_id.clone(),
-            ))?;
+            ))?
+            .into();
 
-        Ok(record.into())
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_shares,
+            EnvironmentAction::ViewEnvironment,
+        )
+        .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id.clone()))?;
+
+        Ok(environment)
+    }
+
+    /// Convenience method for fetching environment and checking permissions against it.
+    /// This is mostly for checking access to subresources of an enviornment.
+    /// Note that lack of permissions to see the parent is already mapped to EnvironmentNotFound here,
+    /// so an Unauthorized error comes purely from checking the provided action.
+    pub async fn get_and_authorize(
+        &self,
+        environment_id: &EnvironmentId,
+        action: EnvironmentAction,
+        auth: &AuthCtx,
+    ) -> Result<WithEnvironmentCtx<Environment>, EnvironmentError> {
+        let environment: WithEnvironmentCtx<Environment> = self.get(environment_id, auth).await?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_shares,
+            action,
+        )?;
+
+        Ok(environment)
     }
 }

@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::account::{AccountError, AccountService};
+use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::model::token::TokenRecord;
 use crate::repo::token::TokenRepo;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::TokenId;
+use golem_common::model::auth::{AccountAction, TokenId};
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
@@ -31,6 +33,10 @@ pub enum TokenError {
     TokenNotFound(TokenId),
     #[error("Token for secret not found")]
     TokenBySecretFound,
+    #[error("Parent account not found")]
+    ParentAccountNotFound(AccountId),
+    #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -41,50 +47,98 @@ impl SafeDisplay for TokenError {
             Self::TokenSecretAlreadyExists => self.to_string(),
             Self::TokenNotFound(_) => self.to_string(),
             Self::TokenBySecretFound => self.to_string(),
+            Self::ParentAccountNotFound(_) => self.to_string(),
+            Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
 }
 
-error_forwarding!(TokenError, RepoError);
+error_forwarding!(TokenError, RepoError, AccountError);
 
 pub struct TokenService {
     token_repo: Arc<dyn TokenRepo>,
+    account_service: Arc<AccountService>,
 }
 
 impl TokenService {
-    pub fn new(token_repo: Arc<dyn TokenRepo>) -> Self {
-        Self { token_repo }
+    pub fn new(token_repo: Arc<dyn TokenRepo>, account_service: Arc<AccountService>) -> Self {
+        Self {
+            token_repo,
+            account_service,
+        }
     }
 
-    pub async fn get(&self, token_id: &TokenId) -> Result<TokenWithSecret, TokenError> {
-        let record = self
+    pub async fn get(
+        &self,
+        token_id: &TokenId,
+        auth: &AuthCtx,
+    ) -> Result<TokenWithSecret, TokenError> {
+        let token: TokenWithSecret = self
             .token_repo
             .get_by_id(&token_id.0)
             .await?
-            .ok_or(TokenError::TokenNotFound(token_id.clone()))?;
+            .ok_or(TokenError::TokenNotFound(token_id.clone()))?
+            .into();
 
-        Ok(record.into())
+        auth.authorize_account_action(&token.account_id, AccountAction::ViewToken)
+            .map_err(|_| TokenError::TokenNotFound(token_id.clone()))?;
+
+        Ok(token)
     }
 
-    pub async fn get_by_secret(&self, secret: &TokenSecret) -> Result<TokenWithSecret, TokenError> {
-        let token = self
+    pub async fn get_by_secret(
+        &self,
+        secret: &TokenSecret,
+        auth: &AuthCtx,
+    ) -> Result<TokenWithSecret, TokenError> {
+        let token: TokenWithSecret = self
             .token_repo
             .get_by_secret(&secret.0)
             .await?
             .ok_or(TokenError::TokenBySecretFound)?
             .into();
 
+        auth.authorize_account_action(&token.account_id, AccountAction::ViewToken)
+            .map_err(|_| TokenError::TokenBySecretFound)?;
+
         Ok(token)
+    }
+
+    pub async fn get_optional_by_secret(
+        &self,
+        secret: &TokenSecret,
+        auth: &AuthCtx,
+    ) -> Result<Option<TokenWithSecret>, TokenError> {
+        self.get_by_secret(secret, auth)
+            .await
+            .map(Some)
+            .or_else(|err| match err {
+                TokenError::TokenBySecretFound => Ok(None),
+                other => Err(other),
+            })
     }
 
     pub async fn create(
         &self,
         account_id: AccountId,
         expires_at: DateTime<Utc>,
+        auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
+        self.account_service
+            .get(&account_id, auth)
+            .await
+            .map_err(|err| match err {
+                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                    TokenError::ParentAccountNotFound(account_id.clone())
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_account_action(&account_id, AccountAction::CreateToken)?;
+
         let secret = TokenSecret::new_v4();
-        self.create_known_secret(account_id, secret, expires_at)
+        self.create_known_secret(account_id, secret, expires_at, auth)
             .await
     }
 
@@ -93,7 +147,20 @@ impl TokenService {
         account_id: AccountId,
         secret: TokenSecret,
         expires_at: DateTime<Utc>,
+        auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
+        self.account_service
+            .get(&account_id, auth)
+            .await
+            .map_err(|err| match err {
+                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                    TokenError::ParentAccountNotFound(account_id.clone())
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_account_action(&account_id, AccountAction::CreateKnownSecret)?;
+
         let created_at = Utc::now();
         let token_id = TokenId::new_v4();
 
@@ -114,7 +181,27 @@ impl TokenService {
         Ok(record.into())
     }
 
-    pub async fn delete(&self, token_id: &TokenId) -> Result<(), TokenError> {
+    pub async fn create_initial_tokens(&self, auth: &AuthCtx) -> Result<(), TokenError> {
+        for (account_id, secret) in self.account_service.initial_tokens() {
+            let existing = self.get_optional_by_secret(&secret, auth).await?;
+            if existing.is_none() {
+                self.create_known_secret(account_id, secret, DateTime::<Utc>::MAX_UTC, auth)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn delete(&self, token_id: &TokenId, auth: &AuthCtx) -> Result<(), TokenError> {
+        let token: TokenWithSecret = self
+            .token_repo
+            .get_by_id(&token_id.0)
+            .await?
+            .ok_or(TokenError::TokenNotFound(token_id.clone()))?
+            .into();
+
+        auth.authorize_account_action(&token.account_id, AccountAction::DeleteToken)?;
+
         self.token_repo.delete(&token_id.0).await?;
 
         Ok(())

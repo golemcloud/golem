@@ -13,11 +13,9 @@
 // limitations under the License.
 
 use super::environment::EnvironmentId;
-use crate::{declare_structs, declare_transparent_newtypes};
+use crate::{declare_revision, declare_structs};
 
-declare_transparent_newtypes! {
-    pub struct DeploymentRevisionId(pub u64);
-}
+declare_revision!(DeploymentRevisionId);
 
 declare_structs! {
     pub struct Deployment {
