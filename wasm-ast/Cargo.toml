@@ -33,7 +33,9 @@ test-r = { workspace = true }
 wasmprinter = { workspace = true }
 
 [build-dependencies]
+miette = { workspace = true, optional = true }
 prost-build = { workspace = true, optional = true }
+protox = { workspace = true, optional = true }
 
 [features]
 default = [
@@ -81,7 +83,7 @@ json = ["dep:serde", "dep:serde_json"]
 poem_openapi = ["json", "dep:poem-openapi"]
 
 # Protobuf representation of analysed types
-protobuf = ["dep:prost", "dep:prost-build"]
+protobuf = ["dep:prost", "dep:prost-build", "dep:protox", "dep:miette"]
 
 [lib]
 path = "src/lib.rs"
