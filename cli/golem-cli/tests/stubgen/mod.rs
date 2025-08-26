@@ -26,6 +26,12 @@ tag_suite!(cargo, uses_cargo);
 tag_suite!(compose, uses_cargo);
 tag_suite!(stub_wasm, uses_cargo);
 
+tag_suite!(add_dep, group1);
+tag_suite!(wit, group1);
+tag_suite!(cargo, group2);
+tag_suite!(compose, group2);
+tag_suite!(stub_wasm, group2);
+
 static TEST_DATA_PATH: &str = "test-data";
 
 pub fn test_data_path() -> &'static Path {

@@ -24,7 +24,7 @@ use golem_cli::fs;
 use indoc::{formatdoc, indoc};
 use serde_json::json;
 use std::path::Path;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, tag, test};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
@@ -32,6 +32,7 @@ use tracing::{debug, error, info};
 inherit_test_dep!(Tracing);
 
 #[test]
+#[tag(group2)]
 async fn plugin_installation_test1(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";

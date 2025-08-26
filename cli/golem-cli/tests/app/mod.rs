@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use strum::IntoEnumIterator;
 use tempfile::TempDir;
-use test_r::test;
+use test_r::{tag, test};
 use tracing::info;
 
 mod cmd {
@@ -61,6 +61,7 @@ mod pattern {
 }
 
 #[test]
+#[tag(group1)]
 fn app_help_in_empty_folder(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli([cmd::APP]);
@@ -73,6 +74,7 @@ fn app_help_in_empty_folder(_tracing: &Tracing) {
 }
 
 #[test]
+#[tag(group2)]
 fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tracing) {
     let app_name = "test-app-name";
 
@@ -102,6 +104,7 @@ fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tracing) 
 }
 
 #[test]
+#[tag(group1)]
 fn app_build_with_rust_component(_tracing: &Tracing) {
     let app_name = "test-app-name";
 
@@ -163,6 +166,7 @@ fn app_build_with_rust_component(_tracing: &Tracing) {
 }
 
 #[test]
+#[tag(group2)]
 fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli([cmd::APP, cmd::NEW, "dummy-app-name"]);
@@ -181,6 +185,7 @@ fn app_new_language_hints(_tracing: &Tracing) {
 }
 
 #[test]
+#[tag(group1)]
 fn completion(_tracing: &Tracing) {
     let ctx = TestContext::new();
 
@@ -201,6 +206,7 @@ fn completion(_tracing: &Tracing) {
 }
 
 #[test]
+#[tag(group2)]
 fn basic_dependencies_build(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
@@ -260,6 +266,7 @@ fn basic_dependencies_build(_tracing: &Tracing) {
 }
 
 #[test]
+#[tag(group1)]
 fn basic_ifs_deploy(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
@@ -342,6 +349,7 @@ fn basic_ifs_deploy(_tracing: &Tracing) {
 }
 
 #[test]
+#[tag(group2)]
 fn custom_app_subcommand_with_builtin_name() {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
@@ -374,6 +382,7 @@ fn custom_app_subcommand_with_builtin_name() {
 }
 
 #[test]
+#[tag(group1)]
 fn wasm_library_dependency_type() -> anyhow::Result<()> {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
@@ -500,6 +509,7 @@ fn wasm_library_dependency_type() -> anyhow::Result<()> {
 }
 
 #[test]
+#[tag(group2)]
 #[ignore] // TODO: temporarily ignored until a new golem-rust is released
 fn adding_and_changing_rpc_deps_retriggers_build() {
     let mut ctx = TestContext::new();
