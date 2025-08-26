@@ -2,7 +2,7 @@ package golem:agent;
 
 interface host {
     use golem:rpc/types@0.2.2.{component-id};
-    use common.{agent-type};
+    use common.{agent-error, agent-type, data-value};
 
     /// Associates an agent type with a component that implements it
     record registered-agent-type {
@@ -15,4 +15,7 @@ interface host {
 
     /// Get a specific registered agent type by name
     get-agent-type: func(agent-type-name: string) -> option<registered-agent-type>;
+
+    /// Constructs a string agent-id from the agent type and its constructor parameters
+    make-agent-id: func(agent-type-name: string, input:  data-value) -> result<string, agent-error>;
 }
