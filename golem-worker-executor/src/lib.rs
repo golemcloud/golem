@@ -116,7 +116,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> anyhow::Result<u16> {
         let golem_config = service_dependencies.config();
-        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+        let (health_reporter, health_service) = tonic_health::server::health_reporter();
         health_reporter
             .set_serving::<WorkerExecutorServer<WorkerExecutorImpl<Ctx, All<Ctx>>>>()
             .await;

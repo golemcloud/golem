@@ -40,10 +40,6 @@ jobs:
           cache-all-crates: true
           save-if: true
       - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
       - name: Building all executables
@@ -79,10 +75,6 @@ jobs:
           cache-all-crates: true
           save-if: false
       - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
       - name: Unit tests
@@ -128,10 +120,6 @@ jobs:
           cache-all-crates: true
           save-if: false
       - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
@@ -191,10 +179,6 @@ jobs:
           cache-all-crates: true
           save-if: false
       - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
@@ -251,10 +235,6 @@ jobs:
           cache-all-crates: true
           save-if: false
       - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
       - name: Prepare WIT dependencies
@@ -277,10 +257,6 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check formatting
         run: cargo fmt -- --check
         working-directory: sdks/rust
@@ -355,10 +331,6 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: false
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - run: cargo install cross
         if: ${{ matrix.platform.cross }}
@@ -570,10 +542,6 @@ jobs:
           cache-all-crates: true
           save-if: true
       - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Purge v8 from cache
@@ -629,10 +597,6 @@ jobs:
           shared-key: release-${{ matrix.cfg.rust-target }}
           cache-all-crates: true
           save-if: true
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Set version for all packages
