@@ -801,7 +801,7 @@ async fn run_shopping_cart_initialize_and_add(
 ) {
     regular_worker_executor
         .invoke_and_await(
-            &worker_id,
+            worker_id,
             "golem:it/api.{initialize-cart}",
             vec!["test-user-1".into_value_and_type()],
         )
@@ -811,7 +811,7 @@ async fn run_shopping_cart_initialize_and_add(
 
     regular_worker_executor
         .invoke_and_await(
-            &worker_id,
+            worker_id,
             "golem:it/api.{add-item}",
             vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
@@ -835,14 +835,14 @@ async fn run_shopping_cart_workflow(
 
     // Checkout
     let _ = regular_worker_executor
-        .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
+        .invoke_and_await(worker_id, "golem:it/api.{checkout}", vec![])
         .await
         .expect("Failed to invoke and await");
 
     // Add Item again
     let _ = regular_worker_executor
         .invoke_and_await(
-            &worker_id,
+            worker_id,
             "golem:it/api.{add-item}",
             vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),

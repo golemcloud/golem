@@ -517,7 +517,7 @@ async fn get_workers_from_worker(
 
         let result = executor
             .invoke_and_await(
-                &worker_id,
+                worker_id,
                 "golem:it/api.{get-workers}",
                 vec![
                     component_id_val_and_type,
@@ -605,7 +605,7 @@ async fn get_metadata_from_worker(
         let worker_id_val1 = get_worker_id_val(worker_id1);
 
         let result = executor
-            .invoke_and_await(&worker_id1, "golem:it/api.{get-self-metadata}", vec![])
+            .invoke_and_await(worker_id1, "golem:it/api.{get-self-metadata}", vec![])
             .await
             .unwrap();
 
@@ -623,7 +623,7 @@ async fn get_metadata_from_worker(
 
         let result = executor
             .invoke_and_await(
-                &worker_id1,
+                worker_id1,
                 "golem:it/api.{get-worker-metadata}",
                 vec![ValueAndType {
                     value: worker_id_val2.clone(),
