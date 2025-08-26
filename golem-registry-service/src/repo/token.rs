@@ -27,23 +27,11 @@ use uuid::Uuid;
 pub trait TokenRepo: Send + Sync {
     async fn create(&self, token: TokenRecord) -> RepoResult<Option<TokenRecord>>;
 
-    async fn get_by_id(
-        &self,
-        token_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Option<TokenRecord>>;
+    async fn get_by_id(&self, token_id: &Uuid) -> RepoResult<Option<TokenRecord>>;
 
-    async fn get_by_secret(
-        &self,
-        secret: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Option<TokenRecord>>;
+    async fn get_by_secret(&self, secret: &Uuid) -> RepoResult<Option<TokenRecord>>;
 
-    async fn get_by_account(
-        &self,
-        account_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Vec<TokenRecord>>;
+    async fn get_by_account(&self, account_id: &Uuid) -> RepoResult<Vec<TokenRecord>>;
 
     async fn delete(&self, token_id: &Uuid) -> RepoResult<()>;
 }
@@ -79,35 +67,23 @@ impl<Repo: TokenRepo> TokenRepo for LoggedTokenRepo<Repo> {
         self.repo.create(token).instrument(span).await
     }
 
-    async fn get_by_id(
-        &self,
-        token_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Option<TokenRecord>> {
+    async fn get_by_id(&self, token_id: &Uuid) -> RepoResult<Option<TokenRecord>> {
         self.repo
-            .get_by_id(token_id, include_deleted)
+            .get_by_id(token_id)
             .instrument(Self::span_id(token_id))
             .await
     }
 
-    async fn get_by_secret(
-        &self,
-        secret: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Option<TokenRecord>> {
+    async fn get_by_secret(&self, secret: &Uuid) -> RepoResult<Option<TokenRecord>> {
         self.repo
-            .get_by_secret(secret, include_deleted)
+            .get_by_secret(secret)
             .instrument(Self::span_secret(secret))
             .await
     }
 
-    async fn get_by_account(
-        &self,
-        account_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Vec<TokenRecord>> {
+    async fn get_by_account(&self, account_id: &Uuid) -> RepoResult<Vec<TokenRecord>> {
         self.repo
-            .get_by_account(account_id, include_deleted)
+            .get_by_account(account_id)
             .instrument(Self::span_account(account_id))
             .await
     }
@@ -168,11 +144,7 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
             .none_on_unique_violation()
     }
 
-    async fn get_by_id(
-        &self,
-        token_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Option<TokenRecord>> {
+    async fn get_by_id(&self, token_id: &Uuid) -> RepoResult<Option<TokenRecord>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -182,23 +154,14 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                         ON t.account_id = a.account_id
                     WHERE
                         t.token_id = $1
-                        -- check deletion
-                        AND (
-                            $2
-                            OR a.deleted_at IS NULL
-                        )
+                        AND a.deleted_at IS NULL
                 "#})
-                .bind(token_id)
-                .bind(include_deleted),
+                .bind(token_id),
             )
             .await
     }
 
-    async fn get_by_secret(
-        &self,
-        secret: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Option<TokenRecord>> {
+    async fn get_by_secret(&self, secret: &Uuid) -> RepoResult<Option<TokenRecord>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -208,23 +171,14 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                         ON t.account_id = a.account_id
                     WHERE
                         t.secret = $1
-                        -- check deletion
-                        AND (
-                            $2
-                            OR a.deleted_at IS NULL
-                        )
+                        AND a.deleted_at IS NULL
                 "#})
-                .bind(secret)
-                .bind(include_deleted),
+                .bind(secret),
             )
             .await
     }
 
-    async fn get_by_account(
-        &self,
-        account_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Vec<TokenRecord>> {
+    async fn get_by_account(&self, account_id: &Uuid) -> RepoResult<Vec<TokenRecord>> {
         self.with_ro("get_by_account")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -234,15 +188,10 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                         ON t.account_id = a.account_id
                     WHERE
                         a.account_id = $1
-                        -- check deletion
-                        AND (
-                            $2
-                            OR a.deleted_at IS NULL
-                        )
+                        AND a.deleted_at IS NULL
                     ORDER BY token_id
                 "#})
-                .bind(account_id)
-                .bind(include_deleted),
+                .bind(account_id),
             )
             .await
     }

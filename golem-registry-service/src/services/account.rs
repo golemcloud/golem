@@ -130,7 +130,7 @@ impl AccountService {
 
         let mut account: Account = self
             .account_repo
-            .get_by_id(&account_id.0, false)
+            .get_by_id(&account_id.0)
             .await?
             .ok_or(AccountError::AccountNotFound(account_id.clone()))?
             .try_into()?;
@@ -153,7 +153,7 @@ impl AccountService {
 
         let mut account: Account = self
             .account_repo
-            .get_by_id(&account_id.0, false)
+            .get_by_id(&account_id.0)
             .await?
             .ok_or(AccountError::AccountNotFound(account_id.clone()))?
             .try_into()?;
@@ -216,7 +216,7 @@ impl AccountService {
             // Visibility is not enforced in the repo, so we need to map permissions to visibility
             .map_err(|_| AccountError::AccountNotFound(account_id.clone()))?;
 
-        let record = self.account_repo.get_by_id(&account_id.0, false).await?;
+        let record = self.account_repo.get_by_id(&account_id.0).await?;
         Ok(record.map(|r| r.try_into()).transpose()?)
     }
 

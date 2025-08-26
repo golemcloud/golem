@@ -79,9 +79,7 @@ CREATE TABLE account_revisions
     CONSTRAINT account_revisions_accounts_fk
         FOREIGN KEY (account_id) REFERENCES accounts,
     CONSTRAINT account_revisions_plans_fk
-        FOREIGN KEY (plan_id) REFERENCES plans,
-    CONSTRAINT account_revisions_check_roles
-        CHECK ((roles & ~3) = 0) -- for 3 roles (bits 0,1),
+        FOREIGN KEY (plan_id) REFERENCES plans
 );
 
 CREATE TABLE tokens
@@ -689,7 +687,5 @@ CREATE TABLE environment_share_revisions
     CONSTRAINT environment_share_revisions_pk
         PRIMARY KEY (environment_share_id, revision_id),
     CONSTRAINT environment_share_revisions_environment_shares_fk
-        FOREIGN KEY (environment_share_id) REFERENCES environment_shares,
-    CONSTRAINT environment_share_revisions_check_roles
-        CHECK ((roles & ~7) = 0) -- for 3 roles (bits 0,1,2)
+        FOREIGN KEY (environment_share_id) REFERENCES environment_shares
 );

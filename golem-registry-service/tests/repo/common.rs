@@ -75,7 +75,7 @@ pub async fn test_create_and_get_account(deps: &Deps) {
 
     let requested_account = deps
         .account_repo
-        .get_by_id(&account.account_id, false)
+        .get_by_id(&account.account_id)
         .await
         .unwrap();
     let_assert!(Some(requested_account) = requested_account);
@@ -83,7 +83,7 @@ pub async fn test_create_and_get_account(deps: &Deps) {
 
     let requested_account = deps
         .account_repo
-        .get_by_email(&account.email, false)
+        .get_by_email(&account.email)
         .await
         .unwrap();
     let_assert!(Some(requested_account) = requested_account);
@@ -127,7 +127,7 @@ pub async fn test_application_ensure(deps: &Deps) {
 
     let app = deps
         .application_repo
-        .get_by_name(&owner.revision.account_id, &app_name, false)
+        .get_by_name(&owner.revision.account_id, &app_name)
         .await
         .unwrap();
     assert!(app.is_none());
@@ -163,7 +163,7 @@ pub async fn test_application_ensure(deps: &Deps) {
 
     let app_3 = deps
         .application_repo
-        .get_by_name(&owner.revision.account_id, &app_name, false)
+        .get_by_name(&owner.revision.account_id, &app_name)
         .await
         .unwrap();
     let_assert!(Some(app_3) = app_3);
@@ -215,13 +215,13 @@ pub async fn test_application_delete(deps: &Deps) {
 
     let get_by_id = deps
         .application_repo
-        .get_by_id(&app.application_id, false)
+        .get_by_id(&app.application_id)
         .await
         .unwrap();
     assert!(get_by_id.is_none());
     let get_by_name = deps
         .application_repo
-        .get_by_name(&user.revision.account_id, &app.name, false)
+        .get_by_name(&user.revision.account_id, &app.name)
         .await
         .unwrap();
     assert!(get_by_name.is_none());
@@ -255,7 +255,6 @@ pub async fn test_environment_create(deps: &Deps) {
                 env_name,
                 &user.revision.account_id,
                 false,
-                false
             )
             .await
             .unwrap()
@@ -291,7 +290,6 @@ pub async fn test_environment_create(deps: &Deps) {
             env_name,
             &user.revision.account_id,
             false,
-            false,
         )
         .await
         .unwrap();
@@ -303,7 +301,6 @@ pub async fn test_environment_create(deps: &Deps) {
         .get_by_id(
             &env.revision.environment_id,
             &user.revision.account_id,
-            false,
             false,
         )
         .await
@@ -394,7 +391,6 @@ pub async fn test_environment_update(deps: &Deps) {
             &env_rev_0.name,
             &user.revision.account_id,
             false,
-            false,
         )
         .await
         .unwrap();
@@ -405,12 +401,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_1_by_id = deps
         .environment_repo
-        .get_by_id(
-            &env_rev_1.environment_id,
-            &user.revision.account_id,
-            false,
-            false,
-        )
+        .get_by_id(&env_rev_1.environment_id, &user.revision.account_id, false)
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_id) = rev_1_by_id);
@@ -460,7 +451,6 @@ pub async fn test_environment_update(deps: &Deps) {
             &env_rev_0.name,
             &user.revision.account_id,
             false,
-            false,
         )
         .await
         .unwrap();
@@ -471,12 +461,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_2_by_id = deps
         .environment_repo
-        .get_by_id(
-            &env_rev_2.environment_id,
-            &user.revision.account_id,
-            false,
-            false,
-        )
+        .get_by_id(&env_rev_2.environment_id, &user.revision.account_id, false)
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_id) = rev_2_by_id);
@@ -531,7 +516,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let env = deps.create_env(&app.application_id).await;
     let app = deps
         .application_repo
-        .get_by_id(&env.application_id, false)
+        .get_by_id(&env.application_id)
         .await
         .unwrap()
         .unwrap();

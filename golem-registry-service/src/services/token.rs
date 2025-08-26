@@ -76,7 +76,7 @@ impl TokenService {
     ) -> Result<TokenWithSecret, TokenError> {
         let token: TokenWithSecret = self
             .token_repo
-            .get_by_id(&token_id.0, false)
+            .get_by_id(&token_id.0)
             .await?
             .ok_or(TokenError::TokenNotFound(token_id.clone()))?
             .into();
@@ -94,7 +94,7 @@ impl TokenService {
     ) -> Result<TokenWithSecret, TokenError> {
         let token: TokenWithSecret = self
             .token_repo
-            .get_by_secret(&secret.0, false)
+            .get_by_secret(&secret.0)
             .await?
             .ok_or(TokenError::TokenBySecretFound)?
             .into();
@@ -195,7 +195,7 @@ impl TokenService {
     pub async fn delete(&self, token_id: &TokenId, auth: &AuthCtx) -> Result<(), TokenError> {
         let token: TokenWithSecret = self
             .token_repo
-            .get_by_id(&token_id.0, false)
+            .get_by_id(&token_id.0)
             .await?
             .ok_or(TokenError::TokenNotFound(token_id.clone()))?
             .into();

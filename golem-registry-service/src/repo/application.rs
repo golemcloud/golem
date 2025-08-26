@@ -35,25 +35,15 @@ pub trait ApplicationRepo: Send + Sync {
         &self,
         owner_account_id: &Uuid,
         name: &str,
-        include_deleted: bool,
     ) -> RepoResult<Option<ApplicationRecord>>;
 
-    async fn get_by_id(
-        &self,
-        application_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Option<ApplicationRecord>>;
+    async fn get_by_id(&self, application_id: &Uuid) -> RepoResult<Option<ApplicationRecord>>;
 
-    async fn list_by_owner(
-        &self,
-        owner_account_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Vec<ApplicationRecord>>;
+    async fn list_by_owner(&self, owner_account_id: &Uuid) -> RepoResult<Vec<ApplicationRecord>>;
 
     async fn get_revisions(
         &self,
         application_id: &Uuid,
-        include_deleted: bool,
     ) -> RepoResult<Vec<ApplicationRevisionRecord>>;
 
     async fn ensure(
@@ -96,32 +86,23 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
         &self,
         owner_account_id: &Uuid,
         name: &str,
-        include_deleted: bool,
     ) -> RepoResult<Option<ApplicationRecord>> {
         self.repo
-            .get_by_name(owner_account_id, name, include_deleted)
+            .get_by_name(owner_account_id, name)
             .instrument(Self::span_name(name))
             .await
     }
 
-    async fn get_by_id(
-        &self,
-        application_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Option<ApplicationRecord>> {
+    async fn get_by_id(&self, application_id: &Uuid) -> RepoResult<Option<ApplicationRecord>> {
         self.repo
-            .get_by_id(application_id, include_deleted)
+            .get_by_id(application_id)
             .instrument(Self::span_app_id(application_id))
             .await
     }
 
-    async fn list_by_owner(
-        &self,
-        owner_account_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Vec<ApplicationRecord>> {
+    async fn list_by_owner(&self, owner_account_id: &Uuid) -> RepoResult<Vec<ApplicationRecord>> {
         self.repo
-            .list_by_owner(owner_account_id, include_deleted)
+            .list_by_owner(owner_account_id)
             .instrument(Self::span_owner_id(owner_account_id))
             .await
     }
@@ -129,10 +110,9 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     async fn get_revisions(
         &self,
         application_id: &Uuid,
-        include_deleted: bool,
     ) -> RepoResult<Vec<ApplicationRevisionRecord>> {
         self.repo
-            .get_revisions(application_id, include_deleted)
+            .get_revisions(application_id)
             .instrument(Self::span_app_id(application_id))
             .await
     }
@@ -198,7 +178,6 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         &self,
         owner_account_id: &Uuid,
         name: &str,
-        include_deleted: bool,
     ) -> RepoResult<Option<ApplicationRecord>> {
         self.with_ro("get_by_name")
             .fetch_optional_as(
@@ -212,27 +191,16 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                     WHERE
                         a.account_id = $1
                         AND ap.name = $2
-                        -- check deletion
-                        AND (
-                            $3
-                            OR (
-                                a.deleted_at IS NULL
-                                AND ap.deleted_at IS NULL
-                            )
-                        )
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
                 "#})
                 .bind(owner_account_id)
-                .bind(name)
-                .bind(include_deleted),
+                .bind(name),
             )
             .await
     }
 
-    async fn get_by_id(
-        &self,
-        application_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Option<ApplicationRecord>> {
+    async fn get_by_id(&self, application_id: &Uuid) -> RepoResult<Option<ApplicationRecord>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
@@ -244,26 +212,15 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                         ON ap.account_id = a.account_id
                     WHERE
                         ap.application_id = $1
-                        -- check deletion
-                        AND (
-                            $2
-                            OR (
-                                a.deleted_at IS NULL
-                                AND ap.deleted_at IS NULL
-                            )
-                        )
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
                 "#})
-                .bind(application_id)
-                .bind(include_deleted),
+                .bind(application_id),
             )
             .await
     }
 
-    async fn list_by_owner(
-        &self,
-        owner_account_id: &Uuid,
-        include_deleted: bool,
-    ) -> RepoResult<Vec<ApplicationRecord>> {
+    async fn list_by_owner(&self, owner_account_id: &Uuid) -> RepoResult<Vec<ApplicationRecord>> {
         self.with_ro("list_by_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
@@ -274,19 +231,12 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                     JOIN applications ap
                         ON ap.account_id = a.account_id
                     WHERE
-                        a.account_id
-                        -- check deletion
-                        AND (
-                            $2
-                            OR (
-                                a.deleted_at IS NULL
-                                AND ap.deleted_at IS NULL
-                            )
-                        )
+                        a.account_id = $1
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
                     ORDER BY name
                 "#})
-                .bind(owner_account_id)
-                .bind(include_deleted),
+                .bind(owner_account_id),
             )
             .await
     }
@@ -294,7 +244,6 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn get_revisions(
         &self,
         application_id: &Uuid,
-        include_deleted: bool,
     ) -> RepoResult<Vec<ApplicationRevisionRecord>> {
         self.with_ro("get_revisions")
             .fetch_all_as(
@@ -309,18 +258,11 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                         ON apr.application_id = ap.application_id
                     WHERE
                         ap.application_id = $1
-                        -- check deletion
-                        AND (
-                            $2
-                            OR (
-                                a.deleted_at IS NULL
-                                AND ap.deleted_at IS NULL
-                            )
-                        )
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
                     ORDER BY revision_id DESC
                 "#})
-                .bind(application_id)
-                .bind(include_deleted),
+                .bind(application_id),
             )
             .await
     }
@@ -331,7 +273,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         owner_account_id: &Uuid,
         name: &str,
     ) -> RepoResult<ApplicationRecord> {
-        if let Some(app) = self.get_by_name(owner_account_id, name, false).await? {
+        if let Some(app) = self.get_by_name(owner_account_id, name).await? {
             return Ok(app);
         }
 
@@ -372,7 +314,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
             return Ok(result);
         }
 
-        match self.get_by_name(owner_account_id, name, false).await? {
+        match self.get_by_name(owner_account_id, name).await? {
             Some(app) => Ok(app),
             None => Err(anyhow!("illegal state: missing application"))?,
         }

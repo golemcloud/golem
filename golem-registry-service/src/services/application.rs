@@ -105,7 +105,7 @@ impl ApplicationService {
     ) -> Result<Application, ApplicationError> {
         let application: Application = self
             .application_repo
-            .get_by_id(&application_id.0, false)
+            .get_by_id(&application_id.0)
             .await?
             .ok_or(ApplicationError::ApplicationNotFound(
                 application_id.clone(),

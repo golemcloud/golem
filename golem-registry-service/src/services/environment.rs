@@ -90,7 +90,6 @@ impl EnvironmentService {
                 &environment_id.0,
                 &auth.account_id.0,
                 auth.should_override_storage_visibility_rules(),
-                false,
             )
             .await?
             .ok_or(EnvironmentError::EnvironmentNotFound(

@@ -39,7 +39,6 @@ pub trait EnvironmentRepo: Send + Sync {
         name: &str,
         actor: &Uuid,
         override_visibility: bool,
-        include_deleted: bool,
     ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>>;
 
     async fn get_by_id(
@@ -47,7 +46,6 @@ pub trait EnvironmentRepo: Send + Sync {
         environment_id: &Uuid,
         actor: &Uuid,
         override_visibility: bool,
-        include_deleted: bool,
     ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>>;
 
     async fn list_by_app(
@@ -55,7 +53,6 @@ pub trait EnvironmentRepo: Send + Sync {
         application_id: &Uuid,
         actor: &Uuid,
         override_visibility: bool,
-        include_deleted: bool,
     ) -> RepoResult<Vec<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>>;
 
     async fn create(
@@ -81,7 +78,6 @@ pub trait EnvironmentRepo: Send + Sync {
     async fn get_current_plugin_installations(
         &self,
         environment_id: &Uuid,
-        include_deleted: bool,
     ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>>;
 
     async fn create_plugin_installations(
@@ -135,16 +131,9 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         name: &str,
         actor: &Uuid,
         override_visibility: bool,
-        include_deleted: bool,
     ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.repo
-            .get_by_name(
-                application_id,
-                name,
-                actor,
-                override_visibility,
-                include_deleted,
-            )
+            .get_by_name(application_id, name, actor, override_visibility)
             .instrument(Self::span_name(application_id, name))
             .await
     }
@@ -154,10 +143,9 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         environment_id: &Uuid,
         actor: &Uuid,
         override_visibility: bool,
-        include_deleted: bool,
     ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.repo
-            .get_by_id(environment_id, actor, override_visibility, include_deleted)
+            .get_by_id(environment_id, actor, override_visibility)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -167,10 +155,9 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         application_id: &Uuid,
         actor: &Uuid,
         override_visibility: bool,
-        include_deleted: bool,
     ) -> RepoResult<Vec<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.repo
-            .list_by_app(application_id, actor, override_visibility, include_deleted)
+            .list_by_app(application_id, actor, override_visibility)
             .instrument(Self::span_env(application_id))
             .await
     }
@@ -215,10 +202,9 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn get_current_plugin_installations(
         &self,
         environment_id: &Uuid,
-        include_deleted: bool,
     ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
         self.repo
-            .get_current_plugin_installations(environment_id, include_deleted)
+            .get_current_plugin_installations(environment_id)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -296,7 +282,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         name: &str,
         actor: &Uuid,
         override_visibility: bool,
-        include_deleted: bool,
     ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.with_ro("get_by_name")
             .fetch_optional_as(
@@ -325,27 +310,19 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     WHERE
                         ap.application_id = $1
                         AND e.name = $2
-                        -- check deletion
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
                         AND (
-                            $5
-                            OR (
-                                a.deleted_at IS NULL
-                                AND ap.deleted_at IS NULL
-                                AND e.deleted_at IS NULL
-                            )
-                        )
-                        -- check visibility
-                        AND (
-                            $4                                 -- override
-                            OR a.account_id = $3      -- owner is querying
-                            OR esr.roles IS NOT NULL  -- share exists
+                            $4
+                            OR a.account_id = $3
+                            OR esr.roles IS NOT NULL
                         )
                 "# })
                 .bind(application_id)
                 .bind(name)
                 .bind(actor)
-                .bind(override_visibility)
-                .bind(include_deleted),
+                .bind(override_visibility),
             )
             .await
     }
@@ -355,7 +332,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         environment_id: &Uuid,
         actor: &Uuid,
         override_visibility: bool,
-        include_deleted: bool,
     ) -> RepoResult<Option<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
@@ -383,26 +359,18 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND esr.revision_id = es.current_revision_id
                     WHERE
                         e.environment_id = $1
-                        -- check deletion
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
                         AND (
-                            $4
-                            OR (
-                                a.deleted_at IS NULL
-                                AND ap.deleted_at IS NULL
-                                AND e.deleted_at IS NULL
-                            )
-                        )
-                        -- check visibility
-                        AND (
-                            $3                                 -- override
-                            OR a.account_id = $2      -- owner is querying
-                            OR esr.roles IS NOT NULL  -- share exists
+                            $3
+                            OR a.account_id = $2
+                            OR esr.roles IS NOT NULL
                         )
                 "# })
                 .bind(environment_id)
                 .bind(actor)
-                .bind(override_visibility)
-                .bind(include_deleted),
+                .bind(override_visibility),
             )
             .await
     }
@@ -412,7 +380,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         application_id: &Uuid,
         actor: &Uuid,
         override_visibility: bool,
-        include_deleted: bool,
     ) -> RepoResult<Vec<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>> {
         self.with_ro("list_by_owner")
             .fetch_all_as(
@@ -440,27 +407,19 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND esr.revision_id = es.current_revision_id
                     WHERE
                         ap.application_id = $1
-                        -- check deletion
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
                         AND (
-                            $4
-                            OR (
-                                a.deleted_at IS NULL
-                                AND ap.deleted_at IS NULL
-                                AND e.deleted_at IS NULL
-                            )
-                        )
-                        -- check visibility
-                        AND (
-                            $3                                 -- override
-                            OR a.account_id = $2      -- owner is querying
-                            OR esr.roles IS NOT NULL  -- share exists
+                            $3
+                            OR a.account_id = $2
+                            OR esr.roles IS NOT NULL
                         )
                     ORDER BY e.name
                 "#})
                 .bind(application_id)
                 .bind(actor)
-                .bind(override_visibility)
-                .bind(include_deleted),
+                .bind(override_visibility),
             )
             .await
     }
@@ -594,7 +553,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_current_plugin_installations(
         &self,
         environment_id: &Uuid,
-        include_deleted: bool,
     ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
         let plugin_installation: Option<EnvironmentPluginInstallationRecord> =
             self.with_ro("get_current_plugin_installations").fetch_optional_as(
@@ -603,13 +561,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     FROM environment_plugin_installations
                     WHERE
                         environment_id = $1
-                        AND (
-                            $2
-                            OR deleted_at IS NULL
-                        )
+                        AND deleted_at IS NULL
                 "#})
                 .bind(environment_id)
-                .bind(include_deleted)
             ).await?;
 
         match plugin_installation {
@@ -931,12 +885,21 @@ impl EnvironmentSharedRepo<PostgresPool> for EnvironmentSharedRepoDefault<Postgr
                         r.environment_id, r.revision_id, r.hash,
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides
-                    FROM environments e
+                    FROM accounts a
+                    JOIN applications ap
+                        ON ap.account_id = a.account_id
+                    JOIN environments e
+                        ON e.application_id = ap.application_id
                     JOIN environment_revisions r
-                        ON e.environment_id = r.environment_id AND e.current_revision_id = r.revision_id
-                    WHERE e.environment_id = $1 AND e.deleted_at IS NULL
+                        ON r.environment_id = e.environment_id
+                        AND r.revision_id = e.current_revision_id
+                    WHERE
+                        e.environment_id = $1
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
                  "})
-                    .bind(environment_id),
+                .bind(environment_id),
             )
             .await
     }
