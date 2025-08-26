@@ -12,13 +12,11 @@ use golem_common::config::RedisConfig;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, GetFileSystemNodeResult,
     IdempotencyKey, OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, RetryConfig,
-    TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};

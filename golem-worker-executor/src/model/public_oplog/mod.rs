@@ -43,9 +43,8 @@ use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
-    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters,
-    CreateParameters, DeactivatePluginParameters,
-    EndRegionParameters, ErrorParameters,
+    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters,
+    DeactivatePluginParameters, EndRegionParameters, ErrorParameters,
     ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,

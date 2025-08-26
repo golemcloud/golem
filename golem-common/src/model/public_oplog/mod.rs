@@ -28,7 +28,8 @@ use crate::model::oplog::{
 use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, TransactionId, WorkerId,
+    AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp,
+    TransactionId, WorkerId,
 };
 use crate::model::{ProjectId, RetryConfig};
 use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str};

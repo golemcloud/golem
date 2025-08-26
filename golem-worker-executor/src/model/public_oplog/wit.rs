@@ -18,9 +18,8 @@ use crate::preview2::wasi::clocks::wall_clock::Datetime;
 use golem_common::base_model::ProjectId;
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
-    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters,
-    CreateParameters, DeactivatePluginParameters,
-    EndRegionParameters, ErrorParameters,
+    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters,
+    DeactivatePluginParameters, EndRegionParameters, ErrorParameters,
     ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,

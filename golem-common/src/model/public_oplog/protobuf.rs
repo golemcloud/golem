@@ -16,9 +16,8 @@ use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
 use crate::model::public_oplog::{
     ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
-    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters,
-    CreateParameters, DeactivatePluginParameters,
-    EndRegionParameters, ErrorParameters,
+    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters,
+    DeactivatePluginParameters, EndRegionParameters, ErrorParameters,
     ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
