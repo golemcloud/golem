@@ -45,6 +45,6 @@ fn find_package_root(name: &str) -> String {
 }
 
 #[cfg(not(feature = "protobuf"))]
-fn main() -> Result<()> {
+fn main() -> std::io::Result<()> {
     Ok(())
 }

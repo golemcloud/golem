@@ -15,6 +15,6 @@ fn main() -> miette::Result<()> {
 }
 
 #[cfg(not(feature = "protobuf"))]
-fn main() -> Result<()> {
+fn main() -> std::io::Result<()> {
     Ok(())
 }
