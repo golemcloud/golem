@@ -1713,7 +1713,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_Application'
+                $ref: '#/components/schemas/Application'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -1779,7 +1779,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdateApplicationRequest'
+              $ref: '#/components/schemas/UpdatedApplicationData'
         required: true
       responses:
         '200':
@@ -1787,7 +1787,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_Application'
+                $ref: '#/components/schemas/Application'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -7229,6 +7229,9 @@ components:
         id:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: uint64
         accountId:
           type: string
           format: uuid
@@ -7236,6 +7239,7 @@ components:
           type: string
       required:
       - id
+      - revision
       - accountId
       - name
     BinaryDescriptor:
@@ -8928,9 +8932,6 @@ components:
     UpdateApiDomainRequest:
       title: UpdateApiDomainRequest
       type: object
-    UpdateApplicationRequest:
-      title: UpdateApplicationRequest
-      type: object
     UpdateCertificateRequest:
       title: UpdateCertificateRequest
       type: object
@@ -8999,6 +9000,12 @@ components:
       required:
       - name
       - email
+    UpdatedApplicationData:
+      title: UpdatedApplicationData
+      type: object
+      properties:
+        newName:
+          type: string
     UpdatedEnvironmentData:
       title: UpdatedEnvironmentData
       type: object

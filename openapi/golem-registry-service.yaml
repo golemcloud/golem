@@ -1728,7 +1728,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_Application'
+                $ref: '#/components/schemas/Application'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -1793,7 +1793,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdateApplicationRequest'
+              $ref: '#/components/schemas/UpdatedApplicationData'
         required: true
       responses:
         '200':
@@ -1801,7 +1801,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_Application'
+                $ref: '#/components/schemas/Application'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -7162,12 +7162,16 @@ components:
       title: Application
       required:
       - id
+      - revision
       - accountId
       - name
       properties:
         id:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: uint64
         accountId:
           type: string
           format: uuid
@@ -8863,9 +8867,6 @@ components:
     UpdateApiDomainRequest:
       type: object
       title: UpdateApiDomainRequest
-    UpdateApplicationRequest:
-      type: object
-      title: UpdateApplicationRequest
     UpdateCertificateRequest:
       type: object
       title: UpdateCertificateRequest
@@ -8933,6 +8934,12 @@ components:
         name:
           type: string
         email:
+          type: string
+    UpdatedApplicationData:
+      type: object
+      title: UpdatedApplicationData
+      properties:
+        newName:
           type: string
     UpdatedEnvironmentData:
       type: object
