@@ -9455,8 +9455,8 @@ components:
         transactionId:
           type: string
       required:
-        - timestamp
-        - transactionId
+      - timestamp
+      - transactionId
     CancelInvocationParameters:
       title: CancelInvocationParameters
       type: object

@@ -3650,8 +3650,8 @@ components:
       type: object
       title: BeginRemoteTransactionParameters
       required:
-        - timestamp
-        - transactionId
+      - timestamp
+      - transactionId
       properties:
         timestamp:
           type: string
