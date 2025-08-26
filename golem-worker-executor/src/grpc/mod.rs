@@ -854,7 +854,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let invocation_context = request
             .maybe_invocation_context()
-            .unwrap_or_else(|| InvocationContextStack::fresh());
+            .unwrap_or_else(InvocationContextStack::fresh);
         Worker::get_or_create_suspended(
             self,
             &account_id,

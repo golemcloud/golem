@@ -507,7 +507,7 @@ fn to_moonbit_parameter_list(
                         write!(
                             result,
                             "{param_name}: {}",
-                            moonbit_type_ref(ctx, &typ.type_info)?
+                            moonbit_type_ref(ctx, &typ.element_type)?
                         )?;
                     }
                     ElementSchema::UnstructuredText(_) => {
@@ -554,7 +554,7 @@ fn to_moonbit_return_type(
                 let element = &elements[0];
                 match &element.schema {
                     ElementSchema::ComponentModel(typ) => {
-                        write!(result, "{}", moonbit_type_ref(ctx, &typ.type_info)?)?;
+                        write!(result, "{}", moonbit_type_ref(ctx, &typ.element_type)?)?;
                     }
                     ElementSchema::UnstructuredText(_) => {
                         write!(result, "@common.TextReference")?;
@@ -571,7 +571,7 @@ fn to_moonbit_return_type(
                     }
                     match &element.schema {
                         ElementSchema::ComponentModel(typ) => {
-                            write!(result, "{}", moonbit_type_ref(ctx, &typ.type_info)?)?;
+                            write!(result, "{}", moonbit_type_ref(ctx, &typ.element_type)?)?;
                         }
                         ElementSchema::UnstructuredText(_) => {
                             write!(result, "@common.TextReference")?;
@@ -688,7 +688,7 @@ fn build_element_value(
             write_builder(
                 result,
                 ctx,
-                &schema.type_info,
+                &schema.element_type,
                 access,
                 "@builder.Builder::new()",
                 &format!("{indent}    "),
@@ -1033,7 +1033,7 @@ fn extract_data_value(
                             "{indent}let wit_value = @extractor.extract_component_model_value(values[0])"
                         )?;
                         writeln!(result, "{indent}Ok(")?;
-                        extract_wit_value(result, ctx, &schema.type_info, "wit_value", indent)?;
+                        extract_wit_value(result, ctx, &schema.element_type, "wit_value", indent)?;
                         writeln!(result, "{indent})")?;
                     }
                     ElementSchema::UnstructuredText(_) => {
@@ -1066,7 +1066,7 @@ fn extract_data_value(
                             extract_wit_value(
                                 result,
                                 ctx,
-                                &schema.type_info,
+                                &schema.element_type,
                                 "@extractor.extract(wit_value)",
                                 &format!("{indent}  "),
                             )?;
@@ -1120,7 +1120,7 @@ fn extract_data_value(
                         extract_wit_value(
                             result,
                             ctx,
-                            &schema.type_info,
+                            &schema.element_type,
                             "wit_value",
                             &format!("{indent}          "),
                         )?;

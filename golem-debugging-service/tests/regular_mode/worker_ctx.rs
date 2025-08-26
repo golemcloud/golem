@@ -636,6 +636,10 @@ impl InvocationContextManagement for TestWorkerCtx {
             .set_span_attribute(span_id, key, value)
             .await
     }
+
+    fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        self.durable_ctx.clone_as_inherited_stack(current_span_id)
+    }
 }
 
 impl HasWasiConfigVars for TestWorkerCtx {

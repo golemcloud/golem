@@ -85,7 +85,7 @@ impl ComponentMetadata {
     pub fn exports(&self) -> &[AnalysedExport] {
         &self.data.exports
     }
-    
+
     pub fn producers(&self) -> &[Producers] {
         &self.data.producers
     }
@@ -115,7 +115,7 @@ impl ComponentMetadata {
     }
 
     pub fn is_agent(&self) -> bool {
-        self.data.agent_types.len() > 0
+        !self.data.agent_types.is_empty()
     }
 
     pub async fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {

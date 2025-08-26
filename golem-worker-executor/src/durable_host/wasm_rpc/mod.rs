@@ -1138,7 +1138,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             args,
             env,
             config,
-            stack
+            stack,
         )
         .await?;
     let entry = ctx.table().push(WasmRpcEntry {

@@ -414,7 +414,7 @@ impl ElementValue {
     pub fn parse(s: &str, schema: &ElementSchema) -> Result<Self, String> {
         match schema {
             ElementSchema::ComponentModel(typ) => {
-                let value_and_type = parse_value_and_type(typ, s)
+                let value_and_type = parse_value_and_type(&typ.element_type, s)
                     .map_err(|e| format!("Failed to parse parameter value {s}: {e}"))?;
                 Ok(ElementValue::ComponentModel(value_and_type))
             }
@@ -518,7 +518,7 @@ pub enum ElementSchema {
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentModelElementSchema {
-    pub type_info: AnalysedType,
+    pub element_type: AnalysedType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]

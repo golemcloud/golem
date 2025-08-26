@@ -455,6 +455,10 @@ pub trait InvocationContextManagement {
         key: &str,
         value: AttributeValue,
     ) -> Result<(), WorkerExecutorError>;
+
+    /// Clones every element of the stack belonging to the given current span id, and sets
+    /// the inherited flag to true on them, without changing the spans in this invocation context.
+    fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack;
 }
 
 #[async_trait]

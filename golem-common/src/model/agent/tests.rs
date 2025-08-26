@@ -14,9 +14,9 @@
 
 use crate::model::agent::{
     AgentConstructor, AgentId, AgentType, AgentTypeResolver, BinaryDescriptor, BinaryReference,
-    BinarySource, BinaryType, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, TextDescriptor,
-    TextReference, TextSource, TextType, Url,
+    BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema,
+    ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue,
+    NamedElementValues, TextDescriptor, TextReference, TextSource, TextType, Url,
 };
 use async_trait::async_trait;
 use golem_wasm_ast::analysis::analysed_type::{field, flags, record, u32};
@@ -302,7 +302,9 @@ fn test_agent_types() -> HashMap<String, AgentType> {
                 input_schema: DataSchema::Tuple(NamedElementSchemas {
                     elements: vec![NamedElementSchema {
                         name: "x".to_string(),
-                        schema: ElementSchema::ComponentModel(u32()),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: u32(),
+                        }),
                     }],
                 }),
             },
@@ -320,15 +322,19 @@ fn test_agent_types() -> HashMap<String, AgentType> {
                     elements: vec![
                         NamedElementSchema {
                             name: "x".to_string(),
-                            schema: ElementSchema::ComponentModel(u32()),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
                         },
                         NamedElementSchema {
                             name: "r".to_string(),
-                            schema: ElementSchema::ComponentModel(record(vec![
-                                field("x", u32()),
-                                field("y", u32()),
-                                field("properties", flags(&["a", "b", "c"])),
-                            ])),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: record(vec![
+                                    field("x", u32()),
+                                    field("y", u32()),
+                                    field("properties", flags(&["a", "b", "c"])),
+                                ]),
+                            }),
                         },
                     ],
                 }),
@@ -401,7 +407,9 @@ fn test_agent_types() -> HashMap<String, AgentType> {
                     elements: vec![
                         NamedElementSchema {
                             name: "x".to_string(),
-                            schema: ElementSchema::ComponentModel(u32()),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
                         },
                         NamedElementSchema {
                             name: "y".to_string(),

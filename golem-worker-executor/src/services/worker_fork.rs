@@ -41,6 +41,7 @@ use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRange};
 use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata, WorkerStatusRecord};
 use golem_common::model::{OwnedWorkerId, WorkerId};
@@ -49,7 +50,6 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::runtime::Handle;
-use golem_common::model::invocation_context::InvocationContextStack;
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {

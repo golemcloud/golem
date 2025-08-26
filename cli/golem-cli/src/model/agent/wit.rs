@@ -408,7 +408,7 @@ impl AgentWrapperGeneratorContextState {
     ) -> anyhow::Result<()> {
         match element {
             ElementSchema::ComponentModel(schema) => {
-                write!(result, "{}", self.wit_type_reference(&schema.type_info)?)?;
+                write!(result, "{}", self.wit_type_reference(&schema.element_type)?)?;
             }
             ElementSchema::UnstructuredText(_text_descriptor) => {
                 write!(result, "text-reference")?;
@@ -526,7 +526,7 @@ impl AgentWrapperGeneratorContextState {
         for named_element_schema in cases {
             let case_name = named_element_schema.name.to_kebab_case();
             let case_type = match &named_element_schema.schema {
-                ElementSchema::ComponentModel(schema) => schema.type_info.clone(),
+                ElementSchema::ComponentModel(schema) => schema.element_type.clone(),
                 ElementSchema::UnstructuredText(_) => variant(vec![]).named("text-reference"),
                 ElementSchema::UnstructuredBinary(_) => variant(vec![]).named("binary-reference"),
             };
@@ -739,13 +739,13 @@ mod tests {
                         NamedElementSchema {
                             name: "a".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: u32(),
+                                element_type: u32(),
                             }),
                         },
                         NamedElementSchema {
                             name: "b".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: option(str()),
+                                element_type: option(str()),
                             }),
                         },
                     ],
@@ -761,7 +761,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "a".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: str(),
+                                element_type: str(),
                             }),
                         }],
                     }),
@@ -775,13 +775,17 @@ mod tests {
                             NamedElementSchema {
                                 name: "x".to_string(),
                                 schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema { type_info: u32() },
+                                    ComponentModelElementSchema {
+                                        element_type: u32(),
+                                    },
                                 ),
                             },
                             NamedElementSchema {
                                 name: "y".to_string(),
                                 schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema { type_info: u32() },
+                                    ComponentModelElementSchema {
+                                        element_type: u32(),
+                                    },
                                 ),
                             },
                         ],
@@ -790,7 +794,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: u32(),
+                                element_type: u32(),
                             }),
                         }],
                     }),
@@ -868,7 +872,7 @@ mod tests {
                         NamedElementSchema {
                             name: "person".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: person,
+                                element_type: person,
                             }),
                         },
                         NamedElementSchema {
@@ -896,7 +900,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: location.clone(),
+                                element_type: location.clone(),
                             }),
                         }],
                     }),
@@ -909,7 +913,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "location".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: location,
+                                element_type: location,
                             }),
                         }],
                     }),
@@ -917,7 +921,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: color,
+                                element_type: color,
                             }),
                         }],
                     }),

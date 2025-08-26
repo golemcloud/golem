@@ -1484,6 +1484,12 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         }
         Ok(())
     }
+
+    fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        self.state
+            .invocation_context
+            .clone_as_inherited_stack(current_span_id)
+    }
 }
 
 pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {

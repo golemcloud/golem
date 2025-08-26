@@ -707,9 +707,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
-                &self_stack
+                &self_stack,
             )
-                .await?;
+            .await?;
 
             let demand = LoggingDemand::new(owned_worker_id.worker_id());
             Ok(Box::new(demand))
@@ -722,7 +722,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_args,
                     self_env,
                     self_config,
-                    self_stack
+                    self_stack,
                 )
                 .await
         }
@@ -767,9 +767,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
-                &self_stack
+                &self_stack,
             )
-                .await?;
+            .await?;
 
             let result_value = worker
                 .invoke_and_await(idempotency_key, function_name, input_values, self_stack)
@@ -833,9 +833,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
-                &self_stack
+                &self_stack,
             )
-                .await?;
+            .await?;
 
             worker
                 .invoke(idempotency_key, function_name, input_values, self_stack)
