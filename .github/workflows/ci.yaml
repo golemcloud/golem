@@ -602,8 +602,9 @@ jobs:
             os: macos-latest
           - rust-target: aarch64-apple-darwin
             os: macos-latest
-          - rust-target: x86_64-pc-windows-gnu
-            os: windows-latest
+# Windows build is temporarily disabled
+#          - rust-target: x86_64-pc-windows-gnu
+#            os: windows-latest
     name: Publish binaries of ${{ matrix.project }}
     runs-on: ${{ matrix.cfg.os }}
     permissions:
@@ -657,9 +658,9 @@ jobs:
       - name: Login GH CLI
         shell: bash
         run: gh auth login --with-token < <(echo ${{ secrets.GITHUB_TOKEN }})
-      - run: gh release upload -R golemcloud/golem-cli --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
+      - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.exe
         if: matrix.cfg.os == 'windows-latest'
-      - run: gh release upload -R golemcloud/golem-cli --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+      - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
         if: matrix.cfg.os != 'windows-latest'
 
   publish-slack-notification:
