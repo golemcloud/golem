@@ -19,7 +19,7 @@ fn main() -> miette::Result<()> {
             "proto/wasm/rpc/witvalue.proto",
             "proto/wasm/rpc/value_and_type.proto",
         ],
-        &[&format!("{wasm_ast_root}/proto"), &"proto".to_string()],
+        [&format!("{wasm_ast_root}/proto"), &"proto".to_string()],
     )?;
 
     config

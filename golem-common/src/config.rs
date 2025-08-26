@@ -375,10 +375,10 @@ impl SafeDisplay for RedisConfig {
         if !self.key_prefix.is_empty() {
             let _ = writeln!(&mut result, "key prefix: {}", self.key_prefix);
         }
-        if !self.username.is_none() {
+        if self.username.is_some() {
             let _ = writeln!(&mut result, "username: ****");
         }
-        if !self.password.is_none() {
+        if self.password.is_some() {
             let _ = writeln!(&mut result, "password: ****");
         }
         result

@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wasm_ast_root = find_package_root("golem-wasm-ast");
 
     let file_descriptors = protox::compile(
-        &[
+        [
             "proto/golem/account/account.proto",
             "proto/golem/account/account_data.proto",
             "proto/golem/account/v1/account_error.proto",
@@ -97,7 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "proto/golem/workerexecutor/v1/worker_executor.proto",
             "proto/grpc/health/v1/health.proto",
         ],
-        &[
+        [
             &format!("{wasm_rpc_root}/proto"),
             &format!("{wasm_ast_root}/proto"),
             &"proto".to_string(),

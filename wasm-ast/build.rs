@@ -7,7 +7,7 @@ fn main() -> miette::Result<()> {
         "#[cfg_attr(feature=\"bincode\", derive(bincode::Encode, bincode::Decode))]",
     );
 
-    let file_descriptors = protox::compile(&["proto/wasm/ast/type.proto"], &["proto/"])?;
+    let file_descriptors = protox::compile(["proto/wasm/ast/type.proto"], ["proto/"])?;
     config
         .compile_fds(file_descriptors)
         .map_err(|err| miette::miette!(err))?;
