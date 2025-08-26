@@ -44,7 +44,6 @@ use golem_registry_service::repo::model::http_api_deployment::{
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
-use golem_service_base::repo::RepoError;
 use std::collections::{BTreeMap, HashMap};
 use std::default::Default;
 use strum::IntoEnumIterator;
@@ -194,10 +193,7 @@ pub async fn test_application_create_concurrent(deps: &Deps) {
     .await;
 
     assert_eq!(results.len(), concurrency);
-    let created = results
-        .iter()
-        .filter(|result| matches!(result, Ok(_)))
-        .count();
+    let created = results.iter().filter(|result| result.is_ok()).count();
     let skipped = results
         .iter()
         .filter(|result| {
@@ -355,10 +351,7 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
     .await;
 
     assert_eq!(results.len(), concurrency);
-    let created = results
-        .iter()
-        .filter(|result| matches!(result, Ok(_)))
-        .count();
+    let created = results.iter().filter(|result| result.is_ok()).count();
     let skipped = results
         .iter()
         .filter(|result| {
@@ -520,10 +513,7 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
     )
     .await;
 
-    let created_count = results
-        .iter()
-        .filter(|result| matches!(result, Ok(_)))
-        .count();
+    let created_count = results.iter().filter(|result| result.is_ok()).count();
     let skipped_count = results
         .iter()
         .filter(|result| matches!(result, Err(EnvironmentRepoError::ConcurrentModification)))

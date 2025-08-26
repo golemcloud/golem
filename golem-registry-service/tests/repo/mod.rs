@@ -25,7 +25,7 @@ use golem_registry_service::repo::model::account::{
 };
 use golem_registry_service::repo::model::account_usage::UsageType;
 use golem_registry_service::repo::model::application::{
-    ApplicationExtRevisionRecord, ApplicationRecord, ApplicationRevisionRecord,
+    ApplicationExtRevisionRecord, ApplicationRevisionRecord,
 };
 use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
 use golem_registry_service::repo::model::environment::{
