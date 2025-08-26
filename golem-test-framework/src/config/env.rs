@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::env;
 use crate::components::cloud_service::docker::DockerCloudService;
 use crate::components::cloud_service::spawned::SpawnedCloudService;
 use crate::components::cloud_service::CloudService;
@@ -159,7 +160,7 @@ impl Default for EnvBasedTestDependenciesConfig {
             redis_host: "localhost".to_string(),
             redis_port: 6379,
             redis_key_prefix: "".to_string(),
-            golem_test_components: Path::new("../test-components").to_path_buf(),
+            golem_test_components: PathBuf::from_iter([env!("CARGO_MANIFEST_DIR"), "..", "test-components"]),
             golem_client_protocol: GolemClientProtocol::Grpc,
             unique_network_id: Uuid::new_v4().to_string(),
         }

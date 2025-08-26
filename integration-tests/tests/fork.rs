@@ -33,6 +33,25 @@ use uuid::Uuid;
 inherit_test_dep!(Tracing);
 inherit_test_dep!(Deps);
 
+async fn resolve_host_address(host_http_port: u16) -> String {
+    let mut host = "localhost".to_string();
+
+    if option_env!("GOLEM_DOCKER_SERVICES").is_some_and( |x| x == "true" ) {
+        host = "host.docker.internal".to_string();
+
+        let addr = tokio::net::lookup_host((host, host_http_port))
+            .await
+            .expect("DNS lookup failed")
+            .find(|a| a.is_ipv4())
+            .expect("DNS lookup returned no IPv4 addresses");
+        dbg!(format!("resolved as {addr}"));
+
+        host = addr.ip().to_string();
+    }
+
+    host
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
@@ -48,6 +67,7 @@ async fn fork_interrupted_worker(deps: &Deps, _tracing: &Tracing) {
     let component_id = admin.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("HOST".to_string(), resolve_host_address(host_http_port).await);
 
     let worker_id = admin
         .start_worker_with(&component_id, source_worker_name.as_str(), vec![], env)
@@ -205,6 +225,7 @@ async fn fork_running_worker_2(deps: &Deps, _tracing: &Tracing) {
     let component_id = admin.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("HOST".to_string(), resolve_host_address(host_http_port).await);
 
     let source_worker_name = Uuid::new_v4().to_string();
     let source_worker_id = admin
@@ -649,6 +670,7 @@ async fn fork_self(deps: &Deps, _tracing: &Tracing) {
     let port = port_rx.await.unwrap();
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
+    env.insert("HOST".to_string(), resolve_host_address(port).await);
 
     info!("Using environment: {:?}", env);
 
