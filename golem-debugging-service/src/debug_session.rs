@@ -25,8 +25,8 @@ use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
 use golem_common::model::public_oplog::{
-    CreateParameters, DescribeResourceParameters, ExportedFunctionCompletedParameters,
-    FailedUpdateParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, LogParameters,
+    CreateParameters, ExportedFunctionCompletedParameters, FailedUpdateParameters,
+    GrowMemoryParameters, ImportedFunctionInvokedParameters, LogParameters,
     PublicDurableFunctionType, PublicOplogEntry, ResourceParameters,
 };
 use golem_common::model::{
@@ -180,7 +180,7 @@ impl PlaybackOverridesInternal {
             let oplog_index = override_data.index;
             if oplog_index <= current_index {
                 return Err(
-                    "Cannot create overrides for oplogs indices that are in the past".to_string(),
+                    "Cannot create overrides for oplog indices that are in the past".to_string(),
                 );
             }
 
@@ -453,28 +453,6 @@ fn get_oplog_entry_from_public_oplog_entry(
             id,
             resource_type_id: ResourceTypeId { owner, name },
         }),
-        PublicOplogEntry::DescribeResource(DescribeResourceParameters {
-            timestamp,
-            id,
-            resource_owner,
-            resource_name,
-            resource_params,
-        }) => {
-            let resource_params = resource_params
-                .iter()
-                .map(|value_and_type| value_and_type.to_string()) // This will call to_string of wasm wave
-                .collect::<Vec<_>>();
-
-            Ok(OplogEntry::DescribeResource {
-                timestamp,
-                id,
-                resource_type_id: ResourceTypeId {
-                    owner: resource_owner,
-                    name: resource_name,
-                },
-                indexed_resource_parameters: resource_params,
-            })
-        }
         PublicOplogEntry::Log(LogParameters {
             timestamp,
             level,
@@ -538,19 +516,6 @@ fn get_oplog_entry_from_public_oplog_entry(
             Ok(OplogEntry::ChangePersistenceLevel {
                 timestamp: change_persistence_level.timestamp,
                 level: change_persistence_level.persistence_level,
-            })
-        }
-        PublicOplogEntry::CreateAgentInstance(create_agent_instance) => {
-            Ok(OplogEntry::CreateAgentInstance {
-                timestamp: create_agent_instance.timestamp,
-                key: create_agent_instance.key,
-                parameters: create_agent_instance.parameters,
-            })
-        }
-        PublicOplogEntry::DropAgentInstance(drop_agent_instance) => {
-            Ok(OplogEntry::DropAgentInstance {
-                timestamp: drop_agent_instance.timestamp,
-                key: drop_agent_instance.key,
             })
         }
     }

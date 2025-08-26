@@ -9,7 +9,6 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataSuccessResponse,
 };
 use golem_common::config::RedisConfig;
-use golem_common::model::agent::DataValue;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -18,7 +17,7 @@ use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, GetFileSystemNodeResult,
     IdempotencyKey, OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, RetryConfig,
-    TargetWorkerId, TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
@@ -91,15 +90,16 @@ use golem_worker_executor::services::{
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    AgentStore, DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
-    IndexedResourceStore, InvocationContextManagement, InvocationHooks, InvocationManagement,
-    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx,
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -365,6 +365,28 @@ impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
+impl HasWasiConfigVars for TestWorkerCtx {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.wasi_config_vars()
+    }
+}
+
+impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
+    fn get_environment(
+        &mut self,
+    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
+    }
+
+    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
+    }
+
+    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
+    }
+}
+
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
     fn is_out_of_fuel(&self, _current_level: i64) -> bool {
@@ -379,66 +401,6 @@ impl FuelManagement for TestWorkerCtx {
 
     async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, WorkerExecutorError> {
         Ok(0)
-    }
-}
-
-#[async_trait]
-impl IndexedResourceStore for TestWorkerCtx {
-    fn get_indexed_resource(
-        &self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) -> Option<WorkerResourceId> {
-        self.durable_ctx
-            .get_indexed_resource(resource_owner, resource_name, resource_params)
-    }
-
-    async fn store_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-        resource: WorkerResourceId,
-    ) {
-        self.durable_ctx
-            .store_indexed_resource(resource_owner, resource_name, resource_params, resource)
-            .await
-    }
-
-    fn drop_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) {
-        self.durable_ctx
-            .drop_indexed_resource(resource_owner, resource_name, resource_params)
-    }
-}
-
-#[async_trait]
-impl AgentStore for TestWorkerCtx {
-    async fn store_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: DataValue,
-    ) {
-        self.durable_ctx
-            .store_agent_instance(agent_type, agent_id, parameters)
-            .await;
-    }
-
-    async fn remove_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: DataValue,
-    ) {
-        self.durable_ctx
-            .remove_agent_instance(agent_type, agent_id, parameters)
-            .await;
     }
 }
 
@@ -772,6 +734,10 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_worker_id()
     }
 
+    fn created_by(&self) -> &AccountId {
+        self.durable_ctx.created_by()
+    }
+
     fn component_metadata(&self) -> &golem_service_base::model::Component {
         self.durable_ctx.component_metadata()
     }
@@ -794,15 +760,6 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.durable_ctx.worker_fork()
-    }
-
-    async fn generate_unique_local_worker_id(
-        &mut self,
-        remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        self.durable_ctx
-            .generate_unique_local_worker_id(remote_worker_id)
-            .await
     }
 }
 
@@ -869,13 +826,6 @@ impl HostWasmRpc for TestWorkerCtx {
         worker_id: golem_wasm_rpc::WorkerId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
-    }
-
-    async fn ephemeral(
-        &mut self,
-        component_id: golem_wasm_rpc::ComponentId,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.ephemeral(component_id).await
     }
 
     async fn invoke_and_await(
@@ -1010,6 +960,10 @@ impl InvocationContextManagement for TestWorkerCtx {
         self.durable_ctx
             .set_span_attribute(span_id, key, value)
             .await
+    }
+
+    fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        self.durable_ctx.clone_as_inherited_stack(current_span_id)
     }
 }
 

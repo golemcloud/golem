@@ -17,7 +17,6 @@ use goldenfile::Mint;
 use golem_common::base_model::{
     ComponentId, OplogIndex, PluginInstallationId, ProjectId, PromiseId, WorkerId,
 };
-use golem_common::model::agent::{DataValue, ElementValue, ElementValues};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextStack, SpanId, TraceId,
 };
@@ -27,13 +26,12 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
-    AccountId, AgentInstanceDescription, ExportedResourceInstanceDescription, IdempotencyKey,
-    OwnedWorkerId, RetryConfig, ScheduledAction, Timestamp, WorkerInvocation,
-    WorkerResourceDescription,
+    AccountId, IdempotencyKey, OwnedWorkerId, RetryConfig, ScheduledAction, Timestamp,
+    WorkerInvocation, WorkerResourceDescription,
 };
 use golem_common::serialization::deserialize;
 use golem_wasm_rpc::wasmtime::ResourceTypeId;
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm_rpc::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
@@ -226,16 +224,6 @@ pub fn oplog_entry() {
             name: "name".to_string(),
             owner: "owner".to_string(),
         },
-    };
-
-    let oe23 = OplogEntry::DescribeResource {
-        timestamp: Timestamp::from(1724701938466),
-        id: WorkerResourceId(1),
-        resource_type_id: ResourceTypeId {
-            name: "name".to_string(),
-            owner: "owner".to_string(),
-        },
-        indexed_resource_parameters: vec!["a".to_string(), "b".to_string()],
     };
 
     let oe24 = OplogEntry::Log {
@@ -435,7 +423,6 @@ pub fn oplog_entry() {
     backward_compatible("oplog_entry_grow_memory", &mut mint, oe20);
     backward_compatible("oplog_entry_create_resource", &mut mint, oe21);
     backward_compatible("oplog_entry_drop_resource", &mut mint, oe22);
-    backward_compatible("oplog_entry_describe_resource", &mut mint, oe23);
     backward_compatible("oplog_entry_log", &mut mint, oe24);
     backward_compatible("oplog_entry_restart", &mut mint, oe25);
     backward_compatible("oplog_entry_import_function_invoked", &mut mint, oe26);
@@ -454,31 +441,11 @@ pub fn oplog_entry() {
 
 #[test]
 pub fn worker_resource_description() {
-    let wrd1 =
-        WorkerResourceDescription::ExportedResourceInstance(ExportedResourceInstanceDescription {
-            created_at: Timestamp::from(1724701938466),
-            resource_owner: "owner".to_string(),
-            resource_name: "name".to_string(),
-            resource_params: None,
-        });
-    let wrd2 =
-        WorkerResourceDescription::ExportedResourceInstance(ExportedResourceInstanceDescription {
-            created_at: Timestamp::from(1724701938466),
-            resource_owner: "rpc:counters-export/api".to_string(),
-            resource_name: "counter".to_string(),
-            resource_params: Some(vec!["a".to_string(), "b".to_string()]),
-        });
-    let wrd3 = WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
+    let wrd1 = WorkerResourceDescription {
         created_at: Timestamp::from(1724701938466),
-        agent_parameters: DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::ComponentModel("a".into_value_and_type()),
-                ElementValue::ComponentModel(10.into_value_and_type()),
-            ],
-        }),
-    });
+        resource_owner: "owner".to_string(),
+        resource_name: "name".to_string(),
+    };
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_resource_description", &mut mint, wrd1);
-    backward_compatible("worker_resource_description_indexed", &mut mint, wrd2);
-    backward_compatible("worker_resource_description_agent", &mut mint, wrd3);
 }

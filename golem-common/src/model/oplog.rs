@@ -13,12 +13,11 @@
 // limitations under the License.
 
 pub use crate::base_model::OplogIndex;
-use crate::model::agent::DataValue;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, AgentInstanceKey, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp,
-    TransactionId, WorkerId, WorkerInvocation,
+    AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, TransactionId, WorkerId,
+    WorkerInvocation,
 };
 use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;
@@ -198,13 +197,6 @@ impl Display for WorkerResourceId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
-pub struct IndexedResourceKey {
-    pub resource_owner: String,
-    pub resource_name: String,
-    pub resource_params: Vec<String>,
-}
-
 /// Worker log levels including the special stdout and stderr channels
 #[derive(Copy, Clone, Debug, PartialEq, Encode, Decode, Serialize, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
@@ -369,13 +361,6 @@ pub enum OplogEntry {
         id: WorkerResourceId,
         resource_type_id: ResourceTypeId,
     },
-    /// Adds additional information for a created resource instance
-    DescribeResource {
-        timestamp: Timestamp,
-        id: WorkerResourceId,
-        resource_type_id: ResourceTypeId,
-        indexed_resource_parameters: Vec<String>,
-    },
     /// The worker emitted a log message
     Log {
         timestamp: Timestamp,
@@ -469,17 +454,6 @@ pub enum OplogEntry {
     ChangePersistenceLevel {
         timestamp: Timestamp,
         level: PersistenceLevel,
-    },
-    /// Created an agent instance
-    CreateAgentInstance {
-        timestamp: Timestamp,
-        key: AgentInstanceKey,
-        parameters: DataValue,
-    },
-    /// Dropped an agent instance
-    DropAgentInstance {
-        timestamp: Timestamp,
-        key: AgentInstanceKey,
     },
     BeginRemoteTransaction {
         timestamp: Timestamp,
@@ -662,19 +636,6 @@ impl OplogEntry {
         }
     }
 
-    pub fn describe_resource(
-        id: WorkerResourceId,
-        resource_type_id: ResourceTypeId,
-        indexed_resource_parameters: Vec<String>,
-    ) -> OplogEntry {
-        OplogEntry::DescribeResource {
-            timestamp: Timestamp::now_utc(),
-            id,
-            resource_type_id,
-            indexed_resource_parameters,
-        }
-    }
-
     pub fn log(level: LogLevel, context: String, message: String) -> OplogEntry {
         OplogEntry::Log {
             timestamp: Timestamp::now_utc(),
@@ -754,21 +715,6 @@ impl OplogEntry {
         OplogEntry::ChangePersistenceLevel {
             timestamp: Timestamp::now_utc(),
             level,
-        }
-    }
-
-    pub fn create_agent_instance(key: AgentInstanceKey, parameters: DataValue) -> OplogEntry {
-        OplogEntry::CreateAgentInstance {
-            timestamp: Timestamp::now_utc(),
-            key,
-            parameters,
-        }
-    }
-
-    pub fn drop_agent_instance(key: AgentInstanceKey) -> OplogEntry {
-        OplogEntry::DropAgentInstance {
-            timestamp: Timestamp::now_utc(),
-            key,
         }
     }
 
@@ -882,15 +828,12 @@ impl OplogEntry {
                 | OplogEntry::GrowMemory { .. }
                 | OplogEntry::CreateResource { .. }
                 | OplogEntry::DropResource { .. }
-                | OplogEntry::DescribeResource { .. }
                 | OplogEntry::Log { .. }
                 | OplogEntry::Restart { .. }
                 | OplogEntry::ActivatePlugin { .. }
                 | OplogEntry::DeactivatePlugin { .. }
                 | OplogEntry::Revert { .. }
                 | OplogEntry::CancelPendingInvocation { .. }
-                | OplogEntry::CreateAgentInstance { .. }
-                | OplogEntry::DropAgentInstance { .. }
         )
     }
 
@@ -916,7 +859,6 @@ impl OplogEntry {
             | OplogEntry::GrowMemory { timestamp, .. }
             | OplogEntry::CreateResource { timestamp, .. }
             | OplogEntry::DropResource { timestamp, .. }
-            | OplogEntry::DescribeResource { timestamp, .. }
             | OplogEntry::Log { timestamp, .. }
             | OplogEntry::Restart { timestamp }
             | OplogEntry::ImportedFunctionInvoked { timestamp, .. }
@@ -929,8 +871,6 @@ impl OplogEntry {
             | OplogEntry::FinishSpan { timestamp, .. }
             | OplogEntry::SetSpanAttribute { timestamp, .. }
             | OplogEntry::ChangePersistenceLevel { timestamp, .. }
-            | OplogEntry::CreateAgentInstance { timestamp, .. }
-            | OplogEntry::DropAgentInstance { timestamp, .. }
             | OplogEntry::BeginRemoteTransaction { timestamp, .. }
             | OplogEntry::PreCommitRemoteTransaction { timestamp, .. }
             | OplogEntry::PreRollbackRemoteTransaction { timestamp, .. }
@@ -1080,31 +1020,7 @@ impl WorkerError {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use super::WorkerError;
-    use crate::model::oplog::{IndexedResourceKey, PersistenceLevel};
-
-    impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
-        fn from(value: IndexedResourceKey) -> Self {
-            golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
-                resource_name: value.resource_name,
-                resource_params: value.resource_params,
-                resource_owner: value.resource_owner,
-            }
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata,
-        ) -> Result<Self, Self::Error> {
-            Ok(IndexedResourceKey {
-                resource_owner: value.resource_owner,
-                resource_name: value.resource_name,
-                resource_params: value.resource_params,
-            })
-        }
-    }
+    use crate::model::oplog::PersistenceLevel;
 
     impl From<PersistenceLevel> for golem_api_grpc::proto::golem::worker::PersistenceLevel {
         fn from(value: PersistenceLevel) -> Self {

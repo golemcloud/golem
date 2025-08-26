@@ -20,7 +20,6 @@ mod tests;
 
 use super::plugin::PluginDefinition;
 use super::worker::WasiConfigVars;
-use crate::model::agent::DataValue;
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{
@@ -29,8 +28,7 @@ use crate::model::oplog::{
 use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, AgentInstanceKey, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId,
-    Timestamp, TransactionId, WorkerId,
+    AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, TransactionId, WorkerId,
 };
 use crate::model::{ProjectId, RetryConfig};
 use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str};
@@ -501,8 +499,6 @@ pub struct DescribeResourceParameters {
     pub id: WorkerResourceId,
     pub resource_owner: String,
     pub resource_name: String,
-    #[wit_field(convert_vec = WitValue)]
-    pub resource_params: Vec<ValueAndType>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
@@ -611,25 +607,6 @@ pub struct ChangePersistenceLevelParameters {
     pub persistence_level: PersistenceLevel,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct CreateAgentInstanceParameters {
-    pub timestamp: Timestamp,
-    pub key: AgentInstanceKey,
-    pub parameters: DataValue,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct DropAgentInstanceParameters {
-    pub timestamp: Timestamp,
-    pub key: AgentInstanceKey,
-}
-
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
@@ -714,8 +691,6 @@ pub enum PublicOplogEntry {
     CreateResource(ResourceParameters),
     /// Dropped a resource instance
     DropResource(ResourceParameters),
-    /// Adds additional information for a created resource instance
-    DescribeResource(DescribeResourceParameters),
     /// The worker emitted a log message
     Log(LogParameters),
     /// Marks the point where the worker was restarted from clean initial state
@@ -736,10 +711,6 @@ pub enum PublicOplogEntry {
     SetSpanAttribute(SetSpanAttributeParameters),
     /// Change the current persistence level
     ChangePersistenceLevel(ChangePersistenceLevelParameters),
-    /// Created a new agent instance
-    CreateAgentInstance(CreateAgentInstanceParameters),
-    /// Dropped an agent instance
-    DropAgentInstance(DropAgentInstanceParameters),
     /// Begins a transaction operation
     BeginRemoteTransaction(BeginRemoteTransactionParameters),
     /// Pre-Commit of the transaction, indicating that the transaction will be committed
@@ -974,15 +945,6 @@ impl PublicOplogEntry {
                 Self::string_match("dropresource", &[], query_path, query)
                     || Self::string_match("drop-resource", &[], query_path, query)
             }
-            PublicOplogEntry::DescribeResource(params) => {
-                Self::string_match("describeresource", &[], query_path, query)
-                    || Self::string_match("describe-resource", &[], query_path, query)
-                    || Self::string_match(&params.resource_name, &[], query_path, query)
-                    || params
-                        .resource_params
-                        .iter()
-                        .any(|v| Self::match_value(v, &[], query_path, query))
-            }
             PublicOplogEntry::Log(params) => {
                 Self::string_match("log", &[], query_path, query)
                     || Self::string_match(&params.context, &[], query_path, query)
@@ -1052,16 +1014,6 @@ impl PublicOplogEntry {
                 Self::string_match("changepersistencelevel", &[], query_path, query)
                     || Self::string_match("change-persistence-level", &[], query_path, query)
                     || Self::string_match("persistence-level", &[], query_path, query)
-            }
-            PublicOplogEntry::CreateAgentInstance(_params) => {
-                Self::string_match("createagentinstance", &[], query_path, query)
-                    || Self::string_match("create-agent-instance", &[], query_path, query)
-                // TODO: match in key and parameters
-            }
-            PublicOplogEntry::DropAgentInstance(_params) => {
-                Self::string_match("dropagentinstance", &[], query_path, query)
-                    || Self::string_match("drop-agent-instance", &[], query_path, query)
-                // TODO: match in key and parameters
             }
             PublicOplogEntry::BeginRemoteTransaction(_params) => {
                 Self::string_match("beginremotetransaction", &[], query_path, query)

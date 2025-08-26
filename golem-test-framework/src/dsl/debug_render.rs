@@ -257,16 +257,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}resource id:       {}", &params.id);
         }
-        PublicOplogEntry::DescribeResource(params) => {
-            let _ = writeln!(result, "DESCRIBE RESOURCE");
-            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(result, "{pad}resource id:       {}", &params.id);
-            let _ = writeln!(result, "{pad}resource name:     {}", &params.resource_name,);
-            let _ = writeln!(result, "{pad}resource parameters:");
-            for value in &params.resource_params {
-                let _ = writeln!(result, "{pad}  - {}", value_to_string(value));
-            }
-        }
         PublicOplogEntry::Log(params) => {
             let _ = writeln!(result, "LOG");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
@@ -364,20 +354,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 &params.persistence_level,
             );
         }
-        PublicOplogEntry::CreateAgentInstance(params) => {
-            let _ = writeln!(result, "CREATE AGENT INSTANCE");
-            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(result, "{pad}agent type:        {}", &params.key.agent_type);
-            let _ = writeln!(result, "{pad}agent id:          {}", &params.key.agent_id);
-            let _ = writeln!(result, "{pad}constructor params:");
-            log_data_value(&mut result, pad, &params.parameters);
-        }
-        PublicOplogEntry::DropAgentInstance(params) => {
-            let _ = writeln!(result, "DROP AGENT INSTANCE");
-            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(result, "{pad}agent type:        {}", &params.key.agent_type);
-            let _ = writeln!(result, "{pad}agent id:          {}", &params.key.agent_id);
-        }
         PublicOplogEntry::BeginRemoteTransaction(params) => {
             let _ = writeln!(result, "BEGIN REMOTE TRANSACTION");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
@@ -425,6 +401,7 @@ fn value_to_string(value: &ValueAndType) -> String {
     print_value_and_type(value).unwrap_or_else(|_| format!("{value:?}"))
 }
 
+#[allow(dead_code)]
 fn log_data_value(output: &mut String, pad: &str, value: &DataValue) {
     match value {
         DataValue::Tuple(values) => {
@@ -442,6 +419,7 @@ fn log_data_value(output: &mut String, pad: &str, value: &DataValue) {
     }
 }
 
+#[allow(dead_code)]
 fn log_element_value(output: &mut String, pad: &str, value: &ElementValue) {
     match value {
         ElementValue::ComponentModel(value) => {

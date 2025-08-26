@@ -544,70 +544,6 @@ mod internal {
                                     method: method.clone(),
                                 },
                             )),
-                            DynamicParsedFunctionReference::IndexedResourceConstructor {
-                                resource,
-                                resource_params,
-                            } => {
-                                for param in resource_params {
-                                    stack.push(ExprState::from_expr(param));
-                                }
-                                instructions.push(RibIR::CreateFunctionName(
-                                    site,
-                                    FunctionReferenceType::IndexedResourceConstructor {
-                                        resource: resource.clone(),
-                                        arg_size: resource_params.len(),
-                                    },
-                                ))
-                            }
-                            DynamicParsedFunctionReference::IndexedResourceMethod {
-                                resource,
-                                resource_params,
-                                method,
-                            } => {
-                                for param in resource_params {
-                                    stack.push(ExprState::from_expr(param));
-                                }
-                                instructions.push(RibIR::CreateFunctionName(
-                                    site,
-                                    FunctionReferenceType::IndexedResourceMethod {
-                                        resource: resource.clone(),
-                                        arg_size: resource_params.len(),
-                                        method: method.clone(),
-                                    },
-                                ))
-                            }
-                            DynamicParsedFunctionReference::IndexedResourceStaticMethod {
-                                resource,
-                                resource_params,
-                                method,
-                            } => {
-                                for param in resource_params {
-                                    stack.push(ExprState::from_expr(param));
-                                }
-                                instructions.push(RibIR::CreateFunctionName(
-                                    site,
-                                    FunctionReferenceType::IndexedResourceStaticMethod {
-                                        resource: resource.clone(),
-                                        arg_size: resource_params.len(),
-                                        method: method.clone(),
-                                    },
-                                ))
-                            }
-                            DynamicParsedFunctionReference::IndexedResourceDrop {
-                                resource,
-                                resource_params,
-                            } => {
-                                for param in resource_params {
-                                    stack.push(ExprState::from_expr(param));
-                                }
-                                instructions.push(RibIR::CreateFunctionName(
-                                    site,
-                                    FunctionReferenceType::IndexedResourceDrop {
-                                        resource: resource.clone(),
-                                        arg_size: resource_params.len(),
-                                    },
-                                ))
-                            }
                         }
                     }
 
@@ -1543,29 +1479,6 @@ mod compiler_tests {
         }
 
         #[test]
-        fn test_unknown_resource_method() {
-            let metadata = internal::metadata_with_resource_methods();
-            let expr = r#"
-               let user_id = "user";
-               golem:it/api.{cart(user_id).add-item}("apple");
-               golem:it/api.{cart(user_id).foo}("apple");
-                "success"
-            "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-
-            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
-
-            let compiler = RibCompiler::new(compiler_config);
-
-            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
-            assert_eq!(
-                compiler_error,
-                "error in the following rib found at line 4, column 16\n`foo(\"apple\")`\ncause: invalid function call `foo`\nunknown function\n"
-            );
-        }
-
-        #[test]
         fn test_invalid_arg_size_function() {
             let metadata = internal::get_component_metadata("foo", vec![str()], str());
 
@@ -1589,28 +1502,6 @@ mod compiler_tests {
         }
 
         #[test]
-        fn test_invalid_arg_size_resource_method() {
-            let metadata = internal::metadata_with_resource_methods();
-            let expr = r#"
-               let user_id = "user";
-               golem:it/api.{cart(user_id).add-item}("apple", "samsung");
-                "success"
-            "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-
-            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
-
-            let compiler = RibCompiler::new(compiler_config);
-
-            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
-            assert_eq!(
-                compiler_error,
-                "error in the following rib found at line 3, column 16\n`add-item(\"apple\", \"samsung\")`\ncause: invalid argument size for function `add-item`. expected 1 arguments, found 2\n"
-            );
-        }
-
-        #[test]
         fn test_invalid_arg_types_function() {
             let metadata = internal::get_component_metadata("foo", vec![str()], str());
 
@@ -1629,28 +1520,6 @@ mod compiler_tests {
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 2, column 33\n`1: u64`\ncause: type mismatch. expected string, found u64\ninvalid argument to the function `foo`\n"
-            );
-        }
-
-        #[test]
-        fn test_invalid_arg_types_resource_method() {
-            let metadata = internal::metadata_with_resource_methods();
-            let expr = r#"
-               let user_id = "user";
-               golem:it/api.{cart(user_id).add-item}("apple");
-                "success"
-            "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-
-            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
-
-            let compiler = RibCompiler::new(compiler_config);
-
-            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
-            assert_eq!(
-                compiler_error,
-                "error in the following rib found at line 3, column 54\n`\"apple\"`\ncause: type mismatch. expected record { name: string }, found string\ninvalid argument to the function `add-item`\n"
             );
         }
 
@@ -2013,9 +1882,7 @@ mod compiler_tests {
 
     mod internal {
         use crate::{ComponentDependency, ComponentDependencyKey, RibInputTypeInfo};
-        use golem_wasm_ast::analysis::analysed_type::{
-            case, field, record, str, u64, unit_case, variant,
-        };
+        use golem_wasm_ast::analysis::analysed_type::{case, str, u64, unit_case, variant};
         use golem_wasm_ast::analysis::*;
         use std::collections::HashMap;
         use uuid::Uuid;
@@ -2057,59 +1924,6 @@ mod compiler_tests {
             }]
         }
 
-        pub(crate) fn metadata_with_resource_methods() -> Vec<ComponentDependency> {
-            let instance = AnalysedExport::Instance(AnalysedInstance {
-                name: "golem:it/api".to_string(),
-                functions: vec![
-                    AnalysedFunction {
-                        name: "[constructor]cart".to_string(),
-                        parameters: vec![AnalysedFunctionParameter {
-                            name: "param1".to_string(),
-                            typ: str(),
-                        }],
-                        result: Some(AnalysedFunctionResult {
-                            typ: AnalysedType::Handle(TypeHandle {
-                                resource_id: AnalysedResourceId(0),
-                                mode: AnalysedResourceMode::Owned,
-                                name: None,
-                                owner: None,
-                            }),
-                        }),
-                    },
-                    AnalysedFunction {
-                        name: "[method]cart.add-item".to_string(),
-                        parameters: vec![
-                            AnalysedFunctionParameter {
-                                name: "self".to_string(),
-                                typ: AnalysedType::Handle(TypeHandle {
-                                    resource_id: AnalysedResourceId(0),
-                                    mode: AnalysedResourceMode::Borrowed,
-                                    name: None,
-                                    owner: None,
-                                }),
-                            },
-                            AnalysedFunctionParameter {
-                                name: "item".to_string(),
-                                typ: record(vec![field("name", str())]),
-                            },
-                        ],
-                        result: None,
-                    },
-                ],
-            });
-
-            let component_info = ComponentDependencyKey {
-                component_name: "foo".to_string(),
-                component_id: Uuid::new_v4(),
-                root_package_name: None,
-                root_package_version: None,
-            };
-
-            vec![ComponentDependency {
-                component_dependency_key: component_info,
-                component_exports: vec![instance],
-            }]
-        }
         pub(crate) fn get_component_metadata(
             function_name: &str,
             input_types: Vec<AnalysedType>,

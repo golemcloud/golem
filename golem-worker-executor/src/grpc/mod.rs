@@ -51,10 +51,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
-    proto_plugin_installation_id_string, proto_promise_id_string, proto_target_worker_id_string,
-    proto_worker_id_string,
+    proto_plugin_installation_id_string, proto_promise_id_string, proto_worker_id_string,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
@@ -273,7 +273,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let component_version = request.component_version;
 
         let existing_worker = self.worker_service().get(&owned_worker_id).await;
-        if existing_worker.is_some() {
+        if existing_worker.is_some() && !request.ignore_already_existing {
             return Err(WorkerExecutorError::worker_already_exists(
                 owned_worker_id.worker_id(),
             ));
@@ -302,6 +302,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ),
             Some(component_version),
             None,
+            &InvocationContextStack::fresh(),
         )
         .await?;
 
@@ -384,6 +385,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 None,
                 None,
                 None,
+                &InvocationContextStack::fresh(),
             )
             .await?;
         }
@@ -423,6 +425,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    &InvocationContextStack::fresh(),
                 )
                 .await?;
 
@@ -531,6 +534,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    &InvocationContextStack::fresh(),
                 )
                 .await?;
                 worker.revert(target).await?;
@@ -579,6 +583,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                     worker.cancel_invocation(idempotency_key).await?;
@@ -652,6 +657,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
@@ -669,6 +675,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
@@ -685,6 +692,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                     worker
@@ -738,6 +746,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    &InvocationContextStack::fresh(),
                 )
                 .await?;
                 Ok(())
@@ -756,6 +765,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    &InvocationContextStack::fresh(),
                 )
                 .await?;
                 Ok(())
@@ -825,23 +835,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let target_worker_id = request.worker_id()?;
+        let worker_id = request.worker_id()?;
         let project_id = request.project_id()?;
-
-        let current_assignment = self.shard_service().current_assignment()?;
-
-        let unspecified_name = target_worker_id.worker_name.is_none();
-        let worker_id = target_worker_id.into_worker_id(
-            &current_assignment.shard_ids,
-            current_assignment.number_of_shards,
-        );
-
-        if unspecified_name {
-            info!(
-                worker_id = worker_id.to_string(),
-                "Generated new unique worker id"
-            );
-        }
 
         let account_id: AccountId = request.account_id()?;
         let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
@@ -857,6 +852,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ctx::record_last_known_limits(self, &project_id, &limits.into()).await?;
         }
 
+        let invocation_context = request
+            .maybe_invocation_context()
+            .unwrap_or_else(InvocationContextStack::fresh);
         Worker::get_or_create_suspended(
             self,
             &account_id,
@@ -866,6 +864,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             request.wasi_config_vars()?,
             None,
             request.parent(),
+            &invocation_context,
         )
         .await
     }
@@ -1129,6 +1128,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             Some(metadata.last_known_status.component_version),
                             None,
+                            &InvocationContextStack::fresh(),
                         )
                         .await?;
 
@@ -1166,6 +1166,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             None,
+                            &InvocationContextStack::fresh(),
                         )
                         .await?;
 
@@ -1202,6 +1203,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
+                    &InvocationContextStack::fresh(),
                 )
                 .await?;
                 worker.enqueue_manual_update(request.target_version).await;
@@ -1238,6 +1240,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 None,
                 None,
                 None,
+                &InvocationContextStack::fresh(),
             )
             .await?
             .event_service();
@@ -1592,6 +1595,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             None,
+                            &InvocationContextStack::fresh(),
                         )
                         .await?;
                         worker.activate_plugin(plugin_installation_id).await?;
@@ -1666,6 +1670,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             None,
+                            &InvocationContextStack::fresh(),
                         )
                         .await?;
                         worker.deactivate_plugin(plugin_installation_id).await?;
@@ -1741,11 +1746,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let mut owned_resources = Vec::new();
         for (resource_id, resource) in latest_status.owned_resources {
-            owned_resources.push(
-                to_protobuf_resource_description(resource_id, resource).map_err(|err| {
-                    WorkerExecutorError::unknown(format!("Failed to create worker metadata: {err}"))
-                })?,
-            );
+            owned_resources.push(to_protobuf_resource_description(resource_id, resource));
         }
 
         let active_plugins = latest_status.active_plugins;
@@ -1849,7 +1850,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_worker",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             account_id = proto_account_id_string(&request.account_id),
         );
@@ -1888,7 +1889,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_worker_typed",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             account_id = proto_account_id_string(&request.account_id),
         );
@@ -1929,7 +1930,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_worker",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             function = request.name,
             account_id = proto_account_id_string(&request.account_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
@@ -1971,7 +1972,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_worker_json",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             account_id = proto_account_id_string(&request.account_id),
         );
@@ -2012,7 +2013,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_worker_json",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             function = request.name,
             account_id = proto_account_id_string(&request.account_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
@@ -2637,7 +2638,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_file_system_node",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             path = request.path,
         );
 
@@ -2670,7 +2671,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_file_contents",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
             path = request.file_path,
         );
 

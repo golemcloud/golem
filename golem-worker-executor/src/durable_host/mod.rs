@@ -37,7 +37,6 @@ pub mod wasm_rpc;
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
-use crate::durable_host::serialized::SerializableError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
@@ -70,9 +69,9 @@ use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
 use crate::worker::status::calculate_last_known_status;
 use crate::worker::{interpret_function_result, is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
-    AgentStore, ExternalOperations, FileSystemReading, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, HasWasiConfigVars, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -82,19 +81,16 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
-use golem_common::model::agent::DataValue;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
+    DurableFunctionType, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{
-    AccountId, AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
-    ExportedResourceInstanceKey, PluginInstallationId, ProjectId, TransactionId, WorkerResourceKey,
-};
+use golem_common::model::RetryConfig;
+use golem_common::model::{AccountId, PluginInstallationId, ProjectId, TransactionId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
@@ -102,7 +98,6 @@ use golem_common::model::{
     OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter,
     WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
-use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
@@ -549,35 +544,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    pub async fn generate_unique_local_worker_id(
-        &mut self,
-        remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        match remote_worker_id.clone().try_into_worker_id() {
-            Some(worker_id) => Ok(worker_id),
-            None => {
-                let durability = Durability::<WorkerId, SerializableError>::new(
-                    self,
-                    "golem::rpc::wasm-rpc",
-                    "generate_unique_local_worker_id",
-                    DurableFunctionType::ReadLocal,
-                )
-                .await?;
-                let worker_id = if durability.is_live() {
-                    let result = self
-                        .rpc()
-                        .generate_unique_local_worker_id(remote_worker_id)
-                        .await;
-                    durability.persist(self, (), result).await
-                } else {
-                    durability.replay(self).await
-                }?;
-
-                Ok(worker_id)
-            }
-        }
-    }
-
     /// Counts the number of Error entries that are at the end of the oplog. This equals to the number of retries that have been attempted.
     /// It also returns the last error stored in these entries.
     pub async fn trailing_error_count(&self) -> u64 {
@@ -587,8 +553,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|last_error| last_error.retry_count)
             .unwrap_or_default()
     }
+}
 
-    pub fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+impl<Ctx: WorkerCtx> HasWasiConfigVars for DurableWorkerCtx<Ctx> {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
         self.state.wasi_config_vars.read().unwrap().clone()
     }
 }
@@ -1211,17 +1179,12 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
             self.state.oplog.add(entry.clone()).await;
             self.update_worker_status(move |status| {
                 status.owned_resources.insert(
-                    WorkerResourceKey::ExportedResourceInstanceKey(ExportedResourceInstanceKey {
-                        resource_id,
-                    }),
-                    WorkerResourceDescription::ExportedResourceInstance(
-                        ExportedResourceInstanceDescription {
-                            created_at: entry.timestamp(),
-                            resource_owner: name.owner,
-                            resource_name: name.name,
-                            resource_params: None,
-                        },
-                    ),
+                    resource_id,
+                    WorkerResourceDescription {
+                        created_at: entry.timestamp(),
+                        resource_owner: name.owner,
+                        resource_name: name.name,
+                    },
                 );
             })
             .await;
@@ -1239,11 +1202,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
                     .add(OplogEntry::drop_resource(id, resource_type_id.clone()))
                     .await;
                 self.update_worker_status(move |status| {
-                    status
-                        .owned_resources
-                        .remove(&WorkerResourceKey::ExportedResourceInstanceKey(
-                            ExportedResourceInstanceKey { resource_id: id },
-                        ));
+                    status.owned_resources.remove(&id);
                 })
                 .await;
             }
@@ -1352,145 +1311,6 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
             }
         })
         .await;
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
-    fn get_indexed_resource(
-        &self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) -> Option<WorkerResourceId> {
-        let key = IndexedResourceKey {
-            resource_owner: resource_owner.to_string(),
-            resource_name: resource_name.to_string(),
-            resource_params: resource_params.to_vec(),
-        };
-        self.state.indexed_resources.get(&key).copied()
-    }
-
-    async fn store_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-        resource: WorkerResourceId,
-    ) {
-        let key = IndexedResourceKey {
-            resource_owner: resource_owner.to_string(),
-            resource_name: resource_name.to_string(),
-            resource_params: resource_params.to_vec(),
-        };
-        self.state.indexed_resources.insert(key.clone(), resource);
-        if self.state.is_live() {
-            self.state
-                .oplog
-                .add(OplogEntry::describe_resource(
-                    resource,
-                    ResourceTypeId {
-                        owner: resource_owner.to_string(),
-                        name: resource_name.to_string(),
-                    },
-                    key.resource_params.clone(),
-                ))
-                .await;
-            self.update_worker_status(|status| {
-                if let Some(WorkerResourceDescription::ExportedResourceInstance(description)) =
-                    status
-                        .owned_resources
-                        .get_mut(&WorkerResourceKey::ExportedResourceInstanceKey(
-                            ExportedResourceInstanceKey {
-                                resource_id: resource,
-                            },
-                        ))
-                {
-                    description.resource_params = Some(resource_params.to_vec());
-                }
-            })
-            .await;
-        }
-    }
-
-    fn drop_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) {
-        let key = IndexedResourceKey {
-            resource_owner: resource_owner.to_string(),
-            resource_name: resource_name.to_string(),
-            resource_params: resource_params.to_vec(),
-        };
-        self.state.indexed_resources.remove(&key);
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> AgentStore for DurableWorkerCtx<Ctx> {
-    async fn store_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: DataValue,
-    ) {
-        debug!(%agent_type, %agent_id, "Agent instance created");
-
-        let key = AgentInstanceKey {
-            agent_type,
-            agent_id,
-        };
-        let description = AgentInstanceDescription {
-            created_at: Timestamp::now_utc(),
-            agent_parameters: parameters.clone(),
-        };
-        self.state
-            .agent_instances
-            .insert(key.clone(), description.clone());
-        if self.state.is_live() {
-            self.state
-                .oplog
-                .add(OplogEntry::create_agent_instance(key.clone(), parameters))
-                .await;
-            self.update_worker_status(|status| {
-                status.owned_resources.insert(
-                    WorkerResourceKey::AgentInstanceKey(key),
-                    WorkerResourceDescription::AgentInstance(description.clone()),
-                );
-            })
-            .await;
-        }
-    }
-
-    async fn remove_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        _parameters: DataValue,
-    ) {
-        debug!(%agent_type, %agent_id, "Agent instance dropped");
-
-        let key = AgentInstanceKey {
-            agent_type,
-            agent_id,
-        };
-
-        self.state.agent_instances.remove(&key);
-
-        if self.state.is_live() {
-            self.state
-                .oplog
-                .add(OplogEntry::drop_agent_instance(key.clone()))
-                .await;
-            self.update_worker_status(|status| {
-                status
-                    .owned_resources
-                    .remove(&WorkerResourceKey::AgentInstanceKey(key));
-            })
-            .await;
-        }
     }
 }
 
@@ -1664,6 +1484,12 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             crate::get_oplog_entry!(self.state.replay_state, OplogEntry::SetSpanAttribute)?;
         }
         Ok(())
+    }
+
+    fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        self.state
+            .invocation_context
+            .clone_as_inherited_stack(current_span_id)
     }
 }
 
@@ -2142,6 +1968,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         None,
                         None,
                         None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                 }
@@ -2165,7 +1992,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     ) -> Result<(), WorkerExecutorError> {
         let worker = this
             .worker_activator()
-            .get_or_create_suspended(account_id, owned_worker_id, None, None, None, None, None)
+            .get_or_create_suspended(
+                account_id,
+                owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+            )
             .await?;
 
         let entry = OplogEntry::failed_update(target_version, details.clone());
@@ -2510,9 +2346,6 @@ struct PrivateDurableWorkerState {
 
     snapshotting_mode: Option<PersistenceLevel>,
 
-    indexed_resources: HashMap<IndexedResourceKey, WorkerResourceId>,
-    agent_instances: HashMap<AgentInstanceKey, AgentInstanceDescription>,
-
     component_metadata: golem_service_base::model::Component,
 
     total_linear_memory_size: u64,
@@ -2602,8 +2435,6 @@ impl PrivateDurableWorkerState {
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
             snapshotting_mode: None,
-            indexed_resources: HashMap::new(),
-            agent_instances: HashMap::new(),
             component_metadata,
             total_linear_memory_size,
             replay_state,
@@ -3231,7 +3062,7 @@ async fn update_filesystem(
             .map(|f| root.join(PathBuf::from(f.path.to_rel_string()))),
     );
 
-    // We do this in two phases to make errors less likely. First delete all files that are no longer needed and then create
+    // We do this in two phases to make errors less likely. First, delete all files that are no longer needed and then create
     // new ones.
     let futures_phase_1 = current_state.iter().map(|(path, file)| {
         let path = path.clone();

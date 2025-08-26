@@ -39,7 +39,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
@@ -49,7 +49,16 @@ use tracing::debug;
 
 #[async_trait]
 pub trait Rpc: Send + Sync {
-    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand>;
+    async fn create_demand(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        self_created_by: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
+    ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
     async fn invoke_and_await(
         &self,
@@ -78,11 +87,6 @@ pub trait Rpc: Send + Sync {
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError>;
-
-    async fn generate_unique_local_worker_id(
-        &self,
-        target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
@@ -175,14 +179,14 @@ pub trait RpcDemand: Send + Sync {}
 
 pub struct RemoteInvocationRpc {
     worker_proxy: Arc<dyn WorkerProxy>,
-    shard_service: Arc<dyn ShardService>,
+    _shard_service: Arc<dyn ShardService>,
 }
 
 impl RemoteInvocationRpc {
     pub fn new(worker_proxy: Arc<dyn WorkerProxy>, shard_service: Arc<dyn ShardService>) -> Self {
         Self {
             worker_proxy,
-            shard_service,
+            _shard_service: shard_service,
         }
     }
 }
@@ -209,9 +213,30 @@ impl Drop for LoggingDemand {
 /// Rpc implementation simply calling the public Golem Worker API for invocation
 #[async_trait]
 impl Rpc for RemoteInvocationRpc {
-    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
+    async fn create_demand(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        _self_created_by: &AccountId,
+        _self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        _self_stack: InvocationContextStack, // TODO: make invocation context propagating through the worker start API
+    ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        debug!("Ensuring remote target worker exists");
+
         let demand = LoggingDemand::new(owned_worker_id.worker_id());
-        Box::new(demand)
+
+        self.worker_proxy
+            .start(
+                owned_worker_id,
+                self_args.to_vec(),
+                HashMap::from_iter(self_env.to_vec()),
+                self_config,
+            )
+            .await?;
+
+        Ok(Box::new(demand))
     }
 
     async fn invoke_and_await(
@@ -270,17 +295,6 @@ impl Rpc for RemoteInvocationRpc {
                 self_stack,
             )
             .await?)
-    }
-
-    async fn generate_unique_local_worker_id(
-        &self,
-        target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        let current_assignment = self.shard_service.current_assignment()?;
-        Ok(target_worker_id.into_worker_id(
-            &current_assignment.shard_ids,
-            current_assignment.number_of_shards,
-        ))
     }
 }
 
@@ -667,9 +681,51 @@ fn enrich_function_name_by_target_information(
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
-    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
-        let demand = LoggingDemand::new(owned_worker_id.worker_id());
-        Box::new(demand)
+    async fn create_demand(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        self_created_by: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
+    ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        if self
+            .shard_service()
+            .check_worker(&owned_worker_id.worker_id)
+            .is_ok()
+        {
+            debug!("Ensuring local target worker exists");
+
+            let _worker = Worker::get_or_create_running(
+                self,
+                self_created_by,
+                owned_worker_id,
+                Some(self_args.to_vec()),
+                Some(self_env.to_vec()),
+                Some(self_config),
+                None,
+                Some(self_worker_id.clone()),
+                &self_stack,
+            )
+            .await?;
+
+            let demand = LoggingDemand::new(owned_worker_id.worker_id());
+            Ok(Box::new(demand))
+        } else {
+            self.remote_rpc
+                .create_demand(
+                    owned_worker_id,
+                    self_created_by,
+                    self_worker_id,
+                    self_args,
+                    self_env,
+                    self_config,
+                    self_stack,
+                )
+                .await
+        }
     }
 
     async fn invoke_and_await(
@@ -711,6 +767,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
+                &self_stack,
             )
             .await?;
 
@@ -776,6 +833,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
+                &self_stack,
             )
             .await?;
 
@@ -799,15 +857,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await
         }
-    }
-
-    async fn generate_unique_local_worker_id(
-        &self,
-        target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        self.remote_rpc
-            .generate_unique_local_worker_id(target_worker_id)
-            .await
     }
 }
 

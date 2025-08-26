@@ -646,22 +646,6 @@ impl TextView for PublicOplogEntry {
                 ));
                 logln(format!("{pad}resource id:       {}", format_id(&params.id)));
             }
-            PublicOplogEntry::DescribeResource(params) => {
-                logln(format_message_highlight("DESCRIBE RESOURCE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!("{pad}resource id:       {}", format_id(&params.id)));
-                logln(format!(
-                    "{pad}resource name:     {}",
-                    format_id(&params.resource_name),
-                ));
-                logln(format!("{pad}resource parameters:"));
-                for value in &params.resource_params {
-                    logln(format!("{pad}  - {}", value_to_string(value)));
-                }
-            }
             PublicOplogEntry::Log(params) => {
                 logln(format_message_highlight("LOG"));
                 logln(format!(
@@ -799,38 +783,6 @@ impl TextView for PublicOplogEntry {
                     format_id(&format!("{:?}", &params.persistence_level))
                 ));
             }
-            PublicOplogEntry::CreateAgentInstance(params) => {
-                logln(format_message_highlight("CREATE AGENT INSTANCE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}agent type:        {}",
-                    format_id(&params.key.agent_type)
-                ));
-                logln(format!(
-                    "{pad}agent id:          {}",
-                    format_id(&params.key.agent_id)
-                ));
-                logln(format!("{pad}constructor params:"));
-                log_data_value(pad, &params.parameters);
-            }
-            PublicOplogEntry::DropAgentInstance(params) => {
-                logln(format_message_highlight("DROP AGENT INSTANCE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}agent type:        {}",
-                    format_id(&params.key.agent_type)
-                ));
-                logln(format!(
-                    "{pad}agent id:          {}",
-                    format_id(&params.key.agent_id)
-                ));
-            }
             PublicOplogEntry::BeginRemoteTransaction(params) => {
                 logln(format_message_highlight("BEGIN REMOTE TRANSACTION"));
                 logln(format!(
@@ -912,6 +864,7 @@ fn value_to_string(value: &ValueAndType) -> String {
     print_value_and_type(value).expect("Failed to convert value to string")
 }
 
+#[allow(dead_code)]
 fn log_data_value(pad: &str, value: &DataValue) {
     match value {
         DataValue::Tuple(values) => {
@@ -929,6 +882,7 @@ fn log_data_value(pad: &str, value: &DataValue) {
     }
 }
 
+#[allow(dead_code)]
 fn log_element_value(pad: &str, value: &ElementValue) {
     match value {
         ElementValue::ComponentModel(value) => {
