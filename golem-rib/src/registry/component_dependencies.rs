@@ -27,7 +27,7 @@ pub struct ComponentDependencies {
 }
 
 impl ComponentDependencies {
-    pub fn size(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.dependencies.len()
     }
 

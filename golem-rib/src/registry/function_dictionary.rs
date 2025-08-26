@@ -582,13 +582,6 @@ impl FullyQualifiedResourceMethod {
             dynamic_parsed_str.push('.');
         }
 
-        // Start the dynamic function name with resource
-        dynamic_parsed_str.push('{');
-        if self.static_function {
-            dynamic_parsed_str.push_str("[static]");
-        } else {
-            dynamic_parsed_str.push_str("[method]");
-        }
         dynamic_parsed_str.push_str(&self.resource_name);
         dynamic_parsed_str.push('.');
         dynamic_parsed_str.push_str(&self.method_name);

@@ -1,5 +1,5 @@
-use crate::{parse_with_clap, Command, ReplContext};
-use clap::Parser;
+use crate::{parse_with_clap, Command, FunctionSignaturePrintConfig, ReplContext};
+use clap::{CommandFactory, Parser};
 use crossterm::cursor::MoveTo;
 use crossterm::{
     execute,
@@ -117,9 +117,86 @@ impl Command for Clear {
     fn print_execution_error(&self, _error: Self::ExecutionError, _repl_context: &ReplContext) {}
 }
 
+#[derive(Parser, Debug)]
+#[command(about = "Configuration to customise printing exports")]
+pub struct ExportPrintConfig {
+    /// Allows you to skip printing function argument types in the exports.
+    #[arg(required = false, long, default_value_t = false)]
+    pub skip_function_args: bool,
+
+    /// Allows you to skip printing function return types in the exports.
+    #[arg(required = false, long, default_value_t = false)]
+    pub skip_function_return_type: bool,
+}
+
+pub struct ExportOutput {
+    pub component_dependencies: ComponentDependencies,
+    pub printer_config: ExportPrintConfig,
+}
+
 pub struct Exports;
 
 impl Command for Exports {
+    type Input = ExportPrintConfig;
+    type Output = ExportOutput;
+    type InputParseError = clap::Error;
+    type ExecutionError = RibCompilationError;
+
+    fn command_argument_names() -> Vec<String> {
+        let command = ExportPrintConfig::command();
+
+        command
+            .get_arguments()
+            .map(|arg| arg.get_id().to_string())
+            .collect()
+    }
+
+    fn parse(
+        &self,
+        input: &str,
+        _repl_context: &ReplContext,
+    ) -> Result<Self::Input, Self::InputParseError> {
+        let parse_result = parse_with_clap::<ExportPrintConfig>(self.name().as_str(), input)?;
+
+        Ok(parse_result)
+    }
+
+    fn execute(
+        &self,
+        input: Self::Input,
+        repl_context: &mut ReplContext,
+    ) -> Result<Self::Output, Self::ExecutionError> {
+        let dependencies = repl_context.get_rib_compiler().get_component_dependencies();
+        
+        Ok(ExportOutput {
+            component_dependencies: dependencies,
+            printer_config: input,
+        })
+    }
+
+    fn print_output(&self, output: Self::Output, repl_context: &ReplContext) {
+        let printer = repl_context.get_printer();
+        printer.print_components_and_exports(
+            &output.component_dependencies,
+            &FunctionSignaturePrintConfig {
+                print_args: !output.printer_config.skip_function_args,
+                print_return_type: !output.printer_config.skip_function_return_type,
+            },
+        );
+    }
+
+    fn print_input_parse_error(&self, _error: Self::InputParseError, _repl_context: &ReplContext) {}
+
+    fn print_execution_error(&self, error: Self::ExecutionError, repl_context: &ReplContext) {
+        repl_context
+            .get_printer()
+            .print_rib_compilation_error(&error)
+    }
+}
+
+pub struct ExportsConcise;
+
+impl Command for ExportsConcise {
     type Input = ();
     type Output = ComponentDependencies;
     type InputParseError = ();
@@ -138,12 +215,20 @@ impl Command for Exports {
         _input: Self::Input,
         repl_context: &mut ReplContext,
     ) -> Result<Self::Output, Self::ExecutionError> {
-        Ok(repl_context.get_rib_compiler().get_component_dependencies())
+        let dependencies = repl_context.get_rib_compiler().get_component_dependencies();
+        Ok(dependencies)
     }
 
     fn print_output(&self, output: Self::Output, repl_context: &ReplContext) {
         let printer = repl_context.get_printer();
-        printer.print_components_and_exports(&output);
+
+        printer.print_components_and_exports(
+            &output,
+            &FunctionSignaturePrintConfig {
+                print_args: false,
+                print_return_type: false,
+            },
+        );
     }
 
     fn print_input_parse_error(&self, _error: Self::InputParseError, _repl_context: &ReplContext) {}

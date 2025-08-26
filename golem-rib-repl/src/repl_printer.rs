@@ -38,7 +38,11 @@ pub trait ReplPrinter {
         println!("{} {}", "[message]".yellow(), message.cyan());
     }
 
-    fn print_components_and_exports(&self, exports: &ComponentDependencies) {
+    fn print_components_and_exports(
+        &self,
+        exports: &ComponentDependencies,
+        function_signature_print_config: &FunctionSignaturePrintConfig,
+    ) {
         for (component_dependency_key, component) in &exports.dependencies {
             let mut indent = Indent::new();
 
@@ -75,7 +79,7 @@ pub trait ReplPrinter {
                 indent.add();
             }
 
-            print_function_dictionary(&mut indent, component)
+            print_function_dictionary(&mut indent, component, function_signature_print_config);
         }
     }
 
@@ -122,12 +126,30 @@ pub trait ReplPrinter {
     }
 }
 
+pub struct FunctionSignaturePrintConfig {
+    pub print_args: bool,
+    pub print_return_type: bool,
+}
+
+impl Default for FunctionSignaturePrintConfig {
+    fn default() -> Self {
+        Self {
+            print_args: true,
+            print_return_type: true,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DefaultReplResultPrinter;
 
 impl ReplPrinter for DefaultReplResultPrinter {}
 
-pub fn print_function_dictionary(indent: &mut Indent, dict: &FunctionDictionary) {
+pub fn print_function_dictionary(
+    indent: &mut Indent,
+    dict: &FunctionDictionary,
+    function_signature_print_config: &FunctionSignaturePrintConfig,
+) {
     let mut output = String::new();
 
     let mut hierarchy: BTreeMap<
@@ -180,6 +202,8 @@ pub fn print_function_dictionary(indent: &mut Indent, dict: &FunctionDictionary)
     }
 
     for (pkg, interfaces) in hierarchy {
+        let current_indent = indent.current_level();
+
         match pkg {
             Some(pkg) => {
                 output.push_str(&format!(
@@ -200,6 +224,8 @@ pub fn print_function_dictionary(indent: &mut Indent, dict: &FunctionDictionary)
         }
 
         for (iface, node) in interfaces {
+            let current_indent = indent.current_level();
+
             if let Some(iface) = iface {
                 output.push_str(&format!(
                     "{} {} {}\n",
@@ -219,25 +245,40 @@ pub fn print_function_dictionary(indent: &mut Indent, dict: &FunctionDictionary)
                 indent.add();
             }
 
-            for (fname, ftype) in &node.functions {
-                output.push_str(&format!("{} {}\n", indent, fname.bright_magenta()));
-                indent.add();
-                output.push_str(&format!(
-                    "{} ↳ {}: {}\n",
-                    indent,
-                    "Args".blue(),
-                    format_type_list(&ftype.parameter_types).truecolor(180, 180, 180)
-                ));
-                output.push_str(&format!(
-                    "{} ↳ {}: {}\n",
-                    indent,
-                    "Returns".blue(),
-                    format_return_type(&ftype.return_type).truecolor(180, 180, 180)
-                ));
-                indent.remove();
+            for (fun_name, fun_type) in &node.functions {
+                let current_indent = indent.current_level();
+
+                output.push_str(&format!("{} {}\n", indent, fun_name.bright_magenta()));
+
+                if function_signature_print_config.print_args {
+                    indent.add();
+                    output.push_str(&format!(
+                        "{} ↳ {}: {}\n",
+                        indent,
+                        "Args".blue(),
+                        format_type_list(&fun_type.parameter_types).truecolor(180, 180, 180)
+                    ));
+                }
+
+                if function_signature_print_config.print_return_type {
+                    if indent.current_level() == current_indent {
+                        indent.add()
+                    }
+
+                    output.push_str(&format!(
+                        "{} ↳ {}: {}\n",
+                        indent,
+                        "Returns".blue(),
+                        format_return_type(&fun_type.return_type).truecolor(180, 180, 180)
+                    ));
+                }
+
+                indent.reset(current_indent)
             }
 
             for (res_name, res) in &node.resources {
+                let current_indent = indent.current_level();
+
                 output.push_str(&format!(
                     "{} {} {}\n",
                     indent,
@@ -266,6 +307,8 @@ pub fn print_function_dictionary(indent: &mut Indent, dict: &FunctionDictionary)
                     indent.add();
 
                     for (mname, mtype) in &res.methods {
+                        let current_indent = indent.current_level();
+
                         output.push_str(&format!("{} {}\n", indent, mname.bright_magenta()));
                         indent.add();
 
@@ -291,11 +334,17 @@ pub fn print_function_dictionary(indent: &mut Indent, dict: &FunctionDictionary)
                             format_return_type(&mtype.return_type).truecolor(180, 180, 180)
                         ));
 
-                        indent.remove();
+                        indent.reset(current_indent);
                     }
                 }
+
+                indent.reset(current_indent);
             }
+
+            indent.reset(current_indent);
         }
+
+        indent.reset(current_indent);
     }
 
     println!("{output}");
@@ -457,6 +506,14 @@ impl Indent {
         if self.level >= 2 {
             self.level -= 2;
         }
+    }
+
+    pub fn current_level(&self) -> usize {
+        self.level
+    }
+
+    pub fn reset(&mut self, level: usize) {
+        self.level = level;
     }
 }
 
