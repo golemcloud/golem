@@ -35,5 +35,4 @@ uuid = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
-# golem-openapi-client-generator = { git = "https://github.com/golemcloud/golem-openapi-client-generator.git", branch = "atomic-deployment-fixes" }
-golem-openapi-client-generator = { path = "../../golem-openapi-client-generator" }
+golem-openapi-client-generator = { git = "https://github.com/golemcloud/golem-openapi-client-generator.git", branch = "atomic-deployment-fixes" }
