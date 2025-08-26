@@ -247,6 +247,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         args: caller_args,
                         env: caller_env,
                         wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                        ignore_already_existing: true,
                     },
                     &self.access_token,
                 )))

@@ -139,6 +139,7 @@ impl WorkerService for ForwardingWorkerService {
                         available_fuel: i64::MAX,
                         max_memory_per_worker: i64::MAX,
                     }),
+                    ignore_already_existing: request.ignore_already_existing,
                 })
                 .await;
 

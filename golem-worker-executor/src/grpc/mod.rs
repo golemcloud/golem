@@ -273,7 +273,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let component_version = request.component_version;
 
         let existing_worker = self.worker_service().get(&owned_worker_id).await;
-        if existing_worker.is_some() {
+        if existing_worker.is_some() && !request.ignore_already_existing {
             return Err(WorkerExecutorError::worker_already_exists(
                 owned_worker_id.worker_id(),
             ));

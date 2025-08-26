@@ -780,6 +780,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                     args,
                     env,
                     wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
+                    ignore_already_existing: false,
                 },
             )
             .await?;

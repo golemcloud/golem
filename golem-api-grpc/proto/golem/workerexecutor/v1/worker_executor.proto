@@ -133,6 +133,7 @@ message CreateWorkerRequest {
   // Component's owner project
   golem.common.ProjectId project_id = 7;
   golem.worker.WasiConfigVars wasi_config_vars = 8;
+  bool ignore_already_existing = 9;
 }
 
 message CreateWorkerResponse {

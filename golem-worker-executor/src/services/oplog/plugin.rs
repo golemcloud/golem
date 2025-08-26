@@ -252,23 +252,17 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
 
         let idempotency_key = IdempotencyKey::fresh();
 
-        let (component_id_hi, component_id_lo) =
-            worker_metadata.worker_id.component_id.0.as_u64_pair();
-        let wave_account_info = format!(
-            "{{ account-id: {{ value: \"{}\" }} }}",
-            worker_metadata.created_by.value
-        );
-        let wave_component_id =
-            format!("{{ uuid: {{ high-bits: {component_id_hi}, low-bits: {component_id_lo} }} }}");
-        let mut wave_config = "[".to_string();
-        for (idx, (key, value)) in running_plugin.configuration.iter().enumerate() {
-            wave_config.push_str(&format!("( \"{key}\", \"{value}\")"));
-            if idx != running_plugin.configuration.len() - 1 {
-                wave_config.push_str(", ");
-            }
+        let val_account_info = Value::Record(vec![worker_metadata.created_by.clone().into_value()]);
+        let val_component_id = worker_metadata.worker_id.component_id.clone().into_value();
+        let mut config_pairs = Vec::new();
+        for (key, value) in running_plugin.configuration.iter() {
+            config_pairs.push(Value::Tuple(vec![
+                key.clone().into_value(),
+                value.clone().into_value(),
+            ]));
         }
-        wave_config.push(']');
-        let function_name = format!("golem:api/oplog-processor@1.1.7.{{processor({wave_account_info}, {wave_component_id}, {wave_config}).process}}");
+        let val_config = Value::List(config_pairs);
+        let function_name = "golem:api/oplog-processor@1.1.7.{process}".to_string();
 
         let val_worker_id = worker_metadata.worker_id.clone().into_value();
         let val_metadata = worker_metadata.into_value();
@@ -281,6 +275,9 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         );
 
         let function_input = vec![
+            val_account_info,
+            val_config,
+            val_component_id,
             val_worker_id,
             val_metadata,
             val_first_entry_index,

@@ -146,6 +146,7 @@ impl WorkerApi {
                 args,
                 env,
                 wasi_config_vars.into(),
+                false,
                 namespace,
             )
             .await?;

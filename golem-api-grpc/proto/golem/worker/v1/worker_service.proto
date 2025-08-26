@@ -65,6 +65,7 @@ message LaunchNewWorkerRequest {
   repeated string args = 3;
   map<string, string> env = 4;
   golem.worker.WasiConfigVars wasi_config_vars = 5;
+  bool ignore_already_existing = 6;
 }
 
 message LaunchNewWorkerResponse {

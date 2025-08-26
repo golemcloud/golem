@@ -63,6 +63,7 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
                     ("TEST_ENV_VAR_2".to_string(), "value_2".to_string()),
                 ]),
                 wasi_config_vars: Some(BTreeMap::new().into()),
+                ignore_already_existing: false,
             },
         )
         .await

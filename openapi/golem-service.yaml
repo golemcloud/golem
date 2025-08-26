@@ -4804,92 +4804,6 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/invoke-and-await:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function and await its resolution on a new worker with a random generated name
-      description: |-
-        Ideal for invoking ephemeral components, but works with durable ones as well.
-        Supply the parameters in the request body as JSON.
-      operationId: invoke_and_await_function_without_name
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: header
-        name: Idempotency-Key
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: query
-        name: function
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResult'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
   /v1/components/{component_id}/workers/{worker_name}/invoke:
     post:
       tags:
@@ -4913,93 +4827,6 @@ paths:
         deprecated: false
         schema:
           type: string
-        explode: true
-        style: simple
-      - in: header
-        name: Idempotency-Key
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: query
-        name: function
-        description: name of the exported function to be invoked
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/components/{component_id}/invoke:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function on a new worker with a random generated name
-      description: |-
-        Ideal for invoking ephemeral components, but works with durable ones as well.
-        A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
-      operationId: invoke_function_without_name
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
         explode: true
         style: simple
       - in: header
@@ -8772,10 +8599,10 @@ components:
       title: ComponentModelElementSchema
       type: object
       properties:
-        typeInfo:
+        elementType:
           $ref: '#/components/schemas/AnalysedType'
       required:
-      - typeInfo
+      - elementType
     ComponentPluginScope:
       title: ComponentPluginScope
       type: object

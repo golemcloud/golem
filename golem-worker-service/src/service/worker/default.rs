@@ -68,6 +68,7 @@ pub trait WorkerService: Send + Sync {
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
+        ignore_already_existing: bool,
         namespace: Namespace,
     ) -> WorkerResult<WorkerId>;
 
@@ -500,6 +501,7 @@ impl WorkerService for WorkerServiceDefault {
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
+        ignore_already_existing: bool,
         namespace: Namespace,
     ) -> WorkerResult<WorkerId> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
@@ -520,6 +522,7 @@ impl WorkerService for WorkerServiceDefault {
                     project_id: Some(namespace.project_id.clone().into()),
                     account_limits: Some(resource_limits.clone().into()),
                     wasi_config_vars: Some(wasi_config_vars.clone().into()),
+                    ignore_already_existing,
                 }))
             },
             |response| match response.into_inner() {
