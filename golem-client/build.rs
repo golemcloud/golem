@@ -37,6 +37,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         true,
         &[
             ("AgentType", "golem_common::model::agent::AgentType"),
+            ("DataSchema", "golem_common::model::agent::DataSchema"),
             ("AgentInstanceKey", "golem_common::model::AgentInstanceKey"),
             (
                 "AgentInstanceDescription",
@@ -92,6 +93,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "PublicOplogEntry",
                 "golem_common::model::public_oplog::PublicOplogEntry",
+            ),
+            (
+                "RegisteredAgentType",
+                "golem_common::model::agent::RegisteredAgentType",
             ),
             ("ShardId", "golem_common::model::ShardId"),
             ("ValueAndType", "golem_wasm_rpc::ValueAndType"),

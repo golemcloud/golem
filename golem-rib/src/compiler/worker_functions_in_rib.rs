@@ -37,7 +37,7 @@ impl WorkerFunctionsInRib {
         let mut function_calls = vec![];
 
         for key in worker_invoke_registry_keys {
-            let function_type = component_dependency
+            let (_, function_type) = component_dependency
                 .get_function_type(&None, &key)
                 .map_err(|e| RibCompilationError::RibStaticAnalysisError(e.to_string()))?;
 

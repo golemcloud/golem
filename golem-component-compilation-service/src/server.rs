@@ -13,15 +13,19 @@
 // limitations under the License.
 
 use golem_common::tracing::init_tracing_with_default_env_filter;
+use golem_common::SafeDisplay;
 use golem_component_compilation_service::config::{make_config_loader, ServerConfig};
 use prometheus::Registry;
 use tokio::task::JoinSet;
+use tracing::info;
 use wasmtime::component::__internal::anyhow;
 
 pub fn main() -> anyhow::Result<()> {
     match make_config_loader().load_or_dump_config() {
         Some(config) => {
             init_tracing_with_default_env_filter(&config.tracing);
+            info!("Using configuration:\n{}", config.to_safe_string_indented());
+
             let prometheus = golem_component_compilation_service::metrics::register_all();
 
             tokio::runtime::Builder::new_multi_thread()

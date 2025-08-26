@@ -21,7 +21,6 @@ import public "golem/worker/public_oplog.proto";
 import public "golem/worker/worker_id.proto";
 import public "golem/component/component_id.proto";
 import public "golem/worker/update_mode.proto";
-import public "golem/worker/target_worker_id.proto";
 import public "golem/worker/filesystem.proto";
 import "golem/worker/wasi_config_vars.proto";
 
@@ -66,6 +65,7 @@ message LaunchNewWorkerRequest {
   repeated string args = 3;
   map<string, string> env = 4;
   golem.worker.WasiConfigVars wasi_config_vars = 5;
+  bool ignore_already_existing = 6;
 }
 
 message LaunchNewWorkerResponse {
@@ -144,7 +144,7 @@ message InterruptWorkerResponse {
 }
 
 message InvokeAndAwaitRequest {
-  golem.worker.TargetWorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
@@ -166,7 +166,7 @@ message InvokeAndAwaitTypedResponse {
 }
 
 message InvokeAndAwaitJsonRequest {
-  golem.worker.TargetWorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   repeated string invokeParameters = 4;
@@ -181,7 +181,7 @@ message InvokeAndAwaitJsonResponse {
 }
 
 message InvokeRequest {
-  golem.worker.TargetWorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
@@ -196,7 +196,7 @@ message InvokeResponse {
 }
 
 message InvokeJsonRequest {
-  golem.worker.TargetWorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   repeated string invokeParameters = 4;
@@ -297,7 +297,7 @@ message SearchOplogSuccessResponse {
 }
 
 message GetFileSystemNodeRequest {
-  golem.worker.TargetWorkerId worker_id = 1;
+  golem.worker.WorkerId worker_id = 1;
   string path = 2;
 }
 
@@ -314,7 +314,7 @@ message ListFileSystemNodeResponse {
  
 
 message GetFileContentsRequest {
-  golem.worker.TargetWorkerId worker_id = 1;
+  golem.worker.WorkerId worker_id = 1;
   string file_path = 2;
 }
 

@@ -1,8 +1,9 @@
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentMethod, AgentType, BinaryDescriptor, BinaryReference,
-    BinarySource, BinaryType, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, TextDescriptor,
-    TextReference, TextSource, TextType, Url,
+    BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema,
+    ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue,
+    NamedElementValues, RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType,
+    Url,
 };
 use golem_api_grpc::proto::golem::component::data_schema;
 use golem_api_grpc::proto::golem::component::element_schema;
@@ -243,7 +244,9 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ElementSchema> for Element
             None => Err("Missing field: schema".to_string()),
             Some(schema) => match schema {
                 element_schema::Schema::ComponentModel(wit_type) => {
-                    Ok(ElementSchema::ComponentModel((&wit_type).try_into()?))
+                    Ok(ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: (&wit_type).try_into()?,
+                    }))
                 }
                 element_schema::Schema::UnstructuredText(text_descriptor) => {
                     Ok(ElementSchema::UnstructuredText(text_descriptor.try_into()?))
@@ -259,9 +262,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ElementSchema> for Element
 impl From<ElementSchema> for golem_api_grpc::proto::golem::component::ElementSchema {
     fn from(value: ElementSchema) -> Self {
         match value {
-            ElementSchema::ComponentModel(wit_type) => {
+            ElementSchema::ComponentModel(component_model_element_schema) => {
                 golem_api_grpc::proto::golem::component::ElementSchema {
-                    schema: Some(element_schema::Schema::ComponentModel((&wit_type).into())),
+                    schema: Some(element_schema::Schema::ComponentModel(
+                        (&component_model_element_schema.element_type).into(),
+                    )),
                 }
             }
             ElementSchema::UnstructuredText(text_descriptor) => {
@@ -631,6 +636,38 @@ impl From<DataValue> for golem_api_grpc::proto::golem::component::DataValue {
                     },
                 )),
             },
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::v1::RegisteredAgentType>
+    for RegisteredAgentType
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::v1::RegisteredAgentType,
+    ) -> Result<Self, Self::Error> {
+        Ok(RegisteredAgentType {
+            agent_type: value
+                .agent_type
+                .ok_or_else(|| "Missing agent_type field".to_string())?
+                .try_into()?,
+            implemented_by: value
+                .implemented_by
+                .ok_or_else(|| "Missing implemented_by field".to_string())?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<RegisteredAgentType>
+    for golem_api_grpc::proto::golem::component::v1::RegisteredAgentType
+{
+    fn from(value: RegisteredAgentType) -> Self {
+        golem_api_grpc::proto::golem::component::v1::RegisteredAgentType {
+            agent_type: Some(value.agent_type.into()),
+            implemented_by: Some(value.implemented_by.into()),
         }
     }
 }

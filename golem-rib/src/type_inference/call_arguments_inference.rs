@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ComponentDependencies, Expr, ExprVisitor, FunctionCallError};
+use crate::{ComponentDependencies, Expr, FunctionCallError};
+use std::collections::VecDeque;
 
 // Resolving function arguments and return types based on function type registry
 // If the function call is a mere instance creation, then the return type
@@ -23,7 +24,8 @@ pub fn infer_function_call_types(
     expr: &mut Expr,
     component_dependency: &ComponentDependencies,
 ) -> Result<(), FunctionCallError> {
-    let mut visitor = ExprVisitor::bottom_up(expr);
+    let mut visitor = VecDeque::new();
+    visitor.push_back(expr);
     while let Some(expr) = visitor.pop_back() {
         let source_span = expr.source_span();
 
@@ -41,6 +43,8 @@ pub fn infer_function_call_types(
                 args,
                 inferred_type,
             )?;
+        } else {
+            expr.visit_expr_nodes_lazy(&mut visitor);
         }
     }
 
@@ -217,13 +221,14 @@ mod internal {
         args: &mut [Expr],
         function_result_inferred_type: Option<&mut InferredType>,
     ) -> Result<(), FunctionCallError> {
-        let function_type = component_dependency
-            .get_function_type(&None, key)
-            .map_err(|err| FunctionCallError::InvalidFunctionCall {
-                function_name: function_name.to_string(),
-                source_span: original_source_span.clone(),
-                message: err.to_string(),
-            })?;
+        let (_, function_type) =
+            component_dependency
+                .get_function_type(&None, key)
+                .map_err(|err| FunctionCallError::InvalidFunctionCall {
+                    function_name: function_name.to_string(),
+                    source_span: original_source_span.clone(),
+                    message: err.to_string(),
+                })?;
 
         let mut parameter_types: Vec<AnalysedType> = function_type
             .parameter_types
@@ -384,12 +389,13 @@ mod internal {
         expected: &AnalysedType,
         provided: &Expr,
     ) -> Result<(), FunctionCallError> {
-        let is_valid = if provided.inferred_type().is_unknown() {
-            true
-        } else {
-            provided.inferred_type().get_type_hint().get_type_kind()
-                == expected.get_type_hint().get_type_kind()
-        };
+        let is_valid =
+            if provided.inferred_type().is_unknown() | provided.inferred_type().is_all_of() {
+                true
+            } else {
+                provided.inferred_type().get_type_hint().get_type_kind()
+                    == expected.get_type_hint().get_type_kind()
+            };
 
         if is_valid {
             Ok(())

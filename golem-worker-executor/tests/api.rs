@@ -25,9 +25,9 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    ComponentId, ComponentType, ExportedResourceInstanceDescription, FilterComparator,
-    IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, TargetWorkerId, Timestamp,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
+    StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
@@ -35,7 +35,9 @@ use golem_test_framework::dsl::{
     worker_error_logs, worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
-use golem_wasm_ast::analysis::{analysed_type, AnalysedType, TypeStr};
+use golem_wasm_ast::analysis::{
+    analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle, TypeStr,
+};
 use golem_wasm_rpc::{IntoValue, Record};
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use redis::Commands;
@@ -78,7 +80,7 @@ async fn interruption(
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await(worker_id_clone, "run", vec![])
+                .invoke_and_await(&worker_id_clone, "run", vec![])
                 .await
         }
         .in_current_span(),
@@ -120,7 +122,7 @@ async fn simulated_crash(
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await(worker_id_clone, "run", vec![])
+                .invoke_and_await(&worker_id_clone, "run", vec![])
                 .await
         }
         .in_current_span(),
@@ -338,88 +340,6 @@ fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn dynamic_worker_creation_without_name(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
-
-    let component_id = executor.component("environment-service").store().await;
-    let worker_id = TargetWorkerId {
-        component_id: component_id.clone(),
-        worker_name: None,
-    };
-
-    let env1 = executor
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-    let env2 = executor
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-
-    drop(executor);
-
-    let env1 = get_env_result(env1);
-    let env2 = get_env_result(env2);
-
-    check!(env1.contains_key("GOLEM_WORKER_NAME"));
-    check!(env1.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env1.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env2.contains_key("GOLEM_WORKER_NAME"));
-    check!(env2.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env2.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
-async fn ephemeral_worker_creation_without_name(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
-
-    let component_id = executor
-        .component("environment-service")
-        .ephemeral()
-        .store()
-        .await;
-    let worker_id = TargetWorkerId {
-        component_id: component_id.clone(),
-        worker_name: None,
-    };
-
-    let env1 = executor
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-    let env2 = executor
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-
-    drop(executor);
-
-    let env1 = get_env_result(env1);
-    let env2 = get_env_result(env2);
-
-    check!(env1.contains_key("GOLEM_WORKER_NAME"));
-    check!(env1.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env1.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env2.contains_key("GOLEM_WORKER_NAME"));
-    check!(env2.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env2.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
 async fn ephemeral_worker_creation_with_name_is_not_persistent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -428,14 +348,14 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("counters").ephemeral().store().await;
-    let worker_id = TargetWorkerId {
+    let worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: Some("test".to_string()),
+        worker_name: "test".to_string(),
     };
 
     let _ = executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "rpc:counters-exports/api.{inc-global-by}",
             vec![2u64.into_value_and_type()],
         )
@@ -444,7 +364,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
 
     let result = executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "rpc:counters-exports/api.{get-global-value}",
             vec![],
         )
@@ -597,7 +517,7 @@ async fn get_workers_from_worker(
 
         let result = executor
             .invoke_and_await(
-                worker_id.clone(),
+                worker_id,
                 "golem:it/api.{get-workers}",
                 vec![
                     component_id_val_and_type,
@@ -685,11 +605,7 @@ async fn get_metadata_from_worker(
         let worker_id_val1 = get_worker_id_val(worker_id1);
 
         let result = executor
-            .invoke_and_await(
-                worker_id1.clone(),
-                "golem:it/api.{get-self-metadata}",
-                vec![],
-            )
+            .invoke_and_await(worker_id1, "golem:it/api.{get-self-metadata}", vec![])
             .await
             .unwrap();
 
@@ -707,7 +623,7 @@ async fn get_metadata_from_worker(
 
         let result = executor
             .invoke_and_await(
-                worker_id1.clone(),
+                worker_id1,
                 "golem:it/api.{get-worker-metadata}",
                 vec![ValueAndType {
                     value: worker_id_val2.clone(),
@@ -1749,7 +1665,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    // case: WASM can be parsed but wasmtime does not support it
+    // case: WASM can be parsed, but wasmtime does not support it
     let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("write-stdout").store().await;
 
@@ -1801,7 +1717,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let worker_id = executor.start_worker(&component_id, "bad-wasm-2").await;
     let project_id = executor.default_project().await;
 
-    // worker is idle. if we restart the server it will get recovered
+    // worker is idle. if we restart the server, it will get recovered
     drop(executor);
 
     // corrupting the uploaded WASM
@@ -2721,21 +2637,26 @@ async fn counter_resource_test_1(
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
         .collect::<Vec<_>>();
     resources1.sort_by_key(|(k, _v)| k.clone());
     check!(
         resources1
             == vec![(
-                "resource(0)".to_string(),
-                WorkerResourceDescription::ExportedResourceInstance(
-                    ExportedResourceInstanceDescription {
-                        created_at: ts,
-                        resource_owner: "rpc:counters-exports/api".to_string(),
-                        resource_name: "counter".to_string(),
-                        resource_params: None
-                    }
-                )
+                "0".to_string(),
+                WorkerResourceDescription {
+                    created_at: ts,
+                    resource_owner: "rpc:counters-exports/api".to_string(),
+                    resource_name: "counter".to_string()
+                }
             ),]
     );
 
@@ -2743,150 +2664,19 @@ async fn counter_resource_test_1(
         .last_known_status
         .owned_resources
         .iter()
-        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
         .collect::<Vec<_>>();
     check!(resources2 == vec![]);
 
     executor.check_oplog_is_queryable(&worker_id).await;
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
-async fn counter_resource_test_2(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
-
-    let component_id = executor.component("counters").store().await;
-    let worker_id = executor.start_worker(&component_id, "counters-2").await;
-    executor.log_output(&worker_id).await;
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![5u64.into_value_and_type()],
-        )
-        .await;
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![1u64.into_value_and_type()],
-        )
-        .await;
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![2u64.into_value_and_type()],
-        )
-        .await;
-
-    let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
-        )
-        .await;
-    let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").get-value}",
-            vec![],
-        )
-        .await;
-
-    let (metadata1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").drop}",
-            vec![],
-        )
-        .await;
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").drop}",
-            vec![],
-        )
-        .await;
-
-    let result3 = executor
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{get-all-dropped}",
-            vec![],
-        )
-        .await;
-
-    let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
-
-    let _oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-
-    drop(executor);
-
-    check!(result1 == Ok(vec![Value::U64(5)]));
-    check!(result2 == Ok(vec![Value::U64(3)]));
-    check!(
-        result3
-            == Ok(vec![Value::List(vec![
-                Value::Tuple(vec![Value::String("counter1".to_string()), Value::U64(5)]),
-                Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)])
-            ])])
-    );
-
-    let ts = Timestamp::now_utc();
-    let mut resources1 = metadata1
-        .last_known_status
-        .owned_resources
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
-        .collect::<Vec<_>>();
-    resources1.sort_by_key(|(k, _v)| k.clone());
-    assert_eq!(
-        resources1,
-        vec![
-            (
-                "resource(0)".to_string(),
-                WorkerResourceDescription::ExportedResourceInstance(
-                    ExportedResourceInstanceDescription {
-                        created_at: ts,
-                        resource_owner: "rpc:counters-exports/api".to_string(),
-                        resource_name: "counter".to_string(),
-                        resource_params: Some(vec!["\"counter1\"".to_string()])
-                    }
-                )
-            ),
-            (
-                "resource(1)".to_string(),
-                WorkerResourceDescription::ExportedResourceInstance(
-                    ExportedResourceInstanceDescription {
-                        created_at: ts,
-                        resource_owner: "rpc:counters-exports/api".to_string(),
-                        resource_name: "counter".to_string(),
-                        resource_params: Some(vec!["\"counter2\"".to_string()])
-                    }
-                )
-            )
-        ]
-    );
-
-    let resources2 = metadata2
-        .last_known_status
-        .owned_resources
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.with_timestamp(ts)))
-        .collect::<Vec<_>>();
-
-    check!(resources2 == vec![]);
 }
 
 #[test]
@@ -3237,12 +3027,28 @@ async fn cancelling_pending_invocations(
     let ik3 = IdempotencyKey::fresh();
     let ik4 = IdempotencyKey::fresh();
 
+    let counter1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{[constructor]counter}",
+            vec!["counter1".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let counter_handle_type = AnalysedType::Handle(TypeHandle {
+        name: None,
+        owner: None,
+        resource_id: AnalysedResourceId(0),
+        mode: AnalysedResourceMode::Borrowed,
+    });
+    let counter_ref = ValueAndType::new(counter1[0].clone(), counter_handle_type);
+
     let _ = executor
         .invoke_and_await_with_key(
             &worker_id,
             &ik1,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![5u64.into_value_and_type()],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![counter_ref.clone(), 5u64.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -3250,8 +3056,8 @@ async fn cancelling_pending_invocations(
     let promise_id = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").create-promise}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.create-promise}",
+            vec![counter_ref.clone()],
         )
         .await
         .unwrap();
@@ -3259,11 +3065,14 @@ async fn cancelling_pending_invocations(
     executor
         .invoke(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").block-on-promise}",
-            vec![ValueAndType {
-                value: promise_id[0].clone(),
-                typ: PromiseId::get_type(),
-            }],
+            "rpc:counters-exports/api.{[method]counter.block-on-promise}",
+            vec![
+                counter_ref.clone(),
+                ValueAndType {
+                    value: promise_id[0].clone(),
+                    typ: PromiseId::get_type(),
+                },
+            ],
         )
         .await
         .unwrap();
@@ -3272,8 +3081,8 @@ async fn cancelling_pending_invocations(
         .invoke_with_key(
             &worker_id,
             &ik2,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![6u64.into_value_and_type()],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![counter_ref.clone(), 6u64.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -3282,8 +3091,8 @@ async fn cancelling_pending_invocations(
         .invoke_with_key(
             &worker_id,
             &ik3,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![7u64.into_value_and_type()],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![counter_ref.clone(), 7u64.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -3322,8 +3131,8 @@ async fn cancelling_pending_invocations(
     let final_result = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.get-value}",
+            vec![counter_ref.clone()],
         )
         .await
         .unwrap();

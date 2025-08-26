@@ -29,6 +29,7 @@ use crate::model::{AccountDetails, AccountId, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use futures_util::future::BoxFuture;
+use golem_client::api::AgentTypesClientLive as AgentTypesClientCloud;
 use golem_client::api::ApiCertificateClientLive as ApiCertificateClientCloud;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientCloud;
 use golem_client::api::ApiDeploymentClientLive as ApiDeploymentClientCloud;
@@ -503,6 +504,7 @@ pub struct GolemClients {
 
     pub account: AccountClientCloud,
     pub account_summary: AccountSummaryClientCloud,
+    pub agent_types: AgentTypesClientCloud,
     pub api_certificate: ApiCertificateClientCloud,
     pub api_definition: ApiDefinitionClientCloud,
     pub api_deployment: ApiDeploymentClientCloud,
@@ -592,6 +594,9 @@ impl GolemClients {
             },
             account_summary: AccountSummaryClientCloud {
                 context: worker_context(),
+            },
+            agent_types: AgentTypesClientCloud {
+                context: component_context(),
             },
             api_certificate: ApiCertificateClientCloud {
                 context: worker_context(),

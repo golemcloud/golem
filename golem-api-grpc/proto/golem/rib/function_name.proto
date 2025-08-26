@@ -45,10 +45,6 @@ message ParsedFunctionReference {
     RawResourceDropFunctionReference raw_resource_drop = 3;
     RawResourceMethodFunctionReference raw_resource_method = 4;
     RawResourceStaticMethodFunctionReference raw_resource_static_method = 5;
-    IndexedResourceConstructorFunctionReference indexed_resource_constructor = 6;
-    IndexedResourceMethodFunctionReference indexed_resource_method = 7;
-    IndexedResourceStaticMethodFunctionReference indexed_resource_static_method = 8;
-    IndexedResourceDropFunctionReference indexed_resource_drop = 9;
   }
 }
 
@@ -74,24 +70,3 @@ message RawResourceStaticMethodFunctionReference {
   string method = 2;
 }
 
-message IndexedResourceConstructorFunctionReference {
-  string resource = 1;
-  repeated string resource_params = 2;
-}
-
-message IndexedResourceMethodFunctionReference {
-  string resource = 1;
-  repeated string resource_params = 2;
-  string method = 3;
-}
-
-message IndexedResourceStaticMethodFunctionReference {
-  string resource = 1;
-  repeated string resource_params = 2;
-  string method = 3;
-}
-
-message IndexedResourceDropFunctionReference {
-  string resource = 1;
-  repeated string resource_params = 2;
-}

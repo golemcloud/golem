@@ -382,7 +382,7 @@ mod internal {
             &self,
             _component_dependency_key: ComponentDependencyKey,
             _instruction_id: &InstructionId,
-            _worker_name: Option<EvaluatedWorkerName>,
+            _worker_name: EvaluatedWorkerName,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
             _return_type: Option<AnalysedType>,
@@ -1181,130 +1181,6 @@ mod internal {
 
                 interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
-            FunctionReferenceType::IndexedResourceConstructor { resource, arg_size } => {
-                let last_n_elements = interpreter_stack
-                    .pop_n(arg_size)
-                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
-
-                let parameter_values = last_n_elements
-                    .iter()
-                    .map(|interpreter_result| {
-                        interpreter_result.get_val().ok_or_else(|| {
-                            internal_corrupted_state!("failed to construct resource")
-                        })
-                    })
-                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
-
-                let parsed_function_name = ParsedFunctionName {
-                    site,
-                    function: ParsedFunctionReference::IndexedResourceConstructor {
-                        resource,
-                        resource_params: parameter_values
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>(),
-                    },
-                };
-
-                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
-            }
-            FunctionReferenceType::IndexedResourceMethod {
-                resource,
-                arg_size,
-                method,
-            } => {
-                let last_n_elements = interpreter_stack
-                    .pop_n(arg_size)
-                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
-
-                let param_values = last_n_elements
-                    .iter()
-                    .map(|interpreter_result| {
-                        interpreter_result.get_val().ok_or_else(|| {
-                            internal_corrupted_state!(
-                                "internal error: failed to call indexed resource method {}",
-                                method
-                            )
-                        })
-                    })
-                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
-
-                let parsed_function_name = ParsedFunctionName {
-                    site,
-                    function: ParsedFunctionReference::IndexedResourceMethod {
-                        resource,
-                        resource_params: param_values
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<String>>(),
-                        method,
-                    },
-                };
-
-                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
-            }
-            FunctionReferenceType::IndexedResourceStaticMethod {
-                resource,
-                arg_size,
-                method,
-            } => {
-                let last_n_elements = interpreter_stack
-                    .pop_n(arg_size)
-                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
-
-                let param_values = last_n_elements
-                    .iter()
-                    .map(|interpreter_result| {
-                        interpreter_result.get_val().ok_or_else(|| {
-                            internal_corrupted_state!(
-                                "failed to call static resource method {}",
-                                method
-                            )
-                        })
-                    })
-                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
-
-                let parsed_function_name = ParsedFunctionName {
-                    site,
-                    function: ParsedFunctionReference::IndexedResourceStaticMethod {
-                        resource,
-                        resource_params: param_values
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>(),
-                        method,
-                    },
-                };
-
-                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
-            }
-            FunctionReferenceType::IndexedResourceDrop { resource, arg_size } => {
-                let last_n_elements = interpreter_stack
-                    .pop_n(arg_size)
-                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
-
-                let param_values = last_n_elements
-                    .iter()
-                    .map(|interpreter_result| {
-                        interpreter_result.get_val().ok_or_else(|| {
-                            internal_corrupted_state!("failed to call indexed resource drop")
-                        })
-                    })
-                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
-
-                let parsed_function_name = ParsedFunctionName {
-                    site,
-                    function: ParsedFunctionReference::IndexedResourceDrop {
-                        resource,
-                        resource_params: param_values
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>(),
-                    },
-                };
-
-                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
-            }
         }
 
         Ok(())
@@ -1375,7 +1251,32 @@ mod internal {
                     .invoke_worker_function_async(
                         component_info,
                         instruction_id,
-                        Some(worker_id_string),
+                        worker_id_string,
+                        function_name_cloned,
+                        parameter_values,
+                        expected_result_type.clone(),
+                    )
+                    .await
+                    .map_err(|err| function_invoke_fail(function_name.as_str(), err))?;
+
+                match result {
+                    None => {
+                        interpreter_stack.push(RibInterpreterStackValue::Unit);
+                    }
+                    Some(result) => {
+                        interpreter_stack.push(RibInterpreterStackValue::Val(result));
+                    }
+                }
+            }
+
+            InstanceVariable::WitResource(variable_id)
+                if variable_id == VariableId::global("___STATIC_WIT_RESOURCE".to_string()) =>
+            {
+                let result = interpreter_env
+                    .invoke_worker_function_async(
+                        component_info,
+                        instruction_id,
+                        "___STATIC_WIT_RESOURCE".to_string(),
                         function_name_cloned,
                         parameter_values,
                         expected_result_type.clone(),
@@ -1425,7 +1326,7 @@ mod internal {
                             .invoke_worker_function_async(
                                 component_info,
                                 instruction_id,
-                                Some(worker_name.to_string()),
+                                worker_name.to_string(),
                                 function_name_cloned.clone(),
                                 final_args,
                                 expected_result_type.clone(),
@@ -2821,6 +2722,72 @@ mod tests {
            let cart = worker.cart(user_id);
            let result = cart.checkout();
            result
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+        let compiler = RibCompiler::new(compiler_config);
+
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_executor = test_deps.interpreter;
+        let result = rib_executor.run(compiled.byte_code).await.unwrap();
+
+        let expected_value = Value::Variant {
+            case_idx: 1,
+            case_value: Some(Box::new(Value::Record(vec![Value::String(
+                "foo".to_string(),
+            )]))),
+        };
+
+        assert_eq!(result.get_val().unwrap().value, expected_value);
+    }
+
+    #[test]
+    async fn test_interpreter_with_indexed_resources_static_functions_1() {
+        let expr = r#"
+           let worker = instance();
+           let result = worker.cart.create("afsal");
+           result.checkout()
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+        let compiler = RibCompiler::new(compiler_config);
+
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_executor = test_deps.interpreter;
+        let result = rib_executor.run(compiled.byte_code).await.unwrap();
+
+        let expected_value = Value::Variant {
+            case_idx: 1,
+            case_value: Some(Box::new(Value::Record(vec![Value::String(
+                "foo".to_string(),
+            )]))),
+        };
+
+        assert_eq!(result.get_val().unwrap().value, expected_value);
+    }
+
+    #[test]
+    async fn test_interpreter_with_indexed_resources_static_functions_2() {
+        let expr = r#"
+           let worker = instance();
+           let default-cart = worker.cart("default");
+           let alternate-cart = worker.cart.create-safe("afsal");
+           match alternate-cart {
+             ok(alt) => alt.checkout(),
+             err(_) => default-cart.checkout()
+           }
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
@@ -4764,7 +4731,7 @@ mod tests {
         };
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
+            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
         };
         use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
@@ -4992,6 +4959,39 @@ mod tests {
                         }),
                     },
                     AnalysedFunction {
+                        name: "[static]cart.create".to_string(),
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "item-name".to_string(),
+                            typ: str(),
+                        }],
+                        result: Some(AnalysedFunctionResult {
+                            typ: AnalysedType::Handle(TypeHandle {
+                                name: Some("cart".to_string()),
+                                owner: Some("golem:it/api".to_string()),
+                                resource_id: AnalysedResourceId(0),
+                                mode: AnalysedResourceMode::Owned,
+                            }),
+                        }),
+                    },
+                    AnalysedFunction {
+                        name: "[static]cart.create-safe".to_string(),
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "item-name".to_string(),
+                            typ: str(),
+                        }],
+                        result: Some(AnalysedFunctionResult {
+                            typ: result(
+                                AnalysedType::Handle(TypeHandle {
+                                    name: Some("cart".to_string()),
+                                    owner: Some("golem:it/api".to_string()),
+                                    resource_id: AnalysedResourceId(0),
+                                    mode: AnalysedResourceMode::Owned,
+                                }),
+                                str(),
+                            ),
+                        }),
+                    },
+                    AnalysedFunction {
                         name: "[method]cart.add-item".to_string(),
                         parameters: vec![
                             AnalysedFunctionParameter {
@@ -5180,7 +5180,7 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                _worker_name: Option<EvaluatedWorkerName>,
+                _worker_name: EvaluatedWorkerName,
                 _fqn: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
@@ -5198,7 +5198,7 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                worker_name: Option<EvaluatedWorkerName>,
+                worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
@@ -5210,7 +5210,7 @@ mod tests {
                     field("args1", u32()),
                 ]);
 
-                let worker_name = Value::String(worker_name.map(|x| x.0).unwrap_or_default());
+                let worker_name = Value::String(worker_name.0);
                 let function_name = Value::String(function_name.0);
                 let args0 = args.0[0].value.clone();
                 let args1 = args.0[1].value.clone();
@@ -5229,14 +5229,14 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                worker_name: Option<EvaluatedWorkerName>,
+                worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 match function_name.0.as_str() {
                     "golem:it/api.{cart.new}" => {
-                        let worker_name = worker_name.map(|x| x.0).unwrap_or_default();
+                        let worker_name = worker_name.0;
 
                         let uri = format!(
                             "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{worker_name}"
@@ -5293,8 +5293,47 @@ mod tests {
                         Ok(Some(ValueAndType::new(Value::List(vec![value]), typ)))
                     }
 
+                    "golem:it/api.{[static]cart.create}" => {
+                        let uri = format!(
+                            "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
+                            worker_name.0
+                        );
+
+                        let value = Value::Handle {
+                            uri,
+                            resource_id: 0,
+                        };
+
+                        Ok(Some(ValueAndType::new(
+                            value,
+                            handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                        )))
+                    }
+
+                    "golem:it/api.{[static]cart.create-safe}" => {
+                        let uri = format!(
+                            "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
+                            worker_name.0
+                        );
+
+                        let resource = Value::Handle {
+                            uri,
+                            resource_id: 0,
+                        };
+
+                        let value = Value::Result(Ok(Some(Box::new(resource))));
+
+                        Ok(Some(ValueAndType::new(
+                            value,
+                            result(
+                                handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                                str(),
+                            ),
+                        )))
+                    }
+
                     "golem:it/api.{cart.pass-through}" => {
-                        let worker_name = worker_name.map(|x| x.0);
+                        let worker_name = worker_name.0;
                         let function_args = args.0[1..].to_vec();
 
                         let mut arg_types = vec![];
@@ -5308,15 +5347,13 @@ mod tests {
                         let function_name = function_name.0.into_value_and_type();
 
                         let mut analysed_type_pairs = vec![];
-                        analysed_type_pairs.push(field("worker-name", option(str())));
+                        analysed_type_pairs.push(field("worker-name", str()));
                         analysed_type_pairs.push(field("function-name", str()));
                         analysed_type_pairs.extend(arg_types);
 
                         let mut values = vec![];
 
-                        values.push(Value::Option(
-                            worker_name.map(|x| Box::new(Value::String(x))),
-                        ));
+                        values.push(Value::String(worker_name));
                         values.push(function_name.value);
 
                         for arg_value in function_args {
@@ -5342,7 +5379,7 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                _worker_name: Option<EvaluatedWorkerName>,
+                _worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
@@ -5595,7 +5632,7 @@ mod tests {
                 &self,
                 _component_dependency: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                _worker_name: Option<EvaluatedWorkerName>,
+                _worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,

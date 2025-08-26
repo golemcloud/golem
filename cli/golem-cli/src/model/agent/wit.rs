@@ -26,8 +26,6 @@ use std::path::Path;
 use wit_component::WitPrinter;
 use wit_parser::{PackageId, Resolve, SourceMap};
 
-const STATIC_WRAPPER_INTERFACE_NAME: &str = "agent";
-
 pub fn generate_agent_wrapper_wit(
     component_name: &AppComponentName,
     agent_types: &[AgentType],
@@ -86,19 +84,13 @@ impl AgentWrapperGeneratorContextState {
             )
         }
 
-        let interface_name = STATIC_WRAPPER_INTERFACE_NAME;
-
         writeln!(result, "package {package_name};")?;
         writeln!(result)?;
-        writeln!(result, "interface {interface_name} {{")?;
-        writeln!(
-            result,
-            "  use golem:agent/common.{{agent-error, agent-type, binary-reference, text-reference}};"
-        )?;
 
+        let mut interface_names = Vec::new();
         let agent_types = self.agent_types.clone();
         for agent in &agent_types {
-            self.generate_agent_wrapper_resource(&mut result, agent)?;
+            interface_names.push(self.generate_agent_wrapper_interface(&mut result, agent)?);
         }
 
         self.traverse_gathered_types()?;
@@ -112,16 +104,29 @@ impl AgentWrapperGeneratorContextState {
             .collect::<Vec<_>>();
         types.sort_by_key(|(_, name)| name.clone());
 
-        for (typ, name) in types {
-            self.generate_type_definition(&mut result, &typ, &name)?;
+        let has_types = !types.is_empty();
+        if has_types {
+            writeln!(result, "  interface types {{")?;
+            writeln!(
+                result,
+                "    use golem:agent/common.{{text-reference, binary-reference}};"
+            )?;
+            for (typ, name) in types {
+                self.generate_type_definition(&mut result, &typ, &name)?;
+            }
+            writeln!(result, "  }}")?;
         }
 
-        writeln!(result, "}}")?;
         writeln!(result)?;
         writeln!(result, "world agent-wrapper {{")?;
         writeln!(result, "  import golem:agent/guest;")?;
         writeln!(result, "  export golem:agent/guest;")?;
-        writeln!(result, "  export {interface_name};")?;
+        for interface_name in &interface_names {
+            writeln!(result, "  export {interface_name};")?;
+        }
+        if has_types {
+            writeln!(result, "  export types;")?;
+        }
         writeln!(result, "}}")?;
 
         self.wrapper_package_wit_source = Some(result);
@@ -161,40 +166,57 @@ impl AgentWrapperGeneratorContextState {
         })
     }
 
-    fn generate_agent_wrapper_resource(
+    fn generate_agent_wrapper_interface(
         &mut self,
         result: &mut String,
         agent: &AgentType,
-    ) -> anyhow::Result<()> {
-        let resource_name = agent.type_name.to_kebab_case();
+    ) -> anyhow::Result<String> {
+        let interface_name = agent.type_name.to_kebab_case();
+        let previous_used_names = self.used_names.clone();
+        self.used_names.clear();
 
-        writeln!(result, "    /// {}", agent.description)?;
-        writeln!(result, "  resource {resource_name} {{")?;
-        writeln!(result, "    constructor(agent-id: string);")?;
+        writeln!(result, "/// {}", agent.description)?;
+        writeln!(result, "interface {interface_name} {{")?;
+        writeln!(
+            result,
+            "  use golem:agent/common.{{agent-error, agent-type, binary-reference, text-reference}};"
+        )?;
+        writeln!(result)?;
 
-        writeln!(result, "    /// {}", agent.constructor.description)?;
-        write!(result, "    create: static func(")?;
+        writeln!(result, "  /// {}", agent.constructor.description)?;
+        write!(result, "  initialize: func(")?;
         self.write_parameter_list(result, &agent.constructor.input_schema, "constructor")?;
-        writeln!(result, ") -> result<{resource_name}, agent-error>;")?;
+        writeln!(result, ") -> result<_, agent-error>;")?;
 
         writeln!(result)?;
-        writeln!(result, "    get-id: func() -> string;")?;
-        writeln!(result, "    get-definition: func() -> agent-type;")?;
+        writeln!(result, "  get-definition: func() -> agent-type;")?;
         writeln!(result)?;
 
         for method in &agent.methods {
             let name = method.name.to_kebab_case();
-            writeln!(result, "    /// {}", method.description)?;
-            write!(result, "    {name}: func(")?;
+            writeln!(result, "  /// {}", method.description)?;
+            write!(result, "  {name}: func(")?;
             self.write_parameter_list(result, &method.input_schema, &name)?;
             write!(result, ") -> result<")?;
             self.write_return_type(result, &method.output_schema, &name)?;
             writeln!(result, ", agent-error>;")?;
         }
 
-        writeln!(result, "  }}")?;
+        let mut used_names = self.used_names.iter().cloned().collect::<Vec<_>>();
+        used_names.sort();
+        if !used_names.is_empty() {
+            let used_names_list = used_names.join(", ");
+            writeln!(result)?;
+            writeln!(result, "  use types.{{{used_names_list}}};")?;
+        }
 
-        Ok(())
+        self.used_names = previous_used_names
+            .union(&self.used_names)
+            .cloned()
+            .collect();
+        writeln!(result, "}}")?;
+
+        Ok(interface_name)
     }
 
     fn traverse_gathered_types(&mut self) -> anyhow::Result<()> {
@@ -385,8 +407,8 @@ impl AgentWrapperGeneratorContextState {
         element: &ElementSchema,
     ) -> anyhow::Result<()> {
         match element {
-            ElementSchema::ComponentModel(typ) => {
-                write!(result, "{}", self.wit_type_reference(typ)?)?;
+            ElementSchema::ComponentModel(schema) => {
+                write!(result, "{}", self.wit_type_reference(&schema.element_type)?)?;
             }
             ElementSchema::UnstructuredText(_text_descriptor) => {
                 write!(result, "text-reference")?;
@@ -474,6 +496,7 @@ impl AgentWrapperGeneratorContextState {
 
     fn register_type(&mut self, typ: &AnalysedType) -> String {
         if let Some(name) = self.type_names.get(typ) {
+            self.used_names.insert(name.clone());
             name.clone()
         } else {
             let proposed_name = typ
@@ -503,7 +526,7 @@ impl AgentWrapperGeneratorContextState {
         for named_element_schema in cases {
             let case_name = named_element_schema.name.to_kebab_case();
             let case_type = match &named_element_schema.schema {
-                ElementSchema::ComponentModel(typ) => typ.clone(),
+                ElementSchema::ComponentModel(schema) => schema.element_type.clone(),
                 ElementSchema::UnstructuredText(_) => variant(vec![]).named("text-reference"),
                 ElementSchema::UnstructuredBinary(_) => variant(vec![]).named("binary-reference"),
             };
@@ -668,8 +691,8 @@ fn add_golem_agent(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
 mod tests {
     use crate::model::agent::test;
     use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, DataSchema, ElementSchema,
-        NamedElementSchema, NamedElementSchemas, TextDescriptor,
+        AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
+        DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
     };
     use golem_wasm_ast::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
@@ -687,10 +710,6 @@ mod tests {
         println!("{wit}");
         assert!(wit.contains(indoc!(
             r#"package example:empty;
-            
-            interface agent {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
-            }
 
             world agent-wrapper {
               import wasi:clocks/wall-clock@0.2.3;
@@ -700,7 +719,6 @@ mod tests {
               import golem:agent/guest;
 
               export golem:agent/guest;
-              export agent;
             }
             "#
         )));
@@ -720,11 +738,15 @@ mod tests {
                     elements: vec![
                         NamedElementSchema {
                             name: "a".to_string(),
-                            schema: ElementSchema::ComponentModel(u32()),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
                         },
                         NamedElementSchema {
                             name: "b".to_string(),
-                            schema: ElementSchema::ComponentModel(option(str())),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: option(str()),
+                            }),
                         },
                     ],
                 }),
@@ -738,7 +760,9 @@ mod tests {
                     output_schema: DataSchema::Tuple(NamedElementSchemas {
                         elements: vec![NamedElementSchema {
                             name: "a".to_string(),
-                            schema: ElementSchema::ComponentModel(str()),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
                         }],
                     }),
                 },
@@ -750,18 +774,28 @@ mod tests {
                         elements: vec![
                             NamedElementSchema {
                                 name: "x".to_string(),
-                                schema: ElementSchema::ComponentModel(u32()),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: u32(),
+                                    },
+                                ),
                             },
                             NamedElementSchema {
                                 name: "y".to_string(),
-                                schema: ElementSchema::ComponentModel(u32()),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: u32(),
+                                    },
+                                ),
                             },
                         ],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
-                            schema: ElementSchema::ComponentModel(u32()),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
                         }],
                     }),
                 },
@@ -775,21 +809,20 @@ mod tests {
         assert!(wit.contains(indoc!(
             r#"package example:single1;
 
-            interface agent {
+            /// An example agent
+            interface agent1 {
               use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
 
-              /// An example agent
-              resource agent1 {
-                constructor(agent-id: string);
-                /// Creates an example agent instance
-                create: static func(a: u32, b: option<string>) -> result<agent1, agent-error>;
-                get-id: func() -> string;
-                get-definition: func() -> agent-type;
-                /// returns a random string
-                f1: func() -> result<string, agent-error>;
-                /// adds two numbers
-                f2: func(x: u32, y: u32) -> result<u32, agent-error>;
-              }
+              /// Creates an example agent instance
+              initialize: func(a: u32, b: option<string>) -> result<_, agent-error>;
+
+              get-definition: func() -> agent-type;
+
+              /// returns a random string
+              f1: func() -> result<string, agent-error>;
+
+              /// adds two numbers
+              f2: func(x: u32, y: u32) -> result<u32, agent-error>;
             }
 
             world agent-wrapper {
@@ -800,7 +833,7 @@ mod tests {
               import golem:agent/guest;
 
               export golem:agent/guest;
-              export agent;
+              export agent1;
             }
             "#
         )));
@@ -838,7 +871,9 @@ mod tests {
                     elements: vec![
                         NamedElementSchema {
                             name: "person".to_string(),
-                            schema: ElementSchema::ComponentModel(person),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: person,
+                            }),
                         },
                         NamedElementSchema {
                             name: "description".to_string(),
@@ -864,7 +899,9 @@ mod tests {
                     output_schema: DataSchema::Tuple(NamedElementSchemas {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
-                            schema: ElementSchema::ComponentModel(location.clone()),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: location.clone(),
+                            }),
                         }],
                     }),
                 },
@@ -875,13 +912,17 @@ mod tests {
                     input_schema: DataSchema::Tuple(NamedElementSchemas {
                         elements: vec![NamedElementSchema {
                             name: "location".to_string(),
-                            schema: ElementSchema::ComponentModel(location),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: location,
+                            }),
                         }],
                     }),
                     output_schema: DataSchema::Tuple(NamedElementSchemas {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
-                            schema: ElementSchema::ComponentModel(color),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: color,
+                            }),
                         }],
                     }),
                 },
@@ -895,21 +936,8 @@ mod tests {
         assert!(wit.contains(indoc!(
             r#"package example:single2;
 
-            interface agent {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
-
-              /// An example agent
-              resource agent1 {
-                constructor(agent-id: string);
-                /// Creates an example agent instance
-                create: static func(person: person, description: text-reference, photo: binary-reference) -> result<agent1, agent-error>;
-                get-id: func() -> string;
-                get-definition: func() -> agent-type;
-                /// returns a location
-                f1: func() -> result<location, agent-error>;
-                /// takes a location and returns a color
-                f2: func(location: location) -> result<color, agent-error>;
-              }
+            interface types {
+              use golem:agent/common.{text-reference, binary-reference};
 
               enum color {
                 red,
@@ -931,6 +959,23 @@ mod tests {
               }
             }
 
+            /// An example agent
+            interface agent1 {
+              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use types.{color, location, person};
+
+              /// Creates an example agent instance
+              initialize: func(person: person, description: text-reference, photo: binary-reference) -> result<_, agent-error>;
+
+              get-definition: func() -> agent-type;
+
+              /// returns a location
+              f1: func() -> result<location, agent-error>;
+
+              /// takes a location and returns a color
+              f2: func(location: location) -> result<color, agent-error>;
+            }
+
             world agent-wrapper {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
@@ -939,7 +984,8 @@ mod tests {
               import golem:agent/guest;
 
               export golem:agent/guest;
-              export agent;
+              export types;
+              export agent1;
             }
             "#
         )));
@@ -957,30 +1003,8 @@ mod tests {
         assert!(wit.contains(indoc!(
             r#"package example:multi1;
 
-            interface agent {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
-
-              /// An example agent
-              resource agent1 {
-                constructor(agent-id: string);
-                /// Creates an example agent instance
-                create: static func(person: person, description: text-reference, photo: binary-reference) -> result<agent1, agent-error>;
-                get-id: func() -> string;
-                get-definition: func() -> agent-type;
-                /// returns a location
-                f1: func() -> result<location, agent-error>;
-              }
-
-              /// Another example agent
-              resource agent2 {
-                constructor(agent-id: string);
-                /// Creates another example agent instance
-                create: static func(person-group: list<person>) -> result<agent2, agent-error>;
-                get-id: func() -> string;
-                get-definition: func() -> agent-type;
-                /// takes a location or a color and returns a text or an image
-                f2: func(input: list<f2-input>) -> result<list<f2-output>, agent-error>;
-              }
+            interface types {
+              use golem:agent/common.{text-reference, binary-reference};
 
               enum color {
                 red,
@@ -1012,6 +1036,34 @@ mod tests {
               }
             }
 
+            /// An example agent
+            interface agent1 {
+              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use types.{location, person};
+
+              /// Creates an example agent instance
+              initialize: func(person: person, description: text-reference, photo: binary-reference) -> result<_, agent-error>;
+
+              get-definition: func() -> agent-type;
+
+              /// returns a location
+              f1: func() -> result<location, agent-error>;
+            }
+
+            /// Another example agent
+            interface agent2 {
+              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use types.{f2-input, f2-output, person};
+
+              /// Creates another example agent instance
+              initialize: func(person-group: list<person>) -> result<_, agent-error>;
+
+              get-definition: func() -> agent-type;
+
+              /// takes a location or a color and returns a text or an image
+              f2: func(input: list<f2-input>) -> result<list<f2-output>, agent-error>;
+            }
+
             world agent-wrapper {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
@@ -1020,7 +1072,9 @@ mod tests {
               import golem:agent/guest;
 
               export golem:agent/guest;
-              export agent;
+              export types;
+              export agent1;
+              export agent2;
             }
             "#
         )));

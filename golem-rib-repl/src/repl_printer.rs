@@ -89,35 +89,11 @@ pub trait ReplPrinter {
                 println!("{}", "()".yellow());
             }
 
-            RibResult::Val(value_and_type) => match &value_and_type.value {
-                Value::Handle { uri, resource_id } => {
-                    println!("{} {}", "[warn]".magenta(), "the syntax below to show the resource-handle value is only used for display purposes".to_string().white());
-
-                    println!();
-
-                    let resource = Value::Record(vec![
-                        Value::String(uri.to_string()),
-                        Value::U64(*resource_id),
-                    ]);
-
-                    let analysed_type = record(vec![
-                        NameTypePair {
-                            name: "uri".to_string(),
-                            typ: str(),
-                        },
-                        NameTypePair {
-                            name: "resource-id".to_string(),
-                            typ: u64(),
-                        },
-                    ]);
-
-                    let result = ValueAndType::new(resource, analysed_type);
-
-                    println!("{}", result.to_string().yellow());
-                }
-
-                _ => println!("{}", result.to_string().yellow()),
-            },
+            RibResult::Val(value_and_type) => {
+                let value_str = display_for_value_and_type(value_and_type);
+                let formatted = try_formatting(&value_str, 2);
+                println!("{}", formatted.yellow());
+            }
         }
     }
 
@@ -128,7 +104,7 @@ pub trait ReplPrinter {
     fn print_wasm_value_type(&self, analysed_type: &AnalysedType) {
         match analysed_type {
             AnalysedType::Handle(type_handle) => {
-                let text = display_for_resource_handle(type_handle);
+                let text = display_for_resource_handle_type(type_handle);
                 println!("{} {}", "[warn]".magenta(), "the syntax below to show the resource-handle type is only used for display purposes".to_string().white());
 
                 println!();
@@ -446,7 +422,7 @@ fn print_bootstrap_error(error: &ReplBootstrapError) {
 }
 
 // Only used for displaying since Wasm Wave is yet to support resource handle types
-fn display_for_resource_handle(type_handle: &TypeHandle) -> String {
+fn display_for_resource_handle_type(type_handle: &TypeHandle) -> String {
     let resource_id = &type_handle.resource_id.0;
     let uri = &type_handle.mode;
 
@@ -489,4 +465,281 @@ impl Display for Indent {
         write!(f, "{}", " ".repeat(self.level))?;
         Ok(())
     }
+}
+
+// To intercept any presence of resource handle and therefore inspecting each element
+// instead of value_and_type.to_string()
+fn display_for_value_and_type(value_and_type: &ValueAndType) -> String {
+    match &value_and_type.value {
+        Value::Bool(_) => value_and_type.to_string(),
+        Value::U8(_) => value_and_type.to_string(),
+        Value::U16(_) => value_and_type.to_string(),
+        Value::U32(_) => value_and_type.to_string(),
+        Value::U64(_) => value_and_type.to_string(),
+        Value::S8(_) => value_and_type.to_string(),
+        Value::S16(_) => value_and_type.to_string(),
+        Value::S32(_) => value_and_type.to_string(),
+        Value::S64(_) => value_and_type.to_string(),
+        Value::F32(_) => value_and_type.to_string(),
+        Value::F64(_) => value_and_type.to_string(),
+        Value::Char(_) => value_and_type.to_string(),
+        Value::String(_) => value_and_type.to_string(),
+        Value::List(values) => {
+            let inner_type = match &value_and_type.typ {
+                AnalysedType::List(inner_type) => inner_type.inner.as_ref(),
+                _ => panic!("Expected a list type"),
+            };
+
+            let mut string = "[".to_string();
+            for (i, value) in values.iter().enumerate() {
+                if i > 0 {
+                    string.push_str(", ");
+                }
+                let inner_value_and_type = ValueAndType::new(value.clone(), inner_type.clone());
+                let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
+                string.push_str(&inner_value_and_type.to_string());
+            }
+
+            string.push(']');
+
+            string
+        }
+        Value::Tuple(tuple) => {
+            let inner_types = match &value_and_type.typ {
+                AnalysedType::Tuple(inner_types) => inner_types.items.clone(),
+                _ => panic!("Expected a tuple type"),
+            };
+
+            let mut string = "(".to_string();
+            for (i, value) in tuple.iter().enumerate() {
+                if i > 0 {
+                    string.push_str(", ");
+                }
+                let inner_value_and_type = ValueAndType::new(value.clone(), inner_types[i].clone());
+                let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
+                string.push_str(&inner_value_and_type);
+            }
+            string.push(')');
+
+            string
+        }
+        Value::Record(values) => {
+            let inner_types = match &value_and_type.typ {
+                AnalysedType::Record(inner_types) => inner_types.fields.clone(),
+                _ => panic!("Expected a record type"),
+            };
+
+            let mut string = "{".to_string();
+            for (i, value) in values.iter().enumerate() {
+                if i > 0 {
+                    string.push_str(", ");
+                }
+                let inner_value_and_type =
+                    ValueAndType::new(value.clone(), inner_types[i].typ.clone());
+                let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
+                string.push_str(&format!(
+                    "{}: {}",
+                    inner_types[i].name, inner_value_and_type
+                ));
+            }
+            string.push('}');
+
+            string
+        }
+        Value::Variant {
+            case_idx,
+            case_value,
+        } => {
+            let variant_type = match &value_and_type.typ {
+                AnalysedType::Variant(variant_type) => variant_type,
+                _ => panic!("Expected a variant type"),
+            };
+
+            let case_name = variant_type
+                .cases
+                .get(*case_idx as usize)
+                .map_or("unknown", |c| &c.name);
+
+            match case_value {
+                Some(value) => {
+                    let inner_value_and_type = ValueAndType::new(
+                        value.as_ref().clone(),
+                        variant_type.cases[*case_idx as usize].clone().typ.unwrap(),
+                    );
+
+                    let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
+                    format!("{case_name}({inner_value_and_type})")
+                }
+
+                None => {
+                    // If the case has no value, just return the case name
+                    case_name.to_string()
+                }
+            }
+        }
+        Value::Enum(case_index) => {
+            let enum_type = match &value_and_type.typ {
+                AnalysedType::Enum(enum_type) => enum_type,
+                _ => panic!("Expected an enum type"),
+            };
+
+            let case_name = enum_type
+                .cases
+                .get(*case_index as usize)
+                .unwrap_or_else(|| {
+                    panic!("Enum case index out of bounds: {case_index}");
+                });
+            case_name.to_string()
+        }
+        Value::Flags(bool_list) => {
+            let flags_type = match &value_and_type.typ {
+                AnalysedType::Flags(flags_type) => flags_type,
+                _ => panic!("Expected a flags type"),
+            };
+
+            let mut string = "{".to_string();
+            for (i, value) in bool_list.iter().enumerate() {
+                if i > 0 {
+                    string.push_str(", ");
+                }
+                let flag_name = flags_type.names.get(i).unwrap_or_else(|| {
+                    panic!("Flags index out of bounds: {i}");
+                });
+
+                if *value {
+                    string.push_str(flag_name);
+                }
+            }
+            string.push('}');
+
+            string
+        }
+        Value::Option(option) => {
+            let inner_type = match &value_and_type.typ {
+                AnalysedType::Option(inner_type) => inner_type.inner.as_ref(),
+                _ => panic!("Expected an option type"),
+            };
+
+            match option {
+                Some(value) => {
+                    let inner_value_and_type =
+                        ValueAndType::new(value.as_ref().clone(), inner_type.clone());
+                    let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
+                    format!("some({inner_value_and_type})")
+                }
+                None => "none".to_string(),
+            }
+        }
+        Value::Result(result) => {
+            let x: &Result<Option<Box<Value>>, Option<Box<Value>>> = result;
+
+            let ok_inner_type: Option<&Box<AnalysedType>> = match &value_and_type.typ {
+                AnalysedType::Result(inner_type) => inner_type.ok.as_ref(),
+                _ => panic!("Expected a result type"),
+            };
+
+            let err_inner_type: Option<&Box<AnalysedType>> = match &value_and_type.typ {
+                AnalysedType::Result(inner_type) => inner_type.err.as_ref(),
+                _ => panic!("Expected a result type"),
+            };
+
+            match x {
+                Ok(Some(value)) => {
+                    let inner_value_and_type = ValueAndType::new(
+                        value.as_ref().clone(),
+                        ok_inner_type.unwrap().as_ref().clone(),
+                    );
+                    let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
+                    format!("ok({inner_value_and_type})")
+                }
+                Ok(None) => "ok".to_string(),
+                Err(Some(value)) => {
+                    let inner_value_and_type = ValueAndType::new(
+                        value.as_ref().clone(),
+                        err_inner_type.unwrap().as_ref().clone(),
+                    );
+                    let inner_value_and_type = display_for_value_and_type(&inner_value_and_type);
+                    format!("err({inner_value_and_type})")
+                }
+                Err(None) => "err".to_string(),
+            }
+        }
+        Value::Handle { uri, resource_id } => display_for_resource_handle(uri, resource_id),
+    }
+}
+
+fn display_for_resource_handle(uri: &str, resource_id: &u64) -> String {
+    let resource = Value::Record(vec![
+        Value::String(uri.to_string()),
+        Value::U64(*resource_id),
+    ]);
+
+    let analysed_type = record(vec![
+        NameTypePair {
+            name: "uri".to_string(),
+            typ: str(),
+        },
+        NameTypePair {
+            name: "resource-id".to_string(),
+            typ: u64(),
+        },
+    ]);
+
+    let result = ValueAndType::new(resource, analysed_type);
+
+    result.to_string()
+}
+
+fn try_formatting(input: &str, _indent: usize) -> String {
+    let mut result = String::new();
+    let mut depth = 0;
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        match chars[i] {
+            '{' | '[' => {
+                // Check for empty object or array
+                let mut j = i + 1;
+                while j < chars.len() && chars[j].is_whitespace() {
+                    j += 1;
+                }
+                if j < chars.len() && (chars[j] == '}' || chars[j] == ']') {
+                    result.push(chars[i]);
+                    result.push(chars[j]);
+                    i = j + 1;
+                    continue;
+                }
+
+                depth += 1;
+                result.push(chars[i]);
+                result.push('\n');
+                result.push_str(&"  ".repeat(depth));
+                i += 1;
+            }
+            '}' | ']' => {
+                depth = depth.saturating_sub(1);
+                result.push('\n');
+                result.push_str(&"  ".repeat(depth));
+                result.push(chars[i]);
+                i += 1;
+            }
+            ',' => {
+                result.push(chars[i]);
+                result.push('\n');
+                result.push_str(&"  ".repeat(depth));
+                i += 1;
+                // Skip whitespace after comma
+                while i < chars.len() && chars[i].is_whitespace() && chars[i] != '\n' {
+                    i += 1;
+                }
+            }
+            _ => {
+                result.push(chars[i]);
+                i += 1;
+            }
+        }
+    }
+
+    result
 }

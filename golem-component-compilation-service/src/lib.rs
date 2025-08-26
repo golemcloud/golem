@@ -58,14 +58,9 @@ pub async fn run(
 ) -> anyhow::Result<RunDetails> {
     let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &config.blob_storage {
         BlobStorageConfig::S3(config) => {
-            info!("Using S3 for blob storage");
             Arc::new(S3BlobStorage::new(config.clone()).await)
         }
         BlobStorageConfig::LocalFileSystem(config) => {
-            info!(
-                "Using local file system for blob storage at {:?}",
-                config.root
-            );
             Arc::new(
                 golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
                     .await
@@ -73,14 +68,12 @@ pub async fn run(
             )
         }
         BlobStorageConfig::InMemory(_) => {
-            info!("Using in-memory blob storage");
             Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
         }
         BlobStorageConfig::KVStoreSqlite(_) => {
             Err(anyhow!("KVStoreSqlite configuration option is not supported - use an explicit Sqlite configuration instead"))?
         }
         BlobStorageConfig::Sqlite(sqlite) => {
-            info!("Using Sqlite for blob storage at {}", sqlite.database);
             let pool = SqlitePool::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;

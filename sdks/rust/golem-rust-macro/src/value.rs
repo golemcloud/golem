@@ -94,6 +94,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                 let add_to_type_builder = quote! {
                     builder.r#enum(
                         Some(#ident_lit.to_string()),
+                        None,
                         &[#(#case_labels),*]
                     )
                 };
@@ -232,7 +233,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                     }
                 };
                 let get_type = quote! {
-                    let builder = builder.variant(Some(#ident_lit.to_string()));
+                    let builder = builder.variant(Some(#ident_lit.to_string()), None);
                     #(#case_defs)*
                     builder.finish()
                 };
@@ -294,7 +295,7 @@ fn record_or_tuple(
             builder.finish()
         };
         let add_to_type_builder = quote! {
-            let builder = builder.record(Some(#ident_lit.to_string()));
+            let builder = builder.record(Some(#ident_lit.to_string()), None);
             #(#field_defs)*
             builder.finish()
         };
@@ -327,7 +328,7 @@ fn record_or_tuple(
             builder.finish()
         };
         let add_to_type_builder = quote! {
-            let builder = builder.tuple(Some(#ident_lit.to_string()))
+            let builder = builder.tuple(Some(#ident_lit.to_string()), None)
             #(#tuple_field_types)*
             builder.finish()
         };

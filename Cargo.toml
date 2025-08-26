@@ -202,7 +202,7 @@ mappable-rc = "0.1.1"
 mime = "0.3.17"
 mime_guess = "2.0.5"
 minijinja = "2.7.0"
-moonbit-component-generator = { version = "0.0.2", features = ["get-script"] }
+moonbit-component-generator = { version = "0.0.3", features = ["get-script"] }
 nanoid = "0.4.0"
 native-tls = "0.2.13"
 nondestructive = "0.0.26"

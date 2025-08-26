@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{AgentStore, LogEventEmitBehaviour};
+use super::{HasWasiConfigVars, LogEventEmitBehaviour};
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
 use crate::services::file_loader::FileLoader;
@@ -39,22 +40,20 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplogService, NoAdditionalDeps};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
     InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::ProjectId;
-use golem_common::model::agent::DataValue;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::UpdateDescription;
-use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+    OwnedWorkerId, PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -63,9 +62,10 @@ use golem_wasm_rpc::golem_rpc_0_2_x::types::{
 };
 use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{
-    CancellationTokenEntry, ComponentId, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
+    CancellationTokenEntry, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
 use tracing::debug;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
@@ -438,66 +438,6 @@ impl UpdateManagement for Context {
 }
 
 #[async_trait]
-impl IndexedResourceStore for Context {
-    fn get_indexed_resource(
-        &self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) -> Option<WorkerResourceId> {
-        self.durable_ctx
-            .get_indexed_resource(resource_owner, resource_name, resource_params)
-    }
-
-    async fn store_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-        resource: WorkerResourceId,
-    ) {
-        self.durable_ctx
-            .store_indexed_resource(resource_owner, resource_name, resource_params, resource)
-            .await
-    }
-
-    fn drop_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) {
-        self.durable_ctx
-            .drop_indexed_resource(resource_owner, resource_name, resource_params)
-    }
-}
-
-#[async_trait]
-impl AgentStore for Context {
-    async fn store_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: DataValue,
-    ) {
-        self.durable_ctx
-            .store_agent_instance(agent_type, agent_id, parameters)
-            .await
-    }
-
-    async fn remove_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: DataValue,
-    ) {
-        self.durable_ctx
-            .remove_agent_instance(agent_type, agent_id, parameters)
-            .await
-    }
-}
-
-#[async_trait]
 impl FileSystemReading for Context {
     async fn get_file_system_node(
         &self,
@@ -520,10 +460,6 @@ impl HostWasmRpc for Context {
         worker_id: golem_wasm_rpc::WorkerId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
-    }
-
-    async fn ephemeral(&mut self, component_id: ComponentId) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.ephemeral(component_id).await
     }
 
     async fn invoke_and_await(
@@ -608,6 +544,22 @@ impl HostFutureInvokeResult for Context {
     }
 }
 
+impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
+    fn get_environment(
+        &mut self,
+    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
+    }
+
+    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
+    }
+
+    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
+    }
+}
+
 #[async_trait]
 impl DynamicLinking<Context> for Context {
     fn link(
@@ -665,6 +617,16 @@ impl InvocationContextManagement for Context {
             .set_span_attribute(span_id, key, value)
             .await
     }
+
+    fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        self.durable_ctx.clone_as_inherited_stack(current_span_id)
+    }
+}
+
+impl HasWasiConfigVars for Context {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.wasi_config_vars()
+    }
 }
 
 #[async_trait]
@@ -700,6 +662,7 @@ impl WorkerCtx for Context {
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id.clone(),
@@ -724,6 +687,7 @@ impl WorkerCtx for Context {
             plugins,
             worker_fork,
             project_service,
+            agent_types_service,
         )
         .await?;
         Ok(Self::new(golem_ctx, config, account_id, resource_limits))
@@ -753,6 +717,10 @@ impl WorkerCtx for Context {
         self.durable_ctx.owned_worker_id()
     }
 
+    fn created_by(&self) -> &AccountId {
+        self.durable_ctx.created_by()
+    }
+
     fn component_metadata(&self) -> &golem_service_base::model::Component {
         self.durable_ctx.component_metadata()
     }
@@ -775,14 +743,5 @@ impl WorkerCtx for Context {
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.durable_ctx.worker_fork()
-    }
-
-    async fn generate_unique_local_worker_id(
-        &mut self,
-        remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        self.durable_ctx
-            .generate_unique_local_worker_id(remote_worker_id)
-            .await
     }
 }

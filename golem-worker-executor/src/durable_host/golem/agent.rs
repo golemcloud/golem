@@ -12,60 +12,98 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::DurableWorkerCtx;
-use crate::workerctx::{AgentStore, WorkerCtx};
-use anyhow::anyhow;
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::workerctx::WorkerCtx;
+use golem_common::model::agent::bindings::golem::agent::common::AgentError;
+use golem_common::model::agent::bindings::golem::agent::host;
 use golem_common::model::agent::bindings::golem::agent::host::{DataValue, Host};
-use golem_common::model::agent::DataSchema;
+use golem_common::model::agent::{AgentId, RegisteredAgentType};
+use golem_common::model::oplog::DurableFunctionType;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn register_agent(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: DataValue,
-    ) -> anyhow::Result<()> {
-        let agent = self
-            .component_metadata()
-            .metadata
-            .find_agent_type(&agent_type)
-            .await
-            .map_err(|e| anyhow!(e))?
-            .ok_or_else(|| anyhow!("Unknown agent type: {}", agent_type))?;
-        let parameters = get_data_value(parameters, agent.constructor.input_schema)?;
-        self.store_agent_instance(agent_type, agent_id, parameters)
-            .await;
+    async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<host::RegisteredAgentType>> {
+        let durability = Durability::<Vec<RegisteredAgentType>, SerializableError>::new(
+            self,
+            "golem_agent",
+            "get_all_agent_types",
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+        let result = if durability.is_live() {
+            let project_id = &self.owned_worker_id.project_id;
+            durability
+                .persist(
+                    self,
+                    (),
+                    self.agent_types_service().get_all(project_id).await,
+                )
+                .await
+        } else {
+            durability.replay(self).await
+        };
 
-        Ok(())
+        match result {
+            Ok(result) => Ok(result.into_iter().map(|r| r.into()).collect()),
+            Err(err) => Err(err.into()),
+        }
     }
 
-    async fn unregister_agent(
+    async fn get_agent_type(
         &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: DataValue,
-    ) -> anyhow::Result<()> {
-        let agent = self
-            .component_metadata()
-            .metadata
-            .find_agent_type(&agent_type)
-            .await
-            .map_err(|e| anyhow!(e))?
-            .ok_or_else(|| anyhow!("Unknown agent type: {}", agent_type))?;
-        let parameters = get_data_value(parameters, agent.constructor.input_schema)?;
-        self.remove_agent_instance(agent_type, agent_id, parameters)
-            .await;
+        agent_type_name: String,
+    ) -> anyhow::Result<Option<host::RegisteredAgentType>> {
+        let durability = Durability::<Option<RegisteredAgentType>, SerializableError>::new(
+            self,
+            "golem_agent",
+            "get_agent_type",
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+        let result = if durability.is_live() {
+            let project_id = &self.owned_worker_id.project_id;
+            durability
+                .persist(
+                    self,
+                    agent_type_name.clone(),
+                    self.agent_types_service()
+                        .get(project_id, &agent_type_name)
+                        .await,
+                )
+                .await
+        } else {
+            durability.replay(self).await
+        };
 
-        Ok(())
+        match result {
+            Ok(result) => Ok(result.map(|r| r.into())),
+            Err(err) => Err(err.into()),
+        }
     }
-}
 
-fn get_data_value(
-    value: DataValue,
-    schema: DataSchema,
-) -> anyhow::Result<golem_common::model::agent::DataValue> {
-    let parameters = golem_common::model::agent::DataValue::try_from_bindings(value, schema.into())
-        .map_err(|err| anyhow!(err))?;
+    async fn make_agent_id(
+        &mut self,
+        agent_type_name: String,
+        input: DataValue,
+    ) -> anyhow::Result<Result<String, AgentError>> {
+        DurabilityHost::observe_function_call(self, "golem_agent", "make_agent_id");
 
-    Ok(parameters)
+        if let Some(agent_type) = self.get_agent_type(agent_type_name.clone()).await? {
+            match golem_common::model::agent::DataValue::try_from_bindings(
+                input,
+                agent_type.agent_type.constructor.input_schema,
+            ) {
+                Ok(input) => {
+                    let agent_id = AgentId {
+                        agent_type: agent_type_name,
+                        parameters: input,
+                    };
+                    Ok(Ok(agent_id.to_string()))
+                }
+                Err(err) => Ok(Err(AgentError::InvalidInput(err))),
+            }
+        } else {
+            Ok(Err(AgentError::InvalidType(agent_type_name)))
+        }
+    }
 }

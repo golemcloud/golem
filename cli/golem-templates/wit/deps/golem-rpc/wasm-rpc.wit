@@ -118,7 +118,6 @@ interface types {
 
   resource wasm-rpc {
     constructor(worker-id: worker-id);
-    ephemeral: static func(component-id: component-id) -> wasm-rpc;
 
     invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> result<wit-value, rpc-error>;
     invoke: func(function-name: string, function-params: list<wit-value>) -> result<_, rpc-error>;

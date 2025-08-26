@@ -4134,6 +4134,7 @@ dependencies = [
  "toml 0.9.5",
  "toml_edit 0.23.3",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
  "url",
  "uuid",
@@ -4182,6 +4183,7 @@ name = "golem-common"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "bincode",
  "bytes 1.10.1",
@@ -4205,6 +4207,7 @@ dependencies = [
  "nonempty-collections",
  "poem",
  "poem-openapi",
+ "pretty_assertions",
  "prometheus 0.13.4",
  "prost-types 0.13.5",
  "rand 0.9.2",
@@ -4272,6 +4275,7 @@ dependencies = [
  "conditional-trait-gen",
  "console-subscriber",
  "darling 0.20.11",
+ "dashmap",
  "figment",
  "futures",
  "golem-api-grpc",
@@ -6612,9 +6616,9 @@ dependencies = [
 
 [[package]]
 name = "moonbit-component-generator"
-version = "0.0.2"
+version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cf4e2e9ca0ad1576e0096e62057c1bf083b2902f963efdd46d9ea59283ad487"
+checksum = "7b1013195ac854f17aee72898a4cec5aeed600b4b7d9bc8861b0482c32688f3a"
 dependencies = [
  "anyhow",
  "camino",

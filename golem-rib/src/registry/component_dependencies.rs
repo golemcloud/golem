@@ -55,14 +55,14 @@ impl ComponentDependencies {
         &self,
         component_info: &Option<ComponentDependencyKey>,
         function_name: &FunctionName,
-    ) -> Result<FunctionType, String> {
+    ) -> Result<(ComponentDependencyKey, FunctionType), String> {
         // If function name is unique across all components, we are not in need of a component_info per se
         // and we can return the exact component dependency
         match component_info {
             None => {
                 let mut function_types_in_component = vec![];
 
-                for (component_info, function_dict) in &self.dependencies {
+                for (component_dependency_key, function_dict) in &self.dependencies {
                     let types = function_dict
                         .name_and_types
                         .iter()
@@ -75,7 +75,7 @@ impl ComponentDependencies {
                         })
                         .collect::<Vec<_>>();
 
-                    function_types_in_component.push((component_info.clone(), types));
+                    function_types_in_component.push((component_dependency_key.clone(), types));
                 }
 
                 if function_types_in_component.is_empty() {
@@ -85,25 +85,24 @@ impl ComponentDependencies {
                         "function `{function_name}` is ambiguous across components"
                     ))
                 } else {
-                    let function_types = function_types_in_component.pop().unwrap();
-                    let function_type = function_types.1;
+                    let (key, types) = function_types_in_component.pop().unwrap();
 
-                    if function_type.is_empty() {
+                    if types.is_empty() {
                         Err("unknown function".to_string())
                     } else {
-                        Ok(function_type[0].clone())
+                        Ok((key, types[0].clone()))
                     }
                 }
             }
-            Some(component_info) => {
+            Some(component_dep_key) => {
                 let function_dictionary = self
                     .dependencies
-                    .get(component_info)
+                    .get(component_dep_key)
                     .cloned()
                     .ok_or_else(|| {
                         format!(
                             "component dependency for `{}` not found",
-                            component_info.component_name
+                            component_dep_key.component_name
                         )
                     })?;
 
@@ -118,11 +117,11 @@ impl ComponentDependencies {
                 );
 
                 if let Some(function_type) = function_type {
-                    Ok(function_type)
+                    Ok((component_dep_key.clone(), function_type))
                 } else {
                     Err(format!(
                         "function `{}` not found in component `{}`",
-                        function_name, component_info.component_name
+                        function_name, component_dep_key.component_name
                     ))
                 }
             }
