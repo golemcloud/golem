@@ -14,7 +14,6 @@
 
 pub mod auth;
 pub mod component;
-pub mod environment;
 pub mod login;
 
 use golem_common::model::account::AccountId;

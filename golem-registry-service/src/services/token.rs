@@ -119,6 +119,34 @@ impl TokenService {
             })
     }
 
+    pub async fn list_in_account(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<Vec<TokenWithSecret>, TokenError> {
+        self.account_service
+            .get(account_id, auth)
+            .await
+            .map_err(|err| match err {
+                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                    TokenError::ParentAccountNotFound(account_id.clone())
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_account_action(account_id, AccountAction::ViewToken)?;
+
+        let tokens: Vec<TokenWithSecret> = self
+            .token_repo
+            .get_by_account(&account_id.0)
+            .await?
+            .into_iter()
+            .map(|r| r.into())
+            .collect();
+
+        Ok(tokens)
+    }
+
     pub async fn create(
         &self,
         account_id: AccountId,

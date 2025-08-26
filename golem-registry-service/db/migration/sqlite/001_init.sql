@@ -159,6 +159,8 @@ CREATE TABLE applications
     deleted_at     TIMESTAMP,
     modified_by    UUID      NOT NULL,
 
+    current_revision_id BIGINT    NOT NULL,
+
     CONSTRAINT applications_pk
         PRIMARY KEY (application_id),
     CONSTRAINT applications_accounts_fk
@@ -174,7 +176,6 @@ CREATE TABLE application_revisions
     application_id UUID      NOT NULL,
     revision_id    BIGINT    NOT NULL,
     name           TEXT      NOT NULL,
-    account_id     UUID      NOT NULL,
 
     created_at     TIMESTAMP NOT NULL,
     created_by     UUID      NOT NULL,
@@ -215,6 +216,7 @@ CREATE TABLE environment_revisions
 (
     environment_id      UUID      NOT NULL,
     revision_id         BIGINT    NOT NULL,
+    name           TEXT      NOT NULL,
 
     hash                BYTEA     NOT NULL,
 

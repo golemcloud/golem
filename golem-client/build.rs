@@ -99,12 +99,12 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::environment_share::EnvironmentShare",
             ),
             (
-                "NewEnvironmentShare",
-                "golem_common::model::environment_share::NewEnvironmentShare",
+                "NewEnvironmentShareData",
+                "golem_common::model::environment_share::NewEnvironmentShareData",
             ),
             (
-                "UpdateEnvironmentShare",
-                "golem_common::model::environment_share::UpdateEnvironmentShare",
+                "UpdatedEnvironmentShareData",
+                "golem_common::model::environment_share::UpdatedEnvironmentShareData",
             ),
             // ("AgentType", "golem_common::model::agent::AgentType"),
             // ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),

@@ -15,6 +15,7 @@
 use super::environment::{EnvironmentError, EnvironmentService};
 use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment_share::EnvironmentShareRepo;
+use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment_share::{
     EnvironmentShareRepoError, EnvironmentShareRevisionRecord,
 };
@@ -22,7 +23,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::auth::EnvironmentAction;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_share::{
-    EnvironmentShare, EnvironmentShareId, NewEnvironmentShare, UpdateEnvironmentShare,
+    EnvironmentShare, EnvironmentShareId, NewEnvironmentShareData, UpdatedEnvironmentShareData,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use std::fmt::Debug;
@@ -83,7 +84,7 @@ impl EnvironmentShareService {
     pub async fn create(
         &self,
         environment_id: EnvironmentId,
-        data: NewEnvironmentShare,
+        data: NewEnvironmentShareData,
         actor: AccountId,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
@@ -118,8 +119,7 @@ impl EnvironmentShareService {
     pub async fn update(
         &self,
         environment_share_id: &EnvironmentShareId,
-        update: UpdateEnvironmentShare,
-        actor: AccountId,
+        update: UpdatedEnvironmentShareData,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         let mut environment_share: EnvironmentShare = self
@@ -151,11 +151,13 @@ impl EnvironmentShareService {
         environment_share.revision = current_revision.next()?;
         environment_share.roles = update.new_roles;
 
+        let audit = DeletableRevisionAuditFields::new(auth.account_id.0);
+
         let result = self
             .environment_share_repo
             .update(
                 current_revision.into(),
-                EnvironmentShareRevisionRecord::from_model(environment_share, actor),
+                EnvironmentShareRevisionRecord::from_model(environment_share, audit),
             )
             .await;
 
@@ -171,7 +173,6 @@ impl EnvironmentShareService {
     pub async fn delete(
         &self,
         environment_share_id: &EnvironmentShareId,
-        actor: AccountId,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         let mut environment_share: EnvironmentShare = self
@@ -202,11 +203,13 @@ impl EnvironmentShareService {
 
         environment_share.revision = current_revision.next()?;
 
+        let audit = DeletableRevisionAuditFields::deletion(auth.account_id.0);
+
         let result = self
             .environment_share_repo
             .delete(
                 current_revision.into(),
-                EnvironmentShareRevisionRecord::from_model(environment_share, actor),
+                EnvironmentShareRevisionRecord::from_model(environment_share, audit),
             )
             .await;
 

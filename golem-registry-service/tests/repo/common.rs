@@ -23,6 +23,9 @@ use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
 };
 use golem_registry_service::repo::model::account_usage::{UsageTracking, UsageType};
+use golem_registry_service::repo::model::application::{
+    ApplicationRepoError, ApplicationRevisionRecord,
+};
 use golem_registry_service::repo::model::audit::{
     DeletableRevisionAuditFields, RevisionAuditFields,
 };
@@ -31,6 +34,7 @@ use golem_registry_service::repo::model::component::{
     ComponentRevisionRecord,
 };
 use golem_registry_service::repo::model::datetime::SqlDateTime;
+use golem_registry_service::repo::model::environment::EnvironmentRepoError;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_definition::{
     HttpApiDefinitionRepoError, HttpApiDefinitionRevisionRecord,
@@ -40,6 +44,7 @@ use golem_registry_service::repo::model::http_api_deployment::{
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
+use golem_service_base::repo::RepoError;
 use std::collections::{BTreeMap, HashMap};
 use std::default::Default;
 use strum::IntoEnumIterator;
@@ -119,7 +124,7 @@ pub async fn test_update(deps: &Deps) {
     compare_created_to_requested_account(&updated_account, &created_updated_account);
 }
 
-pub async fn test_application_ensure(deps: &Deps) {
+pub async fn test_application_create(deps: &Deps) {
     let now = Utc::now();
     let owner = deps.create_account().await;
     let user = deps.create_account().await;
@@ -134,44 +139,36 @@ pub async fn test_application_ensure(deps: &Deps) {
 
     let app = deps
         .application_repo
-        .ensure(
-            &user.revision.account_id,
+        .create(
             &owner.revision.account_id,
-            &app_name,
+            ApplicationRevisionRecord {
+                application_id: new_repo_uuid(),
+                revision_id: 0,
+                name: app_name.clone(),
+                audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+            },
         )
         .await
         .unwrap();
 
-    check!(app.name == app_name);
+    check!(app.revision.name == app_name);
     check!(app.account_id == owner.revision.account_id);
-    check!(app.audit.modified_by == user.revision.account_id);
-    check!(app.audit.created_at.as_utc() >= &now);
-    check!(app.audit.created_at == app.audit.updated_at);
-    check!(app.audit.deleted_at.is_none());
+    check!(app.revision.audit.created_by == user.revision.account_id);
+    check!(app.revision.audit.created_at.as_utc() >= &now);
+    check!(app.entity_created_at == app.revision.audit.created_at);
+    check!(!app.revision.audit.deleted);
 
     let app_2 = deps
-        .application_repo
-        .ensure(
-            &user.revision.account_id,
-            &owner.revision.account_id,
-            &app_name,
-        )
-        .await
-        .unwrap();
-
-    check!(app == app_2);
-
-    let app_3 = deps
         .application_repo
         .get_by_name(&owner.revision.account_id, &app_name)
         .await
         .unwrap();
-    let_assert!(Some(app_3) = app_3);
+    let_assert!(Some(app_2) = app_2);
 
-    check!(app == app_3);
+    check!(app == app_2);
 }
 
-pub async fn test_application_ensure_concurrent(deps: &Deps) {
+pub async fn test_application_create_concurrent(deps: &Deps) {
     let owner = deps.create_account().await;
     let user = deps.create_account().await;
     let app_name = format!("app-name-{}", new_repo_uuid());
@@ -179,29 +176,39 @@ pub async fn test_application_ensure_concurrent(deps: &Deps) {
 
     let results = join_all(
         (0..concurrency)
-            .map(|_| {
-                let app_name = app_name.clone();
-                async move {
-                    deps.application_repo
-                        .ensure(
-                            &user.revision.account_id,
-                            &owner.revision.account_id,
-                            &app_name,
-                        )
-                        .await
-                }
+            .map(|_| async {
+                deps.application_repo
+                    .create(
+                        &owner.revision.account_id,
+                        ApplicationRevisionRecord {
+                            application_id: new_repo_uuid(),
+                            revision_id: 0,
+                            name: app_name.clone(),
+                            audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+                        },
+                    )
+                    .await
             })
             .collect::<Vec<_>>(),
     )
     .await;
 
     assert_eq!(results.len(), concurrency);
-    let_assert!(Ok(app) = &results[0]);
-
-    for result in &results {
-        let_assert!(Ok(ok_result) = result);
-        check!(app == ok_result);
-    }
+    let created = results
+        .iter()
+        .filter(|result| matches!(result, Ok(_)))
+        .count();
+    let skipped = results
+        .iter()
+        .filter(|result| {
+            matches!(
+                result,
+                Err(ApplicationRepoError::ApplicationViolatesUniqueness)
+            )
+        })
+        .count();
+    check!(created == 1);
+    check!(skipped == concurrency - 1);
 }
 
 pub async fn test_application_delete(deps: &Deps) {
@@ -209,37 +216,48 @@ pub async fn test_application_delete(deps: &Deps) {
     let app = deps.create_application(&user.revision.account_id).await;
 
     deps.application_repo
-        .delete(&user.revision.account_id, &app.application_id)
+        .delete(user.revision.revision_id, app.revision.clone())
         .await
         .unwrap();
 
     let get_by_id = deps
         .application_repo
-        .get_by_id(&app.application_id)
+        .get_by_id(&app.revision.application_id)
         .await
         .unwrap();
     assert!(get_by_id.is_none());
     let get_by_name = deps
         .application_repo
-        .get_by_name(&user.revision.account_id, &app.name)
+        .get_by_name(&user.revision.account_id, &app.revision.name)
         .await
         .unwrap();
     assert!(get_by_name.is_none());
 
-    // Delete app again, should not fail
-    deps.application_repo
-        .delete(&user.revision.account_id, &app.application_id)
-        .await
-        .unwrap();
+    // Delete app again, should fail
+    {
+        let result = deps
+            .application_repo
+            .delete(user.revision.revision_id, app.revision.clone())
+            .await;
+        assert!(let Err(ApplicationRepoError::ConcurrentModification) = result);
+    }
 
     let new_app_with_same_name = deps
         .application_repo
-        .ensure(&user.revision.account_id, &app.account_id, &app.name)
+        .create(
+            &user.revision.account_id,
+            ApplicationRevisionRecord {
+                application_id: new_repo_uuid(),
+                revision_id: 0,
+                name: app.revision.name.clone(),
+                audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+            },
+        )
         .await
         .unwrap();
 
-    check!(new_app_with_same_name.name == app.name);
-    check!(new_app_with_same_name.application_id != app.application_id);
+    check!(new_app_with_same_name.revision.name == app.revision.name);
+    check!(new_app_with_same_name.revision.application_id != app.revision.application_id);
 }
 
 pub async fn test_environment_create(deps: &Deps) {
@@ -251,7 +269,7 @@ pub async fn test_environment_create(deps: &Deps) {
     assert!(
         deps.environment_repo
             .get_by_name(
-                &app.application_id,
+                &app.revision.application_id,
                 env_name,
                 &user.revision.account_id,
                 false,
@@ -263,6 +281,7 @@ pub async fn test_environment_create(deps: &Deps) {
 
     let revision_0 = EnvironmentRevisionRecord {
         environment_id: new_repo_uuid(),
+        name: env_name.to_string(),
         revision_id: 0,
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: false,
@@ -274,19 +293,17 @@ pub async fn test_environment_create(deps: &Deps) {
 
     let env = deps
         .environment_repo
-        .create(&app.application_id, env_name, revision_0.clone())
+        .create(&app.revision.application_id, revision_0.clone())
         .await
         .unwrap();
-    let_assert!(Some(env) = env);
 
-    check!(env.name == env_name);
-    check!(env.application_id == app.application_id);
+    check!(env.application_id == app.revision.application_id);
     check!(env.revision == revision_0);
 
     let env_by_name = deps
         .environment_repo
         .get_by_name(
-            &app.application_id,
+            &app.revision.application_id,
             env_name,
             &user.revision.account_id,
             false,
@@ -312,7 +329,6 @@ pub async fn test_environment_create(deps: &Deps) {
 pub async fn test_environment_create_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(&user.revision.account_id).await;
-    let env_name = "local";
     let concurrency = 20;
 
     let results = join_all(
@@ -320,11 +336,11 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
             .map(|_| async move {
                 deps.environment_repo
                     .create(
-                        &app.application_id,
-                        env_name,
+                        &app.revision.application_id,
                         EnvironmentRevisionRecord {
                             environment_id: new_repo_uuid(),
                             revision_id: 0,
+                            name: "local".to_string(),
                             audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                             compatibility_check: false,
                             version_check: false,
@@ -341,11 +357,16 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
     assert_eq!(results.len(), concurrency);
     let created = results
         .iter()
-        .filter(|result| matches!(result, Ok(Some(_))))
+        .filter(|result| matches!(result, Ok(_)))
         .count();
     let skipped = results
         .iter()
-        .filter(|result| matches!(result, Ok(None)))
+        .filter(|result| {
+            matches!(
+                result,
+                Err(EnvironmentRepoError::EnvironmentViolatesUniqueness)
+            )
+        })
         .count();
     check!(created == 1);
     check!(skipped == concurrency - 1);
@@ -354,11 +375,12 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
 pub async fn test_environment_update(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(&user.revision.account_id).await;
-    let env_rev_0 = deps.create_env(&app.application_id).await;
+    let env_rev_0 = deps.create_env(&app.revision.application_id).await;
 
     let env_rev_1 = EnvironmentRevisionRecord {
         environment_id: env_rev_0.revision.environment_id,
         revision_id: 1,
+        name: env_rev_0.revision.name.clone(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: true,
         version_check: true,
@@ -372,23 +394,23 @@ pub async fn test_environment_update(deps: &Deps) {
         .update(env_rev_0.revision.revision_id, env_rev_1.clone())
         .await
         .unwrap();
-    let_assert!(Some(revision_1_created) = revision_1_created);
+
     assert!(env_rev_1 == revision_1_created.revision);
-    assert!(env_rev_0.name == revision_1_created.name);
+    assert!(env_rev_0.revision.name == revision_1_created.revision.name);
     assert!(env_rev_0.application_id == revision_1_created.application_id);
 
     let revision_1_retry = deps
         .environment_repo
         .update(env_rev_0.revision.revision_id, env_rev_1.clone())
-        .await
-        .unwrap();
-    assert!(revision_1_retry.is_none());
+        .await;
+
+    assert!(let Err(EnvironmentRepoError::ConcurrentModification) = revision_1_retry);
 
     let rev_1_by_name = deps
         .environment_repo
         .get_by_name(
             &env_rev_0.application_id,
-            &env_rev_0.name,
+            &env_rev_0.revision.name,
             &user.revision.account_id,
             false,
         )
@@ -396,7 +418,7 @@ pub async fn test_environment_update(deps: &Deps) {
         .unwrap();
     let_assert!(Some(rev_1_by_name) = rev_1_by_name);
     assert!(env_rev_1 == rev_1_by_name.value.revision);
-    assert!(env_rev_0.name == rev_1_by_name.value.name);
+    assert!(env_rev_0.revision.name == rev_1_by_name.value.revision.name);
     assert!(env_rev_0.application_id == rev_1_by_name.value.application_id);
 
     let rev_1_by_id = deps
@@ -406,12 +428,13 @@ pub async fn test_environment_update(deps: &Deps) {
         .unwrap();
     let_assert!(Some(rev_1_by_id) = rev_1_by_id);
     assert!(env_rev_1 == rev_1_by_id.value.revision);
-    assert!(env_rev_0.name == rev_1_by_id.value.name);
+    assert!(env_rev_0.revision.name == rev_1_by_id.value.revision.name);
     assert!(env_rev_0.application_id == rev_1_by_id.value.application_id);
 
     let env_rev_2 = EnvironmentRevisionRecord {
         environment_id: env_rev_0.revision.environment_id,
         revision_id: 2,
+        name: env_rev_1.name.clone(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: true,
         version_check: true,
@@ -425,30 +448,28 @@ pub async fn test_environment_update(deps: &Deps) {
         .update(revision_1_created.revision.revision_id, env_rev_2.clone())
         .await
         .unwrap();
-    let_assert!(Some(revision_2_created) = revision_2_created);
+
     assert!(env_rev_2 == revision_2_created.revision);
-    assert!(env_rev_0.name == revision_2_created.name);
+    assert!(env_rev_0.revision.name == revision_2_created.revision.name);
     assert!(env_rev_0.application_id == revision_2_created.application_id);
 
     let revision_1_retry = deps
         .environment_repo
         .update(env_rev_0.revision.revision_id, env_rev_1.clone())
-        .await
-        .unwrap();
-    assert!(revision_1_retry.is_none());
+        .await;
+    assert!(let Err(EnvironmentRepoError::ConcurrentModification) = revision_1_retry);
 
     let revision_2_retry = deps
         .environment_repo
         .update(env_rev_0.revision.revision_id, env_rev_2.clone())
-        .await
-        .unwrap();
-    assert!(revision_2_retry.is_none());
+        .await;
+    assert!(let Err(EnvironmentRepoError::ConcurrentModification) = revision_2_retry);
 
     let rev_2_by_name = deps
         .environment_repo
         .get_by_name(
             &env_rev_0.application_id,
-            &env_rev_0.name,
+            &env_rev_0.revision.name,
             &user.revision.account_id,
             false,
         )
@@ -456,7 +477,7 @@ pub async fn test_environment_update(deps: &Deps) {
         .unwrap();
     let_assert!(Some(rev_2_by_name) = rev_2_by_name);
     assert!(env_rev_2 == rev_2_by_name.value.revision);
-    assert!(env_rev_0.name == rev_2_by_name.value.name);
+    assert!(env_rev_0.revision.name == rev_2_by_name.value.revision.name);
     assert!(env_rev_0.application_id == rev_2_by_name.value.application_id);
 
     let rev_2_by_id = deps
@@ -466,25 +487,26 @@ pub async fn test_environment_update(deps: &Deps) {
         .unwrap();
     let_assert!(Some(rev_2_by_id) = rev_2_by_id);
     assert!(env_rev_2 == rev_2_by_id.value.revision);
-    assert!(env_rev_0.name == rev_2_by_id.value.name);
+    assert!(env_rev_0.revision.name == rev_2_by_id.value.revision.name);
     assert!(env_rev_0.application_id == rev_2_by_id.value.application_id);
 }
 
 pub async fn test_environment_update_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(&user.revision.account_id).await;
-    let env_rev_0 = deps.create_env(&app.application_id).await;
+    let env_rev_0 = deps.create_env(&app.revision.application_id).await;
     let concurrency = 20;
 
     let results = join_all(
         (0..concurrency)
-            .map(|_| async move {
+            .map(|_| async {
                 deps.environment_repo
                     .update(
                         env_rev_0.revision.revision_id,
                         EnvironmentRevisionRecord {
                             environment_id: env_rev_0.revision.environment_id,
                             revision_id: 0,
+                            name: env_rev_0.revision.name.clone(),
                             audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                             compatibility_check: false,
                             version_check: false,
@@ -500,12 +522,13 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
 
     let created_count = results
         .iter()
-        .filter(|result| matches!(result, Ok(Some(_))))
+        .filter(|result| matches!(result, Ok(_)))
         .count();
     let skipped_count = results
         .iter()
-        .filter(|result| matches!(result, Ok(None)))
+        .filter(|result| matches!(result, Err(EnvironmentRepoError::ConcurrentModification)))
         .count();
+
     check!(created_count == 1);
     check!(skipped_count == concurrency - 1);
 }
@@ -513,7 +536,7 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
 pub async fn test_component_stage(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(&user.revision.account_id).await;
-    let env = deps.create_env(&app.application_id).await;
+    let env = deps.create_env(&app.revision.application_id).await;
     let app = deps
         .application_repo
         .get_by_id(&env.application_id)
@@ -826,7 +849,7 @@ pub async fn test_component_stage(deps: &Deps) {
 pub async fn test_http_api_definition_stage(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(&user.revision.account_id).await;
-    let env = deps.create_env(&app.application_id).await;
+    let env = deps.create_env(&app.revision.application_id).await;
     let definition_name = "test-api-definition";
     let definition_id = new_repo_uuid();
 
@@ -1007,7 +1030,7 @@ pub async fn test_http_api_deployment_stage_has_sub(deps: &Deps) {
 async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: Option<&str>) {
     let user = deps.create_account().await;
     let app = deps.create_application(&user.revision.account_id).await;
-    let env = deps.create_env(&app.application_id).await;
+    let env = deps.create_env(&app.revision.application_id).await;
     let host = "test-host-1.com";
     let deployment_id = new_repo_uuid();
 
@@ -1309,21 +1332,26 @@ pub async fn test_account_usage(deps: &Deps) {
     {
         let app = deps
             .application_repo
-            .ensure(
+            .create(
                 &user.revision.account_id,
-                &user.revision.account_id,
-                "test-app",
+                ApplicationRevisionRecord {
+                    application_id: new_repo_uuid(),
+                    revision_id: 0,
+                    name: "test-app".to_string(),
+                    audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+                },
             )
             .await
             .unwrap();
+
         let env = deps
             .environment_repo
             .create(
-                &app.application_id,
-                "env",
+                &app.revision.application_id,
                 EnvironmentRevisionRecord {
                     environment_id: new_repo_uuid(),
                     revision_id: 0,
+                    name: "env".to_string(),
                     hash: SqlBlake3Hash::empty(),
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     compatibility_check: false,
@@ -1332,7 +1360,6 @@ pub async fn test_account_usage(deps: &Deps) {
                 },
             )
             .await
-            .unwrap()
             .unwrap();
         let _component = deps
             .component_repo

@@ -51,6 +51,12 @@ pub struct AuthCtx {
 
 // Note: Basic visibility of resources is enforced in the repo. Use this to check permissions to modify resource / access restricted resources.
 // To support defense-in-depth everything in here should be cheap -- avoid async / fetching data.
+//
+// The patterns for authorizing actions should be:
+// - getting a resource: fetch resource + parent information (either through joins in the repo for non-environment or explicitly for environment case) (404 here) -> check auth using parent information (404 here)
+// - listing a resource: fetch parent information explicitly (using rules in (1), so always 404 here) -> check auth using parent information (403 here)
+// - creating a new resource: fetch parent information explicitly (using rules in (1), so always 404 here) -> check auth (403 here) -> create resource
+// - update/delete a resource -> fetch resource + parent information (using rules in (1), so always 404 here)) + do auth using parent information (403 here)
 impl AuthCtx {
     /// Get the sytem AuthCtx for system initiated action
     pub fn system() -> AuthCtx {
@@ -129,6 +135,9 @@ impl AuthCtx {
             AccountAction::UpdateAccount => {
                 has_any_role(&self.account_roles, &[AccountRole::Admin])
             }
+            AccountAction::DeleteAccount => {
+                has_any_role(&self.account_roles, &[AccountRole::Admin])
+            }
             AccountAction::CreateApplication => {
                 has_any_role(&self.account_roles, &[AccountRole::Admin])
             }
@@ -141,6 +150,18 @@ impl AuthCtx {
             }
             AccountAction::UpdateUsage => has_any_role(&self.account_roles, &[AccountRole::Admin]),
             AccountAction::ViewApplications => {
+                has_any_role(&self.account_roles, &[AccountRole::Admin])
+            }
+            AccountAction::CreateEnvironment => {
+                has_any_role(&self.account_roles, &[AccountRole::Admin])
+            }
+            AccountAction::UpdateApplication => {
+                has_any_role(&self.account_roles, &[AccountRole::Admin])
+            }
+            AccountAction::DeleteApplication => {
+                has_any_role(&self.account_roles, &[AccountRole::Admin])
+            }
+            AccountAction::ListAllApplicationEnvironments => {
                 has_any_role(&self.account_roles, &[AccountRole::Admin])
             }
         };
@@ -198,6 +219,12 @@ impl AuthCtx {
                 has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
             }
             EnvironmentAction::DeleteShare => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::UpdateEnvironment => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::DeleteEnvironment => {
                 has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
             }
         };

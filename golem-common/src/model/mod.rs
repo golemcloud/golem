@@ -37,7 +37,7 @@ pub mod lucene;
 pub mod oplog;
 pub mod plugin;
 #[cfg(feature = "poem")]
-mod poem;
+pub mod poem;
 pub mod project;
 #[cfg(feature = "protobuf")]
 pub mod protobuf;

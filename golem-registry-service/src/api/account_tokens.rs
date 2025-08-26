@@ -16,7 +16,7 @@ use crate::api::ApiResult;
 use crate::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
 use crate::services::token::TokenService;
-use golem_common::api::CreateTokenRequest;
+use golem_common::api::{CreateTokenRequest, Page};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{Token, TokenWithSecret};
 use golem_common::recorded_http_api_request;
@@ -60,7 +60,7 @@ impl AccountTokensApi {
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Vec<Token>>> {
+    ) -> ApiResult<Json<Page<Token>>> {
         let record =
             recorded_http_api_request!("get_account_tokens", account_id = account_id.0.to_string());
 
@@ -76,10 +76,16 @@ impl AccountTokensApi {
 
     async fn get_tokens_internal(
         &self,
-        _account_id: AccountId,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Vec<Token>>> {
-        todo!()
+        account_id: AccountId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<Token>>> {
+        let tokens = self
+            .token_service
+            .list_in_account(&account_id, &auth)
+            .await?;
+        Ok(Json(Page {
+            values: tokens.into_iter().map(|t| t.without_secret()).collect(),
+        }))
     }
 
     #[oai(

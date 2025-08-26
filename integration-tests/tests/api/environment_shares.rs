@@ -16,7 +16,9 @@ use super::Tracing;
 use assert2::{assert, let_assert};
 use golem_client::api::{RegistryServiceClient, RegistryServiceGetEnvironmentShareError};
 use golem_common::model::auth::EnvironmentRole;
-use golem_common::model::environment_share::{NewEnvironmentShare, UpdateEnvironmentShare};
+use golem_common::model::environment_share::{
+    NewEnvironmentShareData, UpdatedEnvironmentShareData,
+};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 use test_r::{inherit_test_dep, test};
@@ -36,7 +38,7 @@ async fn share_environment_with_other_user(deps: &EnvBasedTestDependencies) -> a
     let share = client_1
         .create_environment_share(
             &env.0,
-            &NewEnvironmentShare {
+            &NewEnvironmentShareData {
                 grantee_account_id: user_2.account_id.clone(),
                 roles: vec![EnvironmentRole::Admin],
             },
@@ -71,7 +73,7 @@ async fn delete_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
     let share = client_1
         .create_environment_share(
             &env.0,
-            &NewEnvironmentShare {
+            &NewEnvironmentShareData {
                 grantee_account_id: user_2.account_id.clone(),
                 roles: vec![EnvironmentRole::Admin],
             },
@@ -109,7 +111,7 @@ async fn update_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
     let share = client_1
         .create_environment_share(
             &env.0,
-            &NewEnvironmentShare {
+            &NewEnvironmentShareData {
                 grantee_account_id: user_2.account_id.clone(),
                 roles: vec![EnvironmentRole::Admin],
             },
@@ -119,7 +121,7 @@ async fn update_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
     let updated_share = client_1
         .update_environment_share(
             &share.id.0,
-            &UpdateEnvironmentShare {
+            &UpdatedEnvironmentShareData {
                 new_roles: vec![EnvironmentRole::Viewer],
             },
         )

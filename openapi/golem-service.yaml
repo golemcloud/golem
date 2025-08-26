@@ -277,9 +277,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Token'
+                $ref: '#/components/schemas/Page_Token'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -4357,6 +4355,70 @@ paths:
       security:
       - Cookie: []
       - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - Environment
+      summary: Delete environment by id.
+      operationId: delete_environment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '204':
+          description: ''
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
     patch:
       tags:
       - RegistryService
@@ -4377,7 +4439,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdateEnvironmentRequest'
+              $ref: '#/components/schemas/UpdatedEnvironmentData'
         required: true
       responses:
         '200':
@@ -4874,7 +4936,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/NewEnvironmentShare'
+              $ref: '#/components/schemas/NewEnvironmentShareData'
         required: true
       responses:
         '200':
@@ -5309,7 +5371,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdateEnvironmentShare'
+              $ref: '#/components/schemas/UpdatedEnvironmentShareData'
         required: true
       responses:
         '200':
@@ -7685,6 +7747,9 @@ components:
         id:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: uint64
         applicationId:
           type: string
           format: uuid
@@ -7698,6 +7763,7 @@ components:
           type: boolean
       required:
       - id
+      - revision
       - applicationId
       - name
       - compatibilityCheck
@@ -7948,8 +8014,8 @@ components:
       - compatibilityCheck
       - versionCheck
       - securityOverrides
-    NewEnvironmentShare:
-      title: NewEnvironmentShare
+    NewEnvironmentShareData:
+      title: NewEnvironmentShareData
       type: object
       properties:
         granteeAccountId:
@@ -8135,6 +8201,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SecuritySchemeResponseView'
+      required:
+      - values
+    Page_Token:
+      title: Page_Token
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/Token'
       required:
       - values
     Plan:
@@ -8902,25 +8978,6 @@ components:
             $ref: '#/components/schemas/PluginInstallationAction'
       required:
       - previousVersion
-    UpdateEnvironmentRequest:
-      title: UpdateEnvironmentRequest
-      type: object
-      properties:
-        previousRevision:
-          type: integer
-          format: uint64
-      required:
-      - previousRevision
-    UpdateEnvironmentShare:
-      title: UpdateEnvironmentShare
-      type: object
-      properties:
-        newRoles:
-          type: array
-          items:
-            $ref: '#/components/schemas/EnvironmentRole'
-      required:
-      - newRoles
     UpdateHttpApiDefinitionRequest:
       title: UpdateHttpApiDefinitionRequest
       type: object
@@ -8942,6 +8999,22 @@ components:
       required:
       - name
       - email
+    UpdatedEnvironmentData:
+      title: UpdatedEnvironmentData
+      type: object
+      properties:
+        newName:
+          type: string
+    UpdatedEnvironmentShareData:
+      title: UpdatedEnvironmentShareData
+      type: object
+      properties:
+        newRoles:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentRole'
+      required:
+      - newRoles
     VersionInfo:
       title: VersionInfo
       type: object

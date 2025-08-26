@@ -142,12 +142,7 @@ impl From<AccountError> for ApiError {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
-            AccountError::ConcurrentUpdate => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
-                cause: None,
-            })),
-
-            AccountError::EmailAlreadyInUse => {
+            AccountError::EmailAlreadyInUse | AccountError::ConcurrentUpdate => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
@@ -163,12 +158,17 @@ impl From<ApplicationError> for ApiError {
     fn from(value: ApplicationError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            ApplicationError::Unauthorized(inner) => inner.into(),
+            ApplicationError::ApplicationWithNameAlreadyExists
+            | ApplicationError::ConcurrentModification => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
 
             ApplicationError::ApplicationNotFound(_)
             | ApplicationError::ParentAccountNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
+
+            ApplicationError::Unauthorized(inner) => inner.into(),
 
             ApplicationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
@@ -182,8 +182,15 @@ impl From<EnvironmentError> for ApiError {
     fn from(value: EnvironmentError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            EnvironmentError::EnvironmentNotFound(_) => {
+            EnvironmentError::EnvironmentNotFound(_)
+            | EnvironmentError::EnvironmentByNameNotFound(_)
+            | EnvironmentError::ParentApplicationNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            EnvironmentError::EnvironmentWithNameAlreadyExists
+            | EnvironmentError::ConcurrentModification => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
             EnvironmentError::Unauthorized(inner) => inner.into(),

@@ -16,8 +16,15 @@ use crate::model::component::ComponentFilePath;
 use crate::model::{IdempotencyKey, Timestamp};
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
+use poem_openapi::ApiResponse;
 use serde_json::Value;
 use std::borrow::Cow;
+
+#[derive(Debug, Clone, ApiResponse)]
+pub enum NoContentResponse {
+    #[oai(status = 204)]
+    NoContent,
+}
 
 impl poem_openapi::types::Type for Timestamp {
     const IS_REQUIRED: bool = true;

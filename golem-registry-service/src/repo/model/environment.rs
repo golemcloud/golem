@@ -17,16 +17,28 @@ use super::environment_share::environment_roles_from_bit_vector;
 use crate::model::WithEnvironmentCtx;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::diff;
 use golem_common::model::diff::Hashable;
-use golem_common::model::environment::{
-    Environment, EnvironmentId, EnvironmentName, NewEnvironmentData,
-};
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
+use golem_service_base::repo::RepoError;
 use sqlx::{FromRow, types::Json};
 use std::collections::{BTreeMap, HashSet};
 use uuid::Uuid;
+
+#[derive(Debug, thiserror::Error)]
+pub enum EnvironmentRepoError {
+    #[error("Environment violates unique index")]
+    EnvironmentViolatesUniqueness,
+    #[error("Concurrent modification")]
+    ConcurrentModification,
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error),
+}
+
+error_forwarding!(EnvironmentRepoError, RepoError);
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct EnvironmentRecord {
@@ -42,6 +54,7 @@ pub struct EnvironmentRecord {
 pub struct EnvironmentRevisionRecord {
     pub environment_id: Uuid,
     pub revision_id: i64,
+    pub name: String,
     pub hash: SqlBlake3Hash, // NOTE: set by repo during insert
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
@@ -51,19 +64,16 @@ pub struct EnvironmentRevisionRecord {
 }
 
 impl EnvironmentRevisionRecord {
-    pub fn from_new_model(
-        environment_id: EnvironmentId,
-        data: NewEnvironmentData,
-        actor: AccountId,
-    ) -> Self {
+    pub fn from_model(environment: Environment, audit: DeletableRevisionAuditFields) -> Self {
         Self {
-            environment_id: environment_id.0,
-            revision_id: 0,
+            environment_id: environment.id.0,
+            revision_id: environment.revision.0 as i64,
+            name: environment.name.0,
             hash: SqlBlake3Hash::empty(),
-            audit: DeletableRevisionAuditFields::new(actor.0),
-            compatibility_check: data.compatibility_check,
-            version_check: data.version_check,
-            security_overrides: data.security_overrides,
+            compatibility_check: environment.compatibility_check,
+            version_check: environment.version_check,
+            security_overrides: environment.security_overrides,
+            audit,
         }
     }
 
@@ -83,15 +93,11 @@ impl EnvironmentRevisionRecord {
         }
     }
 
-    pub fn deletion(created_by: Uuid, environment_id: Uuid, current_revision_id: i64) -> Self {
+    pub fn ensure_deletion(self, current_revision_id: i64) -> Self {
         Self {
-            environment_id,
             revision_id: current_revision_id + 1,
-            audit: DeletableRevisionAuditFields::deletion(created_by),
-            compatibility_check: false,
-            version_check: false,
-            security_overrides: false,
-            hash: SqlBlake3Hash::empty(),
+            audit: self.audit.ensure_deletion(),
+            ..self
         }
     }
 
@@ -115,7 +121,6 @@ impl EnvironmentRevisionRecord {
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct EnvironmentExtRevisionRecord {
-    pub name: String,
     pub application_id: Uuid,
 
     #[sqlx(flatten)]
@@ -126,8 +131,9 @@ impl From<EnvironmentExtRevisionRecord> for Environment {
     fn from(value: EnvironmentExtRevisionRecord) -> Self {
         Self {
             id: EnvironmentId(value.revision.environment_id),
+            revision: value.revision.revision_id.into(),
             application_id: ApplicationId(value.application_id),
-            name: EnvironmentName(value.name),
+            name: EnvironmentName(value.revision.name),
             compatibility_check: value.revision.compatibility_check,
             version_check: value.revision.version_check,
             security_overrides: value.revision.security_overrides,

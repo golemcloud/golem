@@ -16,9 +16,8 @@ use super::ApiResult;
 use crate::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
 use crate::services::environment_share::EnvironmentShareService;
-use golem_common::model::account::AccountId;
 use golem_common::model::environment_share::{
-    EnvironmentShare, EnvironmentShareId, UpdateEnvironmentShare,
+    EnvironmentShare, EnvironmentShareId, UpdatedEnvironmentShareData,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -28,7 +27,6 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
-use uuid::Uuid;
 
 pub struct EnvironmentSharesApi {
     environment_share_service: Arc<EnvironmentShareService>,
@@ -98,7 +96,7 @@ impl EnvironmentSharesApi {
     pub async fn update_environment_share(
         &self,
         environment_share_id: Path<EnvironmentShareId>,
-        data: Json<UpdateEnvironmentShare>,
+        data: Json<UpdatedEnvironmentShareData>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let record = recorded_http_api_request!(
@@ -119,13 +117,12 @@ impl EnvironmentSharesApi {
     async fn update_environment_share_internal(
         &self,
         environment_share_id: EnvironmentShareId,
-        data: UpdateEnvironmentShare,
+        data: UpdatedEnvironmentShareData,
         auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
-        let actor = AccountId(Uuid::new_v4());
         let share = self
             .environment_share_service
-            .update(&environment_share_id, data, actor, &auth)
+            .update(&environment_share_id, data, &auth)
             .await?;
         Ok(Json(share))
     }
@@ -161,10 +158,9 @@ impl EnvironmentSharesApi {
         environment_share_id: EnvironmentShareId,
         auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
-        let actor = AccountId(Uuid::new_v4());
         let share = self
             .environment_share_service
-            .delete(&environment_share_id, actor, &auth)
+            .delete(&environment_share_id, &auth)
             .await?;
         Ok(Json(share))
     }

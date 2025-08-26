@@ -109,6 +109,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
             ApiDeploymentsApi::new(services.auth_service.clone()),
             ApiDomainsApi::new(services.auth_service.clone()),
             ApplicationsApi::new(
+                services.application_service.clone(),
                 services.environment_service.clone(),
                 services.auth_service.clone(),
             ),
