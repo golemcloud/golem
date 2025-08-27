@@ -69,7 +69,7 @@ run_task = [
         "wit-template-golem-agent-ts",
         "wit-test-components",
         "wit-golem-templates",
-        "wit-sdks"
+        "wit-sdks",
     ] },
 ]
 
@@ -183,6 +183,20 @@ args = ["build", "--workspace", "--all-targets"]
 dependencies = ["wit"]
 description = "Builds all executables in debug mode"
 command = "cargo"
+args = [
+    "build",
+    "--workspace",
+    "--bins",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
+
+[tasks.build-bins-all]
+dependencies = ["wit"]
+description = "Builds all executables in debug mode, including the single-executable golem"
+command = "cargo"
 args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
 
 [tasks.build-bins-non-ci]
@@ -241,20 +255,45 @@ dependencies = [
 description = "Build the project in release mode"
 condition = { env_not_set = ["PLATFORM_OVERRIDE"] }
 command = "cargo"
-args = ["build", "--release"]
+args = [
+    "build",
+    "--release",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
 
 [tasks.build-release-override-linux-amd64]
 description = "Build the project in release mode with target platform override to linux/amd64"
 condition = { env = { "PLATFORM_OVERRIDE" = "linux/amd64" } }
 command = "cargo"
-args = ["build", "--release", "--target", "x86_64-unknown-linux-gnu"]
+args = [
+    "build",
+    "--release",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
 
 [tasks.build-release-override-linux-arm64]
 description = "Build the project in release mode with target platform override to linux/arm64"
 condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
 install_crate = "cross"
 command = "cross"
-args = ["build", "--release", "--target", "aarch64-unknown-linux-gnu"]
+args = [
+    "build",
+    "--release",
+    "--target",
+    "aarch64-unknown-linux-gnu",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
 
 ## ** CHECK **
 
@@ -399,7 +438,7 @@ dependencies = [
     "integration-tests-group4",
     "integration-tests-group5",
     "cli-integration-tests",
-    "template-integration-tests"
+    "template-integration-tests",
 ]
 
 [tasks.integration-tests-group1]
@@ -447,7 +486,7 @@ cargo test --package integration-tests --test sharding -- --report-time $JUNIT_O
 '''
 
 [tasks.cli-integration-tests]
-dependencies = ["build"]
+dependencies = ["build-bins-all"]
 description = "Run CLI integration tests"
 script_runner = "@duckscript"
 script = '''
@@ -457,7 +496,7 @@ exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integ
 '''
 
 [tasks.template-integration-tests]
-dependencies = ["build"]
+dependencies = ["build-bins"]
 description = "Run template integration tests"
 script_runner = "@duckscript"
 script = '''
@@ -506,10 +545,7 @@ cargo test --package integration-tests --test api -- :tag: --nocapture --report-
 
 [tasks.check-openapi]
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
-dependencies = [
-    "merge-openapi",
-    "diff-openapi",
-]
+dependencies = ["merge-openapi", "diff-openapi"]
 
 [tasks.diff-openapi]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
@@ -554,10 +590,7 @@ script = '''
 ## ** GENERATE-OPENAPI **
 
 [tasks.generate-openapi]
-dependencies = [
-    "merge-openapi",
-    "store-openapi",
-]
+dependencies = ["merge-openapi", "store-openapi"]
 description = "Generates openapi spec from the code and saves it to the openapi directory"
 
 [tasks.generate-worker-service-openapi]
@@ -630,7 +663,7 @@ dependencies = [
     "publish-golem-service-base",
     "publish-golem-test-framework",
     "publish-golem-rib-repl",
-    "publish-golem-cli"
+    "publish-golem-cli",
 ]
 
 [tasks.set-version]
@@ -780,9 +813,7 @@ args = [
 
 [tasks.publish-golem-cli]
 description = "Publishes golem-cli package to crates.io"
-dependencies = [
-    "publish-golem-templates",
-]
+dependencies = ["publish-golem-templates"]
 command = "cargo"
 args = [
     "publish",
@@ -851,12 +882,7 @@ dependencies = ["build"]
 
 condition = { fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager" }
 
-condition_script = [
-    "nginx -v",
-    "lnav --version",
-    "redis-server --version",
-    ""
-]
+condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
 env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "Disabled" }
 
@@ -866,14 +892,12 @@ script = { file = "./local-run/start.sh" }
 description = "Runs all the services locally with the oauth2 login system enabled"
 dependencies = ["build"]
 
-condition = { env_set = ["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"], fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager. GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET env vars must be set." }
+condition = { env_set = [
+    "GITHUB_CLIENT_ID",
+    "GITHUB_CLIENT_SECRET",
+], fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager. GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET env vars must be set." }
 
-condition_script = [
-    "nginx -v",
-    "lnav --version",
-    "redis-server --version",
-    ""
-]
+condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
 env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "OAuth2" }
 
@@ -1012,12 +1036,7 @@ cwd = "./cli/desktop-app"
 [tasks.publish-app-manifest-json-schema]
 description = "Publish application manifest schemas to S3 (https://schema.golem.cloud)"
 command = "aws"
-args = [
-    "s3",
-    "sync",
-    "cli/schema.golem.cloud",
-    "s3://schema.golem.cloud",
-]
+args = ["s3", "sync", "cli/schema.golem.cloud", "s3://schema.golem.cloud"]
 
 [tasks.serve-app-manifest-json-schema]
 description = "Serve the schema.golem.cloud directory locally to help testing the schemas in editors"
