@@ -77,8 +77,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         };
 
-        warn!("poll result: {:?}", result);
-
         match is_suspend_for_sleep(&result) {
             Some(duration) => {
                 self.state.sleep_until(Utc::now() + duration).await?;
