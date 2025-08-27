@@ -1784,7 +1784,12 @@ async fn sleep_above_threshold_between_http_responses(
         .unwrap();
 
     check!(duration.as_secs() >= 14);
-    check!(result == vec![Value::String("Ok(\"slow response\")\nOk(\"slow response\")\n".to_string())]);
+    check!(
+        result
+            == vec![Value::String(
+                "Ok(\"slow response\")\nOk(\"slow response\")\n".to_string()
+            )]
+    );
     check!(healthcheck_result == vec![Value::Bool(true)]);
 }
 

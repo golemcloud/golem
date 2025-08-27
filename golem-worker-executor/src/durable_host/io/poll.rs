@@ -18,7 +18,6 @@ use crate::workerctx::WorkerCtx;
 use chrono::{Duration, Utc};
 use golem_common::model::oplog::DurableFunctionType;
 use golem_service_base::error::worker_executor::InterruptKind;
-use tracing::warn;
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
 
