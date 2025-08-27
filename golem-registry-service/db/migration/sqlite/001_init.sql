@@ -68,7 +68,7 @@ CREATE TABLE account_revisions
     email       TEXT      NOT NULL,
     plan_id     UUID      NOT NULL,
     -- Bitvector of roles
-    roles INT NOT NULL,
+    roles       INT       NOT NULL,
 
     created_at  TIMESTAMP NOT NULL,
     created_by  UUID      NOT NULL,
@@ -150,14 +150,14 @@ CREATE INDEX account_usage_stats_usage_type_idx ON account_usage_stats (usage_ty
 
 CREATE TABLE applications
 (
-    application_id UUID      NOT NULL,
-    name           TEXT      NOT NULL,
-    account_id     UUID      NOT NULL,
+    application_id      UUID      NOT NULL,
+    name                TEXT      NOT NULL,
+    account_id          UUID      NOT NULL,
 
-    created_at     TIMESTAMP NOT NULL,
-    updated_at     TIMESTAMP NOT NULL,
-    deleted_at     TIMESTAMP,
-    modified_by    UUID      NOT NULL,
+    created_at          TIMESTAMP NOT NULL,
+    updated_at          TIMESTAMP NOT NULL,
+    deleted_at          TIMESTAMP,
+    modified_by         UUID      NOT NULL,
 
     current_revision_id BIGINT    NOT NULL,
 
@@ -216,7 +216,7 @@ CREATE TABLE environment_revisions
 (
     environment_id      UUID      NOT NULL,
     revision_id         BIGINT    NOT NULL,
-    name           TEXT      NOT NULL,
+    name                TEXT      NOT NULL,
 
     hash                BYTEA     NOT NULL,
 
@@ -680,7 +680,7 @@ CREATE TABLE environment_share_revisions
     revision_id          BIGINT    NOT NULL,
 
     -- Bitvector of roles
-    roles INT NOT NULL,
+    roles                INT       NOT NULL,
 
     created_at           TIMESTAMP NOT NULL,
     created_by           UUID      NOT NULL,
