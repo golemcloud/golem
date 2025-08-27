@@ -331,7 +331,6 @@ args = [
     "--test",
     "*",
     "--",
-    ,
 ]
 
 [tasks.worker-executor-tests-untagged]
