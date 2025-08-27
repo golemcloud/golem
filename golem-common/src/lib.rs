@@ -74,6 +74,8 @@ pub fn golem_version() -> &'static str {
         build::PKG_VERSION
     } else {
         build::GIT_DESCRIBE_TAGS
+            .strip_prefix("golem-rust-v")
+            .unwrap_or(build::GIT_DESCRIBE_TAGS)
     }
 }
 
