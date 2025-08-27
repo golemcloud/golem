@@ -1205,7 +1205,7 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .await;
 
     assert_eq!(result1.len(), 5); // two invocations and two log messages, and the get-cart-contents results
-    assert_eq!(result2.len(), 2); // get_preopened_directories, get_random_bytes
+    assert_eq!(result2.len(), 1); // get_random_bytes
     assert_eq!(result3.len(), 3); // two invocations, and the get-cart-contents results
 }
 
