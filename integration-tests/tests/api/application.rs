@@ -13,21 +13,16 @@
 // limitations under the License.
 
 use super::Tracing;
-use assert2::{assert, let_assert};
+use assert2::assert;
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceCreateAccountError,
-    RegistryServiceCreateApplicationError, RegistryServiceGetAccountApplicationError,
-    RegistryServiceListAccountApplicationsError, RegistryServiceUpdateAccountError,
+    RegistryServiceClient, RegistryServiceCreateApplicationError,
+    RegistryServiceGetAccountApplicationError, RegistryServiceListAccountApplicationsError,
     RegistryServiceUpdateApplicationError,
 };
-use golem_client::model::AccountRole;
-use golem_client::model::UpdatedAccountData;
-use golem_common::model::account::{AccountRevision, NewAccountData};
 use golem_common::model::application::{NewApplicationData, UpdatedApplicationData};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
-use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);

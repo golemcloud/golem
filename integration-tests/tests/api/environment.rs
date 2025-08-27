@@ -17,7 +17,7 @@ use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateEnvironmentError,
     RegistryServiceGetApplicationEnvironmentError, RegistryServiceListApplicationEnvironmentsError,
-    RegistryServiceUpdateApplicationError, RegistryServiceUpdateEnvironmentError,
+    RegistryServiceUpdateEnvironmentError,
 };
 use golem_common::model::environment::{NewEnvironmentData, UpdatedEnvironmentData};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};

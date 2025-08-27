@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::Tracing;
-use assert2::{assert, let_assert};
+use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateAccountError, RegistryServiceUpdateAccountError,
 };
