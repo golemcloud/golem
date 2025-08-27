@@ -1117,6 +1117,9 @@ impl From<golem_api_1_x::host::StringFilterComparator>
             golem_api_1_x::host::StringFilterComparator::NotLike => {
                 golem_common::model::StringFilterComparator::NotLike
             }
+            golem_api_1_x::host::StringFilterComparator::StartsWith => {
+                golem_common::model::StringFilterComparator::StartsWith
+            }
         }
     }
 }

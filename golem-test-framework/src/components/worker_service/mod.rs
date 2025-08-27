@@ -1541,6 +1541,7 @@ fn grpc_string_filter_comparator_to_http(comparator: i32) -> &'static str {
         StringFilterComparator::StringNotEqual => "!=",
         StringFilterComparator::StringLike => "like",
         StringFilterComparator::StringNotLike => "notlike",
+        StringFilterComparator::StartsWith => "startswith",
     }
 }
 
