@@ -7318,6 +7318,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentType'
+    ComponentModelElementSchema:
+      type: object
+      title: ComponentModelElementSchema
+      required:
+      - elementType
+      properties:
+        elementType:
+          $ref: '#/components/schemas/AnalysedType'
     ComponentPluginScope:
       type: object
       title: ComponentPluginScope
@@ -7631,27 +7639,15 @@ components:
     ElementSchema:
       type: object
       oneOf:
-      - $ref: '#/components/schemas/ElementSchema_AnalysedType'
+      - $ref: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
       - $ref: '#/components/schemas/ElementSchema_TextDescriptor'
       - $ref: '#/components/schemas/ElementSchema_BinaryDescriptor'
       discriminator:
         propertyName: type
         mapping:
-          ComponentModel: '#/components/schemas/ElementSchema_AnalysedType'
+          ComponentModel: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
           UnstructuredText: '#/components/schemas/ElementSchema_TextDescriptor'
           UnstructuredBinary: '#/components/schemas/ElementSchema_BinaryDescriptor'
-    ElementSchema_AnalysedType:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ComponentModel
-            example: ComponentModel
-      - $ref: '#/components/schemas/AnalysedType'
     ElementSchema_BinaryDescriptor:
       allOf:
       - type: object
@@ -7664,6 +7660,18 @@ components:
             - UnstructuredBinary
             example: UnstructuredBinary
       - $ref: '#/components/schemas/BinaryDescriptor'
+    ElementSchema_ComponentModelElementSchema:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentModel
+            example: ComponentModel
+      - $ref: '#/components/schemas/ComponentModelElementSchema'
     ElementSchema_TextDescriptor:
       allOf:
       - type: object

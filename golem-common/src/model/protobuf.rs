@@ -12,23 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::component::ComponentRevision;
-use super::component::{
-    ComponentFilePath, ComponentType, InitialComponentFile, InitialComponentFileKey,
+use super::{WorkerResourceDescription, WorkerWasiConfigVarsFilter};
+use crate::model::component::{
+    ComponentFilePath, ComponentRevision, ComponentType, InitialComponentFile,
+    InitialComponentFileKey,
 };
-use super::oplog::OplogIndex;
-use super::AgentInstanceDescription;
-use super::AgentInstanceKey;
-use super::ExportedResourceInstanceDescription;
-use super::ExportedResourceInstanceKey;
-use super::WorkerResourceDescription;
-use super::WorkerResourceId;
-use super::WorkerResourceKey;
-use super::WorkerWasiConfigVarsFilter;
-use super::{
+use crate::model::oplog::{OplogIndex, WorkerResourceId};
+use crate::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
     FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable,
-    RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, TargetWorkerId, Timestamp,
+    RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
     WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId, WorkerNameFilter,
     WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
 };
@@ -80,29 +73,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
             component_id: value.component_id.unwrap().try_into()?,
             worker_name: value.name,
         })
-    }
-}
-
-impl TryFrom<golem::worker::TargetWorkerId> for TargetWorkerId {
-    type Error = String;
-
-    fn try_from(value: golem::worker::TargetWorkerId) -> Result<Self, Self::Error> {
-        Ok(Self {
-            component_id: value
-                .component_id
-                .ok_or("Missing component_id")?
-                .try_into()?,
-            worker_name: value.name,
-        })
-    }
-}
-
-impl From<TargetWorkerId> for golem::worker::TargetWorkerId {
-    fn from(value: TargetWorkerId) -> Self {
-        Self {
-            component_id: Some(value.component_id.into()),
-            name: value.worker_name,
-        }
     }
 }
 
@@ -760,95 +730,25 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
 }
 
 pub fn to_protobuf_resource_description(
-    key: WorkerResourceKey,
+    key: WorkerResourceId,
     description: WorkerResourceDescription,
-) -> Result<golem::worker::ResourceDescription, String> {
-    match (key, description) {
-        (
-            WorkerResourceKey::ExportedResourceInstanceKey(key),
-            WorkerResourceDescription::ExportedResourceInstance(description),
-        ) => Ok(golem::worker::ResourceDescription {
-            description: Some(
-                golem::worker::resource_description::Description::ExportedResourceInstance(
-                    golem::worker::ExportedResourceInstanceDescription {
-                        created_at: Some(description.created_at.into()),
-                        resource_id: key.resource_id.0,
-                        resource_owner: description.resource_owner,
-                        resource_name: description.resource_name,
-                        is_indexed: description.resource_params.is_some(),
-                        resource_params: description.resource_params.unwrap_or_default(),
-                    },
-                ),
-            ),
-        }),
-        (
-            WorkerResourceKey::AgentInstanceKey(key),
-            WorkerResourceDescription::AgentInstance(description),
-        ) => Ok(golem::worker::ResourceDescription {
-            description: Some(
-                golem::worker::resource_description::Description::AgentInstance(
-                    golem::worker::AgentInstanceDescription {
-                        created_at: Some(description.created_at.into()),
-                        agent_type: key.agent_type,
-                        agent_id: key.agent_id,
-                        agent_parameters: Some(description.agent_parameters.into()),
-                    },
-                ),
-            ),
-        }),
-        _ => Err("Invalid key/description combination".to_string()),
+) -> golem::worker::ResourceDescription {
+    golem::worker::ResourceDescription {
+        created_at: Some(description.created_at.into()),
+        resource_id: key.0,
+        resource_owner: description.resource_owner,
+        resource_name: description.resource_name,
     }
 }
 
 pub fn from_protobuf_resource_description(
     description: golem::worker::ResourceDescription,
-) -> Result<(WorkerResourceKey, WorkerResourceDescription), String> {
-    match description.description {
-        Some(golem::worker::resource_description::Description::ExportedResourceInstance(
-            golem::worker::ExportedResourceInstanceDescription {
-                created_at,
-                resource_id,
-                resource_owner,
-                resource_name,
-                is_indexed,
-                resource_params,
-            },
-        )) => Ok((
-            WorkerResourceKey::ExportedResourceInstanceKey(ExportedResourceInstanceKey {
-                resource_id: WorkerResourceId(resource_id),
-            }),
-            WorkerResourceDescription::ExportedResourceInstance(
-                ExportedResourceInstanceDescription {
-                    created_at: created_at.ok_or("Missing created_at")?.into(),
-                    resource_owner,
-                    resource_name,
-                    resource_params: if is_indexed {
-                        Some(resource_params)
-                    } else {
-                        None
-                    },
-                },
-            ),
-        )),
-        Some(golem::worker::resource_description::Description::AgentInstance(
-            golem::worker::AgentInstanceDescription {
-                created_at,
-                agent_type,
-                agent_id,
-                agent_parameters,
-            },
-        )) => Ok((
-            WorkerResourceKey::AgentInstanceKey(AgentInstanceKey {
-                agent_type,
-                agent_id,
-            }),
-            WorkerResourceDescription::AgentInstance(AgentInstanceDescription {
-                created_at: created_at.ok_or("Missing created_at")?.into(),
-                agent_parameters: agent_parameters
-                    .ok_or("Missing agent_parameters")?
-                    .try_into()?,
-            }),
-        )),
-        None => Err("Missing description".to_string()),
-    }
+) -> Result<(WorkerResourceId, WorkerResourceDescription), String> {
+    let key = WorkerResourceId(description.resource_id);
+    let value = WorkerResourceDescription {
+        created_at: description.created_at.ok_or("Missing created_at")?.into(),
+        resource_owner: description.resource_owner,
+        resource_name: description.resource_name,
+    };
+    Ok((key, value))
 }

@@ -87,6 +87,7 @@ golem-wasm-rpc = { workspace = true, features = ["host"], optional = true }
 golem-wasm-rpc-derive = { workspace = true }
 
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bincode = { workspace = true }
@@ -138,6 +139,7 @@ wit-parser = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+pretty_assertions = { workspace = true }
 test-r = { workspace = true }
 tracing-test = { workspace = true }
 

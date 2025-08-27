@@ -23,7 +23,7 @@ pub trait RibComponentFunctionInvoke {
         &self,
         component_dependency_key: ComponentDependencyKey,
         instruction_id: &InstructionId,
-        worker_name: Option<EvaluatedWorkerName>,
+        worker_name: EvaluatedWorkerName,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
         return_type: Option<AnalysedType>,

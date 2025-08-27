@@ -20,6 +20,7 @@ bincode = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 tonic = { workspace = true }
+tonic-prost = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
@@ -27,4 +28,6 @@ test-r = { workspace = true }
 
 [build-dependencies]
 cargo_metadata = { workspace = true }
-tonic-build = { workspace = true }
+miette = { workspace = true }
+protox = { workspace = true }
+tonic-prost-build = { workspace = true }

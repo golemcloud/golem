@@ -31,6 +31,7 @@ use tempfile::TempDir;
 use test_r::test;
 
 #[test]
+#[ignore] // TODO: temporarily ignored until a new golem-rust is released
 async fn compose_with_single_stub() {
     let (_source_dir, stub_dir, stub_wasm) = init_stub("all-wit-types").await;
     let caller_dir = init_caller("caller-no-dep-importstub");

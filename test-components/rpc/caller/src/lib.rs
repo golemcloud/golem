@@ -119,13 +119,19 @@ impl Guest for Component {
             env::var("EPHEMERAL_COMPONENT_ID").expect("EPHEMERAL_COMPONENT_ID not set");
         let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
         let component_id: ComponentId = component_id.into();
-        let api1 = EphemeralApi::custom(component_id);
+        let api1 = EphemeralApi::custom(&WorkerId {
+            component_id: component_id.clone(),
+            worker_name: "eph1".to_string(),
+        });
         let name1: String = api1.blocking_get_worker_name();
         let key1 = api1.blocking_get_idempotency_key();
         let name2 = api1.blocking_get_worker_name();
         let key2 = api1.blocking_get_idempotency_key();
 
-        let api2 = EphemeralApi::custom(component_id);
+        let api2 = EphemeralApi::custom(&WorkerId {
+            component_id: component_id.clone(),
+            worker_name: "eph2".to_string(),
+        });
         let name3: String = api2.blocking_get_worker_name();
         let key3: String = api2.blocking_get_idempotency_key();
 

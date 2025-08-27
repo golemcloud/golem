@@ -504,7 +504,11 @@ fn to_moonbit_parameter_list(
                 let param_name = parameter.name.to_snake_case();
                 match &parameter.schema {
                     ElementSchema::ComponentModel(typ) => {
-                        write!(result, "{param_name}: {}", moonbit_type_ref(ctx, typ)?)?;
+                        write!(
+                            result,
+                            "{param_name}: {}",
+                            moonbit_type_ref(ctx, &typ.element_type)?
+                        )?;
                     }
                     ElementSchema::UnstructuredText(_) => {
                         write!(result, "{param_name}: @common.TextReference")?;
@@ -550,7 +554,7 @@ fn to_moonbit_return_type(
                 let element = &elements[0];
                 match &element.schema {
                     ElementSchema::ComponentModel(typ) => {
-                        write!(result, "{}", moonbit_type_ref(ctx, typ)?)?;
+                        write!(result, "{}", moonbit_type_ref(ctx, &typ.element_type)?)?;
                     }
                     ElementSchema::UnstructuredText(_) => {
                         write!(result, "@common.TextReference")?;
@@ -567,7 +571,7 @@ fn to_moonbit_return_type(
                     }
                     match &element.schema {
                         ElementSchema::ComponentModel(typ) => {
-                            write!(result, "{}", moonbit_type_ref(ctx, typ)?)?;
+                            write!(result, "{}", moonbit_type_ref(ctx, &typ.element_type)?)?;
                         }
                         ElementSchema::UnstructuredText(_) => {
                             write!(result, "@common.TextReference")?;
@@ -679,12 +683,12 @@ fn build_element_value(
     indent: &str,
 ) -> anyhow::Result<()> {
     match schema {
-        ElementSchema::ComponentModel(typ) => {
+        ElementSchema::ComponentModel(schema) => {
             writeln!(result, "{indent}@common.ElementValue::ComponentModel(")?;
             write_builder(
                 result,
                 ctx,
-                typ,
+                &schema.element_type,
                 access,
                 "@builder.Builder::new()",
                 &format!("{indent}    "),
@@ -1023,13 +1027,13 @@ fn extract_data_value(
                 )?;
                 let element = &elements[0];
                 match &element.schema {
-                    ElementSchema::ComponentModel(typ) => {
+                    ElementSchema::ComponentModel(schema) => {
                         writeln!(
                             result,
                             "{indent}let wit_value = @extractor.extract_component_model_value(values[0])"
                         )?;
                         writeln!(result, "{indent}Ok(")?;
-                        extract_wit_value(result, ctx, typ, "wit_value", indent)?;
+                        extract_wit_value(result, ctx, &schema.element_type, "wit_value", indent)?;
                         writeln!(result, "{indent})")?;
                     }
                     ElementSchema::UnstructuredText(_) => {
@@ -1053,7 +1057,7 @@ fn extract_data_value(
                 writeln!(result, "{indent}Ok((")?;
                 for (idx, element) in elements.iter().enumerate() {
                     match &element.schema {
-                        ElementSchema::ComponentModel(typ) => {
+                        ElementSchema::ComponentModel(schema) => {
                             writeln!(
                                 result,
                                 "{indent}let wit_value = @extractor.extract_component_model_value(values[{idx}])"
@@ -1062,7 +1066,7 @@ fn extract_data_value(
                             extract_wit_value(
                                 result,
                                 ctx,
-                                typ,
+                                &schema.element_type,
                                 "@extractor.extract(wit_value)",
                                 &format!("{indent}  "),
                             )?;
@@ -1103,7 +1107,7 @@ fn extract_data_value(
                 let case_name = element.name.to_kebab_case().to_upper_camel_case();
                 writeln!(result, "{indent}    \"{}\" => {{", element.name)?;
                 match &element.schema {
-                    ElementSchema::ComponentModel(typ) => {
+                    ElementSchema::ComponentModel(schema) => {
                         writeln!(result, "{indent}      match pair.1 {{")?;
                         writeln!(
                             result,
@@ -1116,7 +1120,7 @@ fn extract_data_value(
                         extract_wit_value(
                             result,
                             ctx,
-                            typ,
+                            &schema.element_type,
                             "wit_value",
                             &format!("{indent}          "),
                         )?;

@@ -246,45 +246,23 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         } else {
             let component_name = def.config.component_name.as_str();
 
-            if def.config.is_ephemeral {
-                quote! {
-                    fn new() -> Self {
-                        let component_name = #component_name;
-                        let component_id = golem_rust::bindings::golem::api::host::resolve_component_id(component_name).expect(
-                            &format!("Failed to resolve component id: {}", component_name)
-                        );
-                        Self {
-                            rpc: WasmRpc::ephemeral(component_id)
-                        }
-                    }
-
-                    fn custom(component_id: golem_rust::wasm_rpc:: ComponentId) -> crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name {
-                        crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name::new(
-                            Self {
-                                rpc: WasmRpc::ephemeral(component_id)
-                            }
-                        )
+            quote! {
+                fn new(worker_name: String) -> Self {
+                    let component_name = #component_name;
+                    let worker_id = golem_rust::bindings::golem::api::host::resolve_worker_id(component_name, &worker_name).expect(
+                        &format!("Failed to resolve worker id: {}/{}", component_name, worker_name)
+                    );
+                    Self {
+                        rpc: WasmRpc::new(&worker_id)
                     }
                 }
-            } else {
-                quote! {
-                    fn new(worker_name: String) -> Self {
-                        let component_name = #component_name;
-                        let worker_id = golem_rust::bindings::golem::api::host::resolve_worker_id(component_name, &worker_name).expect(
-                            &format!("Failed to resolve worker id: {}/{}", component_name, worker_name)
-                        );
+
+                fn custom(worker_id: golem_rust::wasm_rpc::WorkerId) -> crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name {
+                    crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name::new(
                         Self {
                             rpc: WasmRpc::new(&worker_id)
                         }
-                    }
-
-                    fn custom(worker_id: golem_rust::wasm_rpc::WorkerId) -> crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name {
-                        crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name::new(
-                            Self {
-                                rpc: WasmRpc::new(&worker_id)
-                            }
-                        )
-                    }
+                    )
                 }
             }
         };
@@ -406,14 +384,10 @@ fn generate_function_stub_source(
         params.push(quote! {&self});
     }
 
-    if mode == FunctionMode::Constructor && !def.config.is_ephemeral {
+    if mode == FunctionMode::Constructor {
         params.push(quote! { wasm_rpc_worker_name: String });
     } else if mode == FunctionMode::CustomConstructor {
-        if def.config.is_ephemeral {
-            params.push(quote! { wasm_rpc_component_id: golem_rust::wasm_rpc::ComponentId });
-        } else {
-            params.push(quote! { wasm_rpc_worker_id: golem_rust::wasm_rpc::WorkerId });
-        }
+        params.push(quote! { wasm_rpc_worker_id: golem_rust::wasm_rpc::WorkerId });
     } else if mode == FunctionMode::Method {
         input_values.push(quote! {
             WitValue::builder().handle(self.uri.clone(), self.id)
@@ -487,32 +461,16 @@ fn generate_function_stub_source(
 
     let component_name = def.config.component_name.as_str();
     let init = if mode == FunctionMode::Constructor {
-        if def.config.is_ephemeral {
-            quote! {
-                let component_name = #component_name;
-                let component_id = golem_rust::bindings::golem::api::host::resolve_component_id(component_name).expect(
-                    &format!("Failed to resolve component id: {}", component_name)
-                );
-                let rpc = WasmRpc::ephemeral(component_id);
-            }
-        } else {
-            quote! {
-                let component_name = #component_name;
-                let worker_id = golem_rust::bindings::golem::api::host::resolve_worker_id(component_name, &wasm_rpc_worker_name).expect(
-                    &format!("Failed to resolve worker id: {}/{}", component_name, wasm_rpc_worker_name)
-                );
-                let rpc = WasmRpc::new(&worker_id);
-            }
+        quote! {
+            let component_name = #component_name;
+            let worker_id = golem_rust::bindings::golem::api::host::resolve_worker_id(component_name, &wasm_rpc_worker_name).expect(
+                &format!("Failed to resolve worker id: {}/{}", component_name, wasm_rpc_worker_name)
+            );
+            let rpc = WasmRpc::new(&worker_id);
         }
     } else if mode == FunctionMode::CustomConstructor {
-        if def.config.is_ephemeral {
-            quote! {
-                let rpc = WasmRpc::ephemeral(wasm_rpc_component_id);
-            }
-        } else {
-            quote! {
-                let rpc = WasmRpc::new(&wasm_rpc_worker_id);
-            }
+        quote! {
+            let rpc = WasmRpc::new(&wasm_rpc_worker_id);
         }
     } else {
         quote! {}

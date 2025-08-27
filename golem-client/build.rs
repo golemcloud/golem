@@ -107,6 +107,9 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::environment_share::UpdatedEnvironmentShareData",
             ),
             // ("AgentType", "golem_common::model::agent::AgentType"),
+            // ("AgentType", "golem_common::model::agent::AgentType"),
+            // ("DataSchema", "golem_common::model::agent::DataSchema"),
+            // ("AgentInstanceKey", "golem_common::model::AgentInstanceKey"),
             // ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
             // ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
             // ("PluginScope", "golem_common::model::plugin::PluginScope"),
@@ -150,11 +153,11 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             //     "golem_common::model::public_oplog::PublicOplogEntry",
             // ),
             // ("ShardId", "golem_common::model::ShardId"),
-            // ("ValueAndType", "golem_wasm_rpc::ValueAndType"),
-            // (
-            //     "ValueAndOptionalType",
-            //     "golem_wasm_rpc::json::OptionallyValueAndTypeJson",
-            // ),
+            ("ValueAndType", "golem_wasm_rpc::ValueAndType"),
+            (
+                "ValueAndOptionalType",
+                "golem_wasm_rpc::json::OptionallyValueAndTypeJson",
+            ),
             // (
             //     "WasiConfigVarsEntry",
             //     "golem_common::model::worker::WasiConfigVarsEntry",

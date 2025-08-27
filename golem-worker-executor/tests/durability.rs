@@ -22,7 +22,10 @@ use bytes::Bytes;
 use futures::{stream, StreamExt};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm_ast::analysis::{
+    AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
+};
+use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use http::StatusCode;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -183,11 +186,27 @@ async fn lazy_pollable(
 
     signal_tx.send(()).unwrap();
 
+    let res1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it-exports/golem-it-api.{[constructor]lazy-pollable-test}",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let res_handle_type = AnalysedType::Handle(TypeHandle {
+        name: None,
+        owner: None,
+        resource_id: AnalysedResourceId(0),
+        mode: AnalysedResourceMode::Borrowed,
+    });
+    let res = ValueAndType::new(res1[0].clone(), res_handle_type);
+
     let s1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it-exports/golem-it-api.{lazy-pollable-test().test}",
-            vec![1u32.into_value_and_type()],
+            "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
+            vec![res.clone(), 1u32.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -197,8 +216,8 @@ async fn lazy_pollable(
     let s2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it-exports/golem-it-api.{lazy-pollable-test().test}",
-            vec![2u32.into_value_and_type()],
+            "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
+            vec![res.clone(), 2u32.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -208,8 +227,8 @@ async fn lazy_pollable(
     let s3 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it-exports/golem-it-api.{lazy-pollable-test().test}",
-            vec![3u32.into_value_and_type()],
+            "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
+            vec![res.clone(), 3u32.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -224,8 +243,8 @@ async fn lazy_pollable(
     let s4 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it-exports/golem-it-api.{lazy-pollable-test().test}",
-            vec![3u32.into_value_and_type()],
+            "golem:it-exports/golem-it-api.{[method]lazy-pollable-test.test}",
+            vec![res.clone(), 3u32.into_value_and_type()],
         )
         .await
         .unwrap();
