@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use golem_common::api::Page;
 use golem_common::api::certificate::{CertificateResponseView, CreateCertificateRequest};
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::certificate::CertificateName;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
@@ -24,9 +25,12 @@ use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
+use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct EnvironmentCertificatesApi {}
+pub struct EnvironmentCertificatesApi {
+    auth_service: Arc<AuthService>,
+}
 
 #[OpenApi(
     prefix_path = "/v1/envs",
@@ -35,6 +39,10 @@ pub struct EnvironmentCertificatesApi {}
     tag = ApiTags::ApiCertificate
 )]
 impl EnvironmentCertificatesApi {
+    pub fn new(auth_service: Arc<AuthService>) -> Self {
+        Self { auth_service }
+    }
+
     /// Get all certificates in this environment
     #[oai(
         path = "/:environment_id/certificates",
@@ -51,7 +59,7 @@ impl EnvironmentCertificatesApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_certificates_internal(environment_id.0, auth)
@@ -86,7 +94,7 @@ impl EnvironmentCertificatesApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_certificate_internal(environment_id.0, certificate_name.0, auth)
@@ -127,7 +135,7 @@ impl EnvironmentCertificatesApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .create_environment_certificate_internal(environment_id.0, payload.0, auth)

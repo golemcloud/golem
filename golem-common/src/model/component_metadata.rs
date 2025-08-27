@@ -85,26 +85,37 @@ impl ComponentMetadata {
     pub fn exports(&self) -> &[AnalysedExport] {
         &self.data.exports
     }
+
     pub fn producers(&self) -> &[Producers] {
         &self.data.producers
     }
+
     pub fn memories(&self) -> &[LinearMemory] {
         &self.data.memories
     }
+
     pub fn binary_wit(&self) -> &Base64 {
         &self.data.binary_wit
     }
+
     pub fn root_package_name(&self) -> &Option<String> {
         &self.data.root_package_name
     }
+
     pub fn root_package_version(&self) -> &Option<String> {
         &self.data.root_package_version
     }
+
     pub fn dynamic_linking(&self) -> &HashMap<String, DynamicLinkedInstance> {
         &self.data.dynamic_linking
     }
+
     pub fn agent_types(&self) -> &[AgentType] {
         &self.data.agent_types
+    }
+
+    pub fn is_agent(&self) -> bool {
+        !self.data.agent_types.is_empty()
     }
 
     pub async fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {

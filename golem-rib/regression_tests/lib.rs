@@ -1921,7 +1921,7 @@ mod mock_interpreter {
             &self,
             _component_info: ComponentDependencyKey,
             _instruction_id: &InstructionId,
-            _worker_name: Option<EvaluatedWorkerName>,
+            _worker_name: EvaluatedWorkerName,
             function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
             _return_type: Option<AnalysedType>,

@@ -224,6 +224,8 @@ impl<
                             if Some(old_count) == self.capacity {
                                 eviction_needed = true;
                             }
+                        } else {
+                            self.state.items.remove(key);
                         }
                         if tx.receiver_count() > 0 {
                             let _ = tx.send(value.clone());

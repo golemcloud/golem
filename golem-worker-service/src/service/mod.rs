@@ -81,7 +81,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
-use tracing::{error, info};
+use tracing::error;
 
 #[derive(Clone)]
 pub struct Services {
@@ -294,14 +294,6 @@ impl Services {
                 format!("Init error (aws domain): {e:?}")
             })?;
 
-            info!(
-                "AWS domain environment: {}, workspace: {}, region: {:?}, DNS name: {}",
-                config.environment,
-                config.workspace,
-                aws_config.region,
-                aws_domain_route.load_balancer.dns_name
-            );
-
             let domain_route: Arc<dyn RegisterDomainRoute> = Arc::new(aws_domain_route);
 
             let aws_cm = AwsCertificateManager::new(
@@ -320,16 +312,7 @@ impl Services {
                     format!("Init error (aws cert): {e:?}")
                 })?;
 
-            info!(
-                "AWS Certificate Manager environment: {}, workspace: {}, region: {:?}, DNS name: {}",
-                config.environment,
-                config.workspace,
-                aws_config.region,
-                aws_cm.load_balancer.dns_name
-            );
-
             let certificate_manager: Arc<dyn CertificateManager> = Arc::new(aws_cm);
-
             let domain_register_service: Arc<dyn RegisterDomain> =
                 Arc::new(AwsRegisterDomain::new(&aws_config, &config.domain_records));
 

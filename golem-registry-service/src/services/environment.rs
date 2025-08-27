@@ -12,11 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::application::ApplicationService;
+use crate::model::WithEnvironmentCtx;
+use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
-use anyhow::anyhow;
-use golem_common::model::account::AccountId;
+use crate::repo::model::audit::DeletableRevisionAuditFields;
+use crate::repo::model::environment::EnvironmentRepoError;
+use crate::services::application::ApplicationError;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::environment::{Environment, EnvironmentId, NewEnvironmentData};
+use golem_common::model::auth::{AccountAction, EnvironmentAction};
+use golem_common::model::environment::{
+    Environment, EnvironmentId, EnvironmentName, EnvironmentRevision, NewEnvironmentData,
+    UpdatedEnvironmentData,
+};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
@@ -25,8 +33,18 @@ use tracing::error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentError {
+    #[error("Environment with this name already exists")]
+    EnvironmentWithNameAlreadyExists,
     #[error("Environment not found for id {0}")]
     EnvironmentNotFound(EnvironmentId),
+    #[error("Environment not found for name {}", 0.0)]
+    EnvironmentByNameNotFound(EnvironmentName),
+    #[error("Application {0} not found")]
+    ParentApplicationNotFound(ApplicationId),
+    #[error("Concurrent update attempt")]
+    ConcurrentModification,
+    #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -34,57 +52,288 @@ pub enum EnvironmentError {
 impl SafeDisplay for EnvironmentError {
     fn to_safe_string(&self) -> String {
         match self {
+            Self::EnvironmentWithNameAlreadyExists => self.to_string(),
             Self::EnvironmentNotFound(_) => self.to_string(),
+            Self::EnvironmentByNameNotFound(_) => self.to_string(),
+            Self::ParentApplicationNotFound(_) => self.to_string(),
+            Self::ConcurrentModification => self.to_string(),
+            Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
 }
 
-error_forwarding!(EnvironmentError, RepoError);
+error_forwarding!(
+    EnvironmentError,
+    RepoError,
+    ApplicationError,
+    EnvironmentRepoError
+);
 
 pub struct EnvironmentService {
     environment_repo: Arc<dyn EnvironmentRepo>,
+    application_service: Arc<ApplicationService>,
 }
 
 impl EnvironmentService {
-    pub fn new(environment_repo: Arc<dyn EnvironmentRepo>) -> Self {
-        Self { environment_repo }
+    pub fn new(
+        environment_repo: Arc<dyn EnvironmentRepo>,
+        application_service: Arc<ApplicationService>,
+    ) -> Self {
+        Self {
+            environment_repo,
+            application_service,
+        }
     }
 
     pub async fn create(
         &self,
         application_id: ApplicationId,
         data: NewEnvironmentData,
-        actor: AccountId,
+        auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
-        let id = EnvironmentId::new_v4();
-        let name = data.name.clone();
-        let record = EnvironmentRevisionRecord::from_new_model(id, data, actor);
+        let application = self
+            .application_service
+            .get(&application_id, auth)
+            .await
+            .map_err(|err| match err {
+                ApplicationError::ApplicationNotFound(application_id) => {
+                    EnvironmentError::ParentApplicationNotFound(application_id)
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_account_action(&application.account_id, AccountAction::CreateEnvironment)?;
+
+        let environment = Environment {
+            id: EnvironmentId::new_v4(),
+            revision: EnvironmentRevision::INITIAL,
+            application_id: application_id.clone(),
+            name: data.name,
+            compatibility_check: data.compatibility_check,
+            version_check: data.version_check,
+            security_overrides: data.security_overrides,
+        };
+
+        let audit = DeletableRevisionAuditFields::new(auth.account_id.0);
+        let record = EnvironmentRevisionRecord::from_model(environment, audit);
+
         let result = self
             .environment_repo
-            .create(&application_id.0, &name.0, record)
-            .await?;
+            .create(&application_id.0, record)
+            .await
+            .map_err(|err| match err {
+                EnvironmentRepoError::EnvironmentViolatesUniqueness => {
+                    EnvironmentError::EnvironmentWithNameAlreadyExists
+                }
+                other => other.into(),
+            })?
+            .into();
 
-        match result {
-            Some(result_record) => Ok(result_record.into()),
-            None => Err(anyhow!(
-                "Failed creating environment due to unique violation"
-            ))?,
-        }
+        Ok(result)
+    }
+
+    pub async fn update(
+        &self,
+        environment_id: EnvironmentId,
+        update: UpdatedEnvironmentData,
+        auth: &AuthCtx,
+    ) -> Result<Environment, EnvironmentError> {
+        let environment_with_ctx = self.get(&environment_id, auth).await?;
+
+        auth.authorize_environment_action(
+            &environment_with_ctx.owner_account_id,
+            &environment_with_ctx.roles_from_shares,
+            EnvironmentAction::UpdateEnvironment,
+        )?;
+
+        let mut environment = environment_with_ctx.value;
+
+        let current_revision = environment.revision;
+        environment.revision = current_revision.next()?;
+
+        if let Some(new_name) = update.new_name {
+            environment.name = new_name
+        };
+
+        let audit = DeletableRevisionAuditFields::new(auth.account_id.0);
+        let record = EnvironmentRevisionRecord::from_model(environment, audit);
+
+        let result = self
+            .environment_repo
+            .update(current_revision.into(), record)
+            .await
+            .map_err(|err| match err {
+                EnvironmentRepoError::ConcurrentModification => {
+                    EnvironmentError::ConcurrentModification
+                }
+                other => other.into(),
+            })?
+            .into();
+
+        Ok(result)
+    }
+
+    pub async fn delete(
+        &self,
+        environment_id: EnvironmentId,
+        auth: &AuthCtx,
+    ) -> Result<(), EnvironmentError> {
+        let environment_with_ctx = self.get(&environment_id, auth).await?;
+
+        auth.authorize_environment_action(
+            &environment_with_ctx.owner_account_id,
+            &environment_with_ctx.roles_from_shares,
+            EnvironmentAction::DeleteEnvironment,
+        )?;
+
+        let mut environment = environment_with_ctx.value;
+
+        let current_revision = environment.revision;
+        environment.revision = current_revision.next()?;
+
+        let audit = DeletableRevisionAuditFields::deletion(auth.account_id.0);
+        let record = EnvironmentRevisionRecord::from_model(environment, audit);
+
+        self.environment_repo
+            .delete(current_revision.into(), record)
+            .await
+            .map_err(|err| match err {
+                EnvironmentRepoError::ConcurrentModification => {
+                    EnvironmentError::ConcurrentModification
+                }
+                other => other.into(),
+            })?;
+
+        Ok(())
     }
 
     pub async fn get(
         &self,
         environment_id: &EnvironmentId,
-    ) -> Result<Environment, EnvironmentError> {
-        let record = self
+        auth: &AuthCtx,
+    ) -> Result<WithEnvironmentCtx<Environment>, EnvironmentError> {
+        let environment: WithEnvironmentCtx<Environment> = self
             .environment_repo
-            .get_by_id(&environment_id.0)
+            .get_by_id(
+                &environment_id.0,
+                &auth.account_id.0,
+                auth.should_override_storage_visibility_rules(),
+            )
             .await?
             .ok_or(EnvironmentError::EnvironmentNotFound(
                 environment_id.clone(),
-            ))?;
+            ))?
+            .into();
 
-        Ok(record.into())
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_shares,
+            EnvironmentAction::ViewEnvironment,
+        )
+        .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id.clone()))?;
+
+        Ok(environment)
+    }
+
+    pub async fn list_in_application(
+        &self,
+        application_id: &ApplicationId,
+        auth: &AuthCtx,
+    ) -> Result<Vec<WithEnvironmentCtx<Environment>>, EnvironmentError> {
+        let result: Vec<WithEnvironmentCtx<Environment>> = self
+            .environment_repo
+            .list_by_app(
+                &application_id.0,
+                &auth.account_id.0,
+                auth.should_override_storage_visibility_rules(),
+            )
+            .await?
+            .into_iter()
+            .map(|r| r.into())
+            .collect();
+
+        let authorized_environments: Vec<WithEnvironmentCtx<Environment>> = result
+            .into_iter()
+            .filter(|env| {
+                auth.authorize_environment_action(
+                    &env.owner_account_id,
+                    &env.roles_from_shares,
+                    EnvironmentAction::ViewEnvironment,
+                )
+                .is_ok()
+            })
+            .collect();
+
+        // If the user has no access to any environments in the application,
+        // check whether they have account-level permission to list environments (i.e., own the app).
+        // If so, return an empty list. Otherwise, return Unauthorized.
+        if authorized_environments.is_empty() {
+            let account_action = AccountAction::ListAllApplicationEnvironments;
+
+            let application = self
+                .application_service
+                .get(application_id, auth)
+                .await
+                .map_err(|err| match err {
+                    ApplicationError::ApplicationNotFound(_) => EnvironmentError::Unauthorized(
+                        AuthorizationError::AccountActionNotAllowed(account_action),
+                    ),
+                    other => other.into(),
+                })?;
+
+            auth.authorize_account_action(&application.account_id, account_action)?;
+        }
+
+        Ok(authorized_environments)
+    }
+
+    pub async fn get_in_application(
+        &self,
+        application_id: &ApplicationId,
+        name: &EnvironmentName,
+        auth: &AuthCtx,
+    ) -> Result<WithEnvironmentCtx<Environment>, EnvironmentError> {
+        let result: WithEnvironmentCtx<Environment> = self
+            .environment_repo
+            .get_by_name(
+                &application_id.0,
+                &name.0,
+                &auth.account_id.0,
+                auth.should_override_storage_visibility_rules(),
+            )
+            .await?
+            .ok_or(EnvironmentError::EnvironmentByNameNotFound(name.clone()))?
+            .into();
+
+        auth.authorize_environment_action(
+            &result.owner_account_id,
+            &result.roles_from_shares,
+            EnvironmentAction::ViewEnvironment,
+        )
+        .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
+
+        Ok(result)
+    }
+
+    /// Convenience method for fetching environment and checking permissions against it.
+    /// This is mostly for checking access to subresources of an enviornment.
+    /// Note that lack of permissions to see the parent is already mapped to EnvironmentNotFound here,
+    /// so an Unauthorized error comes purely from checking the provided action.
+    pub async fn get_and_authorize(
+        &self,
+        environment_id: &EnvironmentId,
+        action: EnvironmentAction,
+        auth: &AuthCtx,
+    ) -> Result<WithEnvironmentCtx<Environment>, EnvironmentError> {
+        let environment: WithEnvironmentCtx<Environment> = self.get(environment_id, auth).await?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_shares,
+            action,
+        )?;
+
+        Ok(environment)
     }
 }

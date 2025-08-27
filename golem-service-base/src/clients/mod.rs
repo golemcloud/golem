@@ -17,11 +17,13 @@ pub mod limit;
 pub mod plugin;
 pub mod project;
 
+use golem_common::SafeDisplay;
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::RetryConfig;
 use golem_common::model::auth::TokenSecret;
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 use std::str::FromStr;
 use tonic::metadata::MetadataMap;
 use url::Url;
@@ -48,6 +50,18 @@ impl RemoteServiceConfig {
             .path_and_query("/")
             .build()
             .expect("Failed to build service URI")
+    }
+}
+
+impl SafeDisplay for RemoteServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "access_token: ****");
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
     }
 }
 

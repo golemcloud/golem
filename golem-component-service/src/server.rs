@@ -14,6 +14,7 @@
 
 use anyhow::anyhow;
 use golem_common::tracing::init_tracing_with_default_env_filter;
+use golem_common::SafeDisplay;
 use golem_component_service::api::make_open_api_service;
 use golem_component_service::bootstrap::Services;
 use golem_component_service::config::{make_config_loader, ComponentServiceConfig};
@@ -21,6 +22,7 @@ use golem_component_service::{metrics, ComponentService};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use prometheus::Registry;
+use tracing::info;
 
 fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
@@ -30,12 +32,13 @@ fn main() -> anyhow::Result<()> {
             .block_on(dump_openapi_yaml())
     } else if let Some(config) = make_config_loader().load_or_dump_config() {
         init_tracing_with_default_env_filter(&config.tracing);
+        info!("Using configuration:\n{}", config.to_safe_string_indented());
+
         let prometheus = metrics::register_all();
 
         let exporter = opentelemetry_prometheus::exporter()
             .with_registry(prometheus.clone())
-            .build()
-            .unwrap();
+            .build()?;
 
         global::set_meter_provider(
             MeterProviderBuilder::default()

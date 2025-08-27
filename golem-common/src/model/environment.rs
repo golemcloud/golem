@@ -13,22 +13,23 @@
 // limitations under the License.
 
 use super::application::ApplicationId;
-use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
+use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 
 newtype_uuid!(
     EnvironmentId,
     golem_api_grpc::proto::golem::common::EnvironmentId
 );
 
+declare_revision!(EnvironmentRevision);
+
 declare_transparent_newtypes! {
     pub struct EnvironmentName(pub String);
-
-    pub struct EnvironmentRevision(pub u64);
 }
 
 declare_structs! {
     pub struct Environment {
         pub id: EnvironmentId,
+        pub revision: EnvironmentRevision,
         pub application_id: ApplicationId,
         pub name: EnvironmentName,
         pub compatibility_check: bool,
@@ -41,6 +42,10 @@ declare_structs! {
         pub compatibility_check: bool,
         pub version_check: bool,
         pub security_overrides: bool,
+    }
+
+    pub struct UpdatedEnvironmentData {
+        pub new_name: Option<EnvironmentName>
     }
 
     pub struct EnvironmentHash {

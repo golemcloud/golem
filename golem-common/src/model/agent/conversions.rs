@@ -15,9 +15,10 @@
 use crate::model::agent::bindings::golem::agent::host;
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentType, BinaryDescriptor,
-    BinaryReference, BinarySource, BinaryType, DataSchema, DataValue, ElementSchema, ElementValue,
-    ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType, Url,
+    BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
+    NamedElementValue, NamedElementValues, RegisteredAgentType, TextDescriptor, TextReference,
+    TextSource, TextType, Url,
 };
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -287,7 +288,9 @@ impl From<super::bindings::golem::agent::common::ElementSchema> for ElementSchem
     fn from(value: crate::model::agent::bindings::golem::agent::common::ElementSchema) -> Self {
         match value {
             crate::model::agent::bindings::golem::agent::common::ElementSchema::ComponentModel(wit_type) => {
-                ElementSchema::ComponentModel(wit_type.into())
+                ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: wit_type.into(),
+                })
             }
             crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredText(text) => {
                 ElementSchema::UnstructuredText(text.into())
@@ -302,9 +305,9 @@ impl From<super::bindings::golem::agent::common::ElementSchema> for ElementSchem
 impl From<ElementSchema> for super::bindings::golem::agent::common::ElementSchema {
     fn from(value: ElementSchema) -> Self {
         match value {
-            ElementSchema::ComponentModel(wit_type) => {
+            ElementSchema::ComponentModel(component_model_element_schema) => {
                 super::bindings::golem::agent::common::ElementSchema::ComponentModel(
-                    wit_type.into(),
+                    component_model_element_schema.element_type.into(),
                 )
             }
             ElementSchema::UnstructuredText(text) => {

@@ -83,6 +83,21 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::environment::Environment",
             ),
             ("Component", "golem_common::model::component::Component"),
+            ("AccountRole", "golem_common::model::auth::AccountRole"),
+            (
+                "EnvironmentShare",
+                "golem_common::model::environment_share::EnvironmentShare",
+            ),
+            (
+                "NewEnvironmentShareData",
+                "golem_common::model::environment_share::NewEnvironmentShareData",
+            ),
+            (
+                "UpdatedEnvironmentShareData",
+                "golem_common::model::environment_share::UpdatedEnvironmentShareData",
+            ),
+            // ("DataSchema", "golem_common::model::agent::DataSchema"),
+            // ("AgentInstanceKey", "golem_common::model::AgentInstanceKey"),
             ("AgentType", "golem_common::model::agent::AgentType"),
             ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
             ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),

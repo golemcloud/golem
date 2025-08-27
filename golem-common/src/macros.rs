@@ -133,9 +133,25 @@ macro_rules! newtype_uuid {
         }
 
         #[cfg(feature = "poem")]
+        impl ::poem_openapi::types::ParseFromMultipartField for $name {
+            async fn parse_from_multipart(
+                field: Option<::poem::web::Field>,
+            ) -> ::poem_openapi::types::ParseResult<Self> {
+                <::uuid::Uuid as poem_openapi::types::ParseFromMultipartField>::parse_from_multipart(field).await.map(Self).map_err(|e| e.propagate())
+            }
+        }
+
+        #[cfg(feature = "poem")]
         impl poem_openapi::types::ToJSON for $name {
             fn to_json(&self) -> Option<serde_json::Value> {
                 Some(serde_json::Value::String(self.0.to_string()))
+            }
+        }
+
+        #[cfg(feature = "poem")]
+        impl ::poem_openapi::types::ToHeader for $name {
+            fn to_header(&self) -> Option<::http::HeaderValue> {
+                <::uuid::Uuid as ::poem_openapi::types::ToHeader>::to_header(&self.0)
             }
         }
 
@@ -209,9 +225,17 @@ macro_rules! declare_revision {
             Copy,
             Clone,
             PartialEq,
-            serde::Deserialize,
-            serde::Serialize,
-            derive_more::Display,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            ::serde::Deserialize,
+            ::serde::Serialize,
+            ::bincode::Encode,
+            ::bincode::Decode,
+            ::golem_wasm_rpc_derive::IntoValue,
+            ::derive_more::Display,
+            ::derive_more::FromStr,
         )]
         #[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
         #[repr(transparent)]
@@ -278,8 +302,8 @@ macro_rules! declare_enums {
 #[macro_export]
 macro_rules! declare_transparent_newtypes {
     ($($i:item)*) => { $(
-    #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize, derive_more::Display)]
-    #[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
+    #[derive(Debug, Clone, PartialEq, ::serde::Deserialize, ::serde::Serialize)]
+    #[cfg_attr(feature = "poem", derive(::poem_openapi::NewType))]
     #[repr(transparent)]
         $i
     )* }

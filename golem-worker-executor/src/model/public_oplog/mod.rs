@@ -39,19 +39,16 @@ use crate::services::rpc::RpcError;
 use async_trait::async_trait;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
-use golem_common::model::exports::find_resource_site;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
-    ChangeRetryPolicyParameters, CreateAgentInstanceParameters, CreateParameters,
-    DeactivatePluginParameters, DescribeResourceParameters, DropAgentInstanceParameters,
-    EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
-    ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
-    FinishSpanParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters,
-    LogParameters, ManualUpdateParameters, PendingUpdateParameters,
-    PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttribute,
-    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
+    ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters, EndRegionParameters,
+    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
+    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+    PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
     PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
     SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters,
     SuccessfulUpdateParameters, TimestampParameter,
@@ -66,10 +63,7 @@ use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
 };
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedType};
-use golem_wasm_rpc::{
-    parse_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,
-};
-use rib::{ParsedFunctionName, ParsedFunctionReference};
+use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -359,13 +353,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                 )?;
 
-                let parsed = ParsedFunctionName::parse(&function_name)?;
                 let param_types: Box<dyn Iterator<Item = &AnalysedFunctionParameter>> =
-                    if parsed.function().is_indexed_resource() {
-                        Box::new(function.analysed_export.parameters.iter().skip(1))
-                    } else {
-                        Box::new(function.analysed_export.parameters.iter())
-                    };
+                    Box::new(function.analysed_export.parameters.iter());
 
                 let request = param_types
                     .zip(params)
@@ -621,58 +610,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 name: resource_type_id.name,
                 owner: resource_type_id.owner,
             })),
-            OplogEntry::DescribeResource {
-                timestamp,
-                id,
-                resource_type_id,
-                indexed_resource_parameters,
-            } => {
-                let metadata = components
-                    .get_metadata(
-                        &owned_worker_id.project_id,
-                        &owned_worker_id.worker_id.component_id,
-                        Some(component_version),
-                    )
-                    .await
-                    .map_err(|err| err.to_string())?;
 
-                let resource_name = resource_type_id.name.clone();
-                let resource_owner = resource_type_id.owner.clone();
-                let resource_constructor_name = ParsedFunctionName::new(
-                    find_resource_site(metadata.metadata.exports(), &resource_name).ok_or(
-                        format!(
-                            "Resource site for resource {} not found in component {} version {}",
-                            resource_name,
-                            owned_worker_id.component_id(),
-                            component_version
-                        ),
-                    )?,
-                    ParsedFunctionReference::RawResourceConstructor {
-                        resource: resource_name.clone(),
-                    },
-                );
-                let constructor_def = metadata.metadata.find_function(&resource_constructor_name.to_string()).await?.ok_or(
-                    format!("Resource constructor {resource_constructor_name} not found in component {} version {component_version}", owned_worker_id.component_id())
-                )?;
-
-                let mut resource_params = Vec::new();
-                for (value_str, param) in indexed_resource_parameters
-                    .iter()
-                    .zip(constructor_def.analysed_export.parameters)
-                {
-                    let value_and_type = parse_value_and_type(&param.typ, value_str)?;
-                    resource_params.push(value_and_type);
-                }
-                Ok(PublicOplogEntry::DescribeResource(
-                    DescribeResourceParameters {
-                        timestamp,
-                        id,
-                        resource_name,
-                        resource_params,
-                        resource_owner,
-                    },
-                ))
-            }
             OplogEntry::Log {
                 timestamp,
                 level,
@@ -794,20 +732,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     persistence_level: level,
                 }),
-            ),
-            OplogEntry::CreateAgentInstance {
-                timestamp,
-                key,
-                parameters,
-            } => Ok(PublicOplogEntry::CreateAgentInstance(
-                CreateAgentInstanceParameters {
-                    timestamp,
-                    key,
-                    parameters,
-                },
-            )),
-            OplogEntry::DropAgentInstance { timestamp, key } => Ok(
-                PublicOplogEntry::DropAgentInstance(DropAgentInstanceParameters { timestamp, key }),
             ),
         }
     }

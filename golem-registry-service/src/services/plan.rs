@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use crate::config::PlansConfig;
+use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::model::account_usage::UsageType;
 use crate::repo::model::plan::PlanRecord;
 use crate::repo::plan::PlanRepo;
 use anyhow::anyhow;
 use golem_common::model::PlanId;
-use golem_common::model::account::Plan;
+use golem_common::model::account::{Plan, PlanName};
+use golem_common::model::auth::{GlobalAction, PlanAction};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 use std::collections::BTreeMap;
@@ -31,6 +33,8 @@ pub enum PlanError {
     #[error("Plan not found for id {0}")]
     PlanNotFound(PlanId),
     #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
+    #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
 
@@ -38,6 +42,7 @@ impl SafeDisplay for PlanError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::PlanNotFound(_) => self.to_string(),
+            Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -60,10 +65,10 @@ impl PlanService {
         Self { plan_repo, config }
     }
 
-    pub async fn create_initial_plans(&self) -> Result<(), PlanError> {
+    pub async fn create_initial_plans(&self, auth: &AuthCtx) -> Result<(), PlanError> {
         for (name, plan) in &self.config.plans {
             let plan_id = PlanId(plan.plan_id);
-            let existing_plan = self.get(&plan_id).await;
+            let existing_plan = self.get(&plan_id, auth).await;
 
             let needs_update = match existing_plan {
                 Ok(existing_plan) => {
@@ -89,34 +94,29 @@ impl PlanService {
             };
 
             if needs_update {
-                let record: PlanRecord = PlanRecord {
-                    name: name.clone(),
-                    plan_id: plan.plan_id,
-                    limits: BTreeMap::from_iter([
-                        (UsageType::TotalAppCount, Some(plan.app_limit)),
-                        (UsageType::TotalEnvCount, Some(plan.env_limit)),
-                        (UsageType::TotalComponentCount, Some(plan.component_limit)),
-                        (
-                            UsageType::TotalComponentStorageBytes,
-                            Some(plan.storage_limit),
-                        ),
-                        (UsageType::TotalWorkerCount, Some(plan.worker_limit)),
-                        (UsageType::MonthlyGasLimit, Some(plan.monthly_gas_limit)),
-                        (
-                            UsageType::MonthlyComponentUploadLimitBytes,
-                            Some(plan.monthly_upload_limit),
-                        ),
-                    ]),
-                };
-
-                self.plan_repo.create_or_update(record).await?;
+                self.create_or_update_plan(
+                    Plan {
+                        plan_id: PlanId(plan.plan_id),
+                        name: PlanName(name.to_string()),
+                        app_limit: plan.app_limit,
+                        env_limit: plan.env_limit,
+                        component_limit: plan.component_limit,
+                        worker_limit: plan.worker_limit,
+                        storage_limit: plan.storage_limit,
+                        monthly_gas_limit: plan.monthly_gas_limit,
+                        monthly_upload_limit: plan.monthly_upload_limit,
+                    },
+                    auth,
+                )
+                .await?;
             }
         }
 
         Ok(())
     }
 
-    pub async fn get_default_plan(&self) -> Result<Plan, PlanError> {
+    pub async fn get_default_plan(&self, auth: &AuthCtx) -> Result<Plan, PlanError> {
+        auth.authorize_global_action(GlobalAction::GetDefaultPlan)?;
         let plan_id = self.config.plans.get("default").unwrap().plan_id;
 
         debug!("Getting default plan {}", plan_id);
@@ -129,7 +129,10 @@ impl PlanService {
         }
     }
 
-    pub async fn get(&self, plan_id: &PlanId) -> Result<Plan, PlanError> {
+    pub async fn get(&self, plan_id: &PlanId, auth: &AuthCtx) -> Result<Plan, PlanError> {
+        auth.authorize_plan_action(plan_id, PlanAction::ViewPlan)
+            .map_err(|_| PlanError::PlanNotFound(plan_id.clone()))?;
+
         debug!("Getting plan {}", plan_id);
 
         let result = self
@@ -139,5 +142,33 @@ impl PlanService {
             .ok_or(PlanError::PlanNotFound(plan_id.clone()))?;
 
         Ok(result.try_into()?)
+    }
+
+    pub async fn create_or_update_plan(&self, plan: Plan, auth: &AuthCtx) -> Result<(), PlanError> {
+        auth.authorize_plan_action(&plan.plan_id, PlanAction::CreateOrUpdatePlan)?;
+
+        let record: PlanRecord = PlanRecord {
+            name: plan.name.0,
+            plan_id: plan.plan_id.0,
+            limits: BTreeMap::from_iter([
+                (UsageType::TotalAppCount, Some(plan.app_limit)),
+                (UsageType::TotalEnvCount, Some(plan.env_limit)),
+                (UsageType::TotalComponentCount, Some(plan.component_limit)),
+                (
+                    UsageType::TotalComponentStorageBytes,
+                    Some(plan.storage_limit),
+                ),
+                (UsageType::TotalWorkerCount, Some(plan.worker_limit)),
+                (UsageType::MonthlyGasLimit, Some(plan.monthly_gas_limit)),
+                (
+                    UsageType::MonthlyComponentUploadLimitBytes,
+                    Some(plan.monthly_upload_limit),
+                ),
+            ]),
+        };
+
+        self.plan_repo.create_or_update(record).await?;
+
+        Ok(())
     }
 }

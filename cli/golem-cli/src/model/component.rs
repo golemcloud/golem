@@ -411,13 +411,9 @@ pub fn function_params_types<'t>(
     component: &'t Component,
     function: &str,
 ) -> anyhow::Result<Vec<&'t AnalysedType>> {
-    let (func, parsed) = resolve_function(component, function)?;
+    let (func, _parsed) = resolve_function(component, function)?;
 
-    if parsed.function().is_indexed_resource() {
-        Ok(func.parameters.iter().skip(1).map(|r| &r.typ).collect())
-    } else {
-        Ok(func.parameters.iter().map(|r| &r.typ).collect())
-    }
+    Ok(func.parameters.iter().map(|r| &r.typ).collect())
 }
 
 #[cfg(test)]

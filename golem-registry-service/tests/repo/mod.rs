@@ -24,7 +24,9 @@ use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRevisionRecord,
 };
 use golem_registry_service::repo::model::account_usage::UsageType;
-use golem_registry_service::repo::model::application::ApplicationRecord;
+use golem_registry_service::repo::model::application::{
+    ApplicationExtRevisionRecord, ApplicationRevisionRecord,
+};
 use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
 use golem_registry_service::repo::model::environment::{
     EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
@@ -94,38 +96,42 @@ impl Deps {
                 audit: DeletableRevisionAuditFields::new(account_id),
                 name: format!("Test Account {account_id}"),
                 plan_id: self.test_plan_id(),
-                roles: Vec::new(),
+                roles: 0,
             })
             .await
             .unwrap()
     }
 
-    pub async fn create_application(&self) -> ApplicationRecord {
-        let owner = self.create_account().await;
+    pub async fn create_application(
+        &self,
+        owner_account_id: &Uuid,
+    ) -> ApplicationExtRevisionRecord {
         let user = self.create_account().await;
-        let app_name = format!("app-name-{}", new_repo_uuid());
 
         self.application_repo
-            .ensure(
-                &user.revision.account_id,
-                &owner.revision.account_id,
-                &app_name,
+            .create(
+                owner_account_id,
+                ApplicationRevisionRecord {
+                    application_id: new_repo_uuid(),
+                    revision_id: 0,
+                    name: format!("app-name-{}", new_repo_uuid()),
+                    audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+                },
             )
             .await
             .unwrap()
     }
 
-    pub async fn create_env(&self) -> EnvironmentExtRevisionRecord {
-        let app = self.create_application().await;
-        let env_name = format!("env-{}", new_repo_uuid());
+    pub async fn create_env(&self, parent_application_id: &Uuid) -> EnvironmentExtRevisionRecord {
+        let user = self.create_account().await;
         self.environment_repo
             .create(
-                &app.application_id,
-                &env_name,
+                parent_application_id,
                 EnvironmentRevisionRecord {
                     environment_id: new_repo_uuid(),
                     revision_id: 0,
-                    audit: DeletableRevisionAuditFields::new(app.audit.modified_by),
+                    name: format!("env-{}", new_repo_uuid()),
+                    audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     compatibility_check: true,
                     version_check: true,
                     security_overrides: true,
@@ -133,7 +139,6 @@ impl Deps {
                 },
             )
             .await
-            .unwrap()
             .unwrap()
     }
 }

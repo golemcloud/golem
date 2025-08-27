@@ -15,8 +15,8 @@
 use test_r::test;
 
 use crate::model::public_oplog::{
-    ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, EndRegionParameters,
-    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ChangeRetryPolicyParameters, CreateParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, PendingUpdateParameters,
     PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttribute,
@@ -459,31 +459,6 @@ fn drop_resource_serialization_poem_serde_equivalence() {
         id: WorkerResourceId(100),
         name: "test".to_string(),
         owner: "owner".to_string(),
-    });
-
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-#[cfg(feature = "poem")]
-fn describe_resource_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::DescribeResource(DescribeResourceParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
-        id: WorkerResourceId(100),
-        resource_name: "test".to_string(),
-        resource_params: vec![
-            ValueAndType {
-                value: Value::String("test".to_string()),
-                typ: str(),
-            },
-            ValueAndType {
-                value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                typ: record(vec![field("x", s16()), field("y", s16())]),
-            },
-        ],
-        resource_owner: "owner".to_string(),
     });
 
     let serialized = entry.to_json_string();

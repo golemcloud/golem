@@ -17,10 +17,10 @@ use super::PluginInstallationId;
 use crate::base_model::ComponentId;
 use crate::model::account::AccountId;
 use crate::model::component_metadata::ComponentMetadata;
-use crate::{declare_structs, declare_transparent_newtypes};
+use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
 use bincode::{Decode, Encode};
 use core::fmt;
-use golem_wasm_rpc_derive::IntoValue;
+use derive_more::Display;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -28,11 +28,11 @@ use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 use typed_path::Utf8UnixPathBuf;
 
-declare_transparent_newtypes! {
-    pub struct ComponentName(pub String);
+declare_revision!(ComponentRevision);
 
-    #[derive(Copy, Hash, Eq, PartialOrd, Ord, derive_more::FromStr,  Encode, Decode, IntoValue)]
-    pub struct ComponentRevision(pub u64);
+declare_transparent_newtypes! {
+    #[derive(Display)]
+    pub struct ComponentName(pub String);
 }
 
 impl TryFrom<String> for ComponentName {

@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{
-    ComponentId, IdempotencyKey, PluginInstallationId, PromiseId, TargetWorkerId, WorkerId,
-};
+use crate::model::{ComponentId, IdempotencyKey, PluginInstallationId, PromiseId, WorkerId};
 use golem_api_grpc::proto::golem::common;
 use golem_api_grpc::proto::golem::component;
 use golem_api_grpc::proto::golem::worker;
@@ -29,13 +27,6 @@ pub fn proto_worker_id_string(worker_id: &Option<worker::WorkerId>) -> Option<St
     worker_id
         .clone()
         .and_then(|v| TryInto::<WorkerId>::try_into(v).ok())
-        .map(|v| v.to_string())
-}
-
-pub fn proto_target_worker_id_string(worker_id: &Option<worker::TargetWorkerId>) -> Option<String> {
-    worker_id
-        .clone()
-        .and_then(|v| TryInto::<TargetWorkerId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
 

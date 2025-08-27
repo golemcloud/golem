@@ -13,15 +13,17 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_share::EnvironmentShareService;
 use golem_common::api::Page;
-use golem_common::api::environment::{DeployEnvironmentRequest, UpdateEnvironmentRequest};
+use golem_common::api::environment::DeployEnvironmentRequest;
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::deployment::Deployment;
 use golem_common::model::environment::*;
-use golem_common::model::environment_share::{EnvironmentShare, NewEnvironmentShare};
+use golem_common::model::environment_share::{EnvironmentShare, NewEnvironmentShareData};
+use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -35,6 +37,7 @@ use uuid::Uuid;
 pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
     environment_share_service: Arc<EnvironmentShareService>,
+    auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
@@ -46,10 +49,12 @@ impl EnvironmentsApi {
     pub fn new(
         environment_service: Arc<EnvironmentService>,
         environment_share_service: Arc<EnvironmentShareService>,
+        auth_service: Arc<AuthService>,
     ) -> Self {
         Self {
             environment_service,
             environment_share_service,
+            auth_service,
         }
     }
 
@@ -69,7 +74,7 @@ impl EnvironmentsApi {
             environment_id = environment_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_internal(environment_id.0, auth)
@@ -82,10 +87,10 @@ impl EnvironmentsApi {
     async fn get_environment_internal(
         &self,
         environment_id: EnvironmentId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
-        let environment = self.environment_service.get(&environment_id).await?;
-        Ok(Json(environment))
+        let environment = self.environment_service.get(&environment_id, &auth).await?;
+        Ok(Json(environment.value))
     }
 
     /// Update environment by id.
@@ -97,7 +102,7 @@ impl EnvironmentsApi {
     pub async fn update_environment(
         &self,
         environment_id: Path<EnvironmentId>,
-        payload: Json<UpdateEnvironmentRequest>,
+        payload: Json<UpdatedEnvironmentData>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Environment>> {
         let record = recorded_http_api_request!(
@@ -105,7 +110,7 @@ impl EnvironmentsApi {
             environment_id = environment_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .update_environment_internal(environment_id.0, payload.0, auth)
@@ -117,11 +122,52 @@ impl EnvironmentsApi {
 
     async fn update_environment_internal(
         &self,
-        _application_id: EnvironmentId,
-        _payload: UpdateEnvironmentRequest,
-        _auth: AuthCtx,
+        environment_id: EnvironmentId,
+        payload: UpdatedEnvironmentData,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
-        todo!()
+        let result = self
+            .environment_service
+            .update(environment_id, payload, &auth)
+            .await?;
+        Ok(Json(result))
+    }
+
+    /// Delete environment by id.
+    #[oai(
+        path = "/:environment_id",
+        method = "delete",
+        operation_id = "delete_environment"
+    )]
+    pub async fn delete_environment(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<NoContentResponse> {
+        let record = recorded_http_api_request!(
+            "delete_environment",
+            environment_id = environment_id.0.to_string()
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .delete_environment_internal(environment_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn delete_environment_internal(
+        &self,
+        environment_id: EnvironmentId,
+        auth: AuthCtx,
+    ) -> ApiResult<NoContentResponse> {
+        self.environment_service
+            .delete(environment_id, &auth)
+            .await?;
+        Ok(NoContentResponse::NoContent)
     }
 
     /// Get hash of the currently deployed environment
@@ -140,7 +186,7 @@ impl EnvironmentsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_deployed_environment_hash_internal(environment_id.0, auth)
@@ -174,7 +220,7 @@ impl EnvironmentsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_deployed_environment_summary_internal(environment_id.0, auth)
@@ -208,7 +254,7 @@ impl EnvironmentsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_deployment_plan_internal(environment_id.0, auth)
@@ -243,7 +289,7 @@ impl EnvironmentsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_deployments_internal(environment_id.0, auth)
@@ -279,7 +325,7 @@ impl EnvironmentsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .deploy_environment_internal(environment_id.0, payload.0, auth)
@@ -308,7 +354,7 @@ impl EnvironmentsApi {
     async fn create_environment_share(
         &self,
         environment_id: Path<EnvironmentId>,
-        payload: Json<NewEnvironmentShare>,
+        payload: Json<NewEnvironmentShareData>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let record = recorded_http_api_request!(
@@ -316,7 +362,7 @@ impl EnvironmentsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .create_environment_share_internal(environment_id.0, payload.0, auth)
@@ -329,14 +375,14 @@ impl EnvironmentsApi {
     async fn create_environment_share_internal(
         &self,
         environment_id: EnvironmentId,
-        payload: NewEnvironmentShare,
-        _token: AuthCtx,
+        payload: NewEnvironmentShareData,
+        auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let actor = AccountId(Uuid::new_v4());
 
         let result = self
             .environment_share_service
-            .create(environment_id, payload, actor)
+            .create(environment_id, payload, actor, &auth)
             .await?;
 
         Ok(Json(result))
@@ -359,7 +405,7 @@ impl EnvironmentsApi {
             environment_id = environment_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_shares_internal(environment_id.0, auth)
@@ -372,11 +418,11 @@ impl EnvironmentsApi {
     async fn get_environment_shares_internal(
         &self,
         environment_id: EnvironmentId,
-        _token: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Page<EnvironmentShare>>> {
         let result = self
             .environment_share_service
-            .get_shares_in_environment(environment_id)
+            .get_shares_in_environment(environment_id, &auth)
             .await?;
 
         Ok(Json(Page { values: result }))

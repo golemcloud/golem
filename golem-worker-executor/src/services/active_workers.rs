@@ -24,6 +24,7 @@ use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
@@ -61,6 +62,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -70,6 +72,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let owned_worker_id = owned_worker_id.clone();
         let account_id = account_id.clone();
         let deps = deps.clone();
+        let invocation_context_stack = invocation_context_stack.clone();
         self.workers
             .get_or_insert_simple(&worker_id, || {
                 Box::pin(async move {
@@ -83,6 +86,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                             worker_wasi_config_vars,
                             component_version,
                             parent,
+                            &invocation_context_stack,
                         )
                         .in_current_span()
                         .await?,

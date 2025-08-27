@@ -340,35 +340,6 @@ impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct IndexedWorkerMetadata {
-    pub resource_name: String,
-    pub resource_params: Vec<String>,
-    pub resource_owner: String,
-}
-
-impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedWorkerMetadata {
-    fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
-        Self {
-            resource_name: value.resource_name,
-            resource_params: value.resource_params,
-            resource_owner: value.resource_owner,
-        }
-    }
-}
-
-impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
-    fn from(value: IndexedWorkerMetadata) -> Self {
-        Self {
-            resource_name: value.resource_name,
-            resource_params: value.resource_params,
-            resource_owner: value.resource_owner,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]

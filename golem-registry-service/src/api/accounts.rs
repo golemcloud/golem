@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
 use crate::services::account::AccountService;
+use crate::services::auth::AuthService;
 use crate::services::plan::PlanService;
 use golem_common::api::Page;
 use golem_common::model::Empty;
 use golem_common::model::account::{Account, AccountId, NewAccountData, Plan, UpdatedAccountData};
-use golem_common::model::auth::{AccountRole, AuthCtx};
+use golem_common::model::auth::AccountRole;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -28,11 +30,11 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
-use uuid::Uuid;
 
 pub struct AccountsApi {
     account_service: Arc<AccountService>,
     plan_service: Arc<PlanService>,
+    auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
@@ -41,10 +43,15 @@ pub struct AccountsApi {
     tag = ApiTags::Account
 )]
 impl AccountsApi {
-    pub fn new(account_service: Arc<AccountService>, plan_service: Arc<PlanService>) -> Self {
+    pub fn new(
+        account_service: Arc<AccountService>,
+        plan_service: Arc<PlanService>,
+        auth_service: Arc<AuthService>,
+    ) -> Self {
         Self {
             account_service,
             plan_service,
+            auth_service,
         }
     }
 
@@ -59,7 +66,7 @@ impl AccountsApi {
     ) -> ApiResult<Json<Page<Account>>> {
         let record = recorded_http_api_request!("find_accounts", email = email.0);
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .find_accounts_internal(email.0, auth)
@@ -88,7 +95,7 @@ impl AccountsApi {
     ) -> ApiResult<Json<Account>> {
         let record = recorded_http_api_request!("create_account", account_name = data.name.clone());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .create_account_internal(data.0, auth)
@@ -101,11 +108,9 @@ impl AccountsApi {
     async fn create_account_internal(
         &self,
         data: NewAccountData,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        let actor = AccountId(Uuid::nil());
-
-        let result = self.account_service.create(data, actor).await?;
+        let result = self.account_service.create(data, &auth).await?;
         Ok(Json(result))
     }
 
@@ -121,7 +126,7 @@ impl AccountsApi {
         let record =
             recorded_http_api_request!("get_account", account_id = account_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_account_internal(account_id.0, auth)
@@ -134,9 +139,9 @@ impl AccountsApi {
     async fn get_account_internal(
         &self,
         account_id: AccountId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        let result = self.account_service.get(&account_id).await?;
+        let result = self.account_service.get(&account_id, &auth).await?;
         Ok(Json(result))
     }
 
@@ -154,7 +159,7 @@ impl AccountsApi {
         let record =
             recorded_http_api_request!("get_account_plan", account_id = account_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_account_plan_internal(account_id.0, auth)
@@ -167,10 +172,10 @@ impl AccountsApi {
     async fn get_account_plan_internal(
         &self,
         account_id: AccountId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Plan>> {
-        let account = self.account_service.get(&account_id).await?;
-        let plan = self.plan_service.get(&account.plan_id).await?;
+        let account = self.account_service.get(&account_id, &auth).await?;
+        let plan = self.plan_service.get(&account.plan_id, &auth).await?;
 
         Ok(Json(plan))
     }
@@ -191,7 +196,7 @@ impl AccountsApi {
         let record =
             recorded_http_api_request!("update_account", account_id = account_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .put_account_internal(account_id.0, data.0, auth)
@@ -205,12 +210,11 @@ impl AccountsApi {
         &self,
         account_id: AccountId,
         data: UpdatedAccountData,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        let actor = AccountId(Uuid::nil());
         let result = self
             .account_service
-            .update(&account_id, data, actor)
+            .update(&account_id, data, &auth)
             .await?;
         Ok(Json(result))
     }
@@ -230,7 +234,7 @@ impl AccountsApi {
         let record =
             recorded_http_api_request!("set_account_roles", account_id = account_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .set_account_roles_internal(account_id.0, roles.0, auth)
@@ -244,12 +248,11 @@ impl AccountsApi {
         &self,
         account_id: AccountId,
         roles: Vec<AccountRole>,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
-        let actor = AccountId(Uuid::nil());
         let result = self
             .account_service
-            .set_roles(&account_id, roles, actor)
+            .set_roles(&account_id, roles, &auth)
             .await?;
         Ok(Json(result))
     }
@@ -270,7 +273,7 @@ impl AccountsApi {
         let record =
             recorded_http_api_request!("delete_account", account_id = account_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .delete_account_internal(account_id.0, auth)
@@ -282,9 +285,10 @@ impl AccountsApi {
 
     async fn delete_account_internal(
         &self,
-        _account_id: AccountId,
-        _auth: AuthCtx,
+        account_id: AccountId,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Empty>> {
-        todo!()
+        self.account_service.delete(&account_id, &auth).await?;
+        Ok(Json(Empty {}))
     }
 }

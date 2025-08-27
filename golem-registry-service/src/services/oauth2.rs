@@ -18,6 +18,7 @@ use super::oauth2_github_client::{
 };
 use super::token::{TokenError, TokenService};
 use crate::config::OAuth2Config;
+use crate::model::auth::AuthCtx;
 use crate::model::login::{
     ExternalLogin, OAuth2DeviceFlowSession, OAuth2Token, OAuth2WebflowState,
     OAuth2WebflowStateMetadata,
@@ -128,7 +129,11 @@ impl OAuth2Service {
         };
 
         let token = match existing_data.and_then(|token| token.token_id) {
-            Some(token_id) => self.token_service.get(&token_id).await?,
+            Some(token_id) => {
+                self.token_service
+                    .get(&token_id, &AuthCtx::system())
+                    .await?
+            }
             None => {
                 // This will also link the external id to the account id, ensure that no additional
                 // accounts are created in the future.
@@ -344,7 +349,7 @@ impl OAuth2Service {
 
         let account = self
             .account_service
-            .create_bootstrapped(NewAccountData { name, email })
+            .create(NewAccountData { name, email }, &AuthCtx::system())
             .await?;
 
         Ok(account.id)
@@ -363,7 +368,7 @@ impl OAuth2Service {
 
         let token_with_secret = self
             .token_service
-            .create(account_id.clone(), expiration)
+            .create(account_id.clone(), expiration, &AuthCtx::system())
             .await?;
 
         {

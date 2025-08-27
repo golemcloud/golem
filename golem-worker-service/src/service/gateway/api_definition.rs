@@ -40,6 +40,7 @@ use rib::RibCompilationError;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::fmt::Write;
 use std::hash::Hash;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -58,7 +59,8 @@ pub struct ApiDefinitionIdWithVersion {
 pub enum ApiDefinitionError {
     #[error(transparent)]
     ValidationError(#[from] ValidationErrors),
-    #[error("Unable to fetch component: {}", .0.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", "))]
+    #[error("Unable to fetch component: {}", .0.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", ")
+    )]
     ComponentNotFoundError(Vec<VersionedComponentId>),
     #[error("Rib compilation error: {0}")]
     RibCompilationErrors(String),
@@ -233,6 +235,23 @@ pub trait ApiDefinitionService: Send + Sync {
 pub struct ApiDefinitionServiceConfig {
     component_by_name_cache_size: usize,
     component_by_id_cache_size: usize,
+}
+
+impl SafeDisplay for ApiDefinitionServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "component by name cache size: {}",
+            self.component_by_name_cache_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "component by id cache size: {}",
+            self.component_by_id_cache_size
+        );
+        result
+    }
 }
 
 impl Default for ApiDefinitionServiceConfig {

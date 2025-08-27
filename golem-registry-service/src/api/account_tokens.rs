@@ -13,10 +13,12 @@
 // limitations under the License.
 
 use crate::api::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use crate::services::token::TokenService;
-use golem_common::api::CreateTokenRequest;
+use golem_common::api::{CreateTokenRequest, Page};
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::{AuthCtx, Token, TokenWithSecret};
+use golem_common::model::auth::{Token, TokenWithSecret};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -28,6 +30,7 @@ use tracing::Instrument;
 
 pub struct AccountTokensApi {
     token_service: Arc<TokenService>,
+    auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
@@ -37,8 +40,11 @@ pub struct AccountTokensApi {
     tag = ApiTags::Token
 )]
 impl AccountTokensApi {
-    pub fn new(token_service: Arc<TokenService>) -> Self {
-        Self { token_service }
+    pub fn new(token_service: Arc<TokenService>, auth_service: Arc<AuthService>) -> Self {
+        Self {
+            token_service,
+            auth_service,
+        }
     }
 
     /// Get all tokens
@@ -54,11 +60,11 @@ impl AccountTokensApi {
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Vec<Token>>> {
+    ) -> ApiResult<Json<Page<Token>>> {
         let record =
             recorded_http_api_request!("get_account_tokens", account_id = account_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_tokens_internal(account_id.0, auth)
@@ -70,10 +76,16 @@ impl AccountTokensApi {
 
     async fn get_tokens_internal(
         &self,
-        _account_id: AccountId,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Vec<Token>>> {
-        todo!()
+        account_id: AccountId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<Token>>> {
+        let tokens = self
+            .token_service
+            .list_in_account(&account_id, &auth)
+            .await?;
+        Ok(Json(Page {
+            values: tokens.into_iter().map(|t| t.without_secret()).collect(),
+        }))
     }
 
     #[oai(
@@ -96,7 +108,7 @@ impl AccountTokensApi {
         let record =
             recorded_http_api_request!("create_token", account_id = account_id.0.to_string());
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .create_token_internal(account_id.0, request.0, auth)
@@ -110,12 +122,13 @@ impl AccountTokensApi {
         &self,
         account_id: AccountId,
         request: CreateTokenRequest,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<TokenWithSecret>> {
         let result = self
             .token_service
-            .create(account_id, request.expires_at)
+            .create(account_id, request.expires_at, &auth)
             .await?;
+
         Ok(Json(result))
     }
 }

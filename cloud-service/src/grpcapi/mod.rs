@@ -61,7 +61,7 @@ pub async fn start_grpc_server(
     services: &Services,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<u16> {
-    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
     let listener = TcpListener::bind(addr).await?;
     let port = listener.local_addr()?.port();

@@ -2016,9 +2016,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Token'
+                $ref: '#/components/schemas/Page_Token'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -3454,7 +3452,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_Application'
+                $ref: '#/components/schemas/Application'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -3520,7 +3518,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdateApplicationRequest'
+              $ref: '#/components/schemas/UpdatedApplicationData'
         required: true
       responses:
         '200':
@@ -3528,7 +3526,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_Application'
+                $ref: '#/components/schemas/Application'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6096,6 +6094,70 @@ paths:
       security:
       - Cookie: []
       - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - Environment
+      summary: Delete environment by id.
+      operationId: delete_environment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '204':
+          description: ''
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
     patch:
       tags:
       - RegistryService
@@ -6116,7 +6178,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdateEnvironmentRequest'
+              $ref: '#/components/schemas/UpdatedEnvironmentData'
         required: true
       responses:
         '200':
@@ -6613,7 +6675,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/NewEnvironmentShare'
+              $ref: '#/components/schemas/NewEnvironmentShareData'
         required: true
       responses:
         '200':
@@ -7048,7 +7110,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdateEnvironmentShare'
+              $ref: '#/components/schemas/UpdatedEnvironmentShareData'
         required: true
       responses:
         '200':
@@ -11996,6 +12058,9 @@ components:
         id:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: uint64
         accountId:
           type: string
           format: uuid
@@ -12003,6 +12068,7 @@ components:
           type: string
       required:
       - id
+      - revision
       - accountId
       - name
     BinaryDescriptor:
@@ -12133,6 +12199,14 @@ components:
       - binaryWit
       - dynamicLinking
       - agentTypes
+    ComponentModelElementSchema:
+      title: ComponentModelElementSchema
+      type: object
+      properties:
+        elementType:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - elementType
     ComponentPluginScope:
       title: ComponentPluginScope
       type: object
@@ -12447,26 +12521,14 @@ components:
       discriminator:
         propertyName: type
         mapping:
-          ComponentModel: '#/components/schemas/ElementSchema_AnalysedType'
+          ComponentModel: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
           UnstructuredText: '#/components/schemas/ElementSchema_TextDescriptor'
           UnstructuredBinary: '#/components/schemas/ElementSchema_BinaryDescriptor'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/ElementSchema_AnalysedType'
+      - $ref: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
       - $ref: '#/components/schemas/ElementSchema_TextDescriptor'
       - $ref: '#/components/schemas/ElementSchema_BinaryDescriptor'
-    ElementSchema_AnalysedType:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ComponentModel
-            type: string
-            enum:
-            - ComponentModel
-        required:
-        - type
-      - $ref: '#/components/schemas/AnalysedType'
     ElementSchema_BinaryDescriptor:
       allOf:
       - type: object
@@ -12479,6 +12541,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/BinaryDescriptor'
+    ElementSchema_ComponentModelElementSchema:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentModel
+            type: string
+            enum:
+            - ComponentModel
+        required:
+        - type
+      - $ref: '#/components/schemas/ComponentModelElementSchema'
     ElementSchema_TextDescriptor:
       allOf:
       - type: object
@@ -12498,6 +12572,9 @@ components:
         id:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: uint64
         applicationId:
           type: string
           format: uuid
@@ -12511,6 +12588,7 @@ components:
           type: boolean
       required:
       - id
+      - revision
       - applicationId
       - name
       - compatibilityCheck
@@ -12711,8 +12789,8 @@ components:
       - compatibilityCheck
       - versionCheck
       - securityOverrides
-    NewEnvironmentShare:
-      title: NewEnvironmentShare
+    NewEnvironmentShareData:
+      title: NewEnvironmentShareData
       type: object
       properties:
         granteeAccountId:
@@ -12900,6 +12978,16 @@ components:
             $ref: '#/components/schemas/SecuritySchemeResponseView'
       required:
       - values
+    Page_Token:
+      title: Page_Token
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/Token'
+      required:
+      - values
     Plan:
       title: Plan
       type: object
@@ -12907,6 +12995,8 @@ components:
         planId:
           type: string
           format: uuid
+        name:
+          type: string
         appLimit:
           type: integer
           format: int64
@@ -12930,6 +13020,7 @@ components:
           format: int64
       required:
       - planId
+      - name
       - appLimit
       - envLimit
       - componentLimit
@@ -13418,9 +13509,6 @@ components:
     UpdateApiDomainRequest:
       title: UpdateApiDomainRequest
       type: object
-    UpdateApplicationRequest:
-      title: UpdateApplicationRequest
-      type: object
     UpdateCertificateRequest:
       title: UpdateCertificateRequest
       type: object
@@ -13468,25 +13556,6 @@ components:
             $ref: '#/components/schemas/PluginInstallationAction'
       required:
       - previousVersion
-    UpdateEnvironmentRequest:
-      title: UpdateEnvironmentRequest
-      type: object
-      properties:
-        previousRevision:
-          type: integer
-          format: uint64
-      required:
-      - previousRevision
-    UpdateEnvironmentShare:
-      title: UpdateEnvironmentShare
-      type: object
-      properties:
-        newRoles:
-          type: array
-          items:
-            $ref: '#/components/schemas/EnvironmentRole'
-      required:
-      - newRoles
     UpdateHttpApiDefinitionRequest:
       title: UpdateHttpApiDefinitionRequest
       type: object
@@ -13508,6 +13577,28 @@ components:
       required:
       - name
       - email
+    UpdatedApplicationData:
+      title: UpdatedApplicationData
+      type: object
+      properties:
+        newName:
+          type: string
+    UpdatedEnvironmentData:
+      title: UpdatedEnvironmentData
+      type: object
+      properties:
+        newName:
+          type: string
+    UpdatedEnvironmentShareData:
+      title: UpdatedEnvironmentShareData
+      type: object
+      properties:
+        newRoles:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentRole'
+      required:
+      - newRoles
     VersionedComponentId:
       title: VersionedComponentId
       type: object

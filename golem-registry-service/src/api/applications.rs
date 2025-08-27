@@ -27,12 +27,12 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::application::ApplicationService;
+use crate::services::auth::AuthService;
 use crate::services::environment::EnvironmentService;
 use golem_common::api::Page;
-use golem_common::api::application::UpdateApplicationRequest;
-use golem_common::model::account::AccountId;
-use golem_common::model::application::{Application, ApplicationId};
-use golem_common::model::auth::AuthCtx;
+use golem_common::model::application::{Application, ApplicationId, UpdatedApplicationData};
 use golem_common::model::environment::*;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -42,10 +42,11 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
-use uuid::Uuid;
 
 pub struct ApplicationsApi {
+    application_service: Arc<ApplicationService>,
     environment_service: Arc<EnvironmentService>,
+    auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
@@ -54,9 +55,15 @@ pub struct ApplicationsApi {
     tag = ApiTags::Application
 )]
 impl ApplicationsApi {
-    pub fn new(environment_service: Arc<EnvironmentService>) -> Self {
+    pub fn new(
+        application_service: Arc<ApplicationService>,
+        environment_service: Arc<EnvironmentService>,
+        auth_service: Arc<AuthService>,
+    ) -> Self {
         Self {
+            application_service,
             environment_service,
+            auth_service,
         }
     }
 
@@ -70,13 +77,13 @@ impl ApplicationsApi {
         &self,
         application_id: Path<ApplicationId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<Application>>> {
+    ) -> ApiResult<Json<Application>> {
         let record = recorded_http_api_request!(
             "get_application",
             application_id = application_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_application_internal(application_id.0, auth)
@@ -88,10 +95,11 @@ impl ApplicationsApi {
 
     async fn get_application_internal(
         &self,
-        _application_id: ApplicationId,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Page<Application>>> {
-        todo!()
+        application_id: ApplicationId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Application>> {
+        let application = self.application_service.get(&application_id, &auth).await?;
+        Ok(Json(application))
     }
 
     /// Update application by id.
@@ -103,15 +111,15 @@ impl ApplicationsApi {
     pub async fn update_application(
         &self,
         application_id: Path<ApplicationId>,
-        payload: Json<UpdateApplicationRequest>,
+        payload: Json<UpdatedApplicationData>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<Application>>> {
+    ) -> ApiResult<Json<Application>> {
         let record = recorded_http_api_request!(
             "update_application",
             application_id = application_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .update_application_internal(application_id.0, payload.0, auth)
@@ -123,11 +131,15 @@ impl ApplicationsApi {
 
     async fn update_application_internal(
         &self,
-        _application_id: ApplicationId,
-        _payload: UpdateApplicationRequest,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Page<Application>>> {
-        todo!()
+        application_id: ApplicationId,
+        payload: UpdatedApplicationData,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Application>> {
+        let application = self
+            .application_service
+            .update(&application_id, payload, &auth)
+            .await?;
+        Ok(Json(application))
     }
 
     /// List all application environments
@@ -147,7 +159,7 @@ impl ApplicationsApi {
             application_id = application_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .list_application_environments_internal(application_id.0, auth)
@@ -159,10 +171,16 @@ impl ApplicationsApi {
 
     async fn list_application_environments_internal(
         &self,
-        _application_id: ApplicationId,
-        _auth: AuthCtx,
+        application_id: ApplicationId,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Page<Environment>>> {
-        todo!()
+        let result = self
+            .environment_service
+            .list_in_application(&application_id, &auth)
+            .await?;
+        Ok(Json(Page {
+            values: result.into_iter().map(|e| e.value).collect(),
+        }))
     }
 
     /// Create an application environment
@@ -183,7 +201,7 @@ impl ApplicationsApi {
             application_id = application_id.0.to_string(),
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .create_application_environment_internal(application_id.0, data.0, auth)
@@ -197,13 +215,11 @@ impl ApplicationsApi {
         &self,
         application_id: ApplicationId,
         data: NewEnvironmentData,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
-        // TODO
-        let actor = AccountId(Uuid::nil());
         let result = self
             .environment_service
-            .create(application_id, data, actor)
+            .create(application_id, data, &auth)
             .await?;
 
         Ok(Json(result))
@@ -228,7 +244,7 @@ impl ApplicationsApi {
             environment_name = environment_name.0
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_application_environment_internal(application_id.0, environment_name.0, auth)
@@ -240,10 +256,14 @@ impl ApplicationsApi {
 
     async fn get_application_environment_internal(
         &self,
-        _application_id: ApplicationId,
-        _environment_name: String,
-        _auth: AuthCtx,
+        application_id: ApplicationId,
+        environment_name: String,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
-        todo!()
+        let environment = self
+            .environment_service
+            .get_in_application(&application_id, &EnvironmentName(environment_name), &auth)
+            .await?;
+        Ok(Json(environment.value))
     }
 }

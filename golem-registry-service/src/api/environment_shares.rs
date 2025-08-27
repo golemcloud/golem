@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use super::ApiResult;
+use crate::model::auth::AuthCtx;
+use crate::services::auth::AuthService;
 use crate::services::environment_share::EnvironmentShareService;
-use golem_common::model::account::AccountId;
-use golem_common::model::auth::AuthCtx;
 use golem_common::model::environment_share::{
-    EnvironmentShare, EnvironmentShareId, UpdateEnvironmentShare,
+    EnvironmentShare, EnvironmentShareId, UpdatedEnvironmentShareData,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -27,10 +27,10 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
-use uuid::Uuid;
 
 pub struct EnvironmentSharesApi {
     environment_share_service: Arc<EnvironmentShareService>,
+    auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
@@ -39,9 +39,13 @@ pub struct EnvironmentSharesApi {
     tag = ApiTags::EnvironmentShares
 )]
 impl EnvironmentSharesApi {
-    pub fn new(environment_share_service: Arc<EnvironmentShareService>) -> Self {
+    pub fn new(
+        environment_share_service: Arc<EnvironmentShareService>,
+        auth_service: Arc<AuthService>,
+    ) -> Self {
         Self {
             environment_share_service,
+            auth_service,
         }
     }
 
@@ -61,7 +65,7 @@ impl EnvironmentSharesApi {
             environment_share_id = environment_share_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .get_environment_share_internal(environment_share_id.0, auth)
@@ -74,11 +78,11 @@ impl EnvironmentSharesApi {
     async fn get_environment_share_internal(
         &self,
         environment_share_id: EnvironmentShareId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let share = self
             .environment_share_service
-            .get(&environment_share_id)
+            .get(&environment_share_id, &auth)
             .await?;
         Ok(Json(share))
     }
@@ -92,7 +96,7 @@ impl EnvironmentSharesApi {
     pub async fn update_environment_share(
         &self,
         environment_share_id: Path<EnvironmentShareId>,
-        data: Json<UpdateEnvironmentShare>,
+        data: Json<UpdatedEnvironmentShareData>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let record = recorded_http_api_request!(
@@ -100,7 +104,7 @@ impl EnvironmentSharesApi {
             environment_share_id = environment_share_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .update_environment_share_internal(environment_share_id.0, data.0, auth)
@@ -113,13 +117,12 @@ impl EnvironmentSharesApi {
     async fn update_environment_share_internal(
         &self,
         environment_share_id: EnvironmentShareId,
-        data: UpdateEnvironmentShare,
-        _auth: AuthCtx,
+        data: UpdatedEnvironmentShareData,
+        auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
-        let actor = AccountId(Uuid::new_v4());
         let share = self
             .environment_share_service
-            .update(&environment_share_id, data, actor)
+            .update(&environment_share_id, data, &auth)
             .await?;
         Ok(Json(share))
     }
@@ -140,7 +143,7 @@ impl EnvironmentSharesApi {
             environment_share_id = environment_share_id.0.to_string()
         );
 
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
             .delete_environment_share_internal(environment_share_id.0, auth)
@@ -153,12 +156,11 @@ impl EnvironmentSharesApi {
     async fn delete_environment_share_internal(
         &self,
         environment_share_id: EnvironmentShareId,
-        _auth: AuthCtx,
+        auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
-        let actor = AccountId(Uuid::new_v4());
         let share = self
             .environment_share_service
-            .delete(&environment_share_id, actor)
+            .delete(&environment_share_id, &auth)
             .await?;
         Ok(Json(share))
     }

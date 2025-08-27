@@ -19,7 +19,9 @@ use crate::log::logln;
 use crate::model::component::ComponentView;
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::text::fmt::log_error;
-use crate::model::{ComponentName, ComponentNameMatchKind, IdempotencyKey, WorkerName};
+use crate::model::{
+    ComponentName, ComponentNameMatchKind, ComponentVersionSelection, IdempotencyKey, WorkerName,
+};
 use anyhow::bail;
 use async_trait::async_trait;
 use golem_rib_repl::{
@@ -141,12 +143,12 @@ impl WorkerFunctionInvoke for RibReplHandler {
         &self,
         component_id: Uuid,
         component_name: &str,
-        worker_name: Option<String>,
+        worker_name: &str,
         function_name: &str,
         args: Vec<ValueAndType>,
         _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
-        let worker_name = worker_name.map(WorkerName::from);
+        let worker_name = WorkerName::from(worker_name);
 
         let component = self
             .ctx
@@ -154,7 +156,9 @@ impl WorkerFunctionInvoke for RibReplHandler {
             .component(
                 None,
                 component_id.into(),
-                worker_name.as_ref().map(|wn| wn.into()),
+                Some(ComponentVersionSelection::ByWorkerName(&WorkerName(
+                    worker_name.to_string(),
+                ))),
             )
             .await?;
 
@@ -173,7 +177,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
             .worker_handler()
             .invoke_worker(
                 &component,
-                worker_name.as_ref(),
+                &worker_name,
                 function_name,
                 arguments,
                 IdempotencyKey::new(),

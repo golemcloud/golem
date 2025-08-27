@@ -74,12 +74,23 @@ pub fn golem_version() -> &'static str {
         build::PKG_VERSION
     } else {
         build::GIT_DESCRIBE_TAGS
+            .strip_prefix("golem-rust-v")
+            .unwrap_or(build::GIT_DESCRIBE_TAGS)
     }
 }
 
 /// Trait to convert a value to a string which is safe to return through a public API.
 pub trait SafeDisplay {
     fn to_safe_string(&self) -> String;
+
+    fn to_safe_string_indented(&self) -> String {
+        let result = self.to_safe_string();
+        result
+            .lines()
+            .map(|line| format!("  {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 pub struct SafeString(String);
@@ -102,6 +113,12 @@ pub fn safe(value: String) -> impl SafeDisplay {
 
 pub fn widen_infallible<T>(_inf: Infallible) -> T {
     panic!("impossible")
+}
+
+impl SafeDisplay for () {
+    fn to_safe_string(&self) -> String {
+        "".to_string()
+    }
 }
 
 pub trait IntoAnyhow {

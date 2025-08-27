@@ -67,6 +67,8 @@ CREATE TABLE account_revisions
     name        TEXT      NOT NULL,
     email       TEXT      NOT NULL,
     plan_id     UUID      NOT NULL,
+    -- Bitvector of roles
+    roles       INT       NOT NULL,
 
     created_at  TIMESTAMP NOT NULL,
     created_by  UUID      NOT NULL,
@@ -78,18 +80,6 @@ CREATE TABLE account_revisions
         FOREIGN KEY (account_id) REFERENCES accounts,
     CONSTRAINT account_revisions_plans_fk
         FOREIGN KEY (plan_id) REFERENCES plans
-);
-
-CREATE TABLE account_revision_roles
-(
-    account_id  UUID   NOT NULL,
-    revision_id BIGINT NOT NULL,
-    role        INT    NOT NULL,
-
-    CONSTRAINT account_revision_roles_pk
-        PRIMARY KEY (account_id, revision_id, role),
-    CONSTRAINT account_revision_roles_account_revisions_fk
-        FOREIGN KEY (account_id, revision_id) REFERENCES account_revisions
 );
 
 CREATE TABLE tokens
@@ -160,14 +150,16 @@ CREATE INDEX account_usage_stats_usage_type_idx ON account_usage_stats (usage_ty
 
 CREATE TABLE applications
 (
-    application_id UUID      NOT NULL,
-    name           TEXT      NOT NULL,
-    account_id     UUID      NOT NULL,
+    application_id      UUID      NOT NULL,
+    name                TEXT      NOT NULL,
+    account_id          UUID      NOT NULL,
 
-    created_at     TIMESTAMP NOT NULL,
-    updated_at     TIMESTAMP NOT NULL,
-    deleted_at     TIMESTAMP,
-    modified_by    UUID      NOT NULL,
+    created_at          TIMESTAMP NOT NULL,
+    updated_at          TIMESTAMP NOT NULL,
+    deleted_at          TIMESTAMP,
+    modified_by         UUID      NOT NULL,
+
+    current_revision_id BIGINT    NOT NULL,
 
     CONSTRAINT applications_pk
         PRIMARY KEY (application_id),
@@ -184,7 +176,6 @@ CREATE TABLE application_revisions
     application_id UUID      NOT NULL,
     revision_id    BIGINT    NOT NULL,
     name           TEXT      NOT NULL,
-    account_id     UUID      NOT NULL,
 
     created_at     TIMESTAMP NOT NULL,
     created_by     UUID      NOT NULL,
@@ -225,6 +216,7 @@ CREATE TABLE environment_revisions
 (
     environment_id      UUID      NOT NULL,
     revision_id         BIGINT    NOT NULL,
+    name                TEXT      NOT NULL,
 
     hash                BYTEA     NOT NULL,
 
@@ -687,6 +679,9 @@ CREATE TABLE environment_share_revisions
     environment_share_id UUID      NOT NULL,
     revision_id          BIGINT    NOT NULL,
 
+    -- Bitvector of roles
+    roles                INT       NOT NULL,
+
     created_at           TIMESTAMP NOT NULL,
     created_by           UUID      NOT NULL,
     deleted              BOOLEAN   NOT NULL,
@@ -695,16 +690,4 @@ CREATE TABLE environment_share_revisions
         PRIMARY KEY (environment_share_id, revision_id),
     CONSTRAINT environment_share_revisions_environment_shares_fk
         FOREIGN KEY (environment_share_id) REFERENCES environment_shares
-);
-
-CREATE TABLE environment_share_revision_roles
-(
-    environment_share_id UUID   NOT NULL,
-    revision_id          BIGINT NOT NULL,
-    role                 INT    NOT NULL,
-
-    CONSTRAINT environment_share_revision_roles_pk
-        PRIMARY KEY (environment_share_id, revision_id, role),
-    CONSTRAINT environment_share_revision_roles_environment_share_revisions_fk
-        FOREIGN KEY (environment_share_id, revision_id) REFERENCES environment_share_revisions
 );

@@ -312,9 +312,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Token'
+                $ref: '#/components/schemas/Page_Token'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -1730,7 +1728,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_Application'
+                $ref: '#/components/schemas/Application'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -1795,7 +1793,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdateApplicationRequest'
+              $ref: '#/components/schemas/UpdatedApplicationData'
         required: true
       responses:
         '200':
@@ -1803,7 +1801,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_Application'
+                $ref: '#/components/schemas/Application'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -4340,7 +4338,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdateEnvironmentRequest'
+              $ref: '#/components/schemas/UpdatedEnvironmentData'
         required: true
       responses:
         '200':
@@ -4395,6 +4393,69 @@ paths:
       - Cookie: []
       - Token: []
       operationId: update_environment
+    delete:
+      tags:
+      - RegistryService
+      - Environment
+      summary: Delete environment by id.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '204':
+          description: ''
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_environment
   /v1/envs/{environment_id}/current-deployment/hash:
     get:
       tags:
@@ -4762,7 +4823,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/NewEnvironmentShare'
+              $ref: '#/components/schemas/NewEnvironmentShareData'
         required: true
       responses:
         '200':
@@ -5191,7 +5252,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdateEnvironmentShare'
+              $ref: '#/components/schemas/UpdatedEnvironmentShareData'
         required: true
       responses:
         '200':
@@ -7101,12 +7162,16 @@ components:
       title: Application
       required:
       - id
+      - revision
       - accountId
       - name
       properties:
         id:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: uint64
         accountId:
           type: string
           format: uuid
@@ -7253,6 +7318,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentType'
+    ComponentModelElementSchema:
+      type: object
+      title: ComponentModelElementSchema
+      required:
+      - elementType
+      properties:
+        elementType:
+          $ref: '#/components/schemas/AnalysedType'
     ComponentPluginScope:
       type: object
       title: ComponentPluginScope
@@ -7566,27 +7639,15 @@ components:
     ElementSchema:
       type: object
       oneOf:
-      - $ref: '#/components/schemas/ElementSchema_AnalysedType'
+      - $ref: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
       - $ref: '#/components/schemas/ElementSchema_TextDescriptor'
       - $ref: '#/components/schemas/ElementSchema_BinaryDescriptor'
       discriminator:
         propertyName: type
         mapping:
-          ComponentModel: '#/components/schemas/ElementSchema_AnalysedType'
+          ComponentModel: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
           UnstructuredText: '#/components/schemas/ElementSchema_TextDescriptor'
           UnstructuredBinary: '#/components/schemas/ElementSchema_BinaryDescriptor'
-    ElementSchema_AnalysedType:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ComponentModel
-            example: ComponentModel
-      - $ref: '#/components/schemas/AnalysedType'
     ElementSchema_BinaryDescriptor:
       allOf:
       - type: object
@@ -7599,6 +7660,18 @@ components:
             - UnstructuredBinary
             example: UnstructuredBinary
       - $ref: '#/components/schemas/BinaryDescriptor'
+    ElementSchema_ComponentModelElementSchema:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentModel
+            example: ComponentModel
+      - $ref: '#/components/schemas/ComponentModelElementSchema'
     ElementSchema_TextDescriptor:
       allOf:
       - type: object
@@ -7619,6 +7692,7 @@ components:
       title: Environment
       required:
       - id
+      - revision
       - applicationId
       - name
       - compatibilityCheck
@@ -7628,6 +7702,9 @@ components:
         id:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: uint64
         applicationId:
           type: string
           format: uuid
@@ -7884,9 +7961,9 @@ components:
           type: boolean
         securityOverrides:
           type: boolean
-    NewEnvironmentShare:
+    NewEnvironmentShareData:
       type: object
-      title: NewEnvironmentShare
+      title: NewEnvironmentShareData
       required:
       - granteeAccountId
       - roles
@@ -8073,11 +8150,22 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SecuritySchemeResponseView'
+    Page_Token:
+      type: object
+      title: Page_Token
+      required:
+      - values
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/Token'
     Plan:
       type: object
       title: Plan
       required:
       - planId
+      - name
       - appLimit
       - envLimit
       - componentLimit
@@ -8089,6 +8177,8 @@ components:
         planId:
           type: string
           format: uuid
+        name:
+          type: string
         appLimit:
           type: integer
           format: int64
@@ -8785,9 +8875,6 @@ components:
     UpdateApiDomainRequest:
       type: object
       title: UpdateApiDomainRequest
-    UpdateApplicationRequest:
-      type: object
-      title: UpdateApplicationRequest
     UpdateCertificateRequest:
       type: object
       title: UpdateCertificateRequest
@@ -8835,25 +8922,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationAction'
-    UpdateEnvironmentRequest:
-      type: object
-      title: UpdateEnvironmentRequest
-      required:
-      - previousRevision
-      properties:
-        previousRevision:
-          type: integer
-          format: uint64
-    UpdateEnvironmentShare:
-      type: object
-      title: UpdateEnvironmentShare
-      required:
-      - newRoles
-      properties:
-        newRoles:
-          type: array
-          items:
-            $ref: '#/components/schemas/EnvironmentRole'
     UpdateHttpApiDefinitionRequest:
       type: object
       title: UpdateHttpApiDefinitionRequest
@@ -8875,6 +8943,28 @@ components:
           type: string
         email:
           type: string
+    UpdatedApplicationData:
+      type: object
+      title: UpdatedApplicationData
+      properties:
+        newName:
+          type: string
+    UpdatedEnvironmentData:
+      type: object
+      title: UpdatedEnvironmentData
+      properties:
+        newName:
+          type: string
+    UpdatedEnvironmentShareData:
+      type: object
+      title: UpdatedEnvironmentShareData
+      required:
+      - newRoles
+      properties:
+        newRoles:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentRole'
     VersionInfo:
       type: object
       title: VersionInfo

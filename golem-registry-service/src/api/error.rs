@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::auth::AuthorizationError;
 use crate::services::account::AccountError;
 use crate::services::application::ApplicationError;
+use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_share::EnvironmentShareError;
@@ -97,6 +99,15 @@ impl ApiErrorDetails for ApiError {
     }
 }
 
+impl From<AuthorizationError> for ApiError {
+    fn from(value: AuthorizationError) -> Self {
+        Self::Forbidden(Json(ErrorBody {
+            error: value.to_string(),
+            cause: None,
+        }))
+    }
+}
+
 impl From<std::io::Error> for ApiError {
     fn from(value: std::io::Error) -> Self {
         Self::InternalError(Json(ErrorBody {
@@ -106,20 +117,32 @@ impl From<std::io::Error> for ApiError {
     }
 }
 
+impl From<AuthError> for ApiError {
+    fn from(value: AuthError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            AuthError::CouldNotAuthenticate => {
+                Self::Unauthorized(Json(ErrorBody { error, cause: None }))
+            }
+            AuthError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("AuthError")),
+            })),
+        }
+    }
+}
+
 impl From<AccountError> for ApiError {
     fn from(value: AccountError) -> Self {
         let error = value.to_safe_string();
         match value {
+            AccountError::Unauthorized(inner) => inner.into(),
+
             AccountError::AccountNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
-            AccountError::ConcurrentUpdate => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
-                cause: None,
-            })),
-
-            AccountError::EmailAlreadyInUse => {
+            AccountError::EmailAlreadyInUse | AccountError::ConcurrentUpdate => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
@@ -135,9 +158,18 @@ impl From<ApplicationError> for ApiError {
     fn from(value: ApplicationError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            ApplicationError::ApplicationNotFound(_) => {
+            ApplicationError::ApplicationWithNameAlreadyExists
+            | ApplicationError::ConcurrentModification => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            ApplicationError::ApplicationNotFound(_)
+            | ApplicationError::ParentAccountNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
+
+            ApplicationError::Unauthorized(inner) => inner.into(),
+
             ApplicationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("ApplicationError")),
@@ -150,9 +182,18 @@ impl From<EnvironmentError> for ApiError {
     fn from(value: EnvironmentError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            EnvironmentError::EnvironmentNotFound(_) => {
+            EnvironmentError::EnvironmentNotFound(_)
+            | EnvironmentError::EnvironmentByNameNotFound(_)
+            | EnvironmentError::ParentApplicationNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
+
+            EnvironmentError::EnvironmentWithNameAlreadyExists
+            | EnvironmentError::ConcurrentModification => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            EnvironmentError::Unauthorized(inner) => inner.into(),
 
             EnvironmentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
@@ -167,6 +208,9 @@ impl From<PlanError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             PlanError::PlanNotFound(_) => Self::NotFound(Json(ErrorBody { error, cause: None })),
+
+            PlanError::Unauthorized(inner) => inner.into(),
+
             PlanError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("PlanError")),
@@ -179,10 +223,6 @@ impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            ComponentError::Unauthorized(_) => {
-                Self::Unauthorized(Json(ErrorBody { error, cause: None }))
-            }
-
             ComponentError::LimitExceeded { .. } => Self::BadRequest(Json(ErrorsBody {
                 errors: vec![error],
                 cause: None,
@@ -211,12 +251,13 @@ impl From<ComponentError> for ApiError {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
-            ComponentError::UnknownComponentId(_)
-            | ComponentError::UnknownVersionedComponentId(_)
-            | ComponentError::PluginNotFound { .. }
-            | ComponentError::UnknownEnvironmentComponentName { .. } => {
+            ComponentError::NotFound
+            | ComponentError::ParentEnvironmentNotFound(_)
+            | ComponentError::PluginNotFound { .. } => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
+
+            ComponentError::Unauthorized(inner) => inner.into(),
 
             ComponentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
@@ -230,7 +271,10 @@ impl From<TokenError> for ApiError {
     fn from(value: TokenError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            TokenError::TokenNotFound(_) => Self::NotFound(Json(ErrorBody { error, cause: None })),
+            TokenError::Unauthorized(inner) => inner.into(),
+            TokenError::TokenNotFound(_) | TokenError::ParentAccountNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
             TokenError::TokenBySecretFound => {
                 Self::InternalError(Json(ErrorBody { error, cause: None }))
             }
@@ -272,9 +316,11 @@ impl From<EnvironmentShareError> for ApiError {
             | EnvironmentShareError::ShareForAccountAlreadyExists => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
-            EnvironmentShareError::EnvironmentShareNotFound(_) => {
+            EnvironmentShareError::EnvironmentShareNotFound(_)
+            | EnvironmentShareError::ParentEnvironmentNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
+            EnvironmentShareError::Unauthorized(inner) => inner.into(),
             EnvironmentShareError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("EnvironmentShareError")),

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use chrono::Duration;
+use golem_common::SafeDisplay;
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
 use golem_common::model::auth::AccountRole;
@@ -21,6 +22,7 @@ use golem_common::tracing::TracingConfig;
 use golem_service_base::config::BlobStorageConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::PathBuf;
 use uuid::Uuid;
 use uuid::uuid;
@@ -40,6 +42,38 @@ pub struct RegistryServiceConfig {
 
     pub plans: PlansConfig,
     pub accounts: AccountsConfig,
+}
+
+impl SafeDisplay for RegistryServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "tracing:");
+        let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
+        let _ = writeln!(&mut result, "environment: {}", self.environment);
+        let _ = writeln!(&mut result, "workspace: {}", self.workspace);
+        let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
+        let _ = writeln!(&mut result, "gRPC port: {}", self.grpc_port);
+        let _ = writeln!(&mut result, "DB:");
+        let _ = writeln!(&mut result, "{}", self.db.to_safe_string_indented());
+        let _ = writeln!(&mut result, "login:");
+        let _ = writeln!(&mut result, "{}", self.login.to_safe_string_indented());
+        let _ = writeln!(&mut result, "blob storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.blob_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "plugin transformations:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.component_transformer_plugin_caller
+                .to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
+
+        result
+    }
 }
 
 impl Default for RegistryServiceConfig {
@@ -68,6 +102,22 @@ pub enum LoginConfig {
     Disabled(Empty),
 }
 
+impl SafeDisplay for LoginConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            LoginConfig::OAuth2(inner) => {
+                let _ = writeln!(&mut result, "OAuth2:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            LoginConfig::Disabled(_) => {
+                let _ = writeln!(&mut result, "disabled");
+            }
+        }
+        result
+    }
+}
+
 impl Default for LoginConfig {
     fn default() -> LoginConfig {
         LoginConfig::OAuth2(OAuth2LoginSystemConfig::default())
@@ -80,11 +130,36 @@ pub struct OAuth2LoginSystemConfig {
     pub oauth2: OAuth2Config,
 }
 
+impl SafeDisplay for OAuth2LoginSystemConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "GitHub:");
+        let _ = writeln!(&mut result, "{}", self.github.to_safe_string_indented());
+        let _ = writeln!(&mut result, "OAuth2:");
+        let _ = writeln!(&mut result, "{}", self.oauth2.to_safe_string_indented());
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OAuth2Config {
     pub webflow_state_expiry: Duration,
     pub private_key: String,
     pub public_key: String,
+}
+
+impl SafeDisplay for OAuth2Config {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "webflow state expiry: {}",
+            self.webflow_state_expiry
+        );
+        let _ = writeln!(&mut result, "private key: ****");
+        let _ = writeln!(&mut result, "public key: {}", self.public_key);
+        result
+    }
 }
 
 impl Default for OAuth2Config {
@@ -103,6 +178,16 @@ pub struct GitHubOAuth2Config {
     pub client_id: String,
     pub client_secret: String,
     pub redirect_uri: url::Url,
+}
+
+impl SafeDisplay for GitHubOAuth2Config {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "client id: {}", self.client_id);
+        let _ = writeln!(&mut result, "client secret: ****");
+        let _ = writeln!(&mut result, "redirect uri: {}", self.redirect_uri);
+        result
+    }
 }
 
 impl Default for GitHubOAuth2Config {
@@ -164,6 +249,15 @@ pub struct PrecreatedAccount {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ComponentTransformerPluginCallerConfig {
     pub retries: RetryConfig,
+}
+
+impl SafeDisplay for ComponentTransformerPluginCallerConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
