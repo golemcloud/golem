@@ -522,6 +522,7 @@ fn convert_request_value_and_type_to_oplog_payload(
             create_oplog_payload(&payload)
         }
         "golem io::poll::poll" => Ok(empty_payload()),
+        "golem io::poll::ready" => Ok(empty_payload()),
         "golem blobstore::container::object_info" => {
             let payload: ContainerAndObject =
                 ContainerAndObject::from_value(&value_and_type.value)?;
@@ -723,7 +724,6 @@ fn convert_request_value_and_type_to_oplog_payload(
             create_oplog_payload(&payload)
         }
         "golem::rpc::wasm-rpc::generate_unique_local_worker_id" => Ok(empty_payload()),
-        "cli::preopens::get_directories" => Ok(empty_payload()),
         "filesystem::types::descriptor::stat" => {
             let payload: String = String::from_value(&value_and_type.value)?;
 
