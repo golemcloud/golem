@@ -183,7 +183,7 @@ args = ["build", "--workspace", "--all-targets"]
 dependencies = ["wit"]
 description = "Builds all executables in debug mode"
 command = "cargo"
-args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
+args = ["build", "--workspace", "--bins", "--exclude", "integration-tests", "--exclude", "golem"]
 
 [tasks.build-bins-non-ci]
 private = true
@@ -241,20 +241,20 @@ dependencies = [
 description = "Build the project in release mode"
 condition = { env_not_set = ["PLATFORM_OVERRIDE"] }
 command = "cargo"
-args = ["build", "--release"]
+args = ["build", "--release", "--exclude", "integration-tests", "--exclude", "golem"]
 
 [tasks.build-release-override-linux-amd64]
 description = "Build the project in release mode with target platform override to linux/amd64"
 condition = { env = { "PLATFORM_OVERRIDE" = "linux/amd64" } }
 command = "cargo"
-args = ["build", "--release", "--target", "x86_64-unknown-linux-gnu"]
+args = ["build", "--release", "--target", "x86_64-unknown-linux-gnu", "--exclude", "integration-tests", "--exclude", "golem"]
 
 [tasks.build-release-override-linux-arm64]
 description = "Build the project in release mode with target platform override to linux/arm64"
 condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
 install_crate = "cross"
 command = "cross"
-args = ["build", "--release", "--target", "aarch64-unknown-linux-gnu"]
+args = ["build", "--release", "--target", "aarch64-unknown-linux-gnu", "--exclude", "integration-tests", "--exclude", "golem"]
 
 ## ** CHECK **
 
@@ -447,7 +447,7 @@ cargo test --package integration-tests --test sharding -- --report-time $JUNIT_O
 '''
 
 [tasks.cli-integration-tests]
-dependencies = ["build"]
+dependencies = ["build-bins"]
 description = "Run CLI integration tests"
 script_runner = "@duckscript"
 script = '''
@@ -457,7 +457,7 @@ exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integ
 '''
 
 [tasks.template-integration-tests]
-dependencies = ["build"]
+dependencies = ["build-bins"]
 description = "Run template integration tests"
 script_runner = "@duckscript"
 script = '''
