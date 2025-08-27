@@ -1282,7 +1282,7 @@ mod app_builder {
     use crate::fuzzy;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
-    use crate::model::api::to_method_pattern;
+    use crate::model::api::to_route_method;
     use crate::model::app::{
         AppComponentName, Application, BinaryComponentSource, BuildProfileName, Component,
         ComponentProperties, DependencyType, DependentComponent, HttpApiDefinitionName,
@@ -1635,7 +1635,7 @@ mod app_builder {
                                 &app.source,
                             ) {
                                 for route in &api_definition.routes {
-                                    let Ok(method) = to_method_pattern(&route.method) else {
+                                    let Ok(method) = to_route_method(&route.method) else {
                                         continue;
                                     };
 
@@ -2449,7 +2449,7 @@ mod app_builder {
                                 ],
                                 |validation| {
                                     if check_not_empty(validation, "method", &route.method) {
-                                        if let Err(err) = to_method_pattern(&route.method) {
+                                        if let Err(err) = to_route_method(&route.method) {
                                             validation.add_error(err.to_string());
                                         }
                                     }

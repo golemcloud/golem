@@ -58,6 +58,7 @@ use golem_client::model::{
 };
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::worker::WasiConfigVars;
+use golem_common::model::ComponentId;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
@@ -1249,7 +1250,7 @@ impl WorkerCommandHandler {
     pub async fn redeploy_component_workers(
         &self,
         component_name: &ComponentName,
-        component_id: Uuid,
+        component_id: &ComponentId,
     ) -> anyhow::Result<()> {
         let (workers, _) = self
             .list_component_workers(component_name, component_id, None, None, None, false)
@@ -1341,7 +1342,7 @@ impl WorkerCommandHandler {
     pub async fn list_component_workers(
         &self,
         component_name: &ComponentName,
-        component_id: Uuid,
+        component_id: &ComponentId,
         filters: Option<&[String]>,
         start_scan_cursor: Option<&ScanCursor>,
         max_count: Option<u64>,

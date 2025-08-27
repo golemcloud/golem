@@ -22,10 +22,9 @@ use crate::error::NonSuccessfulExit;
 use crate::log::log_warn_action;
 use crate::model::text::account::{AccountGetView, AccountNewView};
 use crate::model::text::fmt::log_error;
-use crate::model::AccountId;
 use anyhow::bail;
 use golem_client::api::AccountClient;
-use golem_client::model::{Account, AccountData};
+use golem_client::model::Account;
 use std::sync::Arc;
 
 pub struct CloudAccountCommandHandler {

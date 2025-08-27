@@ -29,7 +29,7 @@ impl TryUpdateAllWorkersResult {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerUpdateAttempt {
     pub component_name: ComponentName,

@@ -38,11 +38,15 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, Error};
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
-use golem_client::model::PluginTypeSpecificDefinition;
+use golem_client::model::{PluginTypeSpecificDefinition, UpdateRecord};
 use golem_common::model::account::AccountId;
+use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::component::ComponentName;
+use golem_common::model::diff::Environment;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::{
-    AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
+    AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription, WorkerStatus,
 };
 use golem_templates::model::{
     GuestLanguage, GuestLanguageTier, PackageName, Template, TemplateName,
@@ -431,16 +435,15 @@ pub struct WorkerMetadataView {
     #[serde(default)]
     pub created_by: Option<AccountId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub project_id: Option<ProjectId>,
+    pub environment_id: EnvironmentId,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
-    pub status: golem_client::model::WorkerStatus,
+    pub status: WorkerStatus,
     pub component_version: u64,
     pub retry_count: u64,
 
     pub pending_invocation_count: u64,
-    pub updates: Vec<golem_client::model::UpdateRecord>,
+    pub updates: Vec<UpdateRecord>,
     pub created_at: DateTime<Utc>,
     pub last_error: Option<String>,
     pub component_size: u64,
@@ -464,7 +467,7 @@ impl From<WorkerMetadata> for WorkerMetadataView {
             component_name: value.component_name,
             worker_name: value.worker_id.worker_name.into(),
             created_by: value.created_by,
-            project_id: value.project_id,
+            environment_id: Uuid::nil().into(), // TODO: atomic value.project_id,
             args: value.args,
             env: value.env,
             status: value.status,
@@ -486,8 +489,8 @@ impl From<WorkerMetadata> for WorkerMetadataView {
 pub struct WorkerMetadata {
     pub worker_id: golem_client::model::WorkerId,
     pub component_name: ComponentName,
-    pub project_id: Option<ProjectId>,
-    pub created_by: Option<AccountId>,
+    pub environment_id: EnvironmentId,
+    pub created_by: AccountId,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: golem_client::model::WorkerStatus,
@@ -508,8 +511,8 @@ impl WorkerMetadata {
         WorkerMetadata {
             worker_id: value.worker_id,
             component_name,
-            created_by: None,
-            project_id: None,
+            created_by: Uuid::nil().into(), // TODO: atomic: value.created_by
+            environment_id: value.project_id.into(),
             args: value.args,
             env: value.env,
             status: value.status,
@@ -612,11 +615,6 @@ impl ProfileView {
     }
 }
 
-pub struct ProjectRefAndId {
-    pub project_ref: ProjectReference,
-    pub project_id: ProjectId,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentNameMatchKind {
     AppCurrentDir,
@@ -639,93 +637,25 @@ impl From<golem_client::model::Account> for AccountDetails {
     }
 }
 
+pub struct AppIdentity {
+    pub account_id: AccountId,
+    pub account_email: String,
+    pub app_id: ApplicationId,
+    pub app_name: ApplicationName,
+    pub env_id: EnvironmentId,
+    pub env_name: EnvironmentName,
+}
+
 pub struct WorkerNameMatch {
-    pub account: Option<AccountDetails>,
-    pub project: Option<ProjectRefAndId>,
+    pub app: AppIdentity,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
     pub worker_name: Option<WorkerName>,
 }
 
 pub struct SelectedComponents {
-    pub account: Option<AccountDetails>,
-    pub project: Option<ProjectRefAndId>,
+    pub app: AppIdentity,
     pub component_names: Vec<ComponentName>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct TokenId(pub Uuid);
-
-impl FromStr for TokenId {
-    type Err = uuid::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(TokenId(Uuid::parse_str(s)?))
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct ProjectPolicyId(pub Uuid);
-
-impl FromStr for ProjectPolicyId {
-    type Err = uuid::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(ProjectPolicyId(Uuid::parse_str(s)?))
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize)]
-pub enum Role {
-    Admin,
-    MarketingAdmin,
-}
-
-impl Display for Role {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Role::Admin => "Admin",
-            Role::MarketingAdmin => "MarketingAdmin",
-        };
-
-        Display::fmt(s, f)
-    }
-}
-
-impl FromStr for Role {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Admin" => Ok(Role::Admin),
-            "MarketingAdmin" => Ok(Role::MarketingAdmin),
-            _ => {
-                let all = Role::iter()
-                    .map(|x| format!("\"{x}\""))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                Err(format!("Unknown role: {s}. Expected one of {all}"))
-            }
-        }
-    }
-}
-
-impl From<Role> for golem_client::model::Role {
-    fn from(value: Role) -> Self {
-        match value {
-            Role::Admin => golem_client::model::Role::Admin,
-            Role::MarketingAdmin => golem_client::model::Role::MarketingAdmin,
-        }
-    }
-}
-
-impl From<golem_client::model::Role> for Role {
-    fn from(value: golem_client::model::Role) -> Self {
-        match value {
-            golem_client::model::Role::Admin => Role::Admin,
-            golem_client::model::Role::MarketingAdmin => Role::MarketingAdmin,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

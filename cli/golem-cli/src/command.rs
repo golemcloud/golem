@@ -550,11 +550,10 @@ pub enum GolemCliSubcommand {
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
     use crate::model::PluginReference;
-    use crate::model::{
-        ComponentName, ProjectName, ProjectReference, WorkerName, WorkerUpdateMode,
-    };
+    use crate::model::{ProjectName, ProjectReference, WorkerName, WorkerUpdateMode};
     use clap::Args;
     use golem_common::model::account::AccountId;
+    use golem_common::model::component::ComponentName;
     use golem_templates::model::GuestLanguage;
 
     pub type ComponentTemplateName = String;
@@ -767,7 +766,7 @@ pub mod app {
 
     #[derive(Debug, Subcommand)]
     pub enum AppSubcommand {
-        /// Create new application
+        /// Create a new application
         New {
             /// Application folder name where the new application should be created
             application_name: Option<String>,
@@ -781,10 +780,8 @@ pub mod app {
             #[command(flatten)]
             build: BuildArgs,
         },
-        /// Deploy all or selected components and HTTP APIs in the application, includes building
+        /// Deploy application
         Deploy {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]
@@ -828,11 +825,12 @@ pub mod component {
     use crate::command::component::plugin::ComponentPluginSubcommand;
     use crate::command::shared_args::{
         BuildArgs, ComponentOptionalComponentName, ComponentOptionalComponentNames,
-        ComponentTemplateName, ForceBuildArg, UpdateOrRedeployArgs,
+        ComponentTemplateName,
     };
     use crate::model::app::DependencyType;
-    use crate::model::{ComponentName, WorkerUpdateMode};
+    use crate::model::WorkerUpdateMode;
     use clap::Subcommand;
+    use golem_common::model::component::ComponentName;
     use golem_templates::model::PackageName;
     use std::path::PathBuf;
     use url::Url;
@@ -857,15 +855,6 @@ pub mod component {
             component_name: ComponentOptionalComponentNames,
             #[command(flatten)]
             build: BuildArgs,
-        },
-        /// Deploy component(s) and dependent HTTP APIs based on the current directory or by selection
-        Deploy {
-            #[command(flatten)]
-            component_name: ComponentOptionalComponentNames,
-            #[command(flatten)]
-            force_build: ForceBuildArg,
-            #[command(flatten)]
-            update_or_redeploy: UpdateOrRedeployArgs,
         },
         /// Clean component(s) based on the current directory or by selection
         Clean {
@@ -1143,16 +1132,10 @@ pub mod api {
     use crate::command::api::definition::ApiDefinitionSubcommand;
     use crate::command::api::deployment::ApiDeploymentSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
-    use crate::command::shared_args::UpdateOrRedeployArgs;
     use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
     pub enum ApiSubcommand {
-        /// Deploy API Definitions and Deployments
-        Deploy {
-            #[command(flatten)]
-            update_or_redeploy: UpdateOrRedeployArgs,
-        },
         /// Manage API definitions
         Definition {
             #[clap(subcommand)]
@@ -1176,21 +1159,13 @@ pub mod api {
     }
 
     pub mod definition {
-        use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
+        use crate::command::shared_args::ProjectOptionalFlagArg;
         use crate::model::api::{ApiDefinitionId, ApiDefinitionVersion};
-        use crate::model::app::HttpApiDefinitionName;
         use crate::model::OpenApiDefinitionOutputFormat;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
         pub enum ApiDefinitionSubcommand {
-            /// Deploy API Definitions and required components
-            Deploy {
-                /// API definition to deploy, if not specified, all definitions are deployed
-                http_api_definition_name: Option<HttpApiDefinitionName>,
-                #[command(flatten)]
-                update_or_redeploy: UpdateOrRedeployArgs,
-            },
             /// Retrieves metadata about an existing API definition
             Get {
                 #[command(flatten)]
@@ -1209,17 +1184,6 @@ pub mod api {
                 /// API definition id to get all versions. Optional.
                 #[arg(short, long)]
                 id: Option<ApiDefinitionId>,
-            },
-            /// Deletes an existing API definition
-            Delete {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
-                /// API definition id
-                #[arg(short, long)]
-                id: ApiDefinitionId,
-                /// Version of the api definition
-                #[arg(long)]
-                version: ApiDefinitionVersion,
             },
             /// Exports an api definition in OpenAPI format
             Export {
@@ -1256,19 +1220,12 @@ pub mod api {
     }
 
     pub mod deployment {
-        use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
+        use crate::command::shared_args::ProjectOptionalFlagArg;
         use crate::model::api::ApiDefinitionId;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
         pub enum ApiDeploymentSubcommand {
-            /// Deploy API Deployments
-            Deploy {
-                /// Host or site to deploy, if not defined, all deployments will be deployed
-                host_or_site: Option<String>,
-                #[command(flatten)]
-                update_or_redeploy: UpdateOrRedeployArgs,
-            },
             /// Get API deployment
             Get {
                 #[command(flatten)]
@@ -1283,14 +1240,6 @@ pub mod api {
                 project: ProjectOptionalFlagArg,
                 /// API definition id
                 definition: Option<ApiDefinitionId>,
-            },
-            /// Delete api deployment
-            Delete {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
-                /// Deployment site
-                #[arg(value_name = "subdomain.host")]
-                site: String,
             },
         }
     }
@@ -1570,9 +1519,9 @@ pub mod cloud {
 
     pub mod token {
         use crate::command::parse_instant;
-        use crate::model::TokenId;
         use chrono::{DateTime, Utc};
         use clap::Subcommand;
+        use golem_common::model::auth::TokenId;
 
         #[derive(Debug, Subcommand)]
         pub enum TokenSubcommand {
@@ -1634,7 +1583,6 @@ pub mod cloud {
 
         pub mod grant {
             use crate::command::shared_args::AccountIdOptionalArg;
-            use crate::model::Role;
             use clap::Subcommand;
 
             #[derive(Subcommand, Debug)]
@@ -1648,15 +1596,13 @@ pub mod cloud {
                 New {
                     #[command(flatten)]
                     account_id: AccountIdOptionalArg,
-                    /// The role to be granted
-                    role: Role,
+                    // TODO: atomic role: Role, /// The role to be granted
                 },
                 /// Remove a role from the account
                 Delete {
                     #[command(flatten)]
                     account_id: AccountIdOptionalArg,
-                    /// The role to be deleted
-                    role: Role,
+                    // TODO: atomic role: Role, /// The role to be deleted
                 },
             }
         }

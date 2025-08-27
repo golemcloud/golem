@@ -358,7 +358,7 @@ impl PluginCommandHandler {
 }
 
 fn plugin_scope(
-    scope_project: Option<&ProjectRefAndId>,
+    scope_app_id: Option<&AppIdentity>,
     scope_component_id: Option<&ComponentId>,
 ) -> PluginScope {
     if let Some(component_id) = scope_component_id {

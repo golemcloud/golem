@@ -19,8 +19,6 @@ use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
 };
-use crate::command_handler::api::cloud::certificate::ApiCloudCertificateCommandHandler;
-use crate::command_handler::api::cloud::domain::ApiCloudDomainCommandHandler;
 use crate::command_handler::api::cloud::ApiCloudCommandHandler;
 use crate::command_handler::api::definition::ApiDefinitionCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
@@ -365,8 +363,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 //       by moving these simple factory methods into the specific handlers on demand,
 //       if the need ever arises
 pub trait Handlers {
-    fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler;
-    fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler;
+    // TODO: atomic, fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler;
+    // TODO: atomic, fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler;
     fn api_cloud_handler(&self) -> ApiCloudCommandHandler;
     fn api_definition_handler(&self) -> ApiDefinitionCommandHandler;
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
@@ -391,13 +389,14 @@ pub trait Handlers {
 }
 
 impl Handlers for Arc<Context> {
-    fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler {
-        ApiCloudCertificateCommandHandler::new(self.clone())
-    }
-
-    fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler {
-        ApiCloudDomainCommandHandler::new(self.clone())
-    }
+    // TODO: atomic
+    // fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler {
+    //     ApiCloudCertificateCommandHandler::new(self.clone())
+    // }
+    //
+    // fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler {
+    //     ApiCloudDomainCommandHandler::new(self.clone())
+    // }
 
     fn api_cloud_handler(&self) -> ApiCloudCommandHandler {
         ApiCloudCommandHandler::new(self.clone())

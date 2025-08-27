@@ -33,7 +33,7 @@ use crate::model::text::api_definition::{
     ApiDefinitionExportView, ApiDefinitionGetView, ApiDefinitionNewView, ApiDefinitionUpdateView,
 };
 use crate::model::text::fmt::{log_deploy_diff, log_error, log_warn};
-use crate::model::{ComponentName, OpenApiDefinitionOutputFormat, ProjectRefAndId};
+use crate::model::{OpenApiDefinitionOutputFormat, ProjectRefAndId};
 use anyhow::{bail, Context as AnyhowContext};
 use golem_client::api::{ApiDefinitionClient, ApiDeploymentClient};
 use golem_client::model::{HttpApiDefinitionRequest, HttpApiDefinitionResponseData};
@@ -526,7 +526,7 @@ impl ApiDefinitionCommandHandler {
 
     pub async fn deploy(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         deploy_mode: HttpApiDeployMode,
         update_or_redeploy: &UpdateOrRedeployArgs,
         latest_component_versions: &BTreeMap<String, Component>,
@@ -566,7 +566,7 @@ impl ApiDefinitionCommandHandler {
 
     pub async fn deploy_api_definition(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         deploy_mode: HttpApiDeployMode,
         update_or_redeploy: &UpdateOrRedeployArgs,
         latest_component_versions: &BTreeMap<String, Component>,
@@ -785,7 +785,7 @@ impl ApiDefinitionCommandHandler {
 
     pub async fn deploy_required_components(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         update_or_redeploy: &UpdateOrRedeployArgs,
         api_defs_filter: BTreeSet<HttpApiDefinitionName>,
     ) -> anyhow::Result<BTreeMap<String, Component>> {
@@ -841,7 +841,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn api_definition(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         name: &str,
         version: &str,
     ) -> anyhow::Result<Option<HttpApiDefinitionResponseData>> {
@@ -865,7 +865,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn update_api_definition(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         manifest_api_definition: &HttpApiDefinitionRequest,
     ) -> anyhow::Result<HttpApiDefinitionResponseData> {
         let clients = self.ctx.golem_clients().await?;
@@ -890,7 +890,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn new_api_definition(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         api_definition: &HttpApiDefinitionRequest,
     ) -> anyhow::Result<HttpApiDefinitionResponseData> {
         let clients = self.ctx.golem_clients().await?;

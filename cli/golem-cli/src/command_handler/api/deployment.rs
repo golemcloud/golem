@@ -224,7 +224,7 @@ impl ApiDeploymentCommandHandler {
 
     pub async fn deploy(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         deploy_mode: HttpApiDeployMode,
         latest_api_definition_versions: &BTreeMap<String, String>,
     ) -> anyhow::Result<()> {
@@ -251,7 +251,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn deploy_api_deployment(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         deploy_mode: HttpApiDeployMode,
         latest_api_definition_versions: &BTreeMap<String, String>,
         site: &HttpApiDeploymentSite,
@@ -411,7 +411,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn deploy_required_api_definitions<'a, I: Iterator<Item = &'a HttpApiDeployment>>(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         update_or_redeploy: &UpdateOrRedeployArgs,
         api_deployments: I,
     ) -> anyhow::Result<BTreeMap<String, String>> {
@@ -469,7 +469,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn api_deployment(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         site: &str,
     ) -> anyhow::Result<Option<ApiDeployment>> {
         let clients = self.ctx.golem_clients().await?;
@@ -494,7 +494,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn create_or_update_api_deployment(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         site: &HttpApiDeploymentSite,
         api_deployment: &DiffableHttpApiDeployment,
     ) -> anyhow::Result<ApiDeployment> {
@@ -530,7 +530,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn undeploy_api_definition(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         site: &HttpApiDeploymentSite,
         id: &str,
         version: &str,
@@ -557,7 +557,7 @@ impl ApiDeploymentCommandHandler {
 
     pub async fn undeploy_api_from_all_sites_for_redeploy(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         api_definition_name: &HttpApiDefinitionName,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;

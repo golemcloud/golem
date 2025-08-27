@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod certificate;
-pub mod domain;
+// TODO: atomic, pub mod certificate;
+// TODO: atomic, pub mod domain;
 
 use crate::command::api::cloud::ApiCloudSubcommand;
 use crate::command_handler::Handlers;
