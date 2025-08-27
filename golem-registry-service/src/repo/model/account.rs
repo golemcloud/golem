@@ -27,10 +27,8 @@ use uuid::Uuid;
 pub enum AccountRepoError {
     #[error("Account for this email already exists")]
     AccountViolatesUniqueness,
-    #[error("Version already exists: {revision_id}")]
-    RevisionAlreadyExists { revision_id: i64 },
-    #[error("Current revision for update not found: {current_revision_id}")]
-    RevisionForUpdateNotFound { current_revision_id: i64 },
+    #[error("Concurrent modification")]
+    ConcurrentModification,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -84,7 +82,7 @@ impl AccountRevisionRecord {
         }
     }
 
-    pub fn from_model(value: Account, actor: AccountId) -> Self {
+    pub fn from_model(value: Account, audit: DeletableRevisionAuditFields) -> Self {
         Self {
             account_id: value.id.0,
             revision_id: value.revision.into(),
@@ -92,7 +90,7 @@ impl AccountRevisionRecord {
             email: value.email,
             plan_id: value.plan_id.0,
             roles: roles_to_bit_vector(&value.roles),
-            audit: DeletableRevisionAuditFields::new(actor.0),
+            audit,
         }
     }
 
@@ -108,6 +106,14 @@ impl AccountRevisionRecord {
         Self {
             revision_id: current_revision_id + 1,
             audit: self.audit.ensure_new(),
+            ..self
+        }
+    }
+
+    pub fn ensure_deletion(self, current_revision_id: i64) -> Self {
+        Self {
+            revision_id: current_revision_id + 1,
+            audit: self.audit.ensure_deletion(),
             ..self
         }
     }

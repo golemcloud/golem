@@ -17,6 +17,7 @@ use crate::config::AccountsConfig;
 use crate::model::auth::{AuthCtx, AuthorizationError, SYSTEM_ACCOUNT_ID};
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
+use crate::repo::model::audit::DeletableRevisionAuditFields;
 use anyhow::anyhow;
 use golem_common::model::PlanId;
 use golem_common::model::account::{Account, AccountId, NewAccountData, UpdatedAccountData};
@@ -124,16 +125,11 @@ impl AccountService {
         update: UpdatedAccountData,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
+        let mut account: Account = self.get(account_id, auth).await?;
+
         auth.authorize_account_action(account_id, AccountAction::UpdateAccount)?;
 
         info!("Updating account: {}", account_id);
-
-        let mut account: Account = self
-            .account_repo
-            .get_by_id(&account_id.0)
-            .await?
-            .ok_or(AccountError::AccountNotFound(account_id.clone()))?
-            .try_into()?;
 
         account.name = update.name;
         account.email = update.email;
@@ -147,20 +143,47 @@ impl AccountService {
         roles: Vec<AccountRole>,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
+        let mut account: Account = self.get(account_id, auth).await?;
+
         auth.authorize_account_action(account_id, AccountAction::SetRoles)?;
 
         info!("Updating account: {}", account_id);
 
-        let mut account: Account = self
-            .account_repo
-            .get_by_id(&account_id.0)
-            .await?
-            .ok_or(AccountError::AccountNotFound(account_id.clone()))?
-            .try_into()?;
-
         account.roles = roles;
 
         self.update_internal(account, auth).await
+    }
+
+    pub async fn delete(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<Account, AccountError> {
+        let mut account: Account = self.get(account_id, auth).await?;
+
+        auth.authorize_account_action(account_id, AccountAction::DeleteAccount)?;
+
+        info!("Deleting account: {}", account_id);
+
+        let current_revision = account.revision;
+
+        account.revision = account.revision.next()?;
+
+        let record = AccountRevisionRecord::from_model(
+            account,
+            DeletableRevisionAuditFields::deletion(auth.account_id.0),
+        );
+
+        let result = self
+            .account_repo
+            .delete(current_revision.into(), record)
+            .await;
+
+        match result {
+            Ok(record) => Ok(record.try_into()?),
+            Err(AccountRepoError::ConcurrentModification) => Err(AccountError::ConcurrentUpdate)?,
+            Err(other) => Err(other)?,
+        }
     }
 
     pub async fn get(
@@ -225,13 +248,14 @@ impl AccountService {
         mut account: Account,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        auth.authorize_account_action(&account.id, AccountAction::UpdateAccount)?;
-
         let current_revision = account.revision;
 
         account.revision = account.revision.next()?;
 
-        let record = AccountRevisionRecord::from_model(account, auth.account_id.clone());
+        let record = AccountRevisionRecord::from_model(
+            account,
+            DeletableRevisionAuditFields::new(auth.account_id.0),
+        );
 
         let result = self
             .account_repo
@@ -243,9 +267,7 @@ impl AccountService {
             Err(AccountRepoError::AccountViolatesUniqueness) => {
                 Err(AccountError::EmailAlreadyInUse)?
             }
-            Err(AccountRepoError::RevisionAlreadyExists { .. }) => {
-                Err(AccountError::ConcurrentUpdate)?
-            }
+            Err(AccountRepoError::ConcurrentModification) => Err(AccountError::ConcurrentUpdate)?,
             Err(other) => Err(other)?,
         }
     }

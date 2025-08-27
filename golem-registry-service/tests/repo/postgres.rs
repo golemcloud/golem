@@ -173,13 +173,13 @@ async fn test_create_and_get_account(deps: &Deps) {
 }
 
 #[test]
-async fn test_application_ensure(deps: &Deps) {
-    crate::repo::common::test_application_ensure(deps).await;
+async fn test_application_create(deps: &Deps) {
+    crate::repo::common::test_application_create(deps).await;
 }
 
 #[test]
-async fn test_application_ensure_concurrent(deps: &Deps) {
-    crate::repo::common::test_application_ensure_concurrent(deps).await;
+async fn test_application_create_concurrent(deps: &Deps) {
+    crate::repo::common::test_application_create_concurrent(deps).await;
 }
 
 #[test]

@@ -29,6 +29,7 @@ declare_transparent_newtypes! {
 declare_structs! {
     pub struct Environment {
         pub id: EnvironmentId,
+        pub revision: EnvironmentRevision,
         pub application_id: ApplicationId,
         pub name: EnvironmentName,
         pub compatibility_check: bool,
@@ -41,6 +42,10 @@ declare_structs! {
         pub compatibility_check: bool,
         pub version_check: bool,
         pub security_overrides: bool,
+    }
+
+    pub struct UpdatedEnvironmentData {
+        pub new_name: Option<EnvironmentName>
     }
 
     pub struct EnvironmentHash {

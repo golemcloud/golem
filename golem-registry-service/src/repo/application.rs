@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::model::application::{ApplicationExtRevisionRecord, ApplicationRepoError};
+use crate::repo::model::BindFields;
 use crate::repo::model::application::{ApplicationRecord, ApplicationRevisionRecord};
-use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
-use crate::repo::model::{BindFields, new_repo_uuid};
-use anyhow::anyhow;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -23,9 +22,10 @@ use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo::{RepoResult, ResultExt};
+use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
 use sqlx::Database;
+use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -35,25 +35,35 @@ pub trait ApplicationRepo: Send + Sync {
         &self,
         owner_account_id: &Uuid,
         name: &str,
-    ) -> RepoResult<Option<ApplicationRecord>>;
+    ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError>;
 
-    async fn get_by_id(&self, application_id: &Uuid) -> RepoResult<Option<ApplicationRecord>>;
-
-    async fn list_by_owner(&self, owner_account_id: &Uuid) -> RepoResult<Vec<ApplicationRecord>>;
-
-    async fn get_revisions(
+    async fn get_by_id(
         &self,
         application_id: &Uuid,
-    ) -> RepoResult<Vec<ApplicationRevisionRecord>>;
+    ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError>;
 
-    async fn ensure(
+    async fn list_by_owner(
         &self,
-        user_account_id: &Uuid,
         owner_account_id: &Uuid,
-        name: &str,
-    ) -> RepoResult<ApplicationRecord>;
+    ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError>;
 
-    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> RepoResult<bool>;
+    async fn create(
+        &self,
+        account_id: &Uuid,
+        revision: ApplicationRevisionRecord,
+    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError>;
+
+    async fn update(
+        &self,
+        current_revision_id: i64,
+        revision: ApplicationRevisionRecord,
+    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError>;
+
+    async fn delete(
+        &self,
+        current_revision_id: i64,
+        revision: ApplicationRevisionRecord,
+    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError>;
 }
 
 pub struct LoggedApplicationRepo<Repo: ApplicationRepo> {
@@ -86,53 +96,65 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
         &self,
         owner_account_id: &Uuid,
         name: &str,
-    ) -> RepoResult<Option<ApplicationRecord>> {
+    ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         self.repo
             .get_by_name(owner_account_id, name)
             .instrument(Self::span_name(name))
             .await
     }
 
-    async fn get_by_id(&self, application_id: &Uuid) -> RepoResult<Option<ApplicationRecord>> {
+    async fn get_by_id(
+        &self,
+        application_id: &Uuid,
+    ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         self.repo
             .get_by_id(application_id)
             .instrument(Self::span_app_id(application_id))
             .await
     }
 
-    async fn list_by_owner(&self, owner_account_id: &Uuid) -> RepoResult<Vec<ApplicationRecord>> {
+    async fn list_by_owner(
+        &self,
+        owner_account_id: &Uuid,
+    ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         self.repo
             .list_by_owner(owner_account_id)
             .instrument(Self::span_owner_id(owner_account_id))
             .await
     }
 
-    async fn get_revisions(
+    async fn create(
         &self,
-        application_id: &Uuid,
-    ) -> RepoResult<Vec<ApplicationRevisionRecord>> {
+        account_id: &Uuid,
+        revision: ApplicationRevisionRecord,
+    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
         self.repo
-            .get_revisions(application_id)
-            .instrument(Self::span_app_id(application_id))
+            .create(account_id, revision)
+            .instrument(Self::span_owner_id(account_id))
             .await
     }
 
-    async fn ensure(
+    async fn update(
         &self,
-        user_account_id: &Uuid,
-        owner_account_id: &Uuid,
-        name: &str,
-    ) -> RepoResult<ApplicationRecord> {
+        current_revision_id: i64,
+        revision: ApplicationRevisionRecord,
+    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+        let span = Self::span_app_id(&revision.application_id);
         self.repo
-            .ensure(user_account_id, owner_account_id, name)
-            .instrument(Self::span_name(name))
+            .update(current_revision_id, revision)
+            .instrument(span)
             .await
     }
 
-    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> RepoResult<bool> {
+    async fn delete(
+        &self,
+        current_revision_id: i64,
+        revision: ApplicationRevisionRecord,
+    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+        let span = Self::span_app_id(&revision.application_id);
         self.repo
-            .delete(user_account_id, application_id)
-            .instrument(Self::span_app_id(application_id))
+            .delete(current_revision_id, revision)
+            .instrument(span)
             .await
     }
 }
@@ -159,15 +181,18 @@ impl<DBP: Pool> DbApplicationRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> RepoResult<R>
+    async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> Result<R, E>
     where
         R: Send,
+        E: Debug + Send + From<RepoError>,
         F: for<'f> FnOnce(
                 &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, RepoResult<R>>
+            ) -> BoxFuture<'f, Result<R, E>>
             + Send,
     {
-        self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, api_name, f)
+            .await
     }
 }
 
@@ -178,16 +203,22 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         &self,
         owner_account_id: &Uuid,
         name: &str,
-    ) -> RepoResult<Option<ApplicationRecord>> {
-        self.with_ro("get_by_name")
+    ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
+        let result: Option<ApplicationExtRevisionRecord> = self
+            .with_ro("get_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
                     SELECT
-                        ap.application_id, ap.name, ap.account_id, ap.created_at,
-                        ap.updated_at, ap.deleted_at, ap.modified_by
+                        ap.account_id,
+                        ap.created_at as entity_created_at,
+                        r.application_id, r.revision_id, r.name,
+                        r.created_at, r.created_by, r.deleted
                     FROM accounts a
                     JOIN applications ap
                         ON ap.account_id = a.account_id
+                    JOIN application_revisions r
+                        ON r.application_id = ap.application_id
+                        AND r.revision_id = ap.current_revision_id
                     WHERE
                         a.account_id = $1
                         AND ap.name = $2
@@ -197,19 +228,30 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 .bind(owner_account_id)
                 .bind(name),
             )
-            .await
+            .await?;
+
+        Ok(result)
     }
 
-    async fn get_by_id(&self, application_id: &Uuid) -> RepoResult<Option<ApplicationRecord>> {
-        self.with_ro("get_by_id")
+    async fn get_by_id(
+        &self,
+        application_id: &Uuid,
+    ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
+        let result = self
+            .with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
                     SELECT
-                        ap.application_id, ap.name, ap.account_id, ap.created_at,
-                        ap.updated_at, ap.deleted_at, ap.modified_by
+                        ap.account_id,
+                        ap.created_at as entity_created_at,
+                        r.application_id, r.revision_id, r.name,
+                        r.created_at, r.created_by, r.deleted
                     FROM accounts a
                     JOIN applications ap
                         ON ap.account_id = a.account_id
+                    JOIN application_revisions r
+                        ON r.application_id = ap.application_id
+                        AND r.revision_id = ap.current_revision_id
                     WHERE
                         ap.application_id = $1
                         AND a.deleted_at IS NULL
@@ -217,19 +259,30 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 "#})
                 .bind(application_id),
             )
-            .await
+            .await?;
+
+        Ok(result)
     }
 
-    async fn list_by_owner(&self, owner_account_id: &Uuid) -> RepoResult<Vec<ApplicationRecord>> {
-        self.with_ro("list_by_owner")
+    async fn list_by_owner(
+        &self,
+        owner_account_id: &Uuid,
+    ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError> {
+        let result = self
+            .with_ro("list_by_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
                     SELECT
-                        ap.application_id, ap.name, ap.account_id, ap.created_at,
-                        ap.updated_at, ap.deleted_at, ap.modified_by
+                        ap.account_id,
+                        ap.created_at as entity_created_at,
+                        r.application_id, r.revision_id, r.name,
+                        r.created_at, r.created_by, r.deleted
                     FROM accounts a
                     JOIN applications ap
                         ON ap.account_id = a.account_id
+                    JOIN application_revisions r
+                        ON r.application_id = ap.application_id
+                        AND r.revision_id = ap.current_revision_id
                     WHERE
                         a.account_id = $1
                         AND a.deleted_at IS NULL
@@ -238,136 +291,122 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 "#})
                 .bind(owner_account_id),
             )
-            .await
+            .await?;
+
+        Ok(result)
     }
 
-    async fn get_revisions(
+    async fn create(
         &self,
-        application_id: &Uuid,
-    ) -> RepoResult<Vec<ApplicationRevisionRecord>> {
-        self.with_ro("get_revisions")
-            .fetch_all_as(
-                sqlx::query_as(indoc! {r#"
-                    SELECT
-                        apr.application_id, apr.revision_id, apr.name,
-                        apr.account_id, apr.created_at, apr.created_by, apr.deleted
-                    FROM accounts a
-                    JOIN applications ap
-                        ON ap.account_id = a.account_id
-                    JOIN application_revisions apr
-                        ON apr.application_id = ap.application_id
-                    WHERE
-                        ap.application_id = $1
-                        AND a.deleted_at IS NULL
-                        AND ap.deleted_at IS NULL
-                    ORDER BY revision_id DESC
-                "#})
-                .bind(application_id),
-            )
-            .await
-    }
+        account_id: &Uuid,
+        revision: ApplicationRevisionRecord,
+    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+        let account_id = *account_id;
+        let revision = revision.ensure_first();
 
-    async fn ensure(
-        &self,
-        user_account_id: &Uuid,
-        owner_account_id: &Uuid,
-        name: &str,
-    ) -> RepoResult<ApplicationRecord> {
-        if let Some(app) = self.get_by_name(owner_account_id, name).await? {
-            return Ok(app);
-        }
-
-        let result = {
-            let user_id = *user_account_id;
-            let owner_id = *owner_account_id;
-            let name = name.to_owned();
-
-            self.with_tx("ensure", |tx| async move {
-                let app: ApplicationRecord = tx.fetch_one_as(
-                    sqlx::query_as(indoc! {r#"
-                        INSERT INTO applications (application_id, name, account_id, created_at, updated_at, deleted_at, modified_by)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by
-                    "#})
-                        .bind(new_repo_uuid())
-                        .bind(&name)
-                        .bind(owner_id)
-                        .bind_audit(AuditFields::new(user_id))
-                ).await?;
-
-                Self::insert_revision(
-                    tx,
-                    ApplicationRevisionRecord {
-                        application_id: app.application_id,
-                        revision_id: 0,
-                        name: app.name.clone(),
-                        account_id: app.account_id,
-                        audit: DeletableRevisionAuditFields::new(user_id),
-                    },
-                ).await?;
-
-                Ok(app)
-            }.boxed()).await
-        }.none_on_unique_violation()?;
-
-        if let Some(result) = result {
-            return Ok(result);
-        }
-
-        match self.get_by_name(owner_account_id, name).await? {
-            Some(app) => Ok(app),
-            None => Err(anyhow!("illegal state: missing application"))?,
-        }
-    }
-
-    async fn delete(&self, user_account_id: &Uuid, application_id: &Uuid) -> RepoResult<bool> {
-        let application_id = *application_id;
-        let user_account_id = *user_account_id;
-
-        self.with_tx("delete", |tx| async move {
-            let latest_revision: Option<ApplicationRevisionRecord> =
-                tx.fetch_optional_as(
-                    sqlx::query_as(indoc! {r#"
-                        SELECT application_id, revision_id, name, account_id, created_at, created_by, deleted
-                        FROM application_revisions
-                        WHERE application_id = $1
-                        ORDER BY revision_id DESC
-                        LIMIT 1
-                    "#})
-                        .bind(application_id)
-                )
-                    .await?;
-            let Some(latest_revision) = latest_revision else {
-                return Ok(());
-            };
-            if latest_revision.audit.deleted {
-                return Ok(());
-            }
-
-            let revision = ApplicationRevisionRecord {
-                application_id: latest_revision.application_id,
-                revision_id: latest_revision.revision_id + 1,
-                name: latest_revision.name,
-                account_id: latest_revision.account_id,
-                audit: DeletableRevisionAuditFields::deletion(user_account_id),
-            };
-            let deleted_at = revision.audit.created_at.clone();
-
-            Self::insert_revision(tx, revision).await?;
-
+        self.with_tx_err("create", |tx| async move {
             tx.execute(
                 sqlx::query(indoc! { r#"
-                    UPDATE applications
-                    SET deleted_at = $1, modified_by = $2
-                    WHERE application_id = $3
-                "#})
-                    .bind(deleted_at)
-                    .bind(user_account_id)
-                    .bind(application_id)
-            ).await?;
+                    INSERT INTO applications
+                    (application_id, name, account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                    VALUES ($1, $2, $3, $4, $4, NULL, $5, 0)
+                    RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                "# })
+                    .bind(revision.application_id)
+                    .bind(&revision.name)
+                    .bind(account_id)
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+            ).await
+            .to_error_on_unique_violation(ApplicationRepoError::ApplicationViolatesUniqueness)?;
 
-            Ok(())
-        }.boxed()).await.false_on_unique_violation()
+            let revision = Self::insert_revision(tx, revision).await?;
+
+            Ok(ApplicationExtRevisionRecord {
+                account_id,
+                entity_created_at: revision.audit.created_at.clone(),
+                revision,
+            })
+        }.boxed()).await
+    }
+
+    async fn update(
+        &self,
+        current_revision_id: i64,
+        revision: ApplicationRevisionRecord,
+    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+        let revision = revision.ensure_new(current_revision_id);
+
+        self.with_tx_err("update", |tx| {
+            async move {
+                let revision = Self::insert_revision(tx, revision).await?;
+
+                let application_record: ApplicationRecord = tx.fetch_optional_as(
+                    sqlx::query_as(indoc! { r#"
+                        UPDATE applications
+                        SET name = $1, updated_at = $2, modified_by = $3, current_revision_id = $4
+                        WHERE application_id = $5 AND current_revision_id = $6
+                        RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                    "#})
+                    .bind(&revision.name)
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+                    .bind(revision.revision_id)
+                    .bind(revision.application_id)
+                    .bind(current_revision_id)
+                )
+                .await
+                .to_error_on_unique_violation(ApplicationRepoError::ApplicationViolatesUniqueness)?
+                .ok_or(ApplicationRepoError::ConcurrentModification)?;
+
+                Ok(ApplicationExtRevisionRecord {
+                    account_id: application_record.account_id,
+                    entity_created_at: application_record.audit.created_at,
+                    revision,
+                })
+            }
+            .boxed()
+        })
+        .await
+    }
+
+    async fn delete(
+        &self,
+        current_revision_id: i64,
+        revision: ApplicationRevisionRecord,
+    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+        let revision = revision.ensure_deletion(current_revision_id);
+
+        self.with_tx_err("delete", |tx| {
+            async move {
+                let revision = Self::insert_revision(tx, revision).await?;
+
+                let application_record: ApplicationRecord = tx.fetch_optional_as(
+                    sqlx::query_as(indoc! { r#"
+                        UPDATE applications
+                        SET name = $1, updated_at = $2, deleted_at = $2, modified_by = $3, current_revision_id = $4
+                        WHERE application_id = $5 AND current_revision_id = $6
+                        RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                    "#})
+                    .bind(&revision.name)
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+                    .bind(revision.revision_id)
+                    .bind(revision.application_id)
+                    .bind(current_revision_id)
+                )
+                .await?
+                .ok_or(ApplicationRepoError::ConcurrentModification)?;
+
+                Ok(ApplicationExtRevisionRecord {
+                    account_id: application_record.account_id,
+                    entity_created_at: application_record.audit.created_at,
+                    revision,
+                })
+            }
+            .boxed()
+        })
+        .await
     }
 }
 
@@ -379,7 +418,7 @@ trait ApplicationRepoInternal: ApplicationRepo {
     async fn insert_revision(
         tx: &mut Self::Tx,
         revision: ApplicationRevisionRecord,
-    ) -> RepoResult<()>;
+    ) -> Result<ApplicationRevisionRecord, ApplicationRepoError>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -391,19 +430,20 @@ impl ApplicationRepoInternal for DbApplicationRepo<PostgresPool> {
     async fn insert_revision(
         tx: &mut Self::Tx,
         revision: ApplicationRevisionRecord,
-    ) -> RepoResult<()> {
-        tx.execute(
-            sqlx::query(indoc! { r#"
-                INSERT INTO application_revisions (application_id, revision_id, name, account_id, created_at, created_by, deleted)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+    ) -> Result<ApplicationRevisionRecord, ApplicationRepoError> {
+        let revision = tx.fetch_one_as(
+            sqlx::query_as(indoc! { r#"
+                INSERT INTO application_revisions (application_id, revision_id, name, created_at, created_by, deleted)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING application_id, revision_id, name, created_at, created_by, deleted
             "#})
                 .bind(revision.application_id)
                 .bind(revision.revision_id)
                 .bind(revision.name)
-                .bind(revision.account_id)
                 .bind_deletable_revision_audit(revision.audit)
-        ).await?;
+        ).await
+        .to_error_on_unique_violation(ApplicationRepoError::ConcurrentModification)?;
 
-        Ok(())
+        Ok(revision)
     }
 }

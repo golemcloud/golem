@@ -285,9 +285,10 @@ impl AccountsApi {
 
     async fn delete_account_internal(
         &self,
-        _account_id: AccountId,
-        _auth: AuthCtx,
+        account_id: AccountId,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Empty>> {
-        todo!()
+        self.account_service.delete(&account_id, &auth).await?;
+        Ok(Json(Empty {}))
     }
 }

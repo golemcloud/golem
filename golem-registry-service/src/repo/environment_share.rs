@@ -257,14 +257,14 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
         let revision = revision.ensure_new(current_revision_id);
         self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
-                let revision_record = Self::insert_revision(tx, revision.clone()).await?;
+                let revision = Self::insert_revision(tx, revision).await?;
 
                 let environment_share_record: EnvironmentShareRecord = tx
                     .fetch_optional_as(
                         sqlx::query_as(indoc! {r#"
                             UPDATE environment_shares
                             SET updated_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE environment_share_id = $4 AND current_revision_id = $5 AND deleted_at IS null
+                            WHERE environment_share_id = $4 AND current_revision_id = $5
                             RETURNING environment_id, environment_share_id, grantee_account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                             .bind(&revision.audit.created_at)
@@ -279,7 +279,7 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                     environment_id: environment_share_record.environment_id,
                     grantee_account_id: environment_share_record.grantee_account_id,
                     entity_created_at: environment_share_record.audit.created_at,
-                    revision: revision_record
+                    revision
                 })
             }.boxed()
         }).await
@@ -290,7 +290,7 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
         current_revision_id: i64,
         revision: EnvironmentShareRevisionRecord,
     ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
-        let revision = revision.ensure_deleted(current_revision_id);
+        let revision = revision.ensure_deletion(current_revision_id);
         self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision_record = Self::insert_revision(tx, revision.clone()).await?;
@@ -299,8 +299,8 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                     .fetch_optional_as(
                         sqlx::query_as(indoc! {r#"
                             UPDATE environment_shares
-                            SET updated_at = $1, modified_by = $2, deleted_at = $1, current_revision_id = $3
-                            WHERE environment_share_id = $4 AND current_revision_id = $5 AND deleted_at IS null
+                            SET updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
+                            WHERE environment_share_id = $4 AND current_revision_id = $5
                             RETURNING environment_id, environment_share_id, grantee_account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                             .bind(&revision.audit.created_at)

@@ -24,7 +24,9 @@ use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRevisionRecord,
 };
 use golem_registry_service::repo::model::account_usage::UsageType;
-use golem_registry_service::repo::model::application::ApplicationRecord;
+use golem_registry_service::repo::model::application::{
+    ApplicationExtRevisionRecord, ApplicationRevisionRecord,
+};
 use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
 use golem_registry_service::repo::model::environment::{
     EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
@@ -100,26 +102,35 @@ impl Deps {
             .unwrap()
     }
 
-    pub async fn create_application(&self, owner_account_id: &Uuid) -> ApplicationRecord {
+    pub async fn create_application(
+        &self,
+        owner_account_id: &Uuid,
+    ) -> ApplicationExtRevisionRecord {
         let user = self.create_account().await;
-        let app_name = format!("app-name-{}", new_repo_uuid());
 
         self.application_repo
-            .ensure(&user.revision.account_id, owner_account_id, &app_name)
+            .create(
+                owner_account_id,
+                ApplicationRevisionRecord {
+                    application_id: new_repo_uuid(),
+                    revision_id: 0,
+                    name: format!("app-name-{}", new_repo_uuid()),
+                    audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+                },
+            )
             .await
             .unwrap()
     }
 
     pub async fn create_env(&self, parent_application_id: &Uuid) -> EnvironmentExtRevisionRecord {
         let user = self.create_account().await;
-        let env_name = format!("env-{}", new_repo_uuid());
         self.environment_repo
             .create(
                 parent_application_id,
-                &env_name,
                 EnvironmentRevisionRecord {
                     environment_id: new_repo_uuid(),
                     revision_id: 0,
+                    name: format!("env-{}", new_repo_uuid()),
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     compatibility_check: true,
                     version_check: true,
@@ -128,7 +139,6 @@ impl Deps {
                 },
             )
             .await
-            .unwrap()
             .unwrap()
     }
 }

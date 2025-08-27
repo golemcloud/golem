@@ -69,12 +69,12 @@ impl EnvironmentShareRevisionRecord {
         }
     }
 
-    pub fn from_model(value: EnvironmentShare, actor: AccountId) -> Self {
+    pub fn from_model(value: EnvironmentShare, audit: DeletableRevisionAuditFields) -> Self {
         Self {
             environment_share_id: value.id.0,
             revision_id: value.revision.into(),
             roles: roles_to_bit_vector(&value.roles),
-            audit: DeletableRevisionAuditFields::new(actor.0),
+            audit,
         }
     }
 
@@ -94,7 +94,7 @@ impl EnvironmentShareRevisionRecord {
         }
     }
 
-    pub fn ensure_deleted(self, current_revision_id: i64) -> Self {
+    pub fn ensure_deletion(self, current_revision_id: i64) -> Self {
         Self {
             revision_id: current_revision_id + 1,
             audit: self.audit.ensure_deletion(),

@@ -40,6 +40,12 @@ pub trait AccountRepo: Send + Sync {
         revision: AccountRevisionRecord,
     ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
 
+    async fn delete(
+        &self,
+        current_revision_id: i64,
+        revision: AccountRevisionRecord,
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
+
     async fn get_by_id(
         &self,
         account_id: &Uuid,
@@ -89,6 +95,18 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
         let span = Self::span_account_id(&revision.account_id);
         self.repo
             .update(current_revision_id, revision)
+            .instrument(span)
+            .await
+    }
+
+    async fn delete(
+        &self,
+        current_revision_id: i64,
+        revision: AccountRevisionRecord,
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+        let span = Self::span_account_id(&revision.account_id);
+        self.repo
+            .delete(current_revision_id, revision)
             .instrument(span)
             .await
     }
@@ -160,9 +178,7 @@ impl DbAccountRepo<PostgresPool> {
                 .bind_deletable_revision_audit(revision.audit),
             )
             .await
-            .to_error_on_unique_violation(AccountRepoError::RevisionAlreadyExists {
-                revision_id: revision.revision_id,
-            })?;
+            .to_error_on_unique_violation(AccountRepoError::ConcurrentModification)?;
 
         Ok(revision)
     }
@@ -221,7 +237,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                         sqlx::query_as(indoc! {r#"
                             UPDATE accounts
                             SET updated_at = $1, modified_by = $2, current_revision_id = $3, email = $4
-                            WHERE account_id = $5 AND current_revision_id = $6 AND deleted_at IS null
+                            WHERE account_id = $5 AND current_revision_id = $6
                             RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                             .bind(&revision.audit.created_at)
@@ -232,7 +248,43 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                             .bind(current_revision_id)
                     ).await
                     .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?
-                    .ok_or(AccountRepoError::RevisionForUpdateNotFound { current_revision_id })?;
+                    .ok_or(AccountRepoError::ConcurrentModification)?;
+
+                Ok(AccountExtRevisionRecord {
+                    entity_created_at: account_record.audit.created_at,
+                    revision: revision_record
+                })
+            }.boxed()
+        }).await
+    }
+
+    async fn delete(
+        &self,
+        current_revision_id: i64,
+        revision: AccountRevisionRecord,
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+        let revision = revision.ensure_deletion(current_revision_id);
+        self.db_pool.with_tx_err(METRICS_SVC_NAME, "delete", |tx| {
+            async move {
+                let revision_record = Self::insert_revision(tx, revision.clone()).await?;
+
+                let account_record: AccountRecord = tx
+                    .fetch_optional_as(
+                        sqlx::query_as(indoc! {r#"
+                            UPDATE accounts
+                            SET updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3, email = $4
+                            WHERE account_id = $5 AND current_revision_id = $6
+                            RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                        "#})
+                            .bind(&revision.audit.created_at)
+                            .bind(revision.audit.created_by)
+                            .bind(revision.revision_id)
+                            .bind(&revision.email)
+                            .bind(revision.account_id)
+                            .bind(current_revision_id)
+                    ).await
+                    .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?
+                    .ok_or(AccountRepoError::ConcurrentModification)?;
 
                 Ok(AccountExtRevisionRecord {
                     entity_created_at: account_record.audit.created_at,
