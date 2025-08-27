@@ -18,13 +18,27 @@ use crate::workerctx::WorkerCtx;
 use chrono::{Duration, Utc};
 use golem_common::model::oplog::DurableFunctionType;
 use golem_service_base::error::worker_executor::InterruptKind;
+use tracing::warn;
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
 
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
         self.observe_function_call("io::poll:pollable", "ready");
-        HostPollable::ready(&mut self.as_wasi_view().0, self_).await
+        let durability = Durability::<bool, SerializableError>::new(
+            self,
+            "golem io::poll",
+            "ready",
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
+
+        if durability.is_live() {
+            let result = HostPollable::ready(&mut self.as_wasi_view().0, self_).await;
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 
     async fn block(&mut self, self_: Resource<Pollable>) -> anyhow::Result<()> {
@@ -62,6 +76,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             durability.replay(self).await
         };
+
+        warn!("poll result: {:?}", result);
 
         match is_suspend_for_sleep(&result) {
             Some(duration) => {
