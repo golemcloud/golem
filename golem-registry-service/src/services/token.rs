@@ -32,7 +32,7 @@ pub enum TokenError {
     #[error("Token for id not found")]
     TokenNotFound(TokenId),
     #[error("Token for secret not found")]
-    TokenBySecretFound,
+    TokenBySecretNotFound,
     #[error("Parent account not found")]
     ParentAccountNotFound(AccountId),
     #[error(transparent)]
@@ -46,7 +46,7 @@ impl SafeDisplay for TokenError {
         match self {
             Self::TokenSecretAlreadyExists => self.to_string(),
             Self::TokenNotFound(_) => self.to_string(),
-            Self::TokenBySecretFound => self.to_string(),
+            Self::TokenBySecretNotFound => self.to_string(),
             Self::ParentAccountNotFound(_) => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -96,11 +96,11 @@ impl TokenService {
             .token_repo
             .get_by_secret(&secret.0)
             .await?
-            .ok_or(TokenError::TokenBySecretFound)?
+            .ok_or(TokenError::TokenBySecretNotFound)?
             .into();
 
         auth.authorize_account_action(&token.account_id, AccountAction::ViewToken)
-            .map_err(|_| TokenError::TokenBySecretFound)?;
+            .map_err(|_| TokenError::TokenBySecretNotFound)?;
 
         Ok(token)
     }
@@ -114,7 +114,7 @@ impl TokenService {
             .await
             .map(Some)
             .or_else(|err| match err {
-                TokenError::TokenBySecretFound => Ok(None),
+                TokenError::TokenBySecretNotFound => Ok(None),
                 other => Err(other),
             })
     }

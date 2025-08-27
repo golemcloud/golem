@@ -79,6 +79,10 @@ impl AuthCtx {
             GlobalAction::GetDefaultPlan => {
                 has_any_role(&self.account_roles, &[AccountRole::Admin])
             }
+            GlobalAction::GetReports => has_any_role(
+                &self.account_roles,
+                &[AccountRole::Admin, AccountRole::MarketingAdmin],
+            ),
         };
 
         if !is_allowed {

@@ -136,7 +136,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_applications_in_account
+      operationId: list_account_applications
     post:
       tags:
       - RegistryService
@@ -437,73 +437,6 @@ paths:
       - Token: []
       operationId: create_token
   /v1/accounts:
-    get:
-      tags:
-      - RegistryService
-      - Account
-      summary: Find accounts
-      description: Find matching accounts. Only your own account or accounts you have at least one grant from will be returned
-      parameters:
-      - name: email
-        schema:
-          type: string
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_Account'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: find_accounts
     post:
       tags:
       - RegistryService
@@ -1848,6 +1781,69 @@ paths:
       - Cookie: []
       - Token: []
       operationId: update_application
+    delete:
+      tags:
+      - RegistryService
+      - Application
+      summary: Update application by id.
+      parameters:
+      - name: application_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '204':
+          description: ''
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_application
   /v1/apps/{application_id}/envs:
     get:
       tags:
@@ -1990,7 +1986,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: create_application_environment
+      operationId: create_environment
   /v1/apps/{application_id}/envs/{environment_name}:
     get:
       tags:
@@ -6307,6 +6303,124 @@ paths:
       - Cookie: []
       - Token: []
       operationId: create_app_plugin
+  /v1/reports/account_summaries:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      - Token
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_AccountSummary'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_account_summaries_report
+  /v1/reports/account_count:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      - Token
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AccountCounts'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_account_count_report
   /v1/security-schemes/{security_scheme_id}:
     get:
       tags:
@@ -6609,11 +6723,55 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountRole'
+    AccountCounts:
+      type: object
+      title: AccountCounts
+      required:
+      - totalAccounts
+      - totalActiveAccounts
+      - totalDeletedAccounts
+      properties:
+        totalAccounts:
+          type: integer
+          format: int64
+        totalActiveAccounts:
+          type: integer
+          format: int64
+        totalDeletedAccounts:
+          type: integer
+          format: int64
     AccountRole:
       type: string
       enum:
       - admin
       - marketing-admin
+    AccountSummary:
+      type: object
+      title: AccountSummary
+      required:
+      - id
+      - name
+      - email
+      - componentsCount
+      - workersCount
+      - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+        componentsCount:
+          type: integer
+          format: int64
+        workersCount:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
     AgentConstructor:
       type: object
       title: AgentConstructor
@@ -8030,16 +8188,16 @@ components:
         componentVersion:
           type: integer
           format: uint64
-    Page_Account:
+    Page_AccountSummary:
       type: object
-      title: Page_Account
+      title: Page_AccountSummary
       required:
       - values
       properties:
         values:
           type: array
           items:
-            $ref: '#/components/schemas/Account'
+            $ref: '#/components/schemas/AccountSummary'
     Page_ApiDeployment:
       type: object
       title: Page_ApiDeployment

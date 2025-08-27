@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::Tracing;
-use assert2::{assert, let_assert};
+use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateAccountError, RegistryServiceUpdateAccountError,
 };
@@ -33,12 +33,27 @@ async fn get_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let client = deps.registry_service().client(&user.token).await;
 
-    let account = client.get_account(&user.account_id.0).await?;
+    {
+        let account = client.get_account(&user.account_id.0).await?;
 
-    assert!(account.id == user.account_id);
-    assert!(account.email == user.account_email);
-    assert!(account.revision == AccountRevision::INITIAL);
-    assert!(account.roles == Vec::new());
+        assert!(account.id == user.account_id);
+        assert!(account.email == user.account_email);
+        assert!(account.revision == AccountRevision::INITIAL);
+        assert!(account.roles == Vec::new());
+    }
+
+    // get account plan
+    {
+        let result = client.get_account_plan(&user.account_id.0).await;
+        assert!(result.is_ok())
+    }
+
+    // get account tokens
+    {
+        let tokens = client.get_account_tokens(&user.account_id.0).await?;
+        assert!(tokens.values.len() == 1)
+    }
+
     Ok(())
 }
 
@@ -132,8 +147,8 @@ async fn create_account_with_duplicate_email_fails(
             })
             .await;
 
-        let_assert!(
-            Err(golem_client::Error::Item(
+        assert!(
+            let Err(golem_client::Error::Item(
                 RegistryServiceCreateAccountError::Error409(_)
             )) = failed_account_creation
         );
@@ -181,8 +196,8 @@ async fn update_account_with_duplicate_email_fails(
             )
             .await;
 
-        let_assert!(
-            Err(golem_client::Error::Item(
+        assert!(
+            let Err(golem_client::Error::Item(
                 RegistryServiceUpdateAccountError::Error409(_)
             )) = failed_account_update
         );
