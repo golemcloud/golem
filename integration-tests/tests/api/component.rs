@@ -16,7 +16,6 @@ use super::Tracing;
 use assert2::assert;
 use golem_client::api::RegistryServiceClient;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDsl;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(Tracing);
@@ -29,7 +28,7 @@ async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Re
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env, "shopping-cart").store().await?;
+    let component = user.component(&env.id, "shopping-cart").store().await?;
 
     let component_from_get = client
         .get_component(&component.versioned_component_id.component_id.0)
@@ -46,7 +45,7 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
-    let component_1 = user.component(&env, "update-test-v1").store().await?;
+    let component_1 = user.component(&env.id, "update-test-v1").store().await?;
     let component_2 = user
         .update_component_with(
             &component_1.versioned_component_id.component_id,

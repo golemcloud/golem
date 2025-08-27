@@ -66,6 +66,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "UpdatedAccountData",
                 "golem_common::model::account::UpdatedAccountData",
             ),
+            ("Token", "golem_common::model::auth::Token"),
             (
                 "TokenWithSecret",
                 "golem_common::model::auth::TokenWithSecret",
@@ -79,6 +80,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::application::NewApplicationData",
             ),
             (
+                "UpdatedApplicationData",
+                "golem_common::model::application::UpdatedApplicationData",
+            ),
+            (
                 "RegisteredAgentType",
                 "golem_common::model::agent::RegisteredAgentType",
             ),
@@ -87,6 +92,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "NewEnvironmentData",
                 "golem_common::model::environment::NewEnvironmentData",
+            ),
+            (
+                "UpdatedEnvironmentData",
+                "golem_common::model::environment::UpdatedEnvironmentData",
             ),
             (
                 "Environment",

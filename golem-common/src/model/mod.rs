@@ -43,6 +43,7 @@ pub mod project;
 pub mod protobuf;
 pub mod public_oplog;
 pub mod regions;
+pub mod reports;
 pub mod trim_date;
 pub mod worker;
 

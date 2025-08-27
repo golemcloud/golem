@@ -27,3 +27,23 @@ pub struct WithEnvironmentCtx<A> {
     pub owner_account_id: AccountId,
     pub roles_from_shares: HashSet<EnvironmentRole>,
 }
+
+impl<A> WithEnvironmentCtx<A> {
+    pub fn map<B>(self, f: impl Fn(A) -> B) -> WithEnvironmentCtx<B> {
+        WithEnvironmentCtx {
+            value: f(self.value),
+            owner_account_id: self.owner_account_id,
+            roles_from_shares: self.roles_from_shares,
+        }
+    }
+}
+
+impl<A> WithEnvironmentCtx<Option<A>> {
+    pub fn map_into_inner(self) -> Option<WithEnvironmentCtx<A>> {
+        self.value.map(|v| WithEnvironmentCtx {
+            value: v,
+            owner_account_id: self.owner_account_id,
+            roles_from_shares: self.roles_from_shares,
+        })
+    }
+}

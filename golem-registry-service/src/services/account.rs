@@ -191,9 +191,18 @@ impl AccountService {
         account_id: &AccountId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        self.get_optional(account_id, auth)
+        auth.authorize_account_action(account_id, AccountAction::ViewAccount)
+            // Visibility is not enforced in the repo, so we need to map permissions to visibility
+            .map_err(|_| AccountError::AccountNotFound(account_id.clone()))?;
+
+        let account = self
+            .account_repo
+            .get_by_id(&account_id.0)
             .await?
-            .ok_or(AccountError::AccountNotFound(account_id.clone()))
+            .ok_or(AccountError::AccountNotFound(account_id.clone()))?
+            .try_into()?;
+
+        Ok(account)
     }
 
     async fn create_internal(
@@ -235,12 +244,11 @@ impl AccountService {
         account_id: &AccountId,
         auth: &AuthCtx,
     ) -> Result<Option<Account>, AccountError> {
-        auth.authorize_account_action(account_id, AccountAction::ViewAccount)
-            // Visibility is not enforced in the repo, so we need to map permissions to visibility
-            .map_err(|_| AccountError::AccountNotFound(account_id.clone()))?;
-
-        let record = self.account_repo.get_by_id(&account_id.0).await?;
-        Ok(record.map(|r| r.try_into()).transpose()?)
+        match self.get(account_id, auth).await {
+            Ok(account) => Ok(Some(account)),
+            Err(AccountError::AccountNotFound(_)) => Ok(None),
+            Err(other) => Err(other),
+        }
     }
 
     async fn update_internal(

@@ -32,6 +32,7 @@ pub mod environments;
 pub mod error;
 pub mod login;
 pub mod plugin_registration;
+pub mod reports;
 pub mod security_schemes;
 pub mod tokens;
 
@@ -55,6 +56,7 @@ use self::environments::EnvironmentsApi;
 use self::error::ApiError;
 use self::login::LoginApi;
 use self::plugin_registration::PluginRegistrationApi;
+use self::reports::ReportsApi;
 use self::security_schemes::SecuritySchemesApi;
 use self::tokens::TokensApi;
 use crate::bootstrap::Services;
@@ -82,6 +84,7 @@ pub type Apis = (
     ),
     LoginApi,
     PluginRegistrationApi,
+    ReportsApi,
     SecuritySchemesApi,
     TokensApi,
 );
@@ -143,6 +146,10 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.token_service.clone(),
             ),
             PluginRegistrationApi {},
+            ReportsApi::new(
+                services.reports_service.clone(),
+                services.auth_service.clone(),
+            ),
             SecuritySchemesApi::new(services.auth_service.clone()),
             TokensApi::new(
                 services.token_service.clone(),
