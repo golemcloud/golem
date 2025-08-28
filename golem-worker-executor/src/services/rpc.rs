@@ -619,11 +619,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             function_name
         } else if let Ok(target_component) = self
             .component_service
-            .get_metadata(
-                &target_worker_id.project_id,
-                &target_worker_id.worker_id.component_id,
-                None,
-            )
+            .get_metadata(&target_worker_id.worker_id.component_id, None)
             .await
         {
             enrich_function_name_by_target_information(
