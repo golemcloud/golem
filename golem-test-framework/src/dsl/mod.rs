@@ -24,23 +24,22 @@ use async_zip::{Compression, ZipEntryBuilder};
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog};
-use golem_client::api::RegistryServiceClient;
-use golem_common::api::component::{
-    CreateComponentRequestMetadata, UpdateComponentRequestMetadata,
-};
+use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{
     Application, ApplicationId, ApplicationName, NewApplicationData,
 };
-use golem_common::model::auth::TokenSecret;
+use golem_common::model::auth::{EnvironmentRole, TokenSecret};
 use golem_common::model::component::{
     Component, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentName,
     ComponentRevision, ComponentType,
 };
+use golem_common::model::component::{NewComponentData, UpdatedComponentData};
 use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
 use golem_common::model::environment::{
     Environment, EnvironmentId, EnvironmentName, NewEnvironmentData,
 };
+use golem_common::model::environment_share::{EnvironmentShare, NewEnvironmentShareData};
 use golem_common::model::ComponentId;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
@@ -61,6 +60,10 @@ pub struct TestDependenciesDsl<Deps> {
 }
 
 impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
+    pub async fn registry_service_client(&self) -> RegistryServiceClientLive {
+        self.deps.registry_service().client(&self.token).await
+    }
+
     pub fn component(
         &self,
         environment_id: &EnvironmentId,
@@ -135,7 +138,7 @@ impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
         let component = client
             .create_component(
                 &environment_id.0,
-                &CreateComponentRequestMetadata {
+                &NewComponentData {
                     component_name,
                     component_type: Some(component_type),
                     file_options: Some(file_options),
@@ -196,7 +199,7 @@ impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
         let component = client
             .update_component(
                 &component_id.0,
-                &UpdateComponentRequestMetadata {
+                &UpdatedComponentData {
                     previous_version,
                     component_type,
                     new_file_options: Some(new_file_options),
@@ -266,6 +269,27 @@ impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
             .await?;
 
         Ok((application, environment))
+    }
+
+    pub async fn share_environment(
+        &self,
+        grantee_account_id: &AccountId,
+        environment_id: &EnvironmentId,
+        roles: &[EnvironmentRole],
+    ) -> anyhow::Result<EnvironmentShare> {
+        let client = self.deps.registry_service().client(&self.token).await;
+
+        let environment_share = client
+            .create_environment_share(
+                &environment_id.0,
+                &NewEnvironmentShareData {
+                    grantee_account_id: grantee_account_id.clone(),
+                    roles: roles.to_vec(),
+                },
+            )
+            .await?;
+
+        Ok(environment_share)
     }
 }
 

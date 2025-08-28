@@ -17,14 +17,19 @@ use crate::model::auth::AuthCtx;
 use crate::services::account::AccountService;
 use crate::services::auth::AuthService;
 use crate::services::plan::PlanService;
+use crate::services::plugin_registration::PluginRegistrationService;
+use golem_common::api::Page;
 use golem_common::model::Empty;
 use golem_common::model::account::{Account, AccountId, NewAccountData, Plan, UpdatedAccountData};
 use golem_common::model::auth::AccountRole;
+use golem_common::model::plugin_registration::{NewPluginRegistrationData, PluginRegistrationDto};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
+use golem_service_base::poem::TempFileUpload;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
+use poem_openapi::types::multipart::JsonField;
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -33,6 +38,7 @@ pub struct AccountsApi {
     account_service: Arc<AccountService>,
     plan_service: Arc<PlanService>,
     auth_service: Arc<AuthService>,
+    plugin_registration_service: Arc<PluginRegistrationService>,
 }
 
 #[OpenApi(
@@ -45,11 +51,13 @@ impl AccountsApi {
         account_service: Arc<AccountService>,
         plan_service: Arc<PlanService>,
         auth_service: Arc<AuthService>,
+        plugin_registration_service: Arc<PluginRegistrationService>,
     ) -> Self {
         Self {
             account_service,
             plan_service,
             auth_service,
+            plugin_registration_service,
         }
     }
 
@@ -260,4 +268,103 @@ impl AccountsApi {
         self.account_service.delete(&account_id, &auth).await?;
         Ok(Json(Empty {}))
     }
+
+    /// Register a new plugin
+    #[oai(
+        path = "/:account_id/plugins",
+        method = "post",
+        operation_id = "create_plugin",
+        tag = ApiTags::Plugin
+    )]
+    async fn create_plugin(
+        &self,
+        account_id: Path<AccountId>,
+        payload: CreatePluginRequest,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<PluginRegistrationDto>> {
+        let record = recorded_http_api_request!(
+            "create_plugin",
+            plugin_name = payload.metadata.0.name,
+            plugin_version = payload.metadata.0.version
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .create_plugin_internal(account_id.0, payload.metadata.0, payload.plugin_wasm, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn create_plugin_internal(
+        &self,
+        account_id: AccountId,
+        metadata: NewPluginRegistrationData,
+        plugin_wasm: Option<TempFileUpload>,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<PluginRegistrationDto>> {
+        let plugin_registration = self
+            .plugin_registration_service
+            .register_plugin(
+                account_id,
+                metadata,
+                plugin_wasm.map(|pw| pw.into_file()),
+                &auth,
+            )
+            .await?;
+        Ok(Json(plugin_registration.into()))
+    }
+
+    /// Get all plugins registered in account
+    #[oai(
+        path = "/:account_id/plugins",
+        method = "get",
+        operation_id = "get_account_plugins",
+        tag = ApiTags::Plugin
+    )]
+    async fn get_account_plugins(
+        &self,
+        account_id: Path<AccountId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<PluginRegistrationDto>>> {
+        let record = recorded_http_api_request!(
+            "get_account_plugins",
+            account_id = account_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .get_account_plugins_internal(account_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_account_plugins_internal(
+        &self,
+        account_id: AccountId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<PluginRegistrationDto>>> {
+        let plugin_registrations = self
+            .plugin_registration_service
+            .list_plugins_in_account(&account_id, &auth)
+            .await?;
+        Ok(Json(Page {
+            values: plugin_registrations
+                .into_iter()
+                .map(|pr| pr.into())
+                .collect(),
+        }))
+    }
+}
+
+#[derive(Debug, poem_openapi::Multipart)]
+#[oai(rename_all = "camelCase")]
+struct CreatePluginRequest {
+    metadata: JsonField<NewPluginRegistrationData>,
+    plugin_wasm: Option<TempFileUpload>,
 }

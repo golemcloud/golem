@@ -134,41 +134,8 @@ impl AuthCtx {
             return Ok(());
         };
 
-        let is_allowed = match action {
-            AccountAction::ViewAccount => has_any_role(&self.account_roles, &[AccountRole::Admin]),
-            AccountAction::UpdateAccount => {
-                has_any_role(&self.account_roles, &[AccountRole::Admin])
-            }
-            AccountAction::DeleteAccount => {
-                has_any_role(&self.account_roles, &[AccountRole::Admin])
-            }
-            AccountAction::CreateApplication => {
-                has_any_role(&self.account_roles, &[AccountRole::Admin])
-            }
-            AccountAction::SetRoles => has_any_role(&self.account_roles, &[AccountRole::Admin]),
-            AccountAction::ViewToken => has_any_role(&self.account_roles, &[AccountRole::Admin]),
-            AccountAction::CreateToken => has_any_role(&self.account_roles, &[AccountRole::Admin]),
-            AccountAction::DeleteToken => has_any_role(&self.account_roles, &[AccountRole::Admin]),
-            AccountAction::CreateKnownSecret => {
-                has_any_role(&self.account_roles, &[AccountRole::Admin])
-            }
-            AccountAction::UpdateUsage => has_any_role(&self.account_roles, &[AccountRole::Admin]),
-            AccountAction::ViewApplications => {
-                has_any_role(&self.account_roles, &[AccountRole::Admin])
-            }
-            AccountAction::CreateEnvironment => {
-                has_any_role(&self.account_roles, &[AccountRole::Admin])
-            }
-            AccountAction::UpdateApplication => {
-                has_any_role(&self.account_roles, &[AccountRole::Admin])
-            }
-            AccountAction::DeleteApplication => {
-                has_any_role(&self.account_roles, &[AccountRole::Admin])
-            }
-            AccountAction::ListAllApplicationEnvironments => {
-                has_any_role(&self.account_roles, &[AccountRole::Admin])
-            }
-        };
+        let is_allowed = (self.account_id == *target_account_id)
+            || has_any_role(&self.account_roles, &[AccountRole::Admin]);
 
         if !is_allowed {
             Err(AuthorizationError::AccountActionNotAllowed(action))?
