@@ -1490,7 +1490,7 @@ mod tests {
     use golem_wasm_ast::analysis::NameOptionTypePair;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use golem_worker_executor::durable_host::wasm_rpc::serialized::{
-        SerializableInvokeRequest, SerializableInvokeResult,
+        EnrichedSerializableInvokeRequest, SerializableInvokeRequest, SerializableInvokeResult,
     };
     use golem_worker_executor::services::rpc::RpcError;
     use test_r::test;
@@ -1595,15 +1595,25 @@ mod tests {
             ValueAndType::new(Value::String("bar".to_string()), str()),
         ];
 
-        let serializable_invoke_request = SerializableInvokeRequest {
-            remote_worker_id,
-            idempotency_key,
+        let serializable_invoke_request = EnrichedSerializableInvokeRequest {
+            remote_worker_id: remote_worker_id.clone(),
+            remote_agent_type: None,
+            remote_agent_parameters: None,
+            idempotency_key: idempotency_key.clone(),
             function_name: "foo".to_string(),
-            function_params,
+            function_params: function_params.clone(),
         };
 
         let value_and_type = serializable_invoke_request.clone().into_value_and_type();
         let result = get_serializable_invoke_request(&value_and_type).unwrap();
-        assert_eq!(result, serializable_invoke_request);
+        assert_eq!(
+            result,
+            SerializableInvokeRequest {
+                remote_worker_id,
+                idempotency_key,
+                function_name: "foo".to_string(),
+                function_params,
+            }
+        );
     }
 }
