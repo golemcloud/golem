@@ -175,6 +175,7 @@ fn add_builder_package(
             Utf8Path::new("builder").join("top.mbt"),
         ],
         warning_control: vec![],
+        alert_control: vec![],
         output: Utf8Path::new("target")
             .join("wasm")
             .join("release")
@@ -244,6 +245,7 @@ fn add_extractor_package(
             Utf8Path::new("extractor").join("top.mbt"),
         ],
         warning_control: vec![],
+        alert_control: vec![],
         output: Utf8Path::new("target")
             .join("wasm")
             .join("release")
