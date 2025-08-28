@@ -210,18 +210,18 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 timestamp: timestamp.into(),
                 resource_id: id.0,
                 name,
-                owner
+                owner,
             }),
             PublicOplogEntry::DropResource(ResourceParameters {
                 timestamp,
                 id,
                 name,
-                owner
+                owner,
             }) => Self::DropResource(oplog::DropResourceParameters {
                 timestamp: timestamp.into(),
                 resource_id: id.0,
                 name,
-                owner
+                owner,
             }),
             PublicOplogEntry::Log(LogParameters {
                 timestamp,
