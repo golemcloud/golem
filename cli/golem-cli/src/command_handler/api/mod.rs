@@ -120,7 +120,7 @@ impl ApiCommandHandler {
 
     pub async fn deploy(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
         deploy_mode: HttpApiDeployMode,
         update_or_redeploy: &UpdateOrRedeployArgs,
         latest_component_versions: &BTreeMap<String, Component>,

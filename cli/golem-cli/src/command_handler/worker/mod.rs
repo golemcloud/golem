@@ -38,26 +38,20 @@ use crate::model::text::help::{
     ParameterErrorTableView, WorkerNameHelp,
 };
 use crate::model::text::worker::{WorkerCreateView, WorkerGetView};
-use crate::model::worker::fuzzy_match_function_name;
-use crate::model::{
-    ComponentName, ComponentNameMatchKind, IdempotencyKey, ProjectName, ProjectReference,
-    WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch, WorkerUpdateMode,
-    WorkersMetadataResponseView,
-};
+use crate::model::worker::{fuzzy_match_function_name, WorkerUpdateMode};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::WorkerClient;
-use golem_client::model::{
-    ComponentType, InvokeResult, PublicOplogEntry, ScanCursor, UpdateRecord,
-};
 use golem_client::model::{
     InvokeParameters as InvokeParametersCloud, RevertLastInvocations as RevertLastInvocationsCloud,
     RevertToOplogIndex as RevertToOplogIndexCloud, RevertWorkerTarget as RevertWorkerTargetCloud,
     UpdateWorkerRequest as UpdateWorkerRequestCloud,
     WorkerCreationRequest as WorkerCreationRequestCloud,
 };
+use golem_client::model::{InvokeResult, PublicOplogEntry, ScanCursor, UpdateRecord};
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::worker::WasiConfigVars;
+use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
@@ -67,6 +61,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 use uuid::Uuid;
+use golem_common::model::component::ComponentType;
 
 pub struct WorkerCommandHandler {
     ctx: Arc<Context>,
@@ -242,7 +237,7 @@ impl WorkerCommandHandler {
         self.ctx.silence_app_context_init().await;
 
         fn new_idempotency_key() -> IdempotencyKey {
-            let key = IdempotencyKey::new();
+            let key = IdempotencyKey::fresh();
             log_action(
                 "Using",
                 format!("generated idempotency key: {}", key.0.log_color_highlight()),
@@ -1214,7 +1209,7 @@ impl WorkerCommandHandler {
     pub async fn redeploy_component_workers(
         &self,
         component_name: &ComponentName,
-        component_id: Uuid,
+        component_id: &ComponentId,
     ) -> anyhow::Result<()> {
         let (workers, _) = self
             .list_component_workers(component_name, component_id, None, None, None, false)
@@ -1306,7 +1301,7 @@ impl WorkerCommandHandler {
     pub async fn list_component_workers(
         &self,
         component_name: &ComponentName,
-        component_id: Uuid,
+        component_id: &ComponentId,
         filters: Option<&[String]>,
         start_scan_cursor: Option<&ScanCursor>,
         max_count: Option<u64>,

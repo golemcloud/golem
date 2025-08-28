@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::context::Context;
+use crate::model::format::Format;
 use crate::model::text::fmt::{NestedTextViewIndent, TextView};
-use crate::model::Format;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::Arc;

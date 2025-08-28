@@ -31,9 +31,25 @@ use typed_path::Utf8UnixPathBuf;
 declare_revision!(ComponentRevision);
 
 declare_transparent_newtypes! {
-    // TODO: Add validations (non-empty, no "/", no " ", ...)
     #[derive(Display)]
     pub struct ComponentName(pub String);
+}
+
+impl TryFrom<String> for ComponentName {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        // TODO: Add validations (non-empty, no "/", no " ", ...)
+        Ok(ComponentName(value))
+    }
+}
+
+impl FromStr for ComponentName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s.to_string())
+    }
 }
 
 declare_structs! {

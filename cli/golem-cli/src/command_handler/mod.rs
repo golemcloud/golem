@@ -19,8 +19,6 @@ use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
 };
-use crate::command_handler::api::cloud::certificate::ApiCloudCertificateCommandHandler;
-use crate::command_handler::api::cloud::domain::ApiCloudDomainCommandHandler;
 use crate::command_handler::api::cloud::ApiCloudCommandHandler;
 use crate::command_handler::api::definition::ApiDefinitionCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
@@ -29,9 +27,6 @@ use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::cloud::account::grant::CloudAccountGrantCommandHandler;
 use crate::command_handler::cloud::account::CloudAccountCommandHandler;
-use crate::command_handler::cloud::project::plugin::CloudProjectPluginCommandHandler;
-use crate::command_handler::cloud::project::policy::CloudProjectPolicyCommandHandler;
-use crate::command_handler::cloud::project::CloudProjectCommandHandler;
 use crate::command_handler::cloud::token::CloudTokenCommandHandler;
 use crate::command_handler::cloud::CloudCommandHandler;
 use crate::command_handler::component::plugin::ComponentPluginCommandHandler;
@@ -368,8 +363,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 //       by moving these simple factory methods into the specific handlers on demand,
 //       if the need ever arises
 pub trait Handlers {
-    fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler;
-    fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler;
+    // TODO: atomic, fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler;
+    // TODO: atomic, fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler;
     fn api_cloud_handler(&self) -> ApiCloudCommandHandler;
     fn api_definition_handler(&self) -> ApiDefinitionCommandHandler;
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
@@ -379,9 +374,6 @@ pub trait Handlers {
     fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler;
     fn cloud_account_handler(&self) -> CloudAccountCommandHandler;
     fn cloud_handler(&self) -> CloudCommandHandler;
-    fn cloud_project_handler(&self) -> CloudProjectCommandHandler;
-    fn cloud_project_plugin_handler(&self) -> CloudProjectPluginCommandHandler;
-    fn cloud_project_policy_handler(&self) -> CloudProjectPolicyCommandHandler;
     fn cloud_token_handler(&self) -> CloudTokenCommandHandler;
     fn component_handler(&self) -> ComponentCommandHandler;
     fn component_plugin_handler(&self) -> ComponentPluginCommandHandler;
@@ -397,13 +389,14 @@ pub trait Handlers {
 }
 
 impl Handlers for Arc<Context> {
-    fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler {
-        ApiCloudCertificateCommandHandler::new(self.clone())
-    }
-
-    fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler {
-        ApiCloudDomainCommandHandler::new(self.clone())
-    }
+    // TODO: atomic
+    // fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler {
+    //     ApiCloudCertificateCommandHandler::new(self.clone())
+    // }
+    //
+    // fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler {
+    //     ApiCloudDomainCommandHandler::new(self.clone())
+    // }
 
     fn api_cloud_handler(&self) -> ApiCloudCommandHandler {
         ApiCloudCommandHandler::new(self.clone())
@@ -439,18 +432,6 @@ impl Handlers for Arc<Context> {
 
     fn cloud_handler(&self) -> CloudCommandHandler {
         CloudCommandHandler::new(self.clone())
-    }
-
-    fn cloud_project_handler(&self) -> CloudProjectCommandHandler {
-        CloudProjectCommandHandler::new(self.clone())
-    }
-
-    fn cloud_project_plugin_handler(&self) -> CloudProjectPluginCommandHandler {
-        CloudProjectPluginCommandHandler::new(self.clone())
-    }
-
-    fn cloud_project_policy_handler(&self) -> CloudProjectPolicyCommandHandler {
-        CloudProjectPolicyCommandHandler::new(self.clone())
     }
 
     fn cloud_token_handler(&self) -> CloudTokenCommandHandler {

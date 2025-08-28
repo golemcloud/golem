@@ -22,10 +22,10 @@ use crate::error::NonSuccessfulExit;
 use crate::log::log_warn_action;
 use crate::model::text::account::{AccountGetView, AccountNewView};
 use crate::model::text::fmt::log_error;
-use crate::model::AccountId;
 use anyhow::bail;
 use golem_client::api::AccountClient;
-use golem_client::model::{Account, AccountData};
+use golem_client::model::{Account, NewAccountData, UpdatedAccountData};
+use golem_common::model::account::AccountId;
 use std::sync::Arc;
 
 pub struct CloudAccountCommandHandler {
@@ -90,8 +90,8 @@ impl CloudAccountCommandHandler {
             .await?
             .account
             .update_account(
-                &account.id,
-                &AccountData {
+                &account.id.0,
+                &UpdatedAccountData {
                     name: account_name.unwrap_or(account.name),
                     email: account_email.unwrap_or(account.email),
                 },
@@ -110,7 +110,7 @@ impl CloudAccountCommandHandler {
             .golem_clients()
             .await?
             .account
-            .create_account(&AccountData {
+            .create_account(&NewAccountData {
                 name: account_name,
                 email: account_email,
             })
@@ -136,7 +136,7 @@ impl CloudAccountCommandHandler {
             .golem_clients()
             .await?
             .account
-            .delete_account(&account.id)
+            .delete_account(&account.id.0)
             .await
             .map_service_error()?;
 
@@ -156,7 +156,7 @@ impl CloudAccountCommandHandler {
     }
 
     pub async fn account_id_or_err(&self) -> anyhow::Result<AccountId> {
-        Ok(self.ctx.golem_clients().await?.account_id())
+        Ok(self.ctx.golem_clients().await?.account_id().clone())
     }
 
     pub async fn select_account_id_or_err(

@@ -227,7 +227,7 @@ impl CloudProjectCommandHandler {
 
     pub async fn selected_project_id_or_default(
         &self,
-        project: Option<&ProjectRefAndId>,
+        app_id: Option<&AppIdentity>,
     ) -> anyhow::Result<ProjectId> {
         // TODO: cache default project
         match project {

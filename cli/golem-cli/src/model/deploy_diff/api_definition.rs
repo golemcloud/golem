@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
-use crate::model::api::to_method_pattern;
+use crate::model::api::to_route_method;
 use crate::model::app::HttpApiDefinitionName;
 use crate::model::app_raw::{
     HttpApiDefinition, HttpApiDefinitionBindingType, HttpApiDefinitionRoute,
@@ -108,7 +108,7 @@ fn normalize_http_api_route(
     route: &HttpApiDefinitionRoute,
 ) -> anyhow::Result<RouteRequestData> {
     Ok(RouteRequestData {
-        method: to_method_pattern(&route.method)?,
+        method: to_route_method(&route.method)?,
         path: normalize_http_api_binding_path(&route.path),
         binding: GatewayBindingData {
             binding_type: Some(

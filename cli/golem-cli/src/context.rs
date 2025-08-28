@@ -23,11 +23,12 @@ use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
 use crate::model::app::{AppBuildStep, ApplicationSourceMode};
 use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileName};
+use crate::model::environment::EnvironmentReference;
+use crate::model::format::Format;
 use crate::model::text::fmt::log_error;
-use crate::model::{app_raw, Format, ProjectReference};
-use crate::model::{AccountDetails, AccountId, PluginReference};
+use crate::model::{app_raw, AccountDetails, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
-use anyhow::{anyhow, bail, Context as AnyhowContext};
+use anyhow::{anyhow, bail};
 use futures_util::future::BoxFuture;
 use golem_client::api::AgentTypesClientLive as AgentTypesClientCloud;
 use golem_client::api::ApiCertificateClientLive as ApiCertificateClientCloud;
@@ -49,13 +50,14 @@ use golem_client::api::WorkerClientLive as WorkerClientCloud;
 use golem_client::api::{AccountClient, AccountSummaryClientLive as AccountSummaryClientCloud};
 use golem_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
 use golem_client::{Context as ContextCloud, Security};
+use golem_common::model::account::AccountId;
+use golem_common::model::auth::TokenSecret;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 use tracing::debug;
 use url::Url;
@@ -75,7 +77,7 @@ pub struct Context {
     app_context_config: ApplicationContextConfig,
     http_batch_size: u64,
     auth_token_override: Option<Uuid>,
-    project: Option<ProjectReference>,
+    environment: Option<EnvironmentReference>,
     client_config: ClientConfig,
     yes: bool,
     show_sensitive: bool,
@@ -162,19 +164,24 @@ impl Context {
             }
         }
 
-        let project = match manifest_profile.as_ref().and_then(|m| m.project.as_ref()) {
-            Some(project) => Some(
-                ProjectReference::from_str(project.as_str())
-                    .map_err(|err| anyhow!("{}", err))
-                    .with_context(|| {
-                        anyhow!(
-                            "Failed to parse project for manifest profile {}",
-                            profile.name.0.log_color_highlight()
-                        )
-                    })?,
-            ),
-            None => None,
-        };
+        let environment: Option<EnvironmentReference> =
+            match manifest_profile.as_ref().and_then(|m| m.project.as_ref()) {
+                Some(project) => {
+                    // TODO: atomic deployment
+                    /*Some(
+                    ProjectReference::from_str(project.as_str())
+                        .map_err(|err| anyhow!("{}", err))
+                        .with_context(|| {
+                            anyhow!(
+                                "Failed to parse project for manifest profile {}",
+                                profile.name.0.log_color_highlight()
+                            )
+                        })?,
+                    )*/
+                    todo!()
+                }
+                None => None,
+            };
 
         let format = format.unwrap_or(profile.profile.config.default_format);
 
@@ -191,11 +198,11 @@ impl Context {
             format!(
                 "profile: {}{}",
                 profile.name.0.log_color_highlight(),
-                project
+                environment
                     .as_ref()
-                    .map(|project| format!(
-                        ", project: {}",
-                        project.to_string().log_color_highlight()
+                    .map(|environment| format!(
+                        ", environment: {}",
+                        environment.to_string().log_color_highlight()
                     ))
                     .unwrap_or_else(|| "".to_string())
             ),
@@ -216,7 +223,7 @@ impl Context {
             app_context_config,
             http_batch_size: http_batch_size.unwrap_or(50),
             auth_token_override: auth_token,
-            project,
+            environment,
             yes,
             show_sensitive,
             start_local_server,
@@ -282,8 +289,8 @@ impl Context {
         self.app_context_config.build_profile.as_ref()
     }
 
-    pub fn profile_project(&self) -> Option<&ProjectReference> {
-        self.project.as_ref()
+    pub fn default_environment(&self) -> Option<&EnvironmentReference> {
+        self.environment.as_ref()
     }
 
     pub fn http_batch_size(&self) -> u64 {
@@ -349,11 +356,11 @@ impl Context {
     }
 
     pub async fn account_id(&self) -> anyhow::Result<AccountId> {
-        Ok(self.golem_clients().await?.account_id())
+        Ok(self.golem_clients().await?.account_id().clone())
     }
 
-    pub async fn auth_token(&self) -> anyhow::Result<String> {
-        Ok(self.golem_clients().await?.auth_token())
+    pub async fn auth_token(&self) -> anyhow::Result<TokenSecret> {
+        Ok(self.golem_clients().await?.auth_token().clone())
     }
 
     pub async fn app_context_lock(
@@ -549,7 +556,7 @@ impl GolemClients {
             .authenticate(token_override, auth_config, config_dir, profile_name)
             .await?;
 
-        let security_token = Security::Bearer(authentication.0.secret.value.to_string());
+        let security_token = Security::Bearer(authentication.0.secret.0.to_string());
 
         let component_context = || ContextCloud {
             client: service_http_client.clone(),
@@ -652,12 +659,12 @@ impl GolemClients {
         })
     }
 
-    pub fn account_id(&self) -> AccountId {
+    pub fn account_id(&self) -> &AccountId {
         self.authentication.account_id()
     }
 
-    pub fn auth_token(&self) -> String {
-        self.authentication.0.secret.value.to_string()
+    pub fn auth_token(&self) -> &TokenSecret {
+        &self.authentication.0.secret
     }
 }
 

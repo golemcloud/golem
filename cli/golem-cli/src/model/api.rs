@@ -14,7 +14,8 @@
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
-use golem_client::model::{ApiDefinitionInfo, ApiSite, MethodPattern, Provider};
+use golem_client::model::Provider;
+use golem_common::model::api_definition::RouteMethod;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -192,19 +193,4 @@ impl From<golem_client::model::SecuritySchemeData> for ApiSecurityScheme {
             scopes: value.scopes,
         }
     }
-}
-
-pub fn to_method_pattern(method: &str) -> anyhow::Result<MethodPattern> {
-    Ok(match method.to_lowercase().as_str() {
-        "get" => MethodPattern::Get,
-        "connect" => MethodPattern::Connect,
-        "post" => MethodPattern::Post,
-        "delete" => MethodPattern::Delete,
-        "put" => MethodPattern::Put,
-        "patch" => MethodPattern::Patch,
-        "options" => MethodPattern::Options,
-        "trace" => MethodPattern::Trace,
-        "head" => MethodPattern::Head,
-        _ => bail!("Invalid method: {}", method),
-    })
 }

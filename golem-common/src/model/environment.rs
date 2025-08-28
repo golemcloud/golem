@@ -14,6 +14,7 @@
 
 use super::application::ApplicationId;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use std::str::FromStr;
 
 newtype_uuid!(
     EnvironmentId,
@@ -24,6 +25,23 @@ declare_revision!(EnvironmentRevision);
 
 declare_transparent_newtypes! {
     pub struct EnvironmentName(pub String);
+}
+
+impl TryFrom<String> for EnvironmentName {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        // TODO: Add validations
+        Ok(EnvironmentName(value))
+    }
+}
+
+impl FromStr for EnvironmentName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s.to_string())
+    }
 }
 
 declare_structs! {
