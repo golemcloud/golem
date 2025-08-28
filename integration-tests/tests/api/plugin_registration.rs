@@ -15,13 +15,10 @@
 use super::Tracing;
 use assert2::assert;
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceCreateEnvironmentError, RegistryServiceCreatePluginError,
-    RegistryServiceGetApplicationEnvironmentError, RegistryServiceGetPluginByIdError,
-    RegistryServiceListApplicationEnvironmentsError, RegistryServiceUpdateEnvironmentError,
+    RegistryServiceClient, RegistryServiceCreatePluginError, RegistryServiceGetPluginByIdError,
 };
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
-use golem_common::model::environment::{NewEnvironmentData, UpdatedEnvironmentData};
 use golem_common::model::plugin_registration::{
     NewPluginRegistrationData, OplogProcessorPluginSpec, PluginSpecDto,
 };
@@ -214,7 +211,7 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
                     component_id: component.versioned_component_id.component_id.clone(),
-                    component_revision: component.versioned_component_id.version.clone(),
+                    component_revision: component.versioned_component_id.version,
                 }),
             },
             None::<Vec<u8>>,
@@ -232,7 +229,7 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
                     component_id: component.versioned_component_id.component_id.clone(),
-                    component_revision: component.versioned_component_id.version.clone(),
+                    component_revision: component.versioned_component_id.version,
                 }),
             },
             None::<Vec<u8>>,
@@ -272,7 +269,7 @@ async fn fails_with_bad_request_when_creating_plugin_if_component_user_does_not_
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
                     component_id: component.versioned_component_id.component_id.clone(),
-                    component_revision: component.versioned_component_id.version.clone(),
+                    component_revision: component.versioned_component_id.version,
                 }),
             },
             None::<Vec<u8>>,
@@ -315,7 +312,7 @@ async fn should_allow_creating_plugin_with_component_in_share_environment(
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
                     component_id: component.versioned_component_id.component_id.clone(),
-                    component_revision: component.versioned_component_id.version.clone(),
+                    component_revision: component.versioned_component_id.version,
                 }),
             },
             None::<Vec<u8>>,
