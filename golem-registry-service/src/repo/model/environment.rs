@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::RecordWithEnvironmentCtx;
+use super::datetime::SqlDateTime;
 use super::environment_share::environment_roles_from_bit_vector;
 use crate::model::WithEnvironmentCtx;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
@@ -147,6 +148,69 @@ impl From<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>
     fn from(record: RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>) -> Self {
         Self {
             value: record.value.into(),
+            owner_account_id: AccountId(record.owner_account_id),
+            roles_from_shares: HashSet::from_iter(environment_roles_from_bit_vector(
+                record.environment_roles_from_shares,
+            )),
+        }
+    }
+}
+
+// Remove when https://github.com/launchbadge/sqlx/issues/2934 is fixed
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct OptionalEnvironmentExtRevisionRecord {
+    pub application_id: Option<Uuid>,
+    pub environment_id: Option<Uuid>,
+    pub revision_id: Option<i64>,
+    pub name: Option<String>,
+    pub hash: Option<SqlBlake3Hash>,
+    pub created_at: Option<SqlDateTime>,
+    pub created_by: Option<Uuid>,
+    pub deleted: Option<bool>,
+    pub compatibility_check: Option<bool>,
+    pub version_check: Option<bool>,
+    pub security_overrides: Option<bool>,
+}
+
+impl OptionalEnvironmentExtRevisionRecord {
+    pub fn flatten(self) -> Option<EnvironmentExtRevisionRecord> {
+        let application_id = self.application_id?;
+        let environment_id = self.environment_id?;
+        let revision_id = self.revision_id?;
+        let name = self.name?;
+        let hash = self.hash?;
+        let created_at = self.created_at?;
+        let created_by = self.created_by?;
+        let deleted = self.deleted?;
+        let compatibility_check = self.compatibility_check?;
+        let version_check = self.version_check?;
+        let security_overrides = self.security_overrides?;
+        Some(EnvironmentExtRevisionRecord {
+            application_id,
+            revision: EnvironmentRevisionRecord {
+                environment_id,
+                revision_id,
+                name,
+                hash,
+                audit: DeletableRevisionAuditFields {
+                    created_at,
+                    created_by,
+                    deleted,
+                },
+                compatibility_check,
+                version_check,
+                security_overrides,
+            },
+        })
+    }
+}
+
+impl From<RecordWithEnvironmentCtx<OptionalEnvironmentExtRevisionRecord>>
+    for WithEnvironmentCtx<Option<Environment>>
+{
+    fn from(record: RecordWithEnvironmentCtx<OptionalEnvironmentExtRevisionRecord>) -> Self {
+        Self {
+            value: record.value.flatten().map(|v| v.into()),
             owner_account_id: AccountId(record.owner_account_id),
             roles_from_shares: HashSet::from_iter(environment_roles_from_bit_vector(
                 record.environment_roles_from_shares,

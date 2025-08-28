@@ -12,18 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod account;
-pub mod account_usage;
-pub mod application;
-pub mod auth;
-pub mod component;
-pub mod component_compilation;
-pub mod component_object_store;
-pub mod component_transformer_plugin_caller;
-pub mod environment;
-pub mod environment_share;
-pub mod oauth2;
-pub mod oauth2_github_client;
-pub mod plan;
-pub mod reports;
-pub mod token;
+use crate::declare_structs;
+use crate::model::account::AccountId;
+use chrono::DateTime;
+use chrono::Utc;
+use std::fmt::Debug;
+
+declare_structs! {
+    pub struct AccountSummary {
+        pub id: AccountId,
+        pub name: String,
+        pub email: String,
+        pub components_count: i64,
+        pub workers_count: i64,
+        pub created_at: DateTime<Utc>,
+    }
+
+    pub struct AccountCounts {
+        pub total_accounts: i64,
+        pub total_active_accounts: i64,
+        pub total_deleted_accounts: i64
+    }
+}

@@ -167,6 +167,9 @@ impl EnvironmentService {
                 EnvironmentRepoError::ConcurrentModification => {
                     EnvironmentError::ConcurrentModification
                 }
+                EnvironmentRepoError::EnvironmentViolatesUniqueness => {
+                    EnvironmentError::EnvironmentWithNameAlreadyExists
+                }
                 other => other.into(),
             })?
             .into();
@@ -236,58 +239,6 @@ impl EnvironmentService {
         Ok(environment)
     }
 
-    pub async fn list_in_application(
-        &self,
-        application_id: &ApplicationId,
-        auth: &AuthCtx,
-    ) -> Result<Vec<WithEnvironmentCtx<Environment>>, EnvironmentError> {
-        let result: Vec<WithEnvironmentCtx<Environment>> = self
-            .environment_repo
-            .list_by_app(
-                &application_id.0,
-                &auth.account_id.0,
-                auth.should_override_storage_visibility_rules(),
-            )
-            .await?
-            .into_iter()
-            .map(|r| r.into())
-            .collect();
-
-        let authorized_environments: Vec<WithEnvironmentCtx<Environment>> = result
-            .into_iter()
-            .filter(|env| {
-                auth.authorize_environment_action(
-                    &env.owner_account_id,
-                    &env.roles_from_shares,
-                    EnvironmentAction::ViewEnvironment,
-                )
-                .is_ok()
-            })
-            .collect();
-
-        // If the user has no access to any environments in the application,
-        // check whether they have account-level permission to list environments (i.e., own the app).
-        // If so, return an empty list. Otherwise, return Unauthorized.
-        if authorized_environments.is_empty() {
-            let account_action = AccountAction::ListAllApplicationEnvironments;
-
-            let application = self
-                .application_service
-                .get(application_id, auth)
-                .await
-                .map_err(|err| match err {
-                    ApplicationError::ApplicationNotFound(_) => EnvironmentError::Unauthorized(
-                        AuthorizationError::AccountActionNotAllowed(account_action),
-                    ),
-                    other => other.into(),
-                })?;
-
-            auth.authorize_account_action(&application.account_id, account_action)?;
-        }
-
-        Ok(authorized_environments)
-    }
-
     pub async fn get_in_application(
         &self,
         application_id: &ApplicationId,
@@ -335,5 +286,63 @@ impl EnvironmentService {
         )?;
 
         Ok(environment)
+    }
+
+    pub async fn list_in_application(
+        &self,
+        application_id: &ApplicationId,
+        auth: &AuthCtx,
+    ) -> Result<Vec<WithEnvironmentCtx<Environment>>, EnvironmentError> {
+        let mut authorized_environments = Vec::new();
+        let mut application_owner_id = None;
+
+        for record in self
+            .environment_repo
+            .list_by_app(
+                &application_id.0,
+                &auth.account_id.0,
+                auth.should_override_storage_visibility_rules(),
+            )
+            .await?
+        {
+            let env_ctx: WithEnvironmentCtx<Option<Environment>> = record.into();
+
+            application_owner_id.get_or_insert_with(|| env_ctx.owner_account_id.clone());
+
+            if let Some(env_inner) = env_ctx.map_into_inner()
+                && auth
+                    .authorize_environment_action(
+                        &env_inner.owner_account_id,
+                        &env_inner.roles_from_shares,
+                        EnvironmentAction::ViewEnvironment,
+                    )
+                    .is_ok()
+            {
+                authorized_environments.push(env_inner);
+            }
+        }
+
+        match (application_owner_id, authorized_environments.is_empty()) {
+            (Some(_), false) => {
+                // checked above using the authorized environment actions -> only return authorized environments
+            }
+            (Some(application_owner_id), true) => {
+                // application exists but has no environments -> only leak existence if account-level permissions are present
+                auth.authorize_account_action(
+                    &application_owner_id,
+                    AccountAction::ListAllApplicationEnvironments,
+                )?;
+            }
+            (None, _) => {
+                // parent application does not exist -> return unauthorized to prevent leakage
+                return Err(EnvironmentError::Unauthorized(
+                    AuthorizationError::AccountActionNotAllowed(
+                        AccountAction::ListAllApplicationEnvironments,
+                    ),
+                ));
+            }
+        }
+
+        Ok(authorized_environments)
     }
 }

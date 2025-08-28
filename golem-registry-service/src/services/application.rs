@@ -19,7 +19,8 @@ use crate::repo::model::application::{ApplicationRepoError, ApplicationRevisionR
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{
-    Application, ApplicationId, ApplicationRevision, NewApplicationData, UpdatedApplicationData,
+    Application, ApplicationId, ApplicationName, ApplicationRevision, NewApplicationData,
+    UpdatedApplicationData,
 };
 use golem_common::model::auth::AccountAction;
 use golem_common::{SafeDisplay, error_forwarding};
@@ -33,6 +34,8 @@ pub enum ApplicationError {
     ApplicationWithNameAlreadyExists,
     #[error("Application not found for id {0}")]
     ApplicationNotFound(ApplicationId),
+    #[error("Application not found for name {}", 0.0)]
+    ApplicationByNameNotFound(ApplicationName),
     #[error("Parent account not found {0}")]
     ParentAccountNotFound(AccountId),
     #[error("Concurrent update attempt")]
@@ -48,6 +51,7 @@ impl SafeDisplay for ApplicationError {
         match self {
             Self::ApplicationWithNameAlreadyExists => self.to_string(),
             Self::ApplicationNotFound(_) => self.to_string(),
+            Self::ApplicationByNameNotFound(_) => self.to_string(),
             Self::ParentAccountNotFound(_) => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
@@ -145,6 +149,9 @@ impl ApplicationService {
                 ApplicationRepoError::ConcurrentModification => {
                     ApplicationError::ConcurrentModification
                 }
+                ApplicationRepoError::ApplicationViolatesUniqueness => {
+                    ApplicationError::ApplicationWithNameAlreadyExists
+                }
                 other => other.into(),
             })?
             .into();
@@ -154,10 +161,10 @@ impl ApplicationService {
 
     pub async fn delete(
         &self,
-        application_id: ApplicationId,
+        application_id: &ApplicationId,
         auth: &AuthCtx,
     ) -> Result<(), ApplicationError> {
-        let mut application = self.get(&application_id, auth).await?;
+        let mut application = self.get(application_id, auth).await?;
 
         auth.authorize_account_action(&application.account_id, AccountAction::DeleteApplication)?;
 
@@ -198,5 +205,50 @@ impl ApplicationService {
             .map_err(|_| ApplicationError::ApplicationNotFound(application_id.clone()))?;
 
         Ok(application)
+    }
+
+    pub async fn get_in_account(
+        &self,
+        account_id: &AccountId,
+        name: &ApplicationName,
+        auth: &AuthCtx,
+    ) -> Result<Application, ApplicationError> {
+        auth.authorize_account_action(account_id, AccountAction::ViewApplications)
+            .map_err(|_| ApplicationError::ApplicationByNameNotFound(name.clone()))?;
+
+        let result: Application = self
+            .application_repo
+            .get_by_name(&account_id.0, &name.0)
+            .await?
+            .ok_or(ApplicationError::ApplicationByNameNotFound(name.clone()))?
+            .into();
+
+        Ok(result)
+    }
+
+    pub async fn list_in_account(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<Vec<Application>, ApplicationError> {
+        // TODO: fetch account information from db as part of query
+        self.account_service
+            .get_optional(account_id, auth)
+            .await?
+            .ok_or(ApplicationError::Unauthorized(
+                AuthorizationError::AccountActionNotAllowed(AccountAction::ViewApplications),
+            ))?;
+
+        auth.authorize_account_action(account_id, AccountAction::ViewApplications)?;
+
+        let result = self
+            .application_repo
+            .list_by_owner(&account_id.0)
+            .await?
+            .into_iter()
+            .map(|r| r.into())
+            .collect();
+
+        Ok(result)
     }
 }

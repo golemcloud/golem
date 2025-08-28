@@ -13,8 +13,12 @@
 // limitations under the License.
 
 mod account;
+mod application;
+mod auth;
 mod component;
-mod environment_shares;
+mod environment;
+mod environment_share;
+mod reports;
 
 use super::Tracing;
 use golem_test_framework::config::EnvBasedTestDependencies;

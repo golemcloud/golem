@@ -18,7 +18,7 @@ use crate::services::application::ApplicationService;
 use crate::services::auth::AuthService;
 use golem_common::api::Page;
 use golem_common::model::account::AccountId;
-use golem_common::model::application::{Application, NewApplicationData};
+use golem_common::model::application::{Application, ApplicationName, NewApplicationData};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -54,34 +54,40 @@ impl AccountApplicationsApi {
     #[oai(
         path = "/:account_id/apps",
         method = "get",
-        operation_id = "get_applications_in_account"
+        operation_id = "list_account_applications"
     )]
-    pub async fn get_applications_in_account(
+    pub async fn list_account_applications(
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<Application>>> {
         let record = recorded_http_api_request!(
-            "get_applications_in_account",
+            "list_account_applications",
             account_id = account_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_applications_in_account_internal(account_id.0, auth)
+            .list_account_applications_internal(account_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_applications_in_account_internal(
+    async fn list_account_applications_internal(
         &self,
-        _account_id: AccountId,
-        _auth: AuthCtx,
+        account_id: AccountId,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Page<Application>>> {
-        todo!()
+        let applications = self
+            .application_service
+            .list_in_account(&account_id, &auth)
+            .await?;
+        Ok(Json(Page {
+            values: applications,
+        }))
     }
 
     /// Get application in the account by name
@@ -114,11 +120,15 @@ impl AccountApplicationsApi {
 
     async fn get_application_internal(
         &self,
-        _account_id: AccountId,
-        _application_name: String,
-        _auth: AuthCtx,
+        account_id: AccountId,
+        application_name: String,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Application>> {
-        todo!()
+        let application = self
+            .application_service
+            .get_in_account(&account_id, &ApplicationName(application_name), &auth)
+            .await?;
+        Ok(Json(application))
     }
 
     /// Create an application in the account

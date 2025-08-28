@@ -61,7 +61,7 @@ impl AuthService {
             .get_by_secret(&token, &AuthCtx::system())
             .await
             .map_err(|err| match err {
-                TokenError::TokenBySecretFound => AuthError::CouldNotAuthenticate,
+                TokenError::TokenBySecretNotFound => AuthError::CouldNotAuthenticate,
                 err => err.into(),
             })?;
 

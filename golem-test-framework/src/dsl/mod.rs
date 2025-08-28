@@ -15,11 +15,10 @@
 pub mod benchmark;
 pub mod debug_render;
 
-use crate::config::{TestDependencies, TestDependenciesDsl};
+use crate::config::TestDependencies;
 use crate::model::IFSEntry;
 use anyhow::{anyhow, Context};
 use applying::Apply;
-use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
@@ -29,13 +28,19 @@ use golem_client::api::RegistryServiceClient;
 use golem_common::api::component::{
     CreateComponentRequestMetadata, UpdateComponentRequestMetadata,
 };
-use golem_common::model::application::{ApplicationId, ApplicationName, NewApplicationData};
+use golem_common::model::account::AccountId;
+use golem_common::model::application::{
+    Application, ApplicationId, ApplicationName, NewApplicationData,
+};
+use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{
     Component, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentName,
     ComponentRevision, ComponentType,
 };
 use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
-use golem_common::model::environment::{EnvironmentId, EnvironmentName, NewEnvironmentData};
+use golem_common::model::environment::{
+    Environment, EnvironmentId, EnvironmentName, NewEnvironmentData,
+};
 use golem_common::model::ComponentId;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
@@ -47,8 +52,225 @@ use tracing::info;
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
 
-pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
-    dsl: &'a DSL,
+#[derive(Clone)]
+pub struct TestDependenciesDsl<Deps> {
+    pub deps: Deps,
+    pub account_id: AccountId,
+    pub account_email: String,
+    pub token: TokenSecret,
+}
+
+impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
+    pub fn component(
+        &self,
+        environment_id: &EnvironmentId,
+        name: &str,
+    ) -> StoreComponentBuilder<'_, Deps> {
+        StoreComponentBuilder::new(self, environment_id.clone(), name.to_string())
+    }
+
+    pub async fn store_component_with(
+        &self,
+        wasm_name: &str,
+        environment_id: EnvironmentId,
+        name: &str,
+        component_type: ComponentType,
+        unique: bool,
+        unverified: bool,
+        files: Vec<IFSEntry>,
+        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        env: BTreeMap<String, String>,
+    ) -> anyhow::Result<Component> {
+        let component_directy = self.deps.component_directory();
+
+        let source_path = component_directy.join(format!("{wasm_name}.wasm"));
+
+        let component_name = if unique {
+            let uuid = Uuid::new_v4();
+            ComponentName(format!("{name}-{uuid}"))
+        } else {
+            match component_type {
+                ComponentType::Durable => ComponentName(name.to_string()),
+                ComponentType::Ephemeral => ComponentName(format!("{name}-ephemeral")),
+            }
+        };
+        let dynamic_linking = HashMap::from_iter(
+            dynamic_linking
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone())),
+        );
+
+        let source_path = if !unverified {
+            rename_component_if_needed(
+                self.deps.borrow().temp_directory(),
+                &source_path,
+                &component_name.0,
+            )
+            .expect("Failed to verify and change component metadata")
+        } else {
+            source_path
+        };
+
+        let (_tmp_dir, maybe_files_archive) = if !files.is_empty() {
+            let (tmp_dir, files_archive) = build_ifs_archive(component_directy, &files).await?;
+            (Some(tmp_dir), Some(File::open(files_archive).await?))
+        } else {
+            (None, None)
+        };
+
+        let file_options = files
+            .into_iter()
+            .map(|f| {
+                (
+                    f.target_path,
+                    ComponentFileOptions {
+                        permissions: f.permissions,
+                    },
+                )
+            })
+            .apply(BTreeMap::from_iter);
+
+        let client = self.deps.registry_service().client(&self.token).await;
+
+        let component = client
+            .create_component(
+                &environment_id.0,
+                &CreateComponentRequestMetadata {
+                    component_name,
+                    component_type: Some(component_type),
+                    file_options: Some(file_options),
+                    dynamic_linking: Some(dynamic_linking),
+                    env: Some(env),
+                    agent_types: None,
+                },
+                File::open(source_path).await?,
+                maybe_files_archive,
+            )
+            .await?;
+
+        Ok(component)
+    }
+
+    pub async fn update_component_with(
+        &self,
+        component_id: &ComponentId,
+        previous_version: ComponentRevision,
+        wasm_name: Option<&str>,
+        component_type: Option<ComponentType>,
+        new_files: Vec<IFSEntry>,
+        removed_files: Vec<ComponentFilePath>,
+        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+        env: Option<BTreeMap<String, String>>,
+    ) -> anyhow::Result<Component> {
+        let component_directy = self.deps.component_directory();
+
+        let updated_wasm = if let Some(wasm_name) = wasm_name {
+            let source_path: PathBuf = component_directy.join(format!("{wasm_name}.wasm"));
+            Some(File::open(source_path).await?)
+        } else {
+            None
+        };
+
+        let (_tmp_dir, maybe_new_files_archive) = if !new_files.is_empty() {
+            let (tmp_dir, new_files_archive) =
+                build_ifs_archive(component_directy, &new_files).await?;
+            (Some(tmp_dir), Some(File::open(new_files_archive).await?))
+        } else {
+            (None, None)
+        };
+
+        let new_file_options = new_files
+            .into_iter()
+            .map(|f| {
+                (
+                    f.target_path,
+                    ComponentFileOptions {
+                        permissions: f.permissions,
+                    },
+                )
+            })
+            .apply(BTreeMap::from_iter);
+
+        let client = self.deps.registry_service().client(&self.token).await;
+
+        let component = client
+            .update_component(
+                &component_id.0,
+                &UpdateComponentRequestMetadata {
+                    previous_version,
+                    component_type,
+                    new_file_options: Some(new_file_options),
+                    removed_files: Some(removed_files),
+                    dynamic_linking,
+                    env,
+                    agent_types: None,
+                    plugin_installation_actions: None,
+                },
+                updated_wasm,
+                maybe_new_files_archive,
+            )
+            .await?;
+
+        Ok(component)
+    }
+
+    pub async fn app(&self) -> anyhow::Result<Application> {
+        let client = self.deps.registry_service().client(&self.token).await;
+        let app_name = ApplicationName(format!("app-{}", Uuid::new_v4()));
+
+        let application = client
+            .create_application(&self.account_id.0, &NewApplicationData { name: app_name })
+            .await?;
+
+        Ok(application)
+    }
+
+    pub async fn env(&self, application_id: &ApplicationId) -> anyhow::Result<Environment> {
+        let client = self.deps.registry_service().client(&self.token).await;
+        let env_name = EnvironmentName(format!("env-{}", Uuid::new_v4()));
+
+        let environment = client
+            .create_environment(
+                &application_id.0,
+                &NewEnvironmentData {
+                    name: env_name,
+                    compatibility_check: false,
+                    version_check: false,
+                    security_overrides: false,
+                },
+            )
+            .await?;
+
+        Ok(environment)
+    }
+
+    pub async fn app_and_env(&self) -> anyhow::Result<(Application, Environment)> {
+        let client = self.deps.registry_service().client(&self.token).await;
+        let app_name = ApplicationName(format!("app-{}", Uuid::new_v4()));
+        let env_name = EnvironmentName(format!("env-{}", Uuid::new_v4()));
+
+        let application = client
+            .create_application(&self.account_id.0, &NewApplicationData { name: app_name })
+            .await?;
+
+        let environment = client
+            .create_environment(
+                &application.id.0,
+                &NewEnvironmentData {
+                    name: env_name,
+                    compatibility_check: false,
+                    version_check: false,
+                    security_overrides: false,
+                },
+            )
+            .await?;
+
+        Ok((application, environment))
+    }
+}
+
+pub struct StoreComponentBuilder<'a, Deps: TestDependencies> {
+    dsl: &'a TestDependenciesDsl<Deps>,
     environment_id: EnvironmentId,
     name: String,
     wasm_name: String,
@@ -60,8 +282,12 @@ pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     env: BTreeMap<String, String>,
 }
 
-impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
-    pub fn new(dsl: &'a DSL, environment_id: EnvironmentId, name: String) -> Self {
+impl<'a, Deps: TestDependencies> StoreComponentBuilder<'a, Deps> {
+    pub fn new(
+        dsl: &'a TestDependenciesDsl<Deps>,
+        environment_id: EnvironmentId,
+        name: String,
+    ) -> Self {
         Self {
             dsl,
             environment_id,
@@ -194,1699 +420,1699 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
     }
 }
 
-#[async_trait]
-pub trait TestDsl {
-    fn component(
-        &self,
-        environment_id: &EnvironmentId,
-        name: &str,
-    ) -> StoreComponentBuilder<'_, Self>;
-
-    async fn app_and_env(&self) -> anyhow::Result<(ApplicationId, EnvironmentId)>;
-
-    async fn store_component_with(
-        &self,
-        wasm_name: &str,
-        environment_id: EnvironmentId,
-        name: &str,
-        component_type: ComponentType,
-        unique: bool,
-        unverified: bool,
-        files: Vec<IFSEntry>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        env: BTreeMap<String, String>,
-    ) -> anyhow::Result<Component>;
-
-    async fn update_component_with(
-        &self,
-        component_id: &ComponentId,
-        previous_version: ComponentRevision,
-        wasm_name: Option<&str>,
-        component_type: Option<ComponentType>,
-        new_files: Vec<IFSEntry>,
-        removed_files: Vec<ComponentFilePath>,
-        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
-        env: Option<BTreeMap<String, String>>,
-    ) -> anyhow::Result<Component>;
-
-    // async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
-
-    // async fn get_latest_component_metadata(
-    //     &self,
-    //     component_id: &ComponentId,
-    // ) -> crate::Result<ComponentMetadata>;
-
-    // async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision;
-
-    // async fn update_component_with_files(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     files: Option<&[(PathBuf, InitialComponentFile)]>,
-    // ) -> ComponentRevision;
-
-    // async fn update_component_with_env(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     files: &[(String, String)],
-    // ) -> ComponentRevision;
-
-    // async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
-
-    // async fn add_initial_component_files(
-    //     &self,
-    //     files: &[(&str, &str, ComponentFilePermissions)],
-    // ) -> Vec<(PathBuf, InitialComponentFile)> {
-    //     let mut added_files = Vec::<(PathBuf, InitialComponentFile)>::with_capacity(files.len());
-    //     for (source, target, permissions) in files {
-    //         added_files.push((
-    //             source.into(),
-    //             InitialComponentFile {
-    //                 key: self.add_initial_component_file(Path::new(source)).await,
-    //                 path: ComponentFilePath::from_str(target).unwrap(),
-    //                 permissions: *permissions,
-    //             },
-    //         ))
-    //     }
-    //     added_files
-    // }
-
-    // async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey>;
-
-    // async fn start_worker(&self, component_id: &ComponentId, name: &str)
-    //     -> crate::Result<WorkerId>;
-
-    // async fn try_start_worker(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    // ) -> crate::Result<Result<WorkerId, Error>>;
-
-    // async fn start_worker_with(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     args: Vec<String>,
-    //     env: HashMap<String, String>,
-    //     wasi_config_vars: Vec<(String, String)>,
-    // ) -> crate::Result<WorkerId>;
-
-    // async fn try_start_worker_with(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     args: Vec<String>,
-    //     env: HashMap<String, String>,
-    //     wasi_config_vars: Vec<(String, String)>,
-    // ) -> crate::Result<Result<WorkerId, Error>>;
-
-    // async fn get_worker_metadata(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> crate::Result<Option<(WorkerMetadata, Option<String>)>>;
-
-    // async fn wait_for_status(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     status: WorkerStatus,
-    //     timeout: Duration,
-    // ) -> crate::Result<WorkerMetadata>;
-
-    // async fn wait_for_statuses(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     status: &[WorkerStatus],
-    //     timeout: Duration,
-    // ) -> crate::Result<WorkerMetadata>;
-
-    // async fn get_workers_metadata(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     filter: Option<WorkerFilter>,
-    //     cursor: ScanCursor,
-    //     count: u64,
-    //     precise: bool,
-    // ) -> crate::Result<(Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>)>;
-    // async fn delete_worker(&self, worker_id: &WorkerId) -> crate::Result<()>;
-
-    // async fn invoke(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<(), Error>>;
-    // async fn invoke_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<(), Error>>;
-    // async fn invoke_and_await(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Vec<Value>, Error>>;
-    // async fn invoke_and_await_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Vec<Value>, Error>>;
-    // async fn invoke_and_await_custom(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Vec<Value>, Error>>;
-    // async fn invoke_and_await_custom_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Vec<Value>, Error>>;
-    // async fn invoke_and_await_typed(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
-    // async fn invoke_and_await_typed_custom(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
-    // async fn invoke_and_await_typed_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
-    // async fn invoke_and_await_typed_custom_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
-    // async fn invoke_and_await_json(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<serde_json::Value>,
-    // ) -> crate::Result<Result<serde_json::Value, Error>>;
-    // async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent>;
-    // async fn capture_output_forever(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> (UnboundedReceiver<Option<LogEvent>>, Sender<()>);
-    // async fn capture_output_with_termination(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> UnboundedReceiver<Option<LogEvent>>;
-    // async fn log_output(&self, worker_id: &WorkerId);
-    // async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()>;
-    // async fn interrupt(&self, worker_id: &WorkerId) -> crate::Result<()>;
-    // async fn simulated_crash(&self, worker_id: &WorkerId) -> crate::Result<()>;
-    // async fn auto_update_worker(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     target_version: ComponentRevision,
-    // ) -> crate::Result<()>;
-    // async fn manual_update_worker(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     target_version: ComponentRevision,
-    // ) -> crate::Result<()>;
-    // async fn get_oplog(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     from: OplogIndex,
-    // ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
-    // async fn search_oplog(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     query: &str,
-    // ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
-
-    // async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()>;
-
-    // async fn get_file_system_node(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     path: &str,
-    // ) -> crate::Result<Vec<ComponentFileSystemNode>>;
-
-    // async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> crate::Result<Bytes>;
-
-    // async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()>;
-
-    // async fn delete_plugin(
-    //     &self,
-    //     account_id: AccountId,
-    //     name: &str,
-    //     version: &str,
-    // ) -> crate::Result<()>;
-
-    // async fn install_plugin_to_component(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     plugin_name: &str,
-    //     plugin_version: &str,
-    //     priority: i32,
-    //     parameters: HashMap<String, String>,
-    // ) -> crate::Result<PluginInstallationId>;
-
-    // async fn fork_worker(
-    //     &self,
-    //     source_worker_id: &WorkerId,
-    //     target_worker_id: &WorkerId,
-    //     oplog_index: OplogIndex,
-    // ) -> crate::Result<()>;
-
-    // async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> crate::Result<()>;
-
-    // async fn cancel_invocation(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    // ) -> crate::Result<bool>;
-
-    // async fn default_project(&self) -> crate::Result<ProjectId>;
-
-    // async fn create_project(&self) -> crate::Result<ProjectId>;
-
-    // async fn grant_full_project_access(
-    //     &self,
-    //     project_id: &ProjectId,
-    //     grantee_account_id: &AccountId,
-    // ) -> crate::Result<()>;
-
-    // async fn get_account(&self, account_id: &AccountId) -> crate::Result<Account>;
-}
-
-#[async_trait]
-impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
-    fn component(
-        &self,
-        environment_id: &EnvironmentId,
-        name: &str,
-    ) -> StoreComponentBuilder<'_, Self> {
-        StoreComponentBuilder::new(self, environment_id.clone(), name.to_string())
-    }
-
-    async fn app_and_env(&self) -> anyhow::Result<(ApplicationId, EnvironmentId)> {
-        let client = self.deps.registry_service().client(&self.token).await;
-        let app_name = ApplicationName(Uuid::new_v4().to_string());
-        let env_name = EnvironmentName(Uuid::new_v4().to_string());
-
-        let application = client
-            .create_application(&self.account_id.0, &NewApplicationData { name: app_name })
-            .await?;
-
-        let environment = client
-            .create_application_environment(
-                &application.id.0,
-                &NewEnvironmentData {
-                    name: env_name,
-                    compatibility_check: false,
-                    version_check: false,
-                    security_overrides: false,
-                },
-            )
-            .await?;
-
-        Ok((application.id, environment.id))
-    }
-
-    async fn store_component_with(
-        &self,
-        wasm_name: &str,
-        environment_id: EnvironmentId,
-        name: &str,
-        component_type: ComponentType,
-        unique: bool,
-        unverified: bool,
-        files: Vec<IFSEntry>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        env: BTreeMap<String, String>,
-    ) -> anyhow::Result<Component> {
-        let component_directy = self.deps.component_directory();
-
-        let source_path = component_directy.join(format!("{wasm_name}.wasm"));
-
-        let component_name = if unique {
-            let uuid = Uuid::new_v4();
-            ComponentName(format!("{name}-{uuid}"))
-        } else {
-            match component_type {
-                ComponentType::Durable => ComponentName(name.to_string()),
-                ComponentType::Ephemeral => ComponentName(format!("{name}-ephemeral")),
-            }
-        };
-        let dynamic_linking = HashMap::from_iter(
-            dynamic_linking
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone())),
-        );
-
-        let source_path = if !unverified {
-            rename_component_if_needed(
-                self.deps.borrow().temp_directory(),
-                &source_path,
-                &component_name.0,
-            )
-            .expect("Failed to verify and change component metadata")
-        } else {
-            source_path
-        };
-
-        let (_tmp_dir, maybe_files_archive) = if !files.is_empty() {
-            let (tmp_dir, files_archive) = build_ifs_archive(component_directy, &files).await?;
-            (Some(tmp_dir), Some(File::open(files_archive).await?))
-        } else {
-            (None, None)
-        };
-
-        let file_options = files
-            .into_iter()
-            .map(|f| {
-                (
-                    f.target_path,
-                    ComponentFileOptions {
-                        permissions: f.permissions,
-                    },
-                )
-            })
-            .apply(BTreeMap::from_iter);
-
-        let client = self.deps.registry_service().client(&self.token).await;
-
-        let component = client
-            .create_component(
-                &environment_id.0,
-                &CreateComponentRequestMetadata {
-                    component_name,
-                    component_type: Some(component_type),
-                    file_options: Some(file_options),
-                    dynamic_linking: Some(dynamic_linking),
-                    env: Some(env),
-                    agent_types: None,
-                },
-                File::open(source_path).await?,
-                maybe_files_archive,
-            )
-            .await?;
-
-        Ok(component)
-    }
-
-    async fn update_component_with(
-        &self,
-        component_id: &ComponentId,
-        previous_version: ComponentRevision,
-        wasm_name: Option<&str>,
-        component_type: Option<ComponentType>,
-        new_files: Vec<IFSEntry>,
-        removed_files: Vec<ComponentFilePath>,
-        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
-        env: Option<BTreeMap<String, String>>,
-    ) -> anyhow::Result<Component> {
-        let component_directy = self.deps.component_directory();
-
-        let updated_wasm = if let Some(wasm_name) = wasm_name {
-            let source_path: PathBuf = component_directy.join(format!("{wasm_name}.wasm"));
-            Some(File::open(source_path).await?)
-        } else {
-            None
-        };
-
-        let (_tmp_dir, maybe_new_files_archive) = if !new_files.is_empty() {
-            let (tmp_dir, new_files_archive) =
-                build_ifs_archive(component_directy, &new_files).await?;
-            (Some(tmp_dir), Some(File::open(new_files_archive).await?))
-        } else {
-            (None, None)
-        };
-
-        let new_file_options = new_files
-            .into_iter()
-            .map(|f| {
-                (
-                    f.target_path,
-                    ComponentFileOptions {
-                        permissions: f.permissions,
-                    },
-                )
-            })
-            .apply(BTreeMap::from_iter);
-
-        let client = self.deps.registry_service().client(&self.token).await;
-
-        let component = client
-            .update_component(
-                &component_id.0,
-                &UpdateComponentRequestMetadata {
-                    previous_version,
-                    component_type,
-                    new_file_options: Some(new_file_options),
-                    removed_files: Some(removed_files),
-                    dynamic_linking,
-                    env,
-                    agent_types: None,
-                    plugin_installation_actions: None,
-                },
-                updated_wasm,
-                maybe_new_files_archive,
-            )
-            .await?;
-
-        Ok(component)
-    }
-
-    // async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
-    //     let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
-    //     self.deps
-    //         .component_service()
-    //         .add_component_with_id(
-    //             &source_path,
-    //             component_id,
-    //             name,
-    //             ComponentType::Durable,
-    //             None,
-    //         )
-    //         .await
-    //         .expect("Failed to store component");
-    // }
-
-    // async fn get_latest_component_metadata(
-    //     &self,
-    //     component_id: &ComponentId,
-    // ) -> crate::Result<ComponentMetadata> {
-    //     self.deps
-    //         .component_service()
-    //         .get_latest_component_metadata(
-    //             &self.token,
-    //             GetLatestComponentRequest {
-    //                 component_id: Some(component_id.clone().into()),
-    //             },
-    //         )
-    //         .await
-    //         .and_then(|c| {
-    //             c.metadata
-    //                 .ok_or(anyhow!("metadata not found"))
-    //                 .and_then(|cm| cm.try_into().map_err(|e: String| anyhow!(e)))
-    //         })
-    // }
-
-    // async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision {
-    //     let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
-    //     let component_env = HashMap::new();
-    //     self.deps
-    //         .component_service()
-    //         .update_component(
-    //             &self.token,
-    //             component_id,
-    //             &source_path,
-    //             ComponentType::Durable,
-    //             None,
-    //             None,
-    //             &component_env,
-    //         )
-    //         .await
-    //         .unwrap()
-    // }
-
-    // async fn update_component_with_files(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     files: Option<&[(PathBuf, InitialComponentFile)]>,
-    // ) -> ComponentRevision {
-    //     let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
-    //     self.deps
-    //         .component_service()
-    //         .update_component(
-    //             &self.token,
-    //             component_id,
-    //             &source_path,
-    //             ComponentType::Durable,
-    //             files,
-    //             None,
-    //             &HashMap::new(),
-    //         )
-    //         .await
-    //         .unwrap()
-    // }
-
-    // async fn update_component_with_env(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     env: &[(String, String)],
-    // ) -> ComponentRevision {
-    //     let map = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-
-    //     let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
-    //     self.deps
-    //         .component_service()
-    //         .update_component(
-    //             &self.token,
-    //             component_id,
-    //             &source_path,
-    //             ComponentType::Durable,
-    //             None,
-    //             None,
-    //             &map,
-    //         )
-    //         .await
-    //         .unwrap()
-    // }
-
-    // async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {
-    //     let source_path = self.deps.borrow().component_directory().join(path);
-    //     let data = tokio::fs::read(&source_path)
-    //         .await
-    //         .expect("Failed to read file");
-    //     let bytes = Bytes::from(data);
-
-    //     let stream = bytes
-    //         .map_item(|i| i.map_err(widen_infallible))
-    //         .map_error(widen_infallible);
-
-    //     let project_id = self
-    //         .deps
-    //         .cloud_service()
-    //         .get_default_project(&self.token)
-    //         .await
-    //         .expect("Failed to get default project");
-    //     self.deps
-    //         .initial_component_files_service()
-    //         .put_if_not_exists(&project_id, stream)
-    //         .await
-    //         .expect("Failed to add initial component file")
-    // }
-
-    // async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey> {
-    //     let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
-    //     let data = tokio::fs::read(&source_path)
-    //         .await
-    //         .map_err(|e| anyhow!("Failed to read file: {e}"))?;
-
-    //     let bytes = Bytes::from(data);
-
-    //     let stream = bytes
-    //         .map_item(|i| i.map_err(widen_infallible))
-    //         .map_error(widen_infallible);
-
-    //     let key = self
-    //         .deps
-    //         .plugin_wasm_files_service()
-    //         .put_if_not_exists(&self.account_id, stream)
-    //         .await
-    //         .map_err(|e| anyhow!("Failed to store plugin wasm: {e}"))?;
-
-    //     Ok(key)
-    // }
-
-    // async fn start_worker(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    // ) -> crate::Result<WorkerId> {
-    //     TestDsl::start_worker_with(self, component_id, name, vec![], HashMap::new(), vec![]).await
-    // }
-
-    // async fn try_start_worker(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    // ) -> crate::Result<Result<WorkerId, Error>> {
-    //     TestDsl::try_start_worker_with(self, component_id, name, vec![], HashMap::new(), vec![])
-    //         .await
-    // }
-
-    // async fn start_worker_with(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     args: Vec<String>,
-    //     env: HashMap<String, String>,
-    //     wasi_config_vars: Vec<(String, String)>,
-    // ) -> crate::Result<WorkerId> {
-    //     let result =
-    //         TestDsl::try_start_worker_with(self, component_id, name, args, env, wasi_config_vars)
-    //             .await?;
-    //     Ok(result.map_err(|err| anyhow!("Failed to start worker: {err:?}"))?)
-    // }
-
-    // async fn try_start_worker_with(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     args: Vec<String>,
-    //     env: HashMap<String, String>,
-    //     wasi_config_vars: Vec<(String, String)>,
-    // ) -> crate::Result<Result<WorkerId, Error>> {
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .create_worker(
-    //             &self.token,
-    //             LaunchNewWorkerRequest {
-    //                 component_id: Some(component_id.clone().into()),
-    //                 name: name.to_string(),
-    //                 args,
-    //                 env,
-    //                 wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
-    //                 ignore_already_existing: false,
-    //             },
-    //         )
-    //         .await?;
-
-    //     match response.result {
-    //         None => panic!("No response from create_worker"),
-    //         Some(launch_new_worker_response::Result::Success(response)) => Ok(Ok(response
-    //             .worker_id
-    //             .ok_or(anyhow!("worker_id is missing"))?
-    //             .try_into()
-    //             .map_err(|err: String| anyhow!(err))?)),
-    //         Some(launch_new_worker_response::Result::Error(WorkerError { error: Some(error) })) => {
-    //             Ok(Err(error))
-    //         }
-    //         Some(launch_new_worker_response::Result::Error(_)) => {
-    //             Err(anyhow!("Error response without any details"))
-    //         }
-    //     }
-    // }
-
-    // async fn get_worker_metadata(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> crate::Result<Option<(WorkerMetadata, Option<String>)>> {
-    //     let worker_id: golem_api_grpc::proto::golem::worker::WorkerId = worker_id.clone().into();
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .get_worker_metadata(
-    //             &self.token,
-    //             GetWorkerMetadataRequest {
-    //                 worker_id: Some(worker_id),
-    //             },
-    //         )
-    //         .await?;
-
-    //     debug!("Received worker metadata: {:?}", response);
-
-    //     match response.result {
-    //         None => Err(anyhow!("No response from connect_worker")),
-    //         Some(get_worker_metadata_response::Result::Success(metadata)) => {
-    //             Ok(Some(to_worker_metadata(&metadata)))
-    //         }
-    //         Some(get_worker_metadata_response::Result::Error(WorkerError {
-    //             error: Some(Error::NotFound { .. }),
-    //         })) => Ok(None),
-    //         Some(get_worker_metadata_response::Result::Error(WorkerError {
-    //             error:
-    //                 Some(Error::InternalError(WorkerExecutionError {
-    //                     error: Some(worker_execution_error::Error::WorkerNotFound(_)),
-    //                 })),
-    //         })) => Ok(None),
-    //         Some(get_worker_metadata_response::Result::Error(error)) => {
-    //             Err(anyhow!("Failed to get worker metadata: {error:?}"))
-    //         }
-    //     }
-    // }
-
-    // async fn wait_for_status(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     status: WorkerStatus,
-    //     timeout: Duration,
-    // ) -> crate::Result<WorkerMetadata> {
-    //     TestDsl::wait_for_statuses(self, worker_id, &[status], timeout).await
-    // }
-
-    // async fn wait_for_statuses(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     statuses: &[WorkerStatus],
-    //     timeout: Duration,
-    // ) -> crate::Result<WorkerMetadata> {
-    //     let start = Instant::now();
-    //     let mut last_known = None;
-    //     while start.elapsed() < timeout {
-    //         let (metadata, _) = TestDsl::get_worker_metadata(self, worker_id)
-    //             .await?
-    //             .ok_or(anyhow!("Worker not found"))?;
-    //         if statuses
-    //             .iter()
-    //             .any(|s| s == &metadata.last_known_status.status)
-    //         {
-    //             return Ok(metadata);
-    //         }
-
-    //         last_known = Some(metadata.last_known_status.status.clone());
-    //         tokio::time::sleep(Duration::from_millis(50)).await;
-    //     }
-
-    //     Err(anyhow!(
-    //         "Timeout waiting for worker status {} (last known: {last_known:?})",
-    //         statuses
-    //             .iter()
-    //             .map(|s| format!("{s:?}"))
-    //             .collect::<Vec<_>>()
-    //             .join(", ")
-    //     ))
-    // }
-
-    // async fn get_workers_metadata(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     filter: Option<WorkerFilter>,
-    //     cursor: ScanCursor,
-    //     count: u64,
-    //     precise: bool,
-    // ) -> crate::Result<(Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>)> {
-    //     let component_id: golem_api_grpc::proto::golem::component::ComponentId =
-    //         component_id.clone().into();
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .get_workers_metadata(
-    //             &self.token,
-    //             GetWorkersMetadataRequest {
-    //                 component_id: Some(component_id),
-    //                 filter: filter.map(|f| f.into()),
-    //                 cursor: Some(cursor.into()),
-    //                 count,
-    //                 precise,
-    //             },
-    //         )
-    //         .await?;
-    //     match response.result {
-    //         None => Err(anyhow!("No response from get_workers_metadata")),
-    //         Some(get_workers_metadata_response::Result::Success(
-    //             GetWorkersMetadataSuccessResponse { workers, cursor },
-    //         )) => Ok((
-    //             cursor.map(|c| c.into()),
-    //             workers.iter().map(to_worker_metadata).collect(),
-    //         )),
-    //         Some(get_workers_metadata_response::Result::Error(error)) => {
-    //             Err(anyhow!("Failed to get workers metadata: {error:?}"))
-    //         }
-    //     }
-    // }
-
-    // async fn delete_worker(&self, worker_id: &WorkerId) -> crate::Result<()> {
-    //     let _ = self
-    //         .deps
-    //         .worker_service()
-    //         .delete_worker(
-    //             &self.token,
-    //             DeleteWorkerRequest {
-    //                 worker_id: Some(worker_id.clone().into()),
-    //             },
-    //         )
-    //         .await?;
-    //     Ok(())
-    // }
-
-    // async fn invoke(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<(), Error>> {
-    //     let invoke_response = self
-    //         .deps
-    //         .worker_service()
-    //         .invoke(
-    //             &self.token,
-    //             worker_id.clone().into(),
-    //             None,
-    //             function_name.to_string(),
-    //             params,
-    //             None,
-    //         )
-    //         .await?;
-
-    //     match invoke_response.result {
-    //         None => Err(anyhow!("No response from invoke_worker")),
-    //         Some(invoke_response::Result::Success(_)) => Ok(Ok(())),
-    //         Some(invoke_response::Result::Error(WorkerError { error: Some(error) })) => {
-    //             Ok(Err(error))
-    //         }
-    //         Some(invoke_response::Result::Error(_)) => {
-    //             Err(anyhow!("Empty error response from invoke_worker"))
-    //         }
-    //     }
-    // }
-
-    // async fn invoke_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<(), Error>> {
-    //     let invoke_response = self
-    //         .deps
-    //         .worker_service()
-    //         .invoke(
-    //             &self.token,
-    //             worker_id.clone().into(),
-    //             Some(idempotency_key.clone().into()),
-    //             function_name.to_string(),
-    //             params,
-    //             None,
-    //         )
-    //         .await?;
-
-    //     match invoke_response.result {
-    //         None => Err(anyhow!("No response from invoke_worker")),
-    //         Some(invoke_response::Result::Success(_)) => Ok(Ok(())),
-    //         Some(invoke_response::Result::Error(WorkerError { error: Some(error) })) => {
-    //             Ok(Err(error))
-    //         }
-    //         Some(invoke_response::Result::Error(_)) => {
-    //             Err(anyhow!("Empty error response from invoke_worker"))
-    //         }
-    //     }
-    // }
-
-    // async fn invoke_and_await(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Vec<Value>, Error>> {
-    //     TestDsl::invoke_and_await_custom(self, worker_id, function_name, params).await
-    // }
-
-    // async fn invoke_and_await_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Vec<Value>, Error>> {
-    //     TestDsl::invoke_and_await_custom_with_key(
-    //         self,
-    //         worker_id,
-    //         idempotency_key,
-    //         function_name,
-    //         params,
-    //     )
-    //     .await
-    // }
-
-    // async fn invoke_and_await_custom(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Vec<Value>, Error>> {
-    //     let idempotency_key = IdempotencyKey::fresh();
-    //     TestDsl::invoke_and_await_custom_with_key(
-    //         self,
-    //         worker_id,
-    //         &idempotency_key,
-    //         function_name,
-    //         params,
-    //     )
-    //     .await
-    // }
-
-    // async fn invoke_and_await_custom_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Vec<Value>, Error>> {
-    //     let invoke_response = self
-    //         .deps
-    //         .worker_service()
-    //         .invoke_and_await(
-    //             &self.token,
-    //             worker_id.clone().into(),
-    //             Some(idempotency_key.clone().into()),
-    //             function_name.to_string(),
-    //             params,
-    //             None,
-    //         )
-    //         .await?;
-
-    //     match invoke_response.result {
-    //         None => Err(anyhow!("No response from invoke_and_await")),
-    //         Some(invoke_and_await_response::Result::Success(response)) => Ok(Ok(response
-    //             .result
-    //             .into_iter()
-    //             .map(|v| v.try_into())
-    //             .collect::<Result<Vec<Value>, String>>()
-    //             .map_err(|err| anyhow!("Invocation result had unexpected format: {err}"))?)),
-    //         Some(invoke_and_await_response::Result::Error(WorkerError { error: Some(error) })) => {
-    //             Ok(Err(error))
-    //         }
-    //         Some(invoke_and_await_response::Result::Error(_)) => {
-    //             Err(anyhow!("Empty error response from invoke_and_await"))
-    //         }
-    //     }
-    // }
-
-    // async fn invoke_and_await_typed(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
-    //     TestDsl::invoke_and_await_typed_custom(self, worker_id, function_name, params).await
-    // }
-
-    // async fn invoke_and_await_typed_custom(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
-    //     let idempotency_key = IdempotencyKey::fresh();
-    //     TestDsl::invoke_and_await_typed_custom_with_key(
-    //         self,
-    //         worker_id,
-    //         &idempotency_key,
-    //         function_name,
-    //         params,
-    //     )
-    //     .await
-    // }
-
-    // async fn invoke_and_await_typed_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
-    //     TestDsl::invoke_and_await_typed_custom_with_key(
-    //         self,
-    //         worker_id,
-    //         idempotency_key,
-    //         function_name,
-    //         params,
-    //     )
-    //     .await
-    // }
-
-    // async fn invoke_and_await_typed_custom_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
-    //     let invoke_response = self
-    //         .deps
-    //         .worker_service()
-    //         .invoke_and_await_typed(
-    //             &self.token,
-    //             worker_id.clone().into(),
-    //             Some(idempotency_key.clone().into()),
-    //             function_name.to_string(),
-    //             params,
-    //             None,
-    //         )
-    //         .await?;
-
-    //     match invoke_response.result {
-    //         None => Err(anyhow!("No response from invoke_and_await_typed")),
-    //         Some(invoke_and_await_typed_response::Result::Success(response)) => {
-    //             match response.result {
-    //                 None => Ok(Ok(None)),
-    //                 Some(response) => {
-    //                     let response: ValueAndType = response.try_into().map_err(|err| {
-    //                         anyhow!("Invocation result had unexpected format: {err}")
-    //                     })?;
-    //                     Ok(Ok(Some(response)))
-    //                 }
-    //             }
-    //         }
-    //         Some(invoke_and_await_typed_response::Result::Error(WorkerError {
-    //             error: Some(error),
-    //         })) => Ok(Err(error)),
-    //         Some(invoke_and_await_typed_response::Result::Error(_)) => {
-    //             Err(anyhow!("Empty error response from invoke_and_await_typed"))
-    //         }
-    //     }
-    // }
-
-    // async fn invoke_and_await_json(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<serde_json::Value>,
-    // ) -> crate::Result<Result<serde_json::Value, Error>> {
-    //     let params = params.into_iter().map(|p| p.to_string()).collect();
-    //     let invoke_response = self
-    //         .deps
-    //         .worker_service()
-    //         .invoke_and_await_json(
-    //             &self.token,
-    //             InvokeAndAwaitJsonRequest {
-    //                 worker_id: Some(worker_id.clone().into()),
-    //                 idempotency_key: Some(IdempotencyKey::fresh().into()),
-    //                 function: function_name.to_string(),
-    //                 invoke_parameters: params,
-    //                 context: None,
-    //             },
-    //         )
-    //         .await?;
-
-    //     match invoke_response.result {
-    //         None => Err(anyhow!("No response from invoke_and_await_json")),
-    //         Some(invoke_and_await_json_response::Result::Success(response)) => {
-    //             let response = serde_json::from_str(&response).map_err(|err| anyhow!(err))?;
-    //             Ok(Ok(response))
-    //         }
-    //         Some(invoke_and_await_json_response::Result::Error(WorkerError {
-    //             error: Some(error),
-    //         })) => Ok(Err(error)),
-    //         Some(invoke_and_await_json_response::Result::Error(_)) => {
-    //             Err(anyhow!("Empty error response from invoke_and_await"))
-    //         }
-    //     }
-    // }
-
-    // async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent> {
-    //     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    //     let cloned_service = self.deps.borrow().worker_service().clone();
-    //     let worker_id = worker_id.clone();
-    //     let token = self.token;
-    //     tokio::spawn(
-    //         async move {
-    //             let mut response = cloned_service
-    //                 .connect_worker(
-    //                     &token,
-    //                     ConnectWorkerRequest {
-    //                         worker_id: Some(worker_id.clone().into()),
-    //                     },
-    //                 )
-    //                 .await
-    //                 .expect("Failed to connect worker");
-
-    //             while let Some(event) = response.message().await.expect("Failed to get message") {
-    //                 debug!("Received event: {:?}", event);
-    //                 tx.send(event).expect("Failed to send event");
-    //             }
-
-    //             debug!("Finished receiving events");
-    //         }
-    //         .in_current_span(),
-    //     );
-
-    //     rx
-    // }
-
-    // async fn capture_output_forever(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> (UnboundedReceiver<Option<LogEvent>>, Sender<()>) {
-    //     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    //     let cloned_service = self.deps.borrow().worker_service().clone();
-    //     let worker_id = worker_id.clone();
-    //     let token = self.token;
-    //     let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
-    //     tokio::spawn(
-    //         async move {
-    //             let mut abort = false;
-    //             while !abort {
-    //                 let mut response = cloned_service
-    //                     .connect_worker(
-    //                         &token,
-    //                         ConnectWorkerRequest {
-    //                             worker_id: Some(worker_id.clone().into()),
-    //                         },
-    //                     )
-    //                     .await
-    //                     .expect("Failed to connect worker");
-
-    //                 loop {
-    //                     select! {
-    //                         msg = response.message() => {
-    //                             match msg {
-    //                                 Ok(Some(event)) =>  {
-    //                                     debug!("Received event: {:?}", event);
-    //                                     tx.send(Some(event)).expect("Failed to send event");
-    //                                 }
-    //                                 Ok(None) => {
-    //                                     break;
-    //                                 }
-    //                                 Err(e) => {
-    //                                     panic!("Failed to get message: {e:?}");
-    //                                 }
-    //                             }
-    //                         }
-    //                         _ = (&mut abort_rx) => {
-    //                             abort = true;
-    //                             break;
-    //                         }
-    //                     }
-    //                 }
-    //             }
-
-    //             tx.send(None).expect("Failed to send event");
-    //             debug!("Finished receiving events");
-    //         }
-    //         .in_current_span(),
-    //     );
-
-    //     (rx, abort_tx)
-    // }
-
-    // async fn capture_output_with_termination(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> UnboundedReceiver<Option<LogEvent>> {
-    //     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    //     let cloned_service = self.deps.borrow().worker_service().clone();
-    //     let worker_id = worker_id.clone();
-    //     let token = self.token;
-    //     tokio::spawn(
-    //         async move {
-    //             let mut response = cloned_service
-    //                 .connect_worker(
-    //                     &token,
-    //                     ConnectWorkerRequest {
-    //                         worker_id: Some(worker_id.clone().into()),
-    //                     },
-    //                 )
-    //                 .await
-    //                 .expect("Failed to connect to worker");
-
-    //             while let Some(event) = response.message().await.expect("Failed to get message") {
-    //                 debug!("Received event: {:?}", event);
-    //                 tx.send(Some(event)).expect("Failed to send event");
-    //             }
-
-    //             debug!("Finished receiving events");
-    //             tx.send(None).expect("Failed to send termination event");
-    //         }
-    //         .in_current_span(),
-    //     );
-
-    //     rx
-    // }
-
-    // async fn log_output(&self, worker_id: &WorkerId) {
-    //     let cloned_service = self.deps.borrow().worker_service().clone();
-    //     let worker_id = worker_id.clone();
-    //     let token = self.token;
-    //     tokio::spawn(
-    //         async move {
-    //             let mut response = cloned_service
-    //                 .connect_worker(
-    //                     &token,
-    //                     ConnectWorkerRequest {
-    //                         worker_id: Some(worker_id.clone().into()),
-    //                     },
-    //                 )
-    //                 .await
-    //                 .expect("Failed to connect worker");
-
-    //             while let Some(event) = response.message().await.expect("Failed to get message") {
-    //                 info!("Received event: {:?}", event);
-    //             }
-    //         }
-    //         .in_current_span(),
-    //     );
-    // }
-
-    // async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()> {
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .resume_worker(
-    //             &self.token,
-    //             ResumeWorkerRequest {
-    //                 worker_id: Some(worker_id.clone().into()),
-    //                 force: Some(force),
-    //             },
-    //         )
-    //         .await?;
-
-    //     match response.result {
-    //         None => Err(anyhow!("No response from connect_worker")),
-    //         Some(resume_worker_response::Result::Success(_)) => Ok(()),
-    //         Some(resume_worker_response::Result::Error(error)) => {
-    //             Err(anyhow!("Failed to connect worker: {error:?}"))
-    //         }
-    //     }
-    // }
-
-    // async fn interrupt(&self, worker_id: &WorkerId) -> crate::Result<()> {
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .interrupt_worker(
-    //             &self.token,
-    //             InterruptWorkerRequest {
-    //                 worker_id: Some(worker_id.clone().into()),
-    //                 recover_immediately: false,
-    //             },
-    //         )
-    //         .await?;
-
-    //     match response {
-    //         InterruptWorkerResponse {
-    //             result: Some(interrupt_worker_response::Result::Success(_)),
-    //         } => Ok(()),
-    //         InterruptWorkerResponse {
-    //             result: Some(interrupt_worker_response::Result::Error(error)),
-    //         } => panic!("Failed to interrupt worker: {error:?}"),
-    //         _ => panic!("Failed to interrupt worker: unknown error"),
-    //     }
-    // }
-
-    // async fn simulated_crash(&self, worker_id: &WorkerId) -> crate::Result<()> {
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .interrupt_worker(
-    //             &self.token,
-    //             InterruptWorkerRequest {
-    //                 worker_id: Some(worker_id.clone().into()),
-    //                 recover_immediately: true,
-    //             },
-    //         )
-    //         .await?;
-
-    //     match response {
-    //         InterruptWorkerResponse {
-    //             result: Some(interrupt_worker_response::Result::Success(_)),
-    //         } => Ok(()),
-    //         InterruptWorkerResponse {
-    //             result: Some(interrupt_worker_response::Result::Error(error)),
-    //         } => Err(anyhow!("Failed to crash worker: {error:?}")),
-    //         _ => Err(anyhow!("Failed to crash worker: unknown error")),
-    //     }
-    // }
-
-    // async fn auto_update_worker(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     target_version: ComponentRevision,
-    // ) -> crate::Result<()> {
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .update_worker(
-    //             &self.token,
-    //             UpdateWorkerRequest {
-    //                 worker_id: Some(worker_id.clone().into()),
-    //                 target_version,
-    //                 mode: UpdateMode::Automatic.into(),
-    //             },
-    //         )
-    //         .await?;
-
-    //     match response {
-    //         UpdateWorkerResponse {
-    //             result: Some(update_worker_response::Result::Success(_)),
-    //         } => Ok(()),
-    //         UpdateWorkerResponse {
-    //             result: Some(update_worker_response::Result::Error(error)),
-    //         } => Err(anyhow!("Failed to update worker: {error:?}")),
-    //         _ => Err(anyhow!("Failed to update worker: unknown error")),
-    //     }
-    // }
-
-    // async fn manual_update_worker(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     target_version: ComponentRevision,
-    // ) -> crate::Result<()> {
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .update_worker(
-    //             &self.token,
-    //             UpdateWorkerRequest {
-    //                 worker_id: Some(worker_id.clone().into()),
-    //                 target_version,
-    //                 mode: UpdateMode::Manual.into(),
-    //             },
-    //         )
-    //         .await?;
-
-    //     match response {
-    //         UpdateWorkerResponse {
-    //             result: Some(update_worker_response::Result::Success(_)),
-    //         } => Ok(()),
-    //         UpdateWorkerResponse {
-    //             result: Some(update_worker_response::Result::Error(error)),
-    //         } => Err(anyhow!("Failed to update worker: {error:?}")),
-    //         _ => Err(anyhow!("Failed to update worker: unknown error")),
-    //     }
-    // }
-
-    // async fn get_oplog(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     from: OplogIndex,
-    // ) -> crate::Result<Vec<PublicOplogEntryWithIndex>> {
-    //     let mut result = Vec::new();
-    //     let mut cursor = None;
-
-    //     loop {
-    //         let chunk = self
-    //             .deps
-    //             .worker_service()
-    //             .get_oplog(
-    //                 &self.token,
-    //                 GetOplogRequest {
-    //                     worker_id: Some(worker_id.clone().into()),
-    //                     from_oplog_index: from.into(),
-    //                     cursor,
-    //                     count: 100,
-    //                 },
-    //             )
-    //             .await?;
-
-    //         if let Some(chunk) = chunk.result {
-    //             match chunk {
-    //                 get_oplog_response::Result::Success(chunk) => {
-    //                     if chunk.entries.is_empty() {
-    //                         break;
-    //                     } else {
-    //                         result.extend(
-    //                             chunk
-    //                                 .entries
-    //                                 .into_iter()
-    //                                 .enumerate()
-    //                                 .map(|(chunk_idx, entry)| {
-    //                                     PublicOplogEntry::try_from(entry).map(
-    //                                         |public_oplog_entry| PublicOplogEntryWithIndex {
-    //                                             entry: public_oplog_entry,
-    //                                             oplog_index: OplogIndex::from_u64(
-    //                                                 chunk.first_index_in_chunk + chunk_idx as u64,
-    //                                             ),
-    //                                         },
-    //                                     )
-    //                                 })
-    //                                 .collect::<Result<Vec<_>, _>>()
-    //                                 .map_err(|err| {
-    //                                     anyhow!("Failed to convert oplog entry: {err}")
-    //                                 })?,
-    //                         );
-    //                         cursor = chunk.next;
-    //                     }
-    //                 }
-    //                 get_oplog_response::Result::Error(error) => {
-    //                     return Err(anyhow!("Failed to get oplog: {error:?}"));
-    //                 }
-    //             }
-    //         } else {
-    //             break;
-    //         }
-    //     }
-
-    //     Ok(result)
-    // }
-
-    // async fn search_oplog(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     query: &str,
-    // ) -> crate::Result<Vec<PublicOplogEntryWithIndex>> {
-    //     let mut result = Vec::new();
-    //     let mut cursor = None;
-
-    //     loop {
-    //         let chunk = self
-    //             .deps
-    //             .worker_service()
-    //             .search_oplog(
-    //                 &self.token,
-    //                 SearchOplogRequest {
-    //                     worker_id: Some(worker_id.clone().into()),
-    //                     cursor,
-    //                     count: 100,
-    //                     query: query.to_string(),
-    //                 },
-    //             )
-    //             .await?;
-
-    //         if let Some(chunk) = chunk.result {
-    //             match chunk {
-    //                 search_oplog_response::Result::Success(chunk) => {
-    //                     if chunk.entries.is_empty() {
-    //                         break;
-    //                     } else {
-    //                         result.extend(
-    //                             chunk
-    //                                 .entries
-    //                                 .into_iter()
-    //                                 .map(|entry| entry.try_into())
-    //                                 .collect::<Result<Vec<_>, _>>()
-    //                                 .map_err(|err| {
-    //                                     anyhow!("Failed to convert oplog entry: {err}")
-    //                                 })?,
-    //                         );
-    //                         cursor = chunk.next;
-    //                     }
-    //                 }
-    //                 search_oplog_response::Result::Error(error) => {
-    //                     return Err(anyhow!("Failed to search oplog: {error:?}"));
-    //                 }
-    //             }
-    //         } else {
-    //             break;
-    //         }
-    //     }
-
-    //     Ok(result)
-    // }
-
-    // async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()> {
-    //     let oplog = TestDsl::get_oplog(self, worker_id, OplogIndex::INITIAL).await?;
-
-    //     for entry in oplog.iter() {
-    //         debug!(
-    //             "#{}:\n{}",
-    //             entry.oplog_index,
-    //             debug_render_oplog_entry(&entry.entry)
-    //         );
-    //     }
-
-    //     Ok(())
-    // }
-
-    // async fn get_file_system_node(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     path: &str,
-    // ) -> crate::Result<Vec<ComponentFileSystemNode>> {
-
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .get_file_system_node(
-    //             &self.token,
-    //             GetFileSystemNodeRequest {
-    //                 worker_id: Some(worker_id.clone().into()),
-    //                 path: path.to_string(),
-    //             },
-    //         )
-    //         .await?;
-
-    //     match response.result {
-    //         Some(get_file_system_node_response::Result::Success(response)) => {
-    //             let converted = response
-    //                 .nodes
-    //                 .into_iter()
-    //                 .map(|node| node.try_into())
-    //                 .collect::<Result<Vec<_>, _>>()
-    //                 .map_err(|err| anyhow!("Failed to convert node: {err}"))?;
-    //             Ok(converted)
-    //         }
-    //         _ => Err(anyhow!("Failed to list directory")),
-    //     }
-    // }
-
-    // async fn get_file_contents(&self, worker_id: &WorkerId, path: &strs) -> crate::Result<Bytes> {
-    //     let target_worker_id: TargetWorkerId = worker_id.into();
-    //     self.deps
-    //         .worker_service()
-    //         .get_file_contents(
-    //             &self.token,
-    //             GetFileContentsRequest {
-    //                 worker_id: Some(worker_id.clone().into()),
-    //                 file_path: path.to_string(),
-    //             },
-    //         )
-    //         .await
-    // }
-
-    // async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()> {
-    //     self.deps
-    //         .component_service()
-    //         .create_plugin(&self.token, &self.account_id, definition)
-    //         .await
-    // }
-
-    // async fn delete_plugin(
-    //     &self,
-    //     account_id: AccountId,
-    //     name: &str,
-    //     version: &str,
-    // ) -> crate::Result<()> {
-    //     self.deps
-    //         .component_service()
-    //         .delete_plugin(&self.token, account_id, name, version)
-    //         .await
-    // }
-
-    // async fn install_plugin_to_component(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     plugin_name: &str,
-    //     plugin_version: &str,
-    //     priority: i32,
-    //     parameters: HashMap<String, String>,
-    // ) -> crate::Result<PluginInstallationId> {
-    //     self.deps
-    //         .component_service()
-    //         .install_plugin_to_component(
-    //             &self.token,
-    //             component_id,
-    //             plugin_name,
-    //             plugin_version,
-    //             priority,
-    //             parameters,
-    //         )
-    //         .await
-    // }
-
-    // async fn fork_worker(
-    //     &self,
-    //     source_worker_id: &WorkerId,
-    //     target_worker_id: &WorkerId,
-    //     oplog_index: OplogIndex,
-    // ) -> crate::Result<()> {
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .fork_worker(
-    //             &self.token,
-    //             ForkWorkerRequest {
-    //                 source_worker_id: Some(source_worker_id.clone().into()),
-    //                 target_worker_id: Some(target_worker_id.clone().into()),
-    //                 oplog_index_cutoff: oplog_index.into(),
-    //             },
-    //         )
-    //         .await?;
-
-    //     match response {
-    //         ForkWorkerResponse {
-    //             result: Some(fork_worker_response::Result::Success(_)),
-    //         } => Ok(()),
-    //         ForkWorkerResponse {
-    //             result: Some(fork_worker_response::Result::Error(error)),
-    //         } => Err(anyhow!("Failed to fork worker: {error:?}")),
-    //         _ => Err(anyhow!("Failed to fork worker: unknown error")),
-    //     }
-    // }
-
-    // async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> crate::Result<()> {
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .revert_worker(
-    //             &self.token,
-    //             RevertWorkerRequest {
-    //                 worker_id: Some(worker_id.clone().into()),
-    //                 target: Some(target.into()),
-    //             },
-    //         )
-    //         .await?;
-
-    //     match response.result {
-    //         Some(revert_worker_response::Result::Success(_)) => Ok(()),
-    //         Some(revert_worker_response::Result::Error(error)) => {
-    //             Err(anyhow!("Failed to fork worker: {error:?}"))
-    //         }
-    //         _ => Err(anyhow!("Failed to revert worker: unknown error")),
-    //     }
-    // }
-
-    // async fn cancel_invocation(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    // ) -> crate::Result<bool> {
-    //     let response = self
-    //         .deps
-    //         .worker_service()
-    //         .cancel_invocation(
-    //             &self.token,
-    //             CancelInvocationRequest {
-    //                 worker_id: Some(worker_id.clone().into()),
-    //                 idempotency_key: Some(idempotency_key.clone().into()),
-    //             },
-    //         )
-    //         .await?;
-
-    //     match response.result {
-    //         Some(cancel_invocation_response::Result::Success(canceled)) => Ok(canceled),
-    //         Some(cancel_invocation_response::Result::Error(error)) => {
-    //             Err(anyhow!("Failed to cancel invocation: {error:?}"))
-    //         }
-    //         _ => Err(anyhow!("Failed to cancel invocation: unknown error")),
-    //     }
-    // }
-
-    // async fn default_project(&self) -> crate::Result<ProjectId> {
-    //     self.deps
-    //         .cloud_service()
-    //         .get_default_project(&self.token)
-    //         .await
-    // }
-
-    // async fn create_project(&self) -> crate::Result<ProjectId> {
-    //     let name = Uuid::new_v4().to_string();
-    //     let description = Uuid::new_v4().to_string();
-
-    //     self.deps
-    //         .cloud_service()
-    //         .create_project(&self.token, name, self.account_id.clone(), description)
-    //         .await
-    // }
-
-    // async fn grant_full_project_access(
-    //     &self,
-    //     project_id: &ProjectId,
-    //     grantee_account_id: &AccountId,
-    // ) -> crate::Result<()> {
-    //     self.deps
-    //         .cloud_service()
-    //         .grant_full_project_access(&self.token, project_id, grantee_account_id)
-    //         .await?;
-    //     Ok(())
-    // }
-
-    // async fn get_account(&self, account_id: &AccountId) -> crate::Result<Account> {
-    //     self.deps
-    //         .cloud_service()
-    //         .get_account_by_id(&self.token, account_id)
-    //         .await
-    // }
-}
+// #[async_trait]
+// pub trait TestDsl {
+//     fn component(
+//         &self,
+//         environment_id: &EnvironmentId,
+//         name: &str,
+//     ) -> StoreComponentBuilder<'_, Self>;
+
+//     async fn app_and_env(&self) -> anyhow::Result<(ApplicationId, EnvironmentId)>;
+
+//     async fn store_component_with(
+//         &self,
+//         wasm_name: &str,
+//         environment_id: EnvironmentId,
+//         name: &str,
+//         component_type: ComponentType,
+//         unique: bool,
+//         unverified: bool,
+//         files: Vec<IFSEntry>,
+//         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+//         env: BTreeMap<String, String>,
+//     ) -> anyhow::Result<Component>;
+
+//     async fn update_component_with(
+//         &self,
+//         component_id: &ComponentId,
+//         previous_version: ComponentRevision,
+//         wasm_name: Option<&str>,
+//         component_type: Option<ComponentType>,
+//         new_files: Vec<IFSEntry>,
+//         removed_files: Vec<ComponentFilePath>,
+//         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+//         env: Option<BTreeMap<String, String>>,
+//     ) -> anyhow::Result<Component>;
+
+// async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
+
+// async fn get_latest_component_metadata(
+//     &self,
+//     component_id: &ComponentId,
+// ) -> crate::Result<ComponentMetadata>;
+
+// async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision;
+
+// async fn update_component_with_files(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     files: Option<&[(PathBuf, InitialComponentFile)]>,
+// ) -> ComponentRevision;
+
+// async fn update_component_with_env(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     files: &[(String, String)],
+// ) -> ComponentRevision;
+
+// async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
+
+// async fn add_initial_component_files(
+//     &self,
+//     files: &[(&str, &str, ComponentFilePermissions)],
+// ) -> Vec<(PathBuf, InitialComponentFile)> {
+//     let mut added_files = Vec::<(PathBuf, InitialComponentFile)>::with_capacity(files.len());
+//     for (source, target, permissions) in files {
+//         added_files.push((
+//             source.into(),
+//             InitialComponentFile {
+//                 key: self.add_initial_component_file(Path::new(source)).await,
+//                 path: ComponentFilePath::from_str(target).unwrap(),
+//                 permissions: *permissions,
+//             },
+//         ))
+//     }
+//     added_files
+// }
+
+// async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey>;
+
+// async fn start_worker(&self, component_id: &ComponentId, name: &str)
+//     -> crate::Result<WorkerId>;
+
+// async fn try_start_worker(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+// ) -> crate::Result<Result<WorkerId, Error>>;
+
+// async fn start_worker_with(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     args: Vec<String>,
+//     env: HashMap<String, String>,
+//     wasi_config_vars: Vec<(String, String)>,
+// ) -> crate::Result<WorkerId>;
+
+// async fn try_start_worker_with(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     args: Vec<String>,
+//     env: HashMap<String, String>,
+//     wasi_config_vars: Vec<(String, String)>,
+// ) -> crate::Result<Result<WorkerId, Error>>;
+
+// async fn get_worker_metadata(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> crate::Result<Option<(WorkerMetadata, Option<String>)>>;
+
+// async fn wait_for_status(
+//     &self,
+//     worker_id: &WorkerId,
+//     status: WorkerStatus,
+//     timeout: Duration,
+// ) -> crate::Result<WorkerMetadata>;
+
+// async fn wait_for_statuses(
+//     &self,
+//     worker_id: &WorkerId,
+//     status: &[WorkerStatus],
+//     timeout: Duration,
+// ) -> crate::Result<WorkerMetadata>;
+
+// async fn get_workers_metadata(
+//     &self,
+//     component_id: &ComponentId,
+//     filter: Option<WorkerFilter>,
+//     cursor: ScanCursor,
+//     count: u64,
+//     precise: bool,
+// ) -> crate::Result<(Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>)>;
+// async fn delete_worker(&self, worker_id: &WorkerId) -> crate::Result<()>;
+
+// async fn invoke(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<(), Error>>;
+// async fn invoke_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<(), Error>>;
+// async fn invoke_and_await(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Vec<Value>, Error>>;
+// async fn invoke_and_await_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Vec<Value>, Error>>;
+// async fn invoke_and_await_custom(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Vec<Value>, Error>>;
+// async fn invoke_and_await_custom_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Vec<Value>, Error>>;
+// async fn invoke_and_await_typed(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
+// async fn invoke_and_await_typed_custom(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
+// async fn invoke_and_await_typed_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
+// async fn invoke_and_await_typed_custom_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
+// async fn invoke_and_await_json(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<serde_json::Value>,
+// ) -> crate::Result<Result<serde_json::Value, Error>>;
+// async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent>;
+// async fn capture_output_forever(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> (UnboundedReceiver<Option<LogEvent>>, Sender<()>);
+// async fn capture_output_with_termination(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> UnboundedReceiver<Option<LogEvent>>;
+// async fn log_output(&self, worker_id: &WorkerId);
+// async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()>;
+// async fn interrupt(&self, worker_id: &WorkerId) -> crate::Result<()>;
+// async fn simulated_crash(&self, worker_id: &WorkerId) -> crate::Result<()>;
+// async fn auto_update_worker(
+//     &self,
+//     worker_id: &WorkerId,
+//     target_version: ComponentRevision,
+// ) -> crate::Result<()>;
+// async fn manual_update_worker(
+//     &self,
+//     worker_id: &WorkerId,
+//     target_version: ComponentRevision,
+// ) -> crate::Result<()>;
+// async fn get_oplog(
+//     &self,
+//     worker_id: &WorkerId,
+//     from: OplogIndex,
+// ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
+// async fn search_oplog(
+//     &self,
+//     worker_id: &WorkerId,
+//     query: &str,
+// ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
+
+// async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()>;
+
+// async fn get_file_system_node(
+//     &self,
+//     worker_id: &WorkerId,
+//     path: &str,
+// ) -> crate::Result<Vec<ComponentFileSystemNode>>;
+
+// async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> crate::Result<Bytes>;
+
+// async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()>;
+
+// async fn delete_plugin(
+//     &self,
+//     account_id: AccountId,
+//     name: &str,
+//     version: &str,
+// ) -> crate::Result<()>;
+
+// async fn install_plugin_to_component(
+//     &self,
+//     component_id: &ComponentId,
+//     plugin_name: &str,
+//     plugin_version: &str,
+//     priority: i32,
+//     parameters: HashMap<String, String>,
+// ) -> crate::Result<PluginInstallationId>;
+
+// async fn fork_worker(
+//     &self,
+//     source_worker_id: &WorkerId,
+//     target_worker_id: &WorkerId,
+//     oplog_index: OplogIndex,
+// ) -> crate::Result<()>;
+
+// async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> crate::Result<()>;
+
+// async fn cancel_invocation(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+// ) -> crate::Result<bool>;
+
+// async fn default_project(&self) -> crate::Result<ProjectId>;
+
+// async fn create_project(&self) -> crate::Result<ProjectId>;
+
+// async fn grant_full_project_access(
+//     &self,
+//     project_id: &ProjectId,
+//     grantee_account_id: &AccountId,
+// ) -> crate::Result<()>;
+
+// async fn get_account(&self, account_id: &AccountId) -> crate::Result<Account>;
+// }
+
+// #[async_trait]
+// impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
+// fn component(
+//     &self,
+//     environment_id: &EnvironmentId,
+//     name: &str,
+// ) -> StoreComponentBuilder<'_, Self> {
+//     StoreComponentBuilder::new(self, environment_id.clone(), name.to_string())
+// }
+
+// async fn store_component_with(
+//     &self,
+//     wasm_name: &str,
+//     environment_id: EnvironmentId,
+//     name: &str,
+//     component_type: ComponentType,
+//     unique: bool,
+//     unverified: bool,
+//     files: Vec<IFSEntry>,
+//     dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+//     env: BTreeMap<String, String>,
+// ) -> anyhow::Result<Component> {
+//     let component_directy = self.deps.component_directory();
+
+//     let source_path = component_directy.join(format!("{wasm_name}.wasm"));
+
+//     let component_name = if unique {
+//         let uuid = Uuid::new_v4();
+//         ComponentName(format!("{name}-{uuid}"))
+//     } else {
+//         match component_type {
+//             ComponentType::Durable => ComponentName(name.to_string()),
+//             ComponentType::Ephemeral => ComponentName(format!("{name}-ephemeral")),
+//         }
+//     };
+//     let dynamic_linking = HashMap::from_iter(
+//         dynamic_linking
+//             .iter()
+//             .map(|(k, v)| (k.to_string(), v.clone())),
+//     );
+
+//     let source_path = if !unverified {
+//         rename_component_if_needed(
+//             self.deps.borrow().temp_directory(),
+//             &source_path,
+//             &component_name.0,
+//         )
+//         .expect("Failed to verify and change component metadata")
+//     } else {
+//         source_path
+//     };
+
+//     let (_tmp_dir, maybe_files_archive) = if !files.is_empty() {
+//         let (tmp_dir, files_archive) = build_ifs_archive(component_directy, &files).await?;
+//         (Some(tmp_dir), Some(File::open(files_archive).await?))
+//     } else {
+//         (None, None)
+//     };
+
+//     let file_options = files
+//         .into_iter()
+//         .map(|f| {
+//             (
+//                 f.target_path,
+//                 ComponentFileOptions {
+//                     permissions: f.permissions,
+//                 },
+//             )
+//         })
+//         .apply(BTreeMap::from_iter);
+
+//     let client = self.deps.registry_service().client(&self.token).await;
+
+//     let component = client
+//         .create_component(
+//             &environment_id.0,
+//             &CreateComponentRequestMetadata {
+//                 component_name,
+//                 component_type: Some(component_type),
+//                 file_options: Some(file_options),
+//                 dynamic_linking: Some(dynamic_linking),
+//                 env: Some(env),
+//                 agent_types: None,
+//             },
+//             File::open(source_path).await?,
+//             maybe_files_archive,
+//         )
+//         .await?;
+
+//     Ok(component)
+// }
+
+// async fn update_component_with(
+//     &self,
+//     component_id: &ComponentId,
+//     previous_version: ComponentRevision,
+//     wasm_name: Option<&str>,
+//     component_type: Option<ComponentType>,
+//     new_files: Vec<IFSEntry>,
+//     removed_files: Vec<ComponentFilePath>,
+//     dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+//     env: Option<BTreeMap<String, String>>,
+// ) -> anyhow::Result<Component> {
+//     let component_directy = self.deps.component_directory();
+
+//     let updated_wasm = if let Some(wasm_name) = wasm_name {
+//         let source_path: PathBuf = component_directy.join(format!("{wasm_name}.wasm"));
+//         Some(File::open(source_path).await?)
+//     } else {
+//         None
+//     };
+
+//     let (_tmp_dir, maybe_new_files_archive) = if !new_files.is_empty() {
+//         let (tmp_dir, new_files_archive) =
+//             build_ifs_archive(component_directy, &new_files).await?;
+//         (Some(tmp_dir), Some(File::open(new_files_archive).await?))
+//     } else {
+//         (None, None)
+//     };
+
+//     let new_file_options = new_files
+//         .into_iter()
+//         .map(|f| {
+//             (
+//                 f.target_path,
+//                 ComponentFileOptions {
+//                     permissions: f.permissions,
+//                 },
+//             )
+//         })
+//         .apply(BTreeMap::from_iter);
+
+//     let client = self.deps.registry_service().client(&self.token).await;
+
+//     let component = client
+//         .update_component(
+//             &component_id.0,
+//             &UpdateComponentRequestMetadata {
+//                 previous_version,
+//                 component_type,
+//                 new_file_options: Some(new_file_options),
+//                 removed_files: Some(removed_files),
+//                 dynamic_linking,
+//                 env,
+//                 agent_types: None,
+//                 plugin_installation_actions: None,
+//             },
+//             updated_wasm,
+//             maybe_new_files_archive,
+//         )
+//         .await?;
+
+//     Ok(component)
+// }
+
+// async fn app_and_env(&self) -> anyhow::Result<(ApplicationId, EnvironmentId)> {
+//     let client = self.deps.registry_service().client(&self.token).await;
+//     let app_name = ApplicationName(Uuid::new_v4().to_string());
+//     let env_name = EnvironmentName(Uuid::new_v4().to_string());
+
+//     let application = client
+//         .create_application(&self.account_id.0, &NewApplicationData { name: app_name })
+//         .await?;
+
+//     let environment = client
+//         .create_application_environment(
+//             &application.id.0,
+//             &NewEnvironmentData {
+//                 name: env_name,
+//                 compatibility_check: false,
+//                 version_check: false,
+//                 security_overrides: false,
+//             },
+//         )
+//         .await?;
+
+//     Ok((application.id, environment.id))
+// }
+
+// async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
+//     let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
+//     self.deps
+//         .component_service()
+//         .add_component_with_id(
+//             &source_path,
+//             component_id,
+//             name,
+//             ComponentType::Durable,
+//             None,
+//         )
+//         .await
+//         .expect("Failed to store component");
+// }
+
+// async fn get_latest_component_metadata(
+//     &self,
+//     component_id: &ComponentId,
+// ) -> crate::Result<ComponentMetadata> {
+//     self.deps
+//         .component_service()
+//         .get_latest_component_metadata(
+//             &self.token,
+//             GetLatestComponentRequest {
+//                 component_id: Some(component_id.clone().into()),
+//             },
+//         )
+//         .await
+//         .and_then(|c| {
+//             c.metadata
+//                 .ok_or(anyhow!("metadata not found"))
+//                 .and_then(|cm| cm.try_into().map_err(|e: String| anyhow!(e)))
+//         })
+// }
+
+// async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision {
+//     let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
+//     let component_env = HashMap::new();
+//     self.deps
+//         .component_service()
+//         .update_component(
+//             &self.token,
+//             component_id,
+//             &source_path,
+//             ComponentType::Durable,
+//             None,
+//             None,
+//             &component_env,
+//         )
+//         .await
+//         .unwrap()
+// }
+
+// async fn update_component_with_files(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     files: Option<&[(PathBuf, InitialComponentFile)]>,
+// ) -> ComponentRevision {
+//     let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
+//     self.deps
+//         .component_service()
+//         .update_component(
+//             &self.token,
+//             component_id,
+//             &source_path,
+//             ComponentType::Durable,
+//             files,
+//             None,
+//             &HashMap::new(),
+//         )
+//         .await
+//         .unwrap()
+// }
+
+// async fn update_component_with_env(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     env: &[(String, String)],
+// ) -> ComponentRevision {
+//     let map = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+//     let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
+//     self.deps
+//         .component_service()
+//         .update_component(
+//             &self.token,
+//             component_id,
+//             &source_path,
+//             ComponentType::Durable,
+//             None,
+//             None,
+//             &map,
+//         )
+//         .await
+//         .unwrap()
+// }
+
+// async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {
+//     let source_path = self.deps.borrow().component_directory().join(path);
+//     let data = tokio::fs::read(&source_path)
+//         .await
+//         .expect("Failed to read file");
+//     let bytes = Bytes::from(data);
+
+//     let stream = bytes
+//         .map_item(|i| i.map_err(widen_infallible))
+//         .map_error(widen_infallible);
+
+//     let project_id = self
+//         .deps
+//         .cloud_service()
+//         .get_default_project(&self.token)
+//         .await
+//         .expect("Failed to get default project");
+//     self.deps
+//         .initial_component_files_service()
+//         .put_if_not_exists(&project_id, stream)
+//         .await
+//         .expect("Failed to add initial component file")
+// }
+
+// async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey> {
+//     let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
+//     let data = tokio::fs::read(&source_path)
+//         .await
+//         .map_err(|e| anyhow!("Failed to read file: {e}"))?;
+
+//     let bytes = Bytes::from(data);
+
+//     let stream = bytes
+//         .map_item(|i| i.map_err(widen_infallible))
+//         .map_error(widen_infallible);
+
+//     let key = self
+//         .deps
+//         .plugin_wasm_files_service()
+//         .put_if_not_exists(&self.account_id, stream)
+//         .await
+//         .map_err(|e| anyhow!("Failed to store plugin wasm: {e}"))?;
+
+//     Ok(key)
+// }
+
+// async fn start_worker(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+// ) -> crate::Result<WorkerId> {
+//     TestDsl::start_worker_with(self, component_id, name, vec![], HashMap::new(), vec![]).await
+// }
+
+// async fn try_start_worker(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+// ) -> crate::Result<Result<WorkerId, Error>> {
+//     TestDsl::try_start_worker_with(self, component_id, name, vec![], HashMap::new(), vec![])
+//         .await
+// }
+
+// async fn start_worker_with(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     args: Vec<String>,
+//     env: HashMap<String, String>,
+//     wasi_config_vars: Vec<(String, String)>,
+// ) -> crate::Result<WorkerId> {
+//     let result =
+//         TestDsl::try_start_worker_with(self, component_id, name, args, env, wasi_config_vars)
+//             .await?;
+//     Ok(result.map_err(|err| anyhow!("Failed to start worker: {err:?}"))?)
+// }
+
+// async fn try_start_worker_with(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     args: Vec<String>,
+//     env: HashMap<String, String>,
+//     wasi_config_vars: Vec<(String, String)>,
+// ) -> crate::Result<Result<WorkerId, Error>> {
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .create_worker(
+//             &self.token,
+//             LaunchNewWorkerRequest {
+//                 component_id: Some(component_id.clone().into()),
+//                 name: name.to_string(),
+//                 args,
+//                 env,
+//                 wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
+//                 ignore_already_existing: false,
+//             },
+//         )
+//         .await?;
+
+//     match response.result {
+//         None => panic!("No response from create_worker"),
+//         Some(launch_new_worker_response::Result::Success(response)) => Ok(Ok(response
+//             .worker_id
+//             .ok_or(anyhow!("worker_id is missing"))?
+//             .try_into()
+//             .map_err(|err: String| anyhow!(err))?)),
+//         Some(launch_new_worker_response::Result::Error(WorkerError { error: Some(error) })) => {
+//             Ok(Err(error))
+//         }
+//         Some(launch_new_worker_response::Result::Error(_)) => {
+//             Err(anyhow!("Error response without any details"))
+//         }
+//     }
+// }
+
+// async fn get_worker_metadata(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> crate::Result<Option<(WorkerMetadata, Option<String>)>> {
+//     let worker_id: golem_api_grpc::proto::golem::worker::WorkerId = worker_id.clone().into();
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .get_worker_metadata(
+//             &self.token,
+//             GetWorkerMetadataRequest {
+//                 worker_id: Some(worker_id),
+//             },
+//         )
+//         .await?;
+
+//     debug!("Received worker metadata: {:?}", response);
+
+//     match response.result {
+//         None => Err(anyhow!("No response from connect_worker")),
+//         Some(get_worker_metadata_response::Result::Success(metadata)) => {
+//             Ok(Some(to_worker_metadata(&metadata)))
+//         }
+//         Some(get_worker_metadata_response::Result::Error(WorkerError {
+//             error: Some(Error::NotFound { .. }),
+//         })) => Ok(None),
+//         Some(get_worker_metadata_response::Result::Error(WorkerError {
+//             error:
+//                 Some(Error::InternalError(WorkerExecutionError {
+//                     error: Some(worker_execution_error::Error::WorkerNotFound(_)),
+//                 })),
+//         })) => Ok(None),
+//         Some(get_worker_metadata_response::Result::Error(error)) => {
+//             Err(anyhow!("Failed to get worker metadata: {error:?}"))
+//         }
+//     }
+// }
+
+// async fn wait_for_status(
+//     &self,
+//     worker_id: &WorkerId,
+//     status: WorkerStatus,
+//     timeout: Duration,
+// ) -> crate::Result<WorkerMetadata> {
+//     TestDsl::wait_for_statuses(self, worker_id, &[status], timeout).await
+// }
+
+// async fn wait_for_statuses(
+//     &self,
+//     worker_id: &WorkerId,
+//     statuses: &[WorkerStatus],
+//     timeout: Duration,
+// ) -> crate::Result<WorkerMetadata> {
+//     let start = Instant::now();
+//     let mut last_known = None;
+//     while start.elapsed() < timeout {
+//         let (metadata, _) = TestDsl::get_worker_metadata(self, worker_id)
+//             .await?
+//             .ok_or(anyhow!("Worker not found"))?;
+//         if statuses
+//             .iter()
+//             .any(|s| s == &metadata.last_known_status.status)
+//         {
+//             return Ok(metadata);
+//         }
+
+//         last_known = Some(metadata.last_known_status.status.clone());
+//         tokio::time::sleep(Duration::from_millis(50)).await;
+//     }
+
+//     Err(anyhow!(
+//         "Timeout waiting for worker status {} (last known: {last_known:?})",
+//         statuses
+//             .iter()
+//             .map(|s| format!("{s:?}"))
+//             .collect::<Vec<_>>()
+//             .join(", ")
+//     ))
+// }
+
+// async fn get_workers_metadata(
+//     &self,
+//     component_id: &ComponentId,
+//     filter: Option<WorkerFilter>,
+//     cursor: ScanCursor,
+//     count: u64,
+//     precise: bool,
+// ) -> crate::Result<(Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>)> {
+//     let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+//         component_id.clone().into();
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .get_workers_metadata(
+//             &self.token,
+//             GetWorkersMetadataRequest {
+//                 component_id: Some(component_id),
+//                 filter: filter.map(|f| f.into()),
+//                 cursor: Some(cursor.into()),
+//                 count,
+//                 precise,
+//             },
+//         )
+//         .await?;
+//     match response.result {
+//         None => Err(anyhow!("No response from get_workers_metadata")),
+//         Some(get_workers_metadata_response::Result::Success(
+//             GetWorkersMetadataSuccessResponse { workers, cursor },
+//         )) => Ok((
+//             cursor.map(|c| c.into()),
+//             workers.iter().map(to_worker_metadata).collect(),
+//         )),
+//         Some(get_workers_metadata_response::Result::Error(error)) => {
+//             Err(anyhow!("Failed to get workers metadata: {error:?}"))
+//         }
+//     }
+// }
+
+// async fn delete_worker(&self, worker_id: &WorkerId) -> crate::Result<()> {
+//     let _ = self
+//         .deps
+//         .worker_service()
+//         .delete_worker(
+//             &self.token,
+//             DeleteWorkerRequest {
+//                 worker_id: Some(worker_id.clone().into()),
+//             },
+//         )
+//         .await?;
+//     Ok(())
+// }
+
+// async fn invoke(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<(), Error>> {
+//     let invoke_response = self
+//         .deps
+//         .worker_service()
+//         .invoke(
+//             &self.token,
+//             worker_id.clone().into(),
+//             None,
+//             function_name.to_string(),
+//             params,
+//             None,
+//         )
+//         .await?;
+
+//     match invoke_response.result {
+//         None => Err(anyhow!("No response from invoke_worker")),
+//         Some(invoke_response::Result::Success(_)) => Ok(Ok(())),
+//         Some(invoke_response::Result::Error(WorkerError { error: Some(error) })) => {
+//             Ok(Err(error))
+//         }
+//         Some(invoke_response::Result::Error(_)) => {
+//             Err(anyhow!("Empty error response from invoke_worker"))
+//         }
+//     }
+// }
+
+// async fn invoke_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<(), Error>> {
+//     let invoke_response = self
+//         .deps
+//         .worker_service()
+//         .invoke(
+//             &self.token,
+//             worker_id.clone().into(),
+//             Some(idempotency_key.clone().into()),
+//             function_name.to_string(),
+//             params,
+//             None,
+//         )
+//         .await?;
+
+//     match invoke_response.result {
+//         None => Err(anyhow!("No response from invoke_worker")),
+//         Some(invoke_response::Result::Success(_)) => Ok(Ok(())),
+//         Some(invoke_response::Result::Error(WorkerError { error: Some(error) })) => {
+//             Ok(Err(error))
+//         }
+//         Some(invoke_response::Result::Error(_)) => {
+//             Err(anyhow!("Empty error response from invoke_worker"))
+//         }
+//     }
+// }
+
+// async fn invoke_and_await(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Vec<Value>, Error>> {
+//     TestDsl::invoke_and_await_custom(self, worker_id, function_name, params).await
+// }
+
+// async fn invoke_and_await_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Vec<Value>, Error>> {
+//     TestDsl::invoke_and_await_custom_with_key(
+//         self,
+//         worker_id,
+//         idempotency_key,
+//         function_name,
+//         params,
+//     )
+//     .await
+// }
+
+// async fn invoke_and_await_custom(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Vec<Value>, Error>> {
+//     let idempotency_key = IdempotencyKey::fresh();
+//     TestDsl::invoke_and_await_custom_with_key(
+//         self,
+//         worker_id,
+//         &idempotency_key,
+//         function_name,
+//         params,
+//     )
+//     .await
+// }
+
+// async fn invoke_and_await_custom_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Vec<Value>, Error>> {
+//     let invoke_response = self
+//         .deps
+//         .worker_service()
+//         .invoke_and_await(
+//             &self.token,
+//             worker_id.clone().into(),
+//             Some(idempotency_key.clone().into()),
+//             function_name.to_string(),
+//             params,
+//             None,
+//         )
+//         .await?;
+
+//     match invoke_response.result {
+//         None => Err(anyhow!("No response from invoke_and_await")),
+//         Some(invoke_and_await_response::Result::Success(response)) => Ok(Ok(response
+//             .result
+//             .into_iter()
+//             .map(|v| v.try_into())
+//             .collect::<Result<Vec<Value>, String>>()
+//             .map_err(|err| anyhow!("Invocation result had unexpected format: {err}"))?)),
+//         Some(invoke_and_await_response::Result::Error(WorkerError { error: Some(error) })) => {
+//             Ok(Err(error))
+//         }
+//         Some(invoke_and_await_response::Result::Error(_)) => {
+//             Err(anyhow!("Empty error response from invoke_and_await"))
+//         }
+//     }
+// }
+
+// async fn invoke_and_await_typed(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
+//     TestDsl::invoke_and_await_typed_custom(self, worker_id, function_name, params).await
+// }
+
+// async fn invoke_and_await_typed_custom(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
+//     let idempotency_key = IdempotencyKey::fresh();
+//     TestDsl::invoke_and_await_typed_custom_with_key(
+//         self,
+//         worker_id,
+//         &idempotency_key,
+//         function_name,
+//         params,
+//     )
+//     .await
+// }
+
+// async fn invoke_and_await_typed_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
+//     TestDsl::invoke_and_await_typed_custom_with_key(
+//         self,
+//         worker_id,
+//         idempotency_key,
+//         function_name,
+//         params,
+//     )
+//     .await
+// }
+
+// async fn invoke_and_await_typed_custom_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
+//     let invoke_response = self
+//         .deps
+//         .worker_service()
+//         .invoke_and_await_typed(
+//             &self.token,
+//             worker_id.clone().into(),
+//             Some(idempotency_key.clone().into()),
+//             function_name.to_string(),
+//             params,
+//             None,
+//         )
+//         .await?;
+
+//     match invoke_response.result {
+//         None => Err(anyhow!("No response from invoke_and_await_typed")),
+//         Some(invoke_and_await_typed_response::Result::Success(response)) => {
+//             match response.result {
+//                 None => Ok(Ok(None)),
+//                 Some(response) => {
+//                     let response: ValueAndType = response.try_into().map_err(|err| {
+//                         anyhow!("Invocation result had unexpected format: {err}")
+//                     })?;
+//                     Ok(Ok(Some(response)))
+//                 }
+//             }
+//         }
+//         Some(invoke_and_await_typed_response::Result::Error(WorkerError {
+//             error: Some(error),
+//         })) => Ok(Err(error)),
+//         Some(invoke_and_await_typed_response::Result::Error(_)) => {
+//             Err(anyhow!("Empty error response from invoke_and_await_typed"))
+//         }
+//     }
+// }
+
+// async fn invoke_and_await_json(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<serde_json::Value>,
+// ) -> crate::Result<Result<serde_json::Value, Error>> {
+//     let params = params.into_iter().map(|p| p.to_string()).collect();
+//     let invoke_response = self
+//         .deps
+//         .worker_service()
+//         .invoke_and_await_json(
+//             &self.token,
+//             InvokeAndAwaitJsonRequest {
+//                 worker_id: Some(worker_id.clone().into()),
+//                 idempotency_key: Some(IdempotencyKey::fresh().into()),
+//                 function: function_name.to_string(),
+//                 invoke_parameters: params,
+//                 context: None,
+//             },
+//         )
+//         .await?;
+
+//     match invoke_response.result {
+//         None => Err(anyhow!("No response from invoke_and_await_json")),
+//         Some(invoke_and_await_json_response::Result::Success(response)) => {
+//             let response = serde_json::from_str(&response).map_err(|err| anyhow!(err))?;
+//             Ok(Ok(response))
+//         }
+//         Some(invoke_and_await_json_response::Result::Error(WorkerError {
+//             error: Some(error),
+//         })) => Ok(Err(error)),
+//         Some(invoke_and_await_json_response::Result::Error(_)) => {
+//             Err(anyhow!("Empty error response from invoke_and_await"))
+//         }
+//     }
+// }
+
+// async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent> {
+//     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+//     let cloned_service = self.deps.borrow().worker_service().clone();
+//     let worker_id = worker_id.clone();
+//     let token = self.token;
+//     tokio::spawn(
+//         async move {
+//             let mut response = cloned_service
+//                 .connect_worker(
+//                     &token,
+//                     ConnectWorkerRequest {
+//                         worker_id: Some(worker_id.clone().into()),
+//                     },
+//                 )
+//                 .await
+//                 .expect("Failed to connect worker");
+
+//             while let Some(event) = response.message().await.expect("Failed to get message") {
+//                 debug!("Received event: {:?}", event);
+//                 tx.send(event).expect("Failed to send event");
+//             }
+
+//             debug!("Finished receiving events");
+//         }
+//         .in_current_span(),
+//     );
+
+//     rx
+// }
+
+// async fn capture_output_forever(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> (UnboundedReceiver<Option<LogEvent>>, Sender<()>) {
+//     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+//     let cloned_service = self.deps.borrow().worker_service().clone();
+//     let worker_id = worker_id.clone();
+//     let token = self.token;
+//     let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
+//     tokio::spawn(
+//         async move {
+//             let mut abort = false;
+//             while !abort {
+//                 let mut response = cloned_service
+//                     .connect_worker(
+//                         &token,
+//                         ConnectWorkerRequest {
+//                             worker_id: Some(worker_id.clone().into()),
+//                         },
+//                     )
+//                     .await
+//                     .expect("Failed to connect worker");
+
+//                 loop {
+//                     select! {
+//                         msg = response.message() => {
+//                             match msg {
+//                                 Ok(Some(event)) =>  {
+//                                     debug!("Received event: {:?}", event);
+//                                     tx.send(Some(event)).expect("Failed to send event");
+//                                 }
+//                                 Ok(None) => {
+//                                     break;
+//                                 }
+//                                 Err(e) => {
+//                                     panic!("Failed to get message: {e:?}");
+//                                 }
+//                             }
+//                         }
+//                         _ = (&mut abort_rx) => {
+//                             abort = true;
+//                             break;
+//                         }
+//                     }
+//                 }
+//             }
+
+//             tx.send(None).expect("Failed to send event");
+//             debug!("Finished receiving events");
+//         }
+//         .in_current_span(),
+//     );
+
+//     (rx, abort_tx)
+// }
+
+// async fn capture_output_with_termination(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> UnboundedReceiver<Option<LogEvent>> {
+//     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+//     let cloned_service = self.deps.borrow().worker_service().clone();
+//     let worker_id = worker_id.clone();
+//     let token = self.token;
+//     tokio::spawn(
+//         async move {
+//             let mut response = cloned_service
+//                 .connect_worker(
+//                     &token,
+//                     ConnectWorkerRequest {
+//                         worker_id: Some(worker_id.clone().into()),
+//                     },
+//                 )
+//                 .await
+//                 .expect("Failed to connect to worker");
+
+//             while let Some(event) = response.message().await.expect("Failed to get message") {
+//                 debug!("Received event: {:?}", event);
+//                 tx.send(Some(event)).expect("Failed to send event");
+//             }
+
+//             debug!("Finished receiving events");
+//             tx.send(None).expect("Failed to send termination event");
+//         }
+//         .in_current_span(),
+//     );
+
+//     rx
+// }
+
+// async fn log_output(&self, worker_id: &WorkerId) {
+//     let cloned_service = self.deps.borrow().worker_service().clone();
+//     let worker_id = worker_id.clone();
+//     let token = self.token;
+//     tokio::spawn(
+//         async move {
+//             let mut response = cloned_service
+//                 .connect_worker(
+//                     &token,
+//                     ConnectWorkerRequest {
+//                         worker_id: Some(worker_id.clone().into()),
+//                     },
+//                 )
+//                 .await
+//                 .expect("Failed to connect worker");
+
+//             while let Some(event) = response.message().await.expect("Failed to get message") {
+//                 info!("Received event: {:?}", event);
+//             }
+//         }
+//         .in_current_span(),
+//     );
+// }
+
+// async fn resume(&self, worker_id: &WorkerId, force: bool) -> crate::Result<()> {
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .resume_worker(
+//             &self.token,
+//             ResumeWorkerRequest {
+//                 worker_id: Some(worker_id.clone().into()),
+//                 force: Some(force),
+//             },
+//         )
+//         .await?;
+
+//     match response.result {
+//         None => Err(anyhow!("No response from connect_worker")),
+//         Some(resume_worker_response::Result::Success(_)) => Ok(()),
+//         Some(resume_worker_response::Result::Error(error)) => {
+//             Err(anyhow!("Failed to connect worker: {error:?}"))
+//         }
+//     }
+// }
+
+// async fn interrupt(&self, worker_id: &WorkerId) -> crate::Result<()> {
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .interrupt_worker(
+//             &self.token,
+//             InterruptWorkerRequest {
+//                 worker_id: Some(worker_id.clone().into()),
+//                 recover_immediately: false,
+//             },
+//         )
+//         .await?;
+
+//     match response {
+//         InterruptWorkerResponse {
+//             result: Some(interrupt_worker_response::Result::Success(_)),
+//         } => Ok(()),
+//         InterruptWorkerResponse {
+//             result: Some(interrupt_worker_response::Result::Error(error)),
+//         } => panic!("Failed to interrupt worker: {error:?}"),
+//         _ => panic!("Failed to interrupt worker: unknown error"),
+//     }
+// }
+
+// async fn simulated_crash(&self, worker_id: &WorkerId) -> crate::Result<()> {
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .interrupt_worker(
+//             &self.token,
+//             InterruptWorkerRequest {
+//                 worker_id: Some(worker_id.clone().into()),
+//                 recover_immediately: true,
+//             },
+//         )
+//         .await?;
+
+//     match response {
+//         InterruptWorkerResponse {
+//             result: Some(interrupt_worker_response::Result::Success(_)),
+//         } => Ok(()),
+//         InterruptWorkerResponse {
+//             result: Some(interrupt_worker_response::Result::Error(error)),
+//         } => Err(anyhow!("Failed to crash worker: {error:?}")),
+//         _ => Err(anyhow!("Failed to crash worker: unknown error")),
+//     }
+// }
+
+// async fn auto_update_worker(
+//     &self,
+//     worker_id: &WorkerId,
+//     target_version: ComponentRevision,
+// ) -> crate::Result<()> {
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .update_worker(
+//             &self.token,
+//             UpdateWorkerRequest {
+//                 worker_id: Some(worker_id.clone().into()),
+//                 target_version,
+//                 mode: UpdateMode::Automatic.into(),
+//             },
+//         )
+//         .await?;
+
+//     match response {
+//         UpdateWorkerResponse {
+//             result: Some(update_worker_response::Result::Success(_)),
+//         } => Ok(()),
+//         UpdateWorkerResponse {
+//             result: Some(update_worker_response::Result::Error(error)),
+//         } => Err(anyhow!("Failed to update worker: {error:?}")),
+//         _ => Err(anyhow!("Failed to update worker: unknown error")),
+//     }
+// }
+
+// async fn manual_update_worker(
+//     &self,
+//     worker_id: &WorkerId,
+//     target_version: ComponentRevision,
+// ) -> crate::Result<()> {
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .update_worker(
+//             &self.token,
+//             UpdateWorkerRequest {
+//                 worker_id: Some(worker_id.clone().into()),
+//                 target_version,
+//                 mode: UpdateMode::Manual.into(),
+//             },
+//         )
+//         .await?;
+
+//     match response {
+//         UpdateWorkerResponse {
+//             result: Some(update_worker_response::Result::Success(_)),
+//         } => Ok(()),
+//         UpdateWorkerResponse {
+//             result: Some(update_worker_response::Result::Error(error)),
+//         } => Err(anyhow!("Failed to update worker: {error:?}")),
+//         _ => Err(anyhow!("Failed to update worker: unknown error")),
+//     }
+// }
+
+// async fn get_oplog(
+//     &self,
+//     worker_id: &WorkerId,
+//     from: OplogIndex,
+// ) -> crate::Result<Vec<PublicOplogEntryWithIndex>> {
+//     let mut result = Vec::new();
+//     let mut cursor = None;
+
+//     loop {
+//         let chunk = self
+//             .deps
+//             .worker_service()
+//             .get_oplog(
+//                 &self.token,
+//                 GetOplogRequest {
+//                     worker_id: Some(worker_id.clone().into()),
+//                     from_oplog_index: from.into(),
+//                     cursor,
+//                     count: 100,
+//                 },
+//             )
+//             .await?;
+
+//         if let Some(chunk) = chunk.result {
+//             match chunk {
+//                 get_oplog_response::Result::Success(chunk) => {
+//                     if chunk.entries.is_empty() {
+//                         break;
+//                     } else {
+//                         result.extend(
+//                             chunk
+//                                 .entries
+//                                 .into_iter()
+//                                 .enumerate()
+//                                 .map(|(chunk_idx, entry)| {
+//                                     PublicOplogEntry::try_from(entry).map(
+//                                         |public_oplog_entry| PublicOplogEntryWithIndex {
+//                                             entry: public_oplog_entry,
+//                                             oplog_index: OplogIndex::from_u64(
+//                                                 chunk.first_index_in_chunk + chunk_idx as u64,
+//                                             ),
+//                                         },
+//                                     )
+//                                 })
+//                                 .collect::<Result<Vec<_>, _>>()
+//                                 .map_err(|err| {
+//                                     anyhow!("Failed to convert oplog entry: {err}")
+//                                 })?,
+//                         );
+//                         cursor = chunk.next;
+//                     }
+//                 }
+//                 get_oplog_response::Result::Error(error) => {
+//                     return Err(anyhow!("Failed to get oplog: {error:?}"));
+//                 }
+//             }
+//         } else {
+//             break;
+//         }
+//     }
+
+//     Ok(result)
+// }
+
+// async fn search_oplog(
+//     &self,
+//     worker_id: &WorkerId,
+//     query: &str,
+// ) -> crate::Result<Vec<PublicOplogEntryWithIndex>> {
+//     let mut result = Vec::new();
+//     let mut cursor = None;
+
+//     loop {
+//         let chunk = self
+//             .deps
+//             .worker_service()
+//             .search_oplog(
+//                 &self.token,
+//                 SearchOplogRequest {
+//                     worker_id: Some(worker_id.clone().into()),
+//                     cursor,
+//                     count: 100,
+//                     query: query.to_string(),
+//                 },
+//             )
+//             .await?;
+
+//         if let Some(chunk) = chunk.result {
+//             match chunk {
+//                 search_oplog_response::Result::Success(chunk) => {
+//                     if chunk.entries.is_empty() {
+//                         break;
+//                     } else {
+//                         result.extend(
+//                             chunk
+//                                 .entries
+//                                 .into_iter()
+//                                 .map(|entry| entry.try_into())
+//                                 .collect::<Result<Vec<_>, _>>()
+//                                 .map_err(|err| {
+//                                     anyhow!("Failed to convert oplog entry: {err}")
+//                                 })?,
+//                         );
+//                         cursor = chunk.next;
+//                     }
+//                 }
+//                 search_oplog_response::Result::Error(error) => {
+//                     return Err(anyhow!("Failed to search oplog: {error:?}"));
+//                 }
+//             }
+//         } else {
+//             break;
+//         }
+//     }
+
+//     Ok(result)
+// }
+
+// async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()> {
+//     let oplog = TestDsl::get_oplog(self, worker_id, OplogIndex::INITIAL).await?;
+
+//     for entry in oplog.iter() {
+//         debug!(
+//             "#{}:\n{}",
+//             entry.oplog_index,
+//             debug_render_oplog_entry(&entry.entry)
+//         );
+//     }
+
+//     Ok(())
+// }
+
+// async fn get_file_system_node(
+//     &self,
+//     worker_id: &WorkerId,
+//     path: &str,
+// ) -> crate::Result<Vec<ComponentFileSystemNode>> {
+
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .get_file_system_node(
+//             &self.token,
+//             GetFileSystemNodeRequest {
+//                 worker_id: Some(worker_id.clone().into()),
+//                 path: path.to_string(),
+//             },
+//         )
+//         .await?;
+
+//     match response.result {
+//         Some(get_file_system_node_response::Result::Success(response)) => {
+//             let converted = response
+//                 .nodes
+//                 .into_iter()
+//                 .map(|node| node.try_into())
+//                 .collect::<Result<Vec<_>, _>>()
+//                 .map_err(|err| anyhow!("Failed to convert node: {err}"))?;
+//             Ok(converted)
+//         }
+//         _ => Err(anyhow!("Failed to list directory")),
+//     }
+// }
+
+// async fn get_file_contents(&self, worker_id: &WorkerId, path: &strs) -> crate::Result<Bytes> {
+//     let target_worker_id: TargetWorkerId = worker_id.into();
+//     self.deps
+//         .worker_service()
+//         .get_file_contents(
+//             &self.token,
+//             GetFileContentsRequest {
+//                 worker_id: Some(worker_id.clone().into()),
+//                 file_path: path.to_string(),
+//             },
+//         )
+//         .await
+// }
+
+// async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()> {
+//     self.deps
+//         .component_service()
+//         .create_plugin(&self.token, &self.account_id, definition)
+//         .await
+// }
+
+// async fn delete_plugin(
+//     &self,
+//     account_id: AccountId,
+//     name: &str,
+//     version: &str,
+// ) -> crate::Result<()> {
+//     self.deps
+//         .component_service()
+//         .delete_plugin(&self.token, account_id, name, version)
+//         .await
+// }
+
+// async fn install_plugin_to_component(
+//     &self,
+//     component_id: &ComponentId,
+//     plugin_name: &str,
+//     plugin_version: &str,
+//     priority: i32,
+//     parameters: HashMap<String, String>,
+// ) -> crate::Result<PluginInstallationId> {
+//     self.deps
+//         .component_service()
+//         .install_plugin_to_component(
+//             &self.token,
+//             component_id,
+//             plugin_name,
+//             plugin_version,
+//             priority,
+//             parameters,
+//         )
+//         .await
+// }
+
+// async fn fork_worker(
+//     &self,
+//     source_worker_id: &WorkerId,
+//     target_worker_id: &WorkerId,
+//     oplog_index: OplogIndex,
+// ) -> crate::Result<()> {
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .fork_worker(
+//             &self.token,
+//             ForkWorkerRequest {
+//                 source_worker_id: Some(source_worker_id.clone().into()),
+//                 target_worker_id: Some(target_worker_id.clone().into()),
+//                 oplog_index_cutoff: oplog_index.into(),
+//             },
+//         )
+//         .await?;
+
+//     match response {
+//         ForkWorkerResponse {
+//             result: Some(fork_worker_response::Result::Success(_)),
+//         } => Ok(()),
+//         ForkWorkerResponse {
+//             result: Some(fork_worker_response::Result::Error(error)),
+//         } => Err(anyhow!("Failed to fork worker: {error:?}")),
+//         _ => Err(anyhow!("Failed to fork worker: unknown error")),
+//     }
+// }
+
+// async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> crate::Result<()> {
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .revert_worker(
+//             &self.token,
+//             RevertWorkerRequest {
+//                 worker_id: Some(worker_id.clone().into()),
+//                 target: Some(target.into()),
+//             },
+//         )
+//         .await?;
+
+//     match response.result {
+//         Some(revert_worker_response::Result::Success(_)) => Ok(()),
+//         Some(revert_worker_response::Result::Error(error)) => {
+//             Err(anyhow!("Failed to fork worker: {error:?}"))
+//         }
+//         _ => Err(anyhow!("Failed to revert worker: unknown error")),
+//     }
+// }
+
+// async fn cancel_invocation(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+// ) -> crate::Result<bool> {
+//     let response = self
+//         .deps
+//         .worker_service()
+//         .cancel_invocation(
+//             &self.token,
+//             CancelInvocationRequest {
+//                 worker_id: Some(worker_id.clone().into()),
+//                 idempotency_key: Some(idempotency_key.clone().into()),
+//             },
+//         )
+//         .await?;
+
+//     match response.result {
+//         Some(cancel_invocation_response::Result::Success(canceled)) => Ok(canceled),
+//         Some(cancel_invocation_response::Result::Error(error)) => {
+//             Err(anyhow!("Failed to cancel invocation: {error:?}"))
+//         }
+//         _ => Err(anyhow!("Failed to cancel invocation: unknown error")),
+//     }
+// }
+
+// async fn default_project(&self) -> crate::Result<ProjectId> {
+//     self.deps
+//         .cloud_service()
+//         .get_default_project(&self.token)
+//         .await
+// }
+
+// async fn create_project(&self) -> crate::Result<ProjectId> {
+//     let name = Uuid::new_v4().to_string();
+//     let description = Uuid::new_v4().to_string();
+
+//     self.deps
+//         .cloud_service()
+//         .create_project(&self.token, name, self.account_id.clone(), description)
+//         .await
+// }
+
+// async fn grant_full_project_access(
+//     &self,
+//     project_id: &ProjectId,
+//     grantee_account_id: &AccountId,
+// ) -> crate::Result<()> {
+//     self.deps
+//         .cloud_service()
+//         .grant_full_project_access(&self.token, project_id, grantee_account_id)
+//         .await?;
+//     Ok(())
+// }
+
+// async fn get_account(&self, account_id: &AccountId) -> crate::Result<Account> {
+//     self.deps
+//         .cloud_service()
+//         .get_account_by_id(&self.token, account_id)
+//         .await
+// }
+// }
 
 pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
     events
@@ -2238,677 +2464,677 @@ pub fn worker_error_logs(error: &Error) -> Option<String> {
 //     )
 // }
 
-#[async_trait]
-pub trait TestDslUnsafe {
-    type Safe: TestDsl;
-
-    // fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self::Safe>;
-
-    // async fn store_component_with(
-    //     &self,
-    //     name: &str,
-    //     component_type: ComponentType,
-    //     unique: bool,
-    //     unverified: bool,
-    //     files: &[(PathBuf, InitialComponentFile)],
-    //     dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    //     env: &HashMap<String, String>,
-    //     project_id: Option<ProjectId>,
-    // ) -> (ComponentId, ComponentName);
-
-    // async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
-
-    // async fn get_latest_component_metadata(&self, component_id: &ComponentId) -> ComponentMetadata;
-
-    // async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision;
-    // async fn update_component_with_files(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     files: Option<&[(PathBuf, InitialComponentFile)]>,
-    // ) -> ComponentRevision;
-
-    // async fn update_component_with_env(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     env: &[(String, String)],
-    // ) -> ComponentRevision;
-
-    // async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
-
-    // async fn add_initial_component_files(
-    //     &self,
-    //     files: &[(&str, &str, ComponentFilePermissions)],
-    // ) -> Vec<(PathBuf, InitialComponentFile)>;
-
-    // async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey;
-
-    // async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
-
-    // async fn try_start_worker(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    // ) -> Result<WorkerId, Error>;
-    // async fn start_worker_with(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     args: Vec<String>,
-    //     env: HashMap<String, String>,
-    //     wasi_config_vars: Vec<(String, String)>,
-    // ) -> WorkerId;
-    // async fn try_start_worker_with(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     args: Vec<String>,
-    //     env: HashMap<String, String>,
-    //     wasi_config_vars: Vec<(String, String)>,
-    // ) -> Result<WorkerId, Error>;
-    // async fn get_worker_metadata(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> Option<(WorkerMetadata, Option<String>)>;
-
-    // async fn wait_for_status(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     status: WorkerStatus,
-    //     timeout: Duration,
-    // ) -> WorkerMetadata;
-
-    // async fn wait_for_statuses(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     statuses: &[WorkerStatus],
-    //     timeout: Duration,
-    // ) -> WorkerMetadata;
-
-    // async fn get_workers_metadata(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     filter: Option<WorkerFilter>,
-    //     cursor: ScanCursor,
-    //     count: u64,
-    //     precise: bool,
-    // ) -> (Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>);
-    // async fn delete_worker(&self, worker_id: &WorkerId) -> ();
-
-    // async fn invoke(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<(), Error>;
-    // async fn invoke_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<(), Error>;
-    // async fn invoke_and_await(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<Vec<Value>, Error>;
-    // async fn invoke_and_await_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<Vec<Value>, Error>;
-    // async fn invoke_and_await_typed(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<Option<ValueAndType>, Error>;
-    // async fn invoke_and_await_typed_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<Option<ValueAndType>, Error>;
-    // async fn invoke_and_await_json(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<serde_json::Value>,
-    // ) -> Result<serde_json::Value, Error>;
-    // async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent>;
-    // async fn capture_output_forever(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> (
-    //     UnboundedReceiver<Option<LogEvent>>,
-    //     tokio::sync::oneshot::Sender<()>,
-    // );
-    // async fn capture_output_with_termination(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> UnboundedReceiver<Option<LogEvent>>;
-    // async fn log_output(&self, worker_id: &WorkerId);
-    // async fn resume(&self, worker_id: &WorkerId, force: bool);
-    // async fn interrupt(&self, worker_id: &WorkerId);
-    // async fn simulated_crash(&self, worker_id: &WorkerId);
-    // async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision);
-    // async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision);
-    // async fn get_oplog(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     from: OplogIndex,
-    // ) -> Vec<PublicOplogEntryWithIndex>;
-    // async fn search_oplog(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     query: &str,
-    // ) -> Vec<PublicOplogEntryWithIndex>;
-
-    // async fn check_oplog_is_queryable(&self, worker_id: &WorkerId);
-
-    // async fn get_file_system_node(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     path: &str,
-    // ) -> Vec<ComponentFileSystemNode>;
-    // async fn get_file_contents(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     path: &str,
-    // ) -> Bytes;
-
-    // async fn create_plugin(&self, definition: PluginDefinitionCreation);
-
-    // async fn delete_plugin(&self, account_id: AccountId, name: &str, version: &str);
-
-    // async fn install_plugin_to_component(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     plugin_name: &str,
-    //     plugin_version: &str,
-    //     priority: i32,
-    //     parameters: HashMap<String, String>,
-    // ) -> PluginInstallationId;
-
-    // async fn fork_worker(
-    //     &self,
-    //     source_worker_id: &WorkerId,
-    //     target_worker_id: &WorkerId,
-    //     oplog_index: OplogIndex,
-    // );
-
-    // async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget);
-
-    // async fn cancel_invocation(&self, worker_id: &WorkerId, idempotency_key: &IdempotencyKey);
-    // async fn try_cancel_invocation(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    // ) -> crate::Result<bool>;
-
-    // async fn default_project(&self) -> ProjectId;
-
-    // async fn create_project(&self) -> ProjectId;
-
-    // async fn grant_full_project_access(
-    //     &self,
-    //     project_id: &ProjectId,
-    //     grantee_account_id: &AccountId,
-    // );
-
-    // async fn get_account(&self, account_id: &AccountId) -> Account;
-}
-
-#[async_trait]
-impl<T: TestDsl + Sync> TestDslUnsafe for T {
-    type Safe = T;
-
-    // fn component(&self, name: &str) -> StoreComponentBuilder<'_, T> {
-    //     StoreComponentBuilder::new(self, name)
-    // }
-
-    // async fn store_component_with(
-    //     &self,
-    //     name: &str,
-    //     component_type: ComponentType,
-    //     unique: bool,
-    //     unverified: bool,
-    //     files: &[(PathBuf, InitialComponentFile)],
-    //     dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
-    //     env: &HashMap<String, String>,
-    //     project_id: Option<ProjectId>,
-    // ) -> (ComponentId, ComponentName) {
-    //     <T as TestDsl>::store_component_with(
-    //         self,
-    //         name,
-    //         name,
-    //         component_type,
-    //         unique,
-    //         unverified,
-    //         files,
-    //         dynamic_linking,
-    //         env,
-    //         project_id,
-    //     )
-    //     .await
-    // }
-
-    // async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
-    //     <T as TestDsl>::store_component_with_id(self, name, component_id).await
-    // }
-
-    // async fn get_latest_component_metadata(&self, component_id: &ComponentId) -> ComponentMetadata {
-    //     <T as TestDsl>::get_latest_component_metadata(self, component_id)
-    //         .await
-    //         .expect("Failed to get latest component metadata")
-    // }
-
-    // async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey {
-    //     <T as TestDsl>::add_plugin_wasm(self, name)
-    //         .await
-    //         .expect("Failed to add plugin wasm")
-    // }
-
-    // async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision {
-    //     <T as TestDsl>::update_component(self, component_id, name).await
-    // }
-
-    // async fn update_component_with_files(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     files: Option<&[(PathBuf, InitialComponentFile)]>,
-    // ) -> ComponentRevision {
-    //     <T as TestDsl>::update_component_with_files(self, component_id, name, files).await
-    // }
-
-    // async fn update_component_with_env(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     env: &[(String, String)],
-    // ) -> ComponentRevision {
-    //     <T as TestDsl>::update_component_with_env(self, component_id, name, env).await
-    // }
-
-    // async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {
-    //     <T as TestDsl>::add_initial_component_file(self, path).await
-    // }
-
-    // async fn add_initial_component_files(
-    //     &self,
-    //     files: &[(&str, &str, ComponentFilePermissions)],
-    // ) -> Vec<(PathBuf, InitialComponentFile)> {
-    //     <T as TestDsl>::add_initial_component_files(self, files).await
-    // }
-
-    // async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId {
-    //     <T as TestDsl>::start_worker(self, component_id, name)
-    //         .await
-    //         .expect("Failed to start worker")
-    // }
-
-    // async fn try_start_worker(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    // ) -> Result<WorkerId, Error> {
-    //     <T as TestDsl>::try_start_worker(self, component_id, name)
-    //         .await
-    //         .expect("Failed to start worker")
-    // }
-
-    // async fn start_worker_with(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     args: Vec<String>,
-    //     env: HashMap<String, String>,
-    //     wasi_config_vars: Vec<(String, String)>,
-    // ) -> WorkerId {
-    //     <T as TestDsl>::start_worker_with(self, component_id, name, args, env, wasi_config_vars)
-    //         .await
-    //         .expect("Failed to start worker")
-    // }
-
-    // async fn try_start_worker_with(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     name: &str,
-    //     args: Vec<String>,
-    //     env: HashMap<String, String>,
-    //     wasi_config_vars: Vec<(String, String)>,
-    // ) -> Result<WorkerId, Error> {
-    //     <T as TestDsl>::try_start_worker_with(self, component_id, name, args, env, wasi_config_vars)
-    //         .await
-    //         .expect("Failed to start worker")
-    // }
-
-    // async fn get_worker_metadata(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> Option<(WorkerMetadata, Option<String>)> {
-    //     <T as TestDsl>::get_worker_metadata(self, worker_id)
-    //         .await
-    //         .expect("Failed to get worker metadata")
-    // }
-
-    // async fn get_workers_metadata(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     filter: Option<WorkerFilter>,
-    //     cursor: ScanCursor,
-    //     count: u64,
-    //     precise: bool,
-    // ) -> (Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>) {
-    //     <T as TestDsl>::get_workers_metadata(self, component_id, filter, cursor, count, precise)
-    //         .await
-    //         .expect("Failed to get workers metadata")
-    // }
-
-    // async fn delete_worker(&self, worker_id: &WorkerId) -> () {
-    //     <T as TestDsl>::delete_worker(self, worker_id)
-    //         .await
-    //         .expect("Failed to delete worker")
-    // }
-
-    // async fn invoke(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<(), Error> {
-    //     <T as TestDsl>::invoke(self, worker_id, function_name, params)
-    //         .await
-    //         .expect("Failed to invoke function")
-    // }
-
-    // async fn invoke_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<(), Error> {
-    //     <T as TestDsl>::invoke_with_key(self, worker_id, idempotency_key, function_name, params)
-    //         .await
-    //         .expect("Failed to invoke function")
-    // }
-
-    // async fn invoke_and_await(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<Vec<Value>, Error> {
-    //     <T as TestDsl>::invoke_and_await(self, worker_id, function_name, params)
-    //         .await
-    //         .expect("Failed to invoke function")
-    // }
-
-    // async fn invoke_and_await_json(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<serde_json::Value>,
-    // ) -> Result<serde_json::Value, Error> {
-    //     <T as TestDsl>::invoke_and_await_json(self, worker_id, function_name, params)
-    //         .await
-    //         .expect("Failed to invoke function")
-    // }
-
-    // async fn invoke_and_await_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<Vec<Value>, Error> {
-    //     <T as TestDsl>::invoke_and_await_with_key(
-    //         self,
-    //         worker_id,
-    //         idempotency_key,
-    //         function_name,
-    //         params,
-    //     )
-    //     .await
-    //     .expect("Failed to invoke function")
-    // }
-    // async fn invoke_and_await_typed(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<Option<ValueAndType>, Error> {
-    //     <T as TestDsl>::invoke_and_await_typed(self, worker_id, function_name, params)
-    //         .await
-    //         .expect("Failed to invoke function")
-    // }
-    // async fn invoke_and_await_typed_with_key(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    //     function_name: &str,
-    //     params: Vec<ValueAndType>,
-    // ) -> Result<Option<ValueAndType>, Error> {
-    //     <T as TestDsl>::invoke_and_await_typed_with_key(
-    //         self,
-    //         worker_id,
-    //         idempotency_key,
-    //         function_name,
-    //         params,
-    //     )
-    //     .await
-    //     .expect("Failed to invoke function")
-    // }
-    // async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent> {
-    //     <T as TestDsl>::capture_output(self, worker_id).await
-    // }
-
-    // async fn capture_output_forever(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> (UnboundedReceiver<Option<LogEvent>>, Sender<()>) {
-    //     <T as TestDsl>::capture_output_forever(self, worker_id).await
-    // }
-
-    // async fn capture_output_with_termination(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> UnboundedReceiver<Option<LogEvent>> {
-    //     <T as TestDsl>::capture_output_with_termination(self, worker_id).await
-    // }
-
-    // async fn log_output(&self, worker_id: &WorkerId) {
-    //     <T as TestDsl>::log_output(self, worker_id).await
-    // }
-
-    // async fn resume(&self, worker_id: &WorkerId, force: bool) {
-    //     <T as TestDsl>::resume(self, worker_id, force)
-    //         .await
-    //         .expect("Failed to resume worker")
-    // }
-
-    // async fn interrupt(&self, worker_id: &WorkerId) {
-    //     <T as TestDsl>::interrupt(self, worker_id)
-    //         .await
-    //         .expect("Failed to interrupt worker")
-    // }
-
-    // async fn simulated_crash(&self, worker_id: &WorkerId) {
-    //     <T as TestDsl>::simulated_crash(self, worker_id)
-    //         .await
-    //         .expect("Failed to crash worker")
-    // }
-
-    // async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision) {
-    //     <T as TestDsl>::auto_update_worker(self, worker_id, target_version)
-    //         .await
-    //         .expect("Failed to update worker")
-    // }
-
-    // async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision) {
-    //     <T as TestDsl>::manual_update_worker(self, worker_id, target_version)
-    //         .await
-    //         .expect("Failed to update worker")
-    // }
-
-    // async fn get_oplog(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     from: OplogIndex,
-    // ) -> Vec<PublicOplogEntryWithIndex> {
-    //     <T as TestDsl>::get_oplog(self, worker_id, from)
-    //         .await
-    //         .expect("Failed to get oplog")
-    // }
-
-    // async fn search_oplog(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     query: &str,
-    // ) -> Vec<PublicOplogEntryWithIndex> {
-    //     <T as TestDsl>::search_oplog(self, worker_id, query)
-    //         .await
-    //         .expect("Failed to search oplog")
-    // }
-
-    // async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> () {
-    //     <T as TestDsl>::check_oplog_is_queryable(self, worker_id)
-    //         .await
-    //         .expect("Oplog check failed")
-    // }
-
-    // async fn get_file_system_node(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     path: &str,
-    // ) -> Vec<ComponentFileSystemNode> {
-    //     <T as TestDsl>::get_file_system_node(self, worker_id, path)
-    //         .await
-    //         .expect("Failed to get file system node")
-    // }
-    // async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> Bytes;
-
-    // async fn create_plugin(&self, definition: PluginDefinitionCreation) {
-    //     <T as TestDsl>::create_plugin(self, definition)
-    //         .await
-    //         .expect("Failed to create plugin")
-    // }
-
-    // async fn delete_plugin(&self, account_id: AccountId, name: &str, version: &str) {
-    //     <T as TestDsl>::delete_plugin(self, account_id, name, version)
-    //         .await
-    //         .expect("Failed to delete plugin")
-    // }
-
-    // async fn install_plugin_to_component(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     plugin_name: &str,
-    //     plugin_version: &str,
-    //     priority: i32,
-    //     parameters: HashMap<String, String>,
-    // ) -> PluginInstallationId {
-    //     <T as TestDsl>::install_plugin_to_component(
-    //         self,
-    //         component_id,
-    //         plugin_name,
-    //         plugin_version,
-    //         priority,
-    //         parameters,
-    //     )
-    //     .await
-    //     .expect("Failed to install plugin")
-    // }
-
-    // async fn wait_for_status(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     status: WorkerStatus,
-    //     timeout: Duration,
-    // ) -> WorkerMetadata {
-    //     <T as TestDsl>::wait_for_status(self, worker_id, status, timeout)
-    //         .await
-    //         .expect("Failed to wait for status")
-    // }
-
-    // async fn wait_for_statuses(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     statuses: &[WorkerStatus],
-    //     timeout: Duration,
-    // ) -> WorkerMetadata {
-    //     <T as TestDsl>::wait_for_statuses(self, worker_id, statuses, timeout)
-    //         .await
-    //         .expect("Failed to wait for status")
-    // }
-
-    // async fn fork_worker(
-    //     &self,
-    //     source_worker_id: &WorkerId,
-    //     target_worker_id: &WorkerId,
-    //     oplog_index: OplogIndex,
-    // ) {
-    //     <T as TestDsl>::fork_worker(self, source_worker_id, target_worker_id, oplog_index)
-    //         .await
-    //         .expect("Failed to fork worker")
-    // }
-
-    // async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) {
-    //     <T as TestDsl>::revert(self, worker_id, target)
-    //         .await
-    //         .expect("Failed to revert worker")
-    // }
-
-    // async fn cancel_invocation(&self, worker_id: &WorkerId, idempotency_key: &IdempotencyKey) {
-    //     <T as TestDsl>::cancel_invocation(self, worker_id, idempotency_key)
-    //         .await
-    //         .expect("Failed to cancel invocation");
-    // }
-
-    // async fn try_cancel_invocation(
-    //     &self,
-    //     worker_id: &WorkerId,
-    //     idempotency_key: &IdempotencyKey,
-    // ) -> crate::Result<bool> {
-    //     <T as TestDsl>::cancel_invocation(self, worker_id, idempotency_key).await
-    // }
-
-    // async fn default_project(&self) -> ProjectId {
-    //     <T as TestDsl>::default_project(self)
-    //         .await
-    //         .expect("failed to get default project")
-    // }
-
-    // async fn create_project(&self) -> ProjectId {
-    //     <T as TestDsl>::create_project(self)
-    //         .await
-    //         .expect("failed to create project")
-    // }
-
-    // async fn grant_full_project_access(
-    //     &self,
-    //     project_id: &ProjectId,
-    //     grantee_account_id: &AccountId,
-    // ) {
-    //     <T as TestDsl>::grant_full_project_access(self, project_id, grantee_account_id)
-    //         .await
-    //         .expect("failed to grant full project access")
-    // }
-
-    // async fn get_account(&self, account_id: &AccountId) -> Account {
-    //     <T as TestDsl>::get_account(self, account_id)
-    //         .await
-    //         .expect("failed to get account")
-    // }
-}
+// #[async_trait]
+// pub trait TestDslUnsafe {
+//     type Safe: TestDsl;
+
+// fn component(&self, name: &str) -> StoreComponentBuilder<'_, Self::Safe>;
+
+// async fn store_component_with(
+//     &self,
+//     name: &str,
+//     component_type: ComponentType,
+//     unique: bool,
+//     unverified: bool,
+//     files: &[(PathBuf, InitialComponentFile)],
+//     dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+//     env: &HashMap<String, String>,
+//     project_id: Option<ProjectId>,
+// ) -> (ComponentId, ComponentName);
+
+// async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
+
+// async fn get_latest_component_metadata(&self, component_id: &ComponentId) -> ComponentMetadata;
+
+// async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision;
+// async fn update_component_with_files(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     files: Option<&[(PathBuf, InitialComponentFile)]>,
+// ) -> ComponentRevision;
+
+// async fn update_component_with_env(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     env: &[(String, String)],
+// ) -> ComponentRevision;
+
+// async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
+
+// async fn add_initial_component_files(
+//     &self,
+//     files: &[(&str, &str, ComponentFilePermissions)],
+// ) -> Vec<(PathBuf, InitialComponentFile)>;
+
+// async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey;
+
+// async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
+
+// async fn try_start_worker(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+// ) -> Result<WorkerId, Error>;
+// async fn start_worker_with(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     args: Vec<String>,
+//     env: HashMap<String, String>,
+//     wasi_config_vars: Vec<(String, String)>,
+// ) -> WorkerId;
+// async fn try_start_worker_with(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     args: Vec<String>,
+//     env: HashMap<String, String>,
+//     wasi_config_vars: Vec<(String, String)>,
+// ) -> Result<WorkerId, Error>;
+// async fn get_worker_metadata(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> Option<(WorkerMetadata, Option<String>)>;
+
+// async fn wait_for_status(
+//     &self,
+//     worker_id: &WorkerId,
+//     status: WorkerStatus,
+//     timeout: Duration,
+// ) -> WorkerMetadata;
+
+// async fn wait_for_statuses(
+//     &self,
+//     worker_id: &WorkerId,
+//     statuses: &[WorkerStatus],
+//     timeout: Duration,
+// ) -> WorkerMetadata;
+
+// async fn get_workers_metadata(
+//     &self,
+//     component_id: &ComponentId,
+//     filter: Option<WorkerFilter>,
+//     cursor: ScanCursor,
+//     count: u64,
+//     precise: bool,
+// ) -> (Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>);
+// async fn delete_worker(&self, worker_id: &WorkerId) -> ();
+
+// async fn invoke(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<(), Error>;
+// async fn invoke_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<(), Error>;
+// async fn invoke_and_await(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<Vec<Value>, Error>;
+// async fn invoke_and_await_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<Vec<Value>, Error>;
+// async fn invoke_and_await_typed(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<Option<ValueAndType>, Error>;
+// async fn invoke_and_await_typed_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<Option<ValueAndType>, Error>;
+// async fn invoke_and_await_json(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<serde_json::Value>,
+// ) -> Result<serde_json::Value, Error>;
+// async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent>;
+// async fn capture_output_forever(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> (
+//     UnboundedReceiver<Option<LogEvent>>,
+//     tokio::sync::oneshot::Sender<()>,
+// );
+// async fn capture_output_with_termination(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> UnboundedReceiver<Option<LogEvent>>;
+// async fn log_output(&self, worker_id: &WorkerId);
+// async fn resume(&self, worker_id: &WorkerId, force: bool);
+// async fn interrupt(&self, worker_id: &WorkerId);
+// async fn simulated_crash(&self, worker_id: &WorkerId);
+// async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision);
+// async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision);
+// async fn get_oplog(
+//     &self,
+//     worker_id: &WorkerId,
+//     from: OplogIndex,
+// ) -> Vec<PublicOplogEntryWithIndex>;
+// async fn search_oplog(
+//     &self,
+//     worker_id: &WorkerId,
+//     query: &str,
+// ) -> Vec<PublicOplogEntryWithIndex>;
+
+// async fn check_oplog_is_queryable(&self, worker_id: &WorkerId);
+
+// async fn get_file_system_node(
+//     &self,
+//     worker_id: &WorkerId,
+//     path: &str,
+// ) -> Vec<ComponentFileSystemNode>;
+// async fn get_file_contents(
+//     &self,
+//     worker_id: &WorkerId,
+//     path: &str,
+// ) -> Bytes;
+
+// async fn create_plugin(&self, definition: PluginDefinitionCreation);
+
+// async fn delete_plugin(&self, account_id: AccountId, name: &str, version: &str);
+
+// async fn install_plugin_to_component(
+//     &self,
+//     component_id: &ComponentId,
+//     plugin_name: &str,
+//     plugin_version: &str,
+//     priority: i32,
+//     parameters: HashMap<String, String>,
+// ) -> PluginInstallationId;
+
+// async fn fork_worker(
+//     &self,
+//     source_worker_id: &WorkerId,
+//     target_worker_id: &WorkerId,
+//     oplog_index: OplogIndex,
+// );
+
+// async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget);
+
+// async fn cancel_invocation(&self, worker_id: &WorkerId, idempotency_key: &IdempotencyKey);
+// async fn try_cancel_invocation(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+// ) -> crate::Result<bool>;
+
+// async fn default_project(&self) -> ProjectId;
+
+// async fn create_project(&self) -> ProjectId;
+
+// async fn grant_full_project_access(
+//     &self,
+//     project_id: &ProjectId,
+//     grantee_account_id: &AccountId,
+// );
+
+// async fn get_account(&self, account_id: &AccountId) -> Account;
+// }
+
+// #[async_trait]
+// impl<T: TestDsl + Sync> TestDslUnsafe for T {
+//     type Safe = T;
+
+// fn component(&self, name: &str) -> StoreComponentBuilder<'_, T> {
+//     StoreComponentBuilder::new(self, name)
+// }
+
+// async fn store_component_with(
+//     &self,
+//     name: &str,
+//     component_type: ComponentType,
+//     unique: bool,
+//     unverified: bool,
+//     files: &[(PathBuf, InitialComponentFile)],
+//     dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+//     env: &HashMap<String, String>,
+//     project_id: Option<ProjectId>,
+// ) -> (ComponentId, ComponentName) {
+//     <T as TestDsl>::store_component_with(
+//         self,
+//         name,
+//         name,
+//         component_type,
+//         unique,
+//         unverified,
+//         files,
+//         dynamic_linking,
+//         env,
+//         project_id,
+//     )
+//     .await
+// }
+
+// async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
+//     <T as TestDsl>::store_component_with_id(self, name, component_id).await
+// }
+
+// async fn get_latest_component_metadata(&self, component_id: &ComponentId) -> ComponentMetadata {
+//     <T as TestDsl>::get_latest_component_metadata(self, component_id)
+//         .await
+//         .expect("Failed to get latest component metadata")
+// }
+
+// async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey {
+//     <T as TestDsl>::add_plugin_wasm(self, name)
+//         .await
+//         .expect("Failed to add plugin wasm")
+// }
+
+// async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentRevision {
+//     <T as TestDsl>::update_component(self, component_id, name).await
+// }
+
+// async fn update_component_with_files(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     files: Option<&[(PathBuf, InitialComponentFile)]>,
+// ) -> ComponentRevision {
+//     <T as TestDsl>::update_component_with_files(self, component_id, name, files).await
+// }
+
+// async fn update_component_with_env(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     env: &[(String, String)],
+// ) -> ComponentRevision {
+//     <T as TestDsl>::update_component_with_env(self, component_id, name, env).await
+// }
+
+// async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {
+//     <T as TestDsl>::add_initial_component_file(self, path).await
+// }
+
+// async fn add_initial_component_files(
+//     &self,
+//     files: &[(&str, &str, ComponentFilePermissions)],
+// ) -> Vec<(PathBuf, InitialComponentFile)> {
+//     <T as TestDsl>::add_initial_component_files(self, files).await
+// }
+
+// async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId {
+//     <T as TestDsl>::start_worker(self, component_id, name)
+//         .await
+//         .expect("Failed to start worker")
+// }
+
+// async fn try_start_worker(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+// ) -> Result<WorkerId, Error> {
+//     <T as TestDsl>::try_start_worker(self, component_id, name)
+//         .await
+//         .expect("Failed to start worker")
+// }
+
+// async fn start_worker_with(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     args: Vec<String>,
+//     env: HashMap<String, String>,
+//     wasi_config_vars: Vec<(String, String)>,
+// ) -> WorkerId {
+//     <T as TestDsl>::start_worker_with(self, component_id, name, args, env, wasi_config_vars)
+//         .await
+//         .expect("Failed to start worker")
+// }
+
+// async fn try_start_worker_with(
+//     &self,
+//     component_id: &ComponentId,
+//     name: &str,
+//     args: Vec<String>,
+//     env: HashMap<String, String>,
+//     wasi_config_vars: Vec<(String, String)>,
+// ) -> Result<WorkerId, Error> {
+//     <T as TestDsl>::try_start_worker_with(self, component_id, name, args, env, wasi_config_vars)
+//         .await
+//         .expect("Failed to start worker")
+// }
+
+// async fn get_worker_metadata(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> Option<(WorkerMetadata, Option<String>)> {
+//     <T as TestDsl>::get_worker_metadata(self, worker_id)
+//         .await
+//         .expect("Failed to get worker metadata")
+// }
+
+// async fn get_workers_metadata(
+//     &self,
+//     component_id: &ComponentId,
+//     filter: Option<WorkerFilter>,
+//     cursor: ScanCursor,
+//     count: u64,
+//     precise: bool,
+// ) -> (Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>) {
+//     <T as TestDsl>::get_workers_metadata(self, component_id, filter, cursor, count, precise)
+//         .await
+//         .expect("Failed to get workers metadata")
+// }
+
+// async fn delete_worker(&self, worker_id: &WorkerId) -> () {
+//     <T as TestDsl>::delete_worker(self, worker_id)
+//         .await
+//         .expect("Failed to delete worker")
+// }
+
+// async fn invoke(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<(), Error> {
+//     <T as TestDsl>::invoke(self, worker_id, function_name, params)
+//         .await
+//         .expect("Failed to invoke function")
+// }
+
+// async fn invoke_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<(), Error> {
+//     <T as TestDsl>::invoke_with_key(self, worker_id, idempotency_key, function_name, params)
+//         .await
+//         .expect("Failed to invoke function")
+// }
+
+// async fn invoke_and_await(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<Vec<Value>, Error> {
+//     <T as TestDsl>::invoke_and_await(self, worker_id, function_name, params)
+//         .await
+//         .expect("Failed to invoke function")
+// }
+
+// async fn invoke_and_await_json(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<serde_json::Value>,
+// ) -> Result<serde_json::Value, Error> {
+//     <T as TestDsl>::invoke_and_await_json(self, worker_id, function_name, params)
+//         .await
+//         .expect("Failed to invoke function")
+// }
+
+// async fn invoke_and_await_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<Vec<Value>, Error> {
+//     <T as TestDsl>::invoke_and_await_with_key(
+//         self,
+//         worker_id,
+//         idempotency_key,
+//         function_name,
+//         params,
+//     )
+//     .await
+//     .expect("Failed to invoke function")
+// }
+// async fn invoke_and_await_typed(
+//     &self,
+//     worker_id: &WorkerId,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<Option<ValueAndType>, Error> {
+//     <T as TestDsl>::invoke_and_await_typed(self, worker_id, function_name, params)
+//         .await
+//         .expect("Failed to invoke function")
+// }
+// async fn invoke_and_await_typed_with_key(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+//     function_name: &str,
+//     params: Vec<ValueAndType>,
+// ) -> Result<Option<ValueAndType>, Error> {
+//     <T as TestDsl>::invoke_and_await_typed_with_key(
+//         self,
+//         worker_id,
+//         idempotency_key,
+//         function_name,
+//         params,
+//     )
+//     .await
+//     .expect("Failed to invoke function")
+// }
+// async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent> {
+//     <T as TestDsl>::capture_output(self, worker_id).await
+// }
+
+// async fn capture_output_forever(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> (UnboundedReceiver<Option<LogEvent>>, Sender<()>) {
+//     <T as TestDsl>::capture_output_forever(self, worker_id).await
+// }
+
+// async fn capture_output_with_termination(
+//     &self,
+//     worker_id: &WorkerId,
+// ) -> UnboundedReceiver<Option<LogEvent>> {
+//     <T as TestDsl>::capture_output_with_termination(self, worker_id).await
+// }
+
+// async fn log_output(&self, worker_id: &WorkerId) {
+//     <T as TestDsl>::log_output(self, worker_id).await
+// }
+
+// async fn resume(&self, worker_id: &WorkerId, force: bool) {
+//     <T as TestDsl>::resume(self, worker_id, force)
+//         .await
+//         .expect("Failed to resume worker")
+// }
+
+// async fn interrupt(&self, worker_id: &WorkerId) {
+//     <T as TestDsl>::interrupt(self, worker_id)
+//         .await
+//         .expect("Failed to interrupt worker")
+// }
+
+// async fn simulated_crash(&self, worker_id: &WorkerId) {
+//     <T as TestDsl>::simulated_crash(self, worker_id)
+//         .await
+//         .expect("Failed to crash worker")
+// }
+
+// async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision) {
+//     <T as TestDsl>::auto_update_worker(self, worker_id, target_version)
+//         .await
+//         .expect("Failed to update worker")
+// }
+
+// async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentRevision) {
+//     <T as TestDsl>::manual_update_worker(self, worker_id, target_version)
+//         .await
+//         .expect("Failed to update worker")
+// }
+
+// async fn get_oplog(
+//     &self,
+//     worker_id: &WorkerId,
+//     from: OplogIndex,
+// ) -> Vec<PublicOplogEntryWithIndex> {
+//     <T as TestDsl>::get_oplog(self, worker_id, from)
+//         .await
+//         .expect("Failed to get oplog")
+// }
+
+// async fn search_oplog(
+//     &self,
+//     worker_id: &WorkerId,
+//     query: &str,
+// ) -> Vec<PublicOplogEntryWithIndex> {
+//     <T as TestDsl>::search_oplog(self, worker_id, query)
+//         .await
+//         .expect("Failed to search oplog")
+// }
+
+// async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> () {
+//     <T as TestDsl>::check_oplog_is_queryable(self, worker_id)
+//         .await
+//         .expect("Oplog check failed")
+// }
+
+// async fn get_file_system_node(
+//     &self,
+//     worker_id: &WorkerId,
+//     path: &str,
+// ) -> Vec<ComponentFileSystemNode> {
+//     <T as TestDsl>::get_file_system_node(self, worker_id, path)
+//         .await
+//         .expect("Failed to get file system node")
+// }
+// async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> Bytes;
+
+// async fn create_plugin(&self, definition: PluginDefinitionCreation) {
+//     <T as TestDsl>::create_plugin(self, definition)
+//         .await
+//         .expect("Failed to create plugin")
+// }
+
+// async fn delete_plugin(&self, account_id: AccountId, name: &str, version: &str) {
+//     <T as TestDsl>::delete_plugin(self, account_id, name, version)
+//         .await
+//         .expect("Failed to delete plugin")
+// }
+
+// async fn install_plugin_to_component(
+//     &self,
+//     component_id: &ComponentId,
+//     plugin_name: &str,
+//     plugin_version: &str,
+//     priority: i32,
+//     parameters: HashMap<String, String>,
+// ) -> PluginInstallationId {
+//     <T as TestDsl>::install_plugin_to_component(
+//         self,
+//         component_id,
+//         plugin_name,
+//         plugin_version,
+//         priority,
+//         parameters,
+//     )
+//     .await
+//     .expect("Failed to install plugin")
+// }
+
+// async fn wait_for_status(
+//     &self,
+//     worker_id: &WorkerId,
+//     status: WorkerStatus,
+//     timeout: Duration,
+// ) -> WorkerMetadata {
+//     <T as TestDsl>::wait_for_status(self, worker_id, status, timeout)
+//         .await
+//         .expect("Failed to wait for status")
+// }
+
+// async fn wait_for_statuses(
+//     &self,
+//     worker_id: &WorkerId,
+//     statuses: &[WorkerStatus],
+//     timeout: Duration,
+// ) -> WorkerMetadata {
+//     <T as TestDsl>::wait_for_statuses(self, worker_id, statuses, timeout)
+//         .await
+//         .expect("Failed to wait for status")
+// }
+
+// async fn fork_worker(
+//     &self,
+//     source_worker_id: &WorkerId,
+//     target_worker_id: &WorkerId,
+//     oplog_index: OplogIndex,
+// ) {
+//     <T as TestDsl>::fork_worker(self, source_worker_id, target_worker_id, oplog_index)
+//         .await
+//         .expect("Failed to fork worker")
+// }
+
+// async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) {
+//     <T as TestDsl>::revert(self, worker_id, target)
+//         .await
+//         .expect("Failed to revert worker")
+// }
+
+// async fn cancel_invocation(&self, worker_id: &WorkerId, idempotency_key: &IdempotencyKey) {
+//     <T as TestDsl>::cancel_invocation(self, worker_id, idempotency_key)
+//         .await
+//         .expect("Failed to cancel invocation");
+// }
+
+// async fn try_cancel_invocation(
+//     &self,
+//     worker_id: &WorkerId,
+//     idempotency_key: &IdempotencyKey,
+// ) -> crate::Result<bool> {
+//     <T as TestDsl>::cancel_invocation(self, worker_id, idempotency_key).await
+// }
+
+// async fn default_project(&self) -> ProjectId {
+//     <T as TestDsl>::default_project(self)
+//         .await
+//         .expect("failed to get default project")
+// }
+
+// async fn create_project(&self) -> ProjectId {
+//     <T as TestDsl>::create_project(self)
+//         .await
+//         .expect("failed to create project")
+// }
+
+// async fn grant_full_project_access(
+//     &self,
+//     project_id: &ProjectId,
+//     grantee_account_id: &AccountId,
+// ) {
+//     <T as TestDsl>::grant_full_project_access(self, project_id, grantee_account_id)
+//         .await
+//         .expect("failed to grant full project access")
+// }
+
+// async fn get_account(&self, account_id: &AccountId) -> Account {
+//     <T as TestDsl>::get_account(self, account_id)
+//         .await
+//         .expect("failed to get account")
+// }
+// }
 
 fn rename_component_if_needed(temp_dir: &Path, path: &Path, name: &str) -> anyhow::Result<PathBuf> {
     // Check metadata

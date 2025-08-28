@@ -17,14 +17,12 @@ use crate::model::auth::AuthCtx;
 use crate::services::account::AccountService;
 use crate::services::auth::AuthService;
 use crate::services::plan::PlanService;
-use golem_common::api::Page;
 use golem_common::model::Empty;
 use golem_common::model::account::{Account, AccountId, NewAccountData, Plan, UpdatedAccountData};
 use golem_common::model::auth::AccountRole;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
-use param::Query;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -53,35 +51,6 @@ impl AccountsApi {
             plan_service,
             auth_service,
         }
-    }
-
-    /// Find accounts
-    ///
-    /// Find matching accounts. Only your own account or accounts you have at least one grant from will be returned
-    #[oai(path = "/", method = "get", operation_id = "find_accounts")]
-    async fn find_accounts(
-        &self,
-        email: Query<Option<String>>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<Account>>> {
-        let record = recorded_http_api_request!("find_accounts", email = email.0);
-
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let response = self
-            .find_accounts_internal(email.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn find_accounts_internal(
-        &self,
-        _email: Option<String>,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Page<Account>>> {
-        todo!()
     }
 
     /// Create account

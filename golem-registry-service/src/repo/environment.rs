@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::model::RecordWithEnvironmentCtx;
-use super::model::environment::EnvironmentRepoError;
+use super::model::environment::{EnvironmentRepoError, OptionalEnvironmentExtRevisionRecord};
 use crate::repo::model::BindFields;
 pub use crate::repo::model::environment::{
     EnvironmentExtRevisionRecord, EnvironmentPluginInstallationRecord,
@@ -55,7 +55,10 @@ pub trait EnvironmentRepo: Send + Sync {
         application_id: &Uuid,
         actor: &Uuid,
         override_visibility: bool,
-    ) -> Result<Vec<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>, EnvironmentRepoError>;
+    ) -> Result<
+        Vec<RecordWithEnvironmentCtx<OptionalEnvironmentExtRevisionRecord>>,
+        EnvironmentRepoError,
+    >;
 
     async fn create(
         &self,
@@ -157,8 +160,10 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         application_id: &Uuid,
         actor: &Uuid,
         override_visibility: bool,
-    ) -> Result<Vec<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>, EnvironmentRepoError>
-    {
+    ) -> Result<
+        Vec<RecordWithEnvironmentCtx<OptionalEnvironmentExtRevisionRecord>>,
+        EnvironmentRepoError,
+    > {
         self.repo
             .list_by_app(application_id, actor, override_visibility)
             .instrument(Self::span_env(application_id))
@@ -321,6 +326,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     LEFT JOIN environment_shares es
                         ON es.environment_id = e.environment_id
                         AND es.grantee_account_id = $3
+                        AND es.deleted_at IS NULL
                     LEFT JOIN environment_share_revisions esr
                         ON esr.environment_share_id = es.environment_share_id
                         AND esr.revision_id = es.current_revision_id
@@ -375,6 +381,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     LEFT JOIN environment_shares es
                         ON es.environment_id = e.environment_id
                         AND es.grantee_account_id = $2
+                        AND es.deleted_at IS NULL
                     LEFT JOIN environment_share_revisions esr
                         ON esr.environment_share_id = es.environment_share_id
                         AND esr.revision_id = es.current_revision_id
@@ -403,8 +410,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         application_id: &Uuid,
         actor: &Uuid,
         override_visibility: bool,
-    ) -> Result<Vec<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>, EnvironmentRepoError>
-    {
+    ) -> Result<
+        Vec<RecordWithEnvironmentCtx<OptionalEnvironmentExtRevisionRecord>>,
+        EnvironmentRepoError,
+    > {
         let result = self
             .with_ro("list_by_owner")
             .fetch_all_as(
@@ -419,14 +428,16 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     FROM accounts a
                     JOIN applications ap
                         ON ap.account_id = a.account_id
-                    JOIN environments e
+                    LEFT JOIN environments e
                         ON e.application_id = ap.application_id
-                    JOIN environment_revisions r
+                        AND e.deleted_at IS NULL
+                    LEFT JOIN environment_revisions r
                         ON r.environment_id = e.environment_id
                         AND r.revision_id = e.current_revision_id
                     LEFT JOIN environment_shares es
                         ON es.environment_id = e.environment_id
                         AND es.grantee_account_id = $2
+                        AND es.deleted_at IS NULL
                     LEFT JOIN environment_share_revisions esr
                         ON esr.environment_share_id = es.environment_share_id
                         AND esr.revision_id = es.current_revision_id
@@ -434,7 +445,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         ap.application_id = $1
                         AND a.deleted_at IS NULL
                         AND ap.deleted_at IS NULL
-                        AND e.deleted_at IS NULL
                         AND (
                             $3
                             OR a.account_id = $2

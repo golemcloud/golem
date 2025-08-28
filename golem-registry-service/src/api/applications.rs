@@ -12,20 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Copyright 2024-2025 Golem Cloud
-//
-// Licensed under the Golem Source License v1.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://license.golem.cloud/LICENSE
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use super::ApiResult;
 use crate::model::auth::AuthCtx;
 use crate::services::application::ApplicationService;
@@ -34,6 +20,7 @@ use crate::services::environment::EnvironmentService;
 use golem_common::api::Page;
 use golem_common::model::application::{Application, ApplicationId, UpdatedApplicationData};
 use golem_common::model::environment::*;
+use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -142,6 +129,44 @@ impl ApplicationsApi {
         Ok(Json(application))
     }
 
+    /// Update application by id.
+    #[oai(
+        path = "/:application_id",
+        method = "delete",
+        operation_id = "delete_application"
+    )]
+    pub async fn delete_application(
+        &self,
+        application_id: Path<ApplicationId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<NoContentResponse> {
+        let record = recorded_http_api_request!(
+            "delete_application",
+            application_id = application_id.0.to_string()
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .delete_application_internal(application_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn delete_application_internal(
+        &self,
+        application_id: ApplicationId,
+        auth: AuthCtx,
+    ) -> ApiResult<NoContentResponse> {
+        self.application_service
+            .delete(&application_id, &auth)
+            .await?;
+
+        Ok(NoContentResponse::NoContent)
+    }
+
     /// List all application environments
     #[oai(
         path = "/:application_id/envs",
@@ -187,31 +212,31 @@ impl ApplicationsApi {
     #[oai(
         path = "/:application_id/envs",
         method = "post",
-        operation_id = "create_application_environment",
+        operation_id = "create_environment",
         tag = ApiTags::Environment
     )]
-    pub async fn create_application_environment(
+    pub async fn create_environment(
         &self,
         application_id: Path<ApplicationId>,
         data: Json<NewEnvironmentData>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Environment>> {
         let record = recorded_http_api_request!(
-            "create_application_environment",
+            "create_environment",
             application_id = application_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .create_application_environment_internal(application_id.0, data.0, auth)
+            .create_environment_internal(application_id.0, data.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn create_application_environment_internal(
+    async fn create_environment_internal(
         &self,
         application_id: ApplicationId,
         data: NewEnvironmentData,

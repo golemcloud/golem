@@ -16,7 +16,7 @@ use super::ApiResult;
 use super::error::ApiError;
 use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
 use crate::model::auth::AuthCtx;
-use crate::services::token::TokenService;
+use crate::services::token::{TokenError, TokenService};
 use golem_common::model::Empty;
 use golem_common::model::auth::{Token, TokenWithSecret};
 use golem_common::model::error::ErrorBody;
@@ -109,10 +109,19 @@ impl LoginApi {
     }
 
     async fn current_token_internal(&self, token: GolemSecurityScheme) -> ApiResult<Json<Token>> {
+        // This route is a bit special, get the token directly instead of doing the normal auth flow.
         let token_info = self
             .token_service
             .get_by_secret(&token.secret(), &AuthCtx::system())
-            .await?;
+            .await
+            .map_err(|err| match err {
+                TokenError::TokenBySecretNotFound => ApiError::Unauthorized(Json(ErrorBody {
+                    error: "Token not found".to_string(),
+                    cause: None,
+                })),
+                other => other.into(),
+            })?;
+
         Ok(Json(token_info.without_secret()))
     }
 

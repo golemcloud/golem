@@ -17,6 +17,7 @@ use crate::components::redis::Redis;
 use crate::components::redis_monitor::RedisMonitor;
 use crate::components::registry_service::RegistryService;
 use crate::components::service::Service;
+use crate::dsl::TestDependenciesDsl;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
@@ -24,9 +25,8 @@ pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 use golem_client::api::RegistryServiceClient;
-use golem_client::model::CreateTokenRequest;
-use golem_common::model::account::{AccountId, NewAccountData};
-use golem_common::model::auth::TokenSecret;
+use golem_client::model::{AccountRole, CreateTokenRequest};
+use golem_common::model::account::NewAccountData;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
@@ -116,6 +116,25 @@ pub trait TestDependencies: Send + Sync {
             token: token.secret,
             deps: self,
         })
+    }
+
+    async fn user_with_roles(
+        &self,
+        roles: &[AccountRole],
+    ) -> anyhow::Result<TestDependenciesDsl<&Self>> {
+        let registry_service = self.registry_service();
+
+        let user_dsl = self.user().await?;
+
+        let client = registry_service
+            .client(&registry_service.admin_account_token())
+            .await;
+
+        client
+            .set_account_roles(&user_dsl.account_id.0, roles)
+            .await?;
+
+        Ok(user_dsl)
     }
 
     // async fn into_user(self) -> anyhow::Result<TestDependenciesDsl<Self>>
@@ -282,14 +301,6 @@ impl<T: TestDependencies> TestDependencies for &T {
     // fn cloud_service(&self) -> Arc<dyn CloudService> {
     //     <T as TestDependencies>::cloud_service(self)
     // }
-}
-
-#[derive(Clone)]
-pub struct TestDependenciesDsl<Deps> {
-    pub deps: Deps,
-    pub account_id: AccountId,
-    pub account_email: String,
-    pub token: TokenSecret,
 }
 
 #[derive(Debug, Clone)]

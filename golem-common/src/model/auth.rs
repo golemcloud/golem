@@ -105,6 +105,7 @@ impl TryFrom<i32> for EnvironmentRole {
 pub enum GlobalAction {
     CreateAccount,
     GetDefaultPlan,
+    GetReports,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]

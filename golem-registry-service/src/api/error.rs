@@ -21,6 +21,7 @@ use crate::services::environment::EnvironmentError;
 use crate::services::environment_share::EnvironmentShareError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
+use crate::services::reports::ReportsError;
 use crate::services::token::TokenError;
 use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -164,6 +165,7 @@ impl From<ApplicationError> for ApiError {
             }
 
             ApplicationError::ApplicationNotFound(_)
+            | ApplicationError::ApplicationByNameNotFound(_)
             | ApplicationError::ParentAccountNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
@@ -275,7 +277,7 @@ impl From<TokenError> for ApiError {
             TokenError::TokenNotFound(_) | TokenError::ParentAccountNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
-            TokenError::TokenBySecretFound => {
+            TokenError::TokenBySecretNotFound => {
                 Self::InternalError(Json(ErrorBody { error, cause: None }))
             }
             TokenError::TokenSecretAlreadyExists => {
@@ -324,6 +326,19 @@ impl From<EnvironmentShareError> for ApiError {
             EnvironmentShareError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("EnvironmentShareError")),
+            })),
+        }
+    }
+}
+
+impl From<ReportsError> for ApiError {
+    fn from(value: ReportsError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            ReportsError::Unauthorized(inner) => inner.into(),
+            ReportsError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("ReportsError")),
             })),
         }
     }
