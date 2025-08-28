@@ -15,7 +15,7 @@
 use crate::from_value::{
     Bucket, BucketAndKey, BucketAndKeys, BucketKeyValue, BucketKeyValues, Container,
     ContainerAndObject, ContainerAndObjects, ContainerCopyObjectInfo, ContainerObjectBeginEnd,
-    ContainerObjectLength, FromValue, UpdateWorkerInfo,
+    ContainerObjectLength, ForkWorkerInfo, FromValue, RevertWorkerInfo, UpdateWorkerInfo,
 };
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
@@ -30,8 +30,8 @@ use golem_common::model::public_oplog::{
     PublicDurableFunctionType, PublicOplogEntry, ResourceParameters,
 };
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, PluginInstallationId, PromiseId, RetryConfig, WorkerId,
-    WorkerMetadata,
+    ComponentId, IdempotencyKey, OwnedWorkerId, PluginInstallationId, PromiseId, RetryConfig,
+    WorkerId, WorkerMetadata,
 };
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::wasmtime::ResourceTypeId;
@@ -44,7 +44,8 @@ use golem_worker_executor::durable_host::serialized::{
     SerializableStreamError,
 };
 use golem_worker_executor::durable_host::wasm_rpc::serialized::{
-    SerializableInvokeRequest, SerializableInvokeResult,
+    SerializableInvokeRequest, SerializableInvokeResult, SerializableScheduleId,
+    SerializableScheduleInvocationRequest,
 };
 use golem_worker_executor::services::blob_store::ObjectMetadata;
 use golem_worker_executor::services::rpc::RpcError;
@@ -539,7 +540,10 @@ fn convert_request_value_and_type_to_oplog_payload(
 
             create_oplog_payload(&payload)
         }
-        "golem io::poll::poll" => Ok(empty_payload()),
+        "golem io::poll::poll" => {
+            let payload: usize = u64::from_value(&value_and_type.value)? as usize;
+            create_oplog_payload(&payload)
+        }
         "golem io::poll::ready" => Ok(empty_payload()),
         "golem blobstore::container::object_info" => {
             let payload: ContainerAndObject =
@@ -639,14 +643,18 @@ fn convert_request_value_and_type_to_oplog_payload(
         "golem_environment::initial_cwd" => Ok(empty_payload()),
         "monotonic_clock::resolution" => Ok(empty_payload()),
         "monotonic_clock::now" => Ok(empty_payload()),
-        "monotonic_clock::subscribe_duration" => Ok(empty_payload()),
+        "monotonic_clock::subscribe_duration" => {
+            let payload = u64::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
         "wall_clock::now" => Ok(empty_payload()),
         "wall_clock::resolution" => Ok(empty_payload()),
-        "golem_delete_promise" => {
+        "golem::api::create_promise" => Ok(empty_payload()),
+        "golem::api::delete_promise" => {
             let payload = PromiseId::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
-        "golem_complete_promise" => {
+        "golem::api::complete_promise" => {
             let payload = PromiseId::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
@@ -658,6 +666,18 @@ fn convert_request_value_and_type_to_oplog_payload(
                 payload.component_version,
                 payload.update_mode,
             ))
+        }
+        "golem::api::fork-worker" => {
+            let payload: ForkWorkerInfo = ForkWorkerInfo::from_value(&value_and_type.value)?;
+            create_oplog_payload(&(
+                payload.source_worker_id,
+                payload.target_worker_id,
+                payload.oplog_idx_cut_off,
+            ))
+        }
+        "golem::api::revert-worker" => {
+            let payload: RevertWorkerInfo = RevertWorkerInfo::from_value(&value_and_type.value)?;
+            create_oplog_payload(&(payload.worker_id, payload.target))
         }
         "http::types::incoming_body_stream::skip" => {
             let serializable_http_request =
@@ -762,7 +782,52 @@ fn convert_request_value_and_type_to_oplog_payload(
         "golem::rpc::wasm-rpc::invoke idempotency key" => Ok(empty_payload()),
         "golem::rpc::wasm-rpc::invoke-and-await idempotency key" => Ok(empty_payload()),
         "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key" => Ok(empty_payload()),
-        _ => Err(format!("Unsupported host function name: {function_name}")),
+        "golem::rpc::wasm-rpc::schedule_invocation" => {
+            let payload: SerializableScheduleInvocationRequest =
+                get_serializable_schedule_invocation_request(value_and_type)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::rpc::cancellation-token::cancel" => {
+            let payload = SerializableScheduleId::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::poll_promise" => {
+            let payload = PromiseId::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::resolve_component_id" => {
+            let payload = String::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::resolve_worker_id_strict" => {
+            let payload: (String, String) = FromValue::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "rdbms::mysql::db-connection::query"
+        | "rdbms::mysql::db-connection::execute"
+        | "rdbms::mysql::db-connection::query-stream"
+        | "rdbms::mysql::db-transaction::query"
+        | "rdbms::mysql::db-transaction::execute"
+        | "rdbms::mysql::db-transaction::query-stream" => {
+            Err("Cannot override DB oplog entries currently".to_string())
+        }
+        "rdbms::mysql::db-transaction::rollback"
+        | "rdbms::mysql::db-transaction::commit"
+        | "rdbms::mysql::db-result-stream::get-columns"
+        | "rdbms::mysql::db-result-stream::get-next" => Ok(empty_payload()),
+        "rdbms::postgres::db-connection::query"
+        | "rdbms::postgres::db-connection::execute"
+        | "rdbms::postgres::db-connection::query-stream"
+        | "rdbms::postgres::db-transaction::query"
+        | "rdbms::postgres::db-transaction::execute"
+        | "rdbms::postgres::db-transaction::query-stream" => {
+            Err("Cannot override DB oplog entries currently".to_string())
+        }
+        "rdbms::postgres::db-transaction::rollback"
+        | "rdbms::postgres::db-transaction::commit"
+        | "rdbms::postgres::db-result-stream::get-columns"
+        | "rdbms::postgres::db-result-stream::get-next" => Ok(empty_payload()),
+        _ => create_oplog_payload(value_and_type),
     }
 }
 
@@ -787,6 +852,11 @@ fn convert_response_value_and_type_to_oplog_payload(
             let payload: Result<u32, SerializableError> =
                 Result::from_value(&value_and_type.value)?;
 
+            create_oplog_payload(&payload)
+        }
+        "golem io::poll::ready" => {
+            let payload: Result<bool, SerializableError> =
+                Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::container::object_info" => {
@@ -898,12 +968,29 @@ fn convert_response_value_and_type_to_oplog_payload(
             let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
-        "golem_complete_promise" => {
+        "golem::api::create_promise" => {
+            let payload: Result<PromiseId, SerializableError> =
+                Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::delete_promise" => {
+            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::complete_promise" => {
             let payload: Result<bool, SerializableError> =
                 Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::update-worker" => {
+            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::fork-worker" => {
+            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::revert-worker" => {
             let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
@@ -999,17 +1086,13 @@ fn convert_response_value_and_type_to_oplog_payload(
             let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
-        "golem::rpc::wasm-rpc::invoke-and-await" => {
+        "golem::rpc::wasm-rpc::invoke-and-await"
+        | "golem::rpc::wasm-rpc::invoke-and-await result" => {
             let payload = get_invoke_and_await_result(value_and_type);
             create_oplog_payload(&payload)
         }
         "golem::rpc::wasm-rpc::generate_unique_local_worker_id" => {
             let payload: Result<WorkerId, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
-            create_oplog_payload(&payload)
-        }
-        "cli::preopens::get_directories" => {
-            let payload: Result<Vec<String>, SerializableError> =
                 Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
@@ -1049,7 +1132,67 @@ fn convert_response_value_and_type_to_oplog_payload(
         "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key" => {
             create_uuid_payload(value_and_type)
         }
-        _ => Err(format!("Unsupported host function name: {function_name}")),
+        "golem::rpc::wasm-rpc::schedule_invocation" => {
+            let payload: Result<SerializableScheduleId, SerializableError> =
+                Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::rpc::cancellation-token::cancel" => {
+            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::poll_promise" => {
+            let payload: Result<Option<Vec<u8>>, SerializableError> =
+                Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::resolve_component_id" => {
+            let payload: Result<Option<ComponentId>, SerializableError> =
+                Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::resolve_worker_id_strict" => {
+            let payload: Result<Option<WorkerId>, SerializableError> =
+                Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "rdbms::mysql::db-connection::execute" | "rdbms::mysql::db-transaction::execute" => {
+            let payload: Result<u64, SerializableError> =
+                Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "rdbms::mysql::db-connection::query" | "rdbms::mysql::db-transaction::query" => {
+            Err("Cannot override DB oplog entries currently".to_string())
+        }
+        "rdbms::mysql::db-transaction::rollback" | "rdbms::mysql::db-transaction::commit" => {
+            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "rdbms::mysql::db-result-stream::get-columns" => {
+            Err("Cannot override DB oplog entries currently".to_string())
+        }
+        "rdbms::mysql::db-result-stream::get-next" => {
+            Err("Cannot override DB oplog entries currently".to_string())
+        }
+        "rdbms::postgres::db-connection::execute" | "rdbms::postgres::db-transaction::execute" => {
+            let payload: Result<u64, SerializableError> =
+                Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "rdbms::postgres::db-connection::query" | "rdbms::postgres::db-transaction::query" => {
+            Err("Cannot override DB oplog entries currently".to_string())
+        }
+        "rdbms::postgres::db-transaction::rollback" | "rdbms::postgres::db-transaction::commit" => {
+            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "rdbms::postgres::db-result-stream::get-columns" => {
+            Err("Cannot override DB oplog entries currently".to_string())
+        }
+        "rdbms::postgres::db-result-stream::get-next" => {
+            Err("Cannot override DB oplog entries currently".to_string())
+        }
+        _ => create_oplog_payload(value_and_type),
     }
 }
 
@@ -1091,13 +1234,14 @@ fn get_serializable_invoke_request(
 ) -> Result<SerializableInvokeRequest, String> {
     match &value_and_type.value {
         Value::Record(values) => {
-            if values.len() != 4 {
+            if values.len() != 6 {
                 return Err("Failed to get SerializableInvokeRequest".to_string());
             }
+            // values contains fields of EnrichedSerializableInvokeRequest; we ignore the enriched information
             let remote_worker_id = &values[0];
-            let idempotency_key = &values[1];
-            let function_name = &values[2];
-            let function_params = &values[3];
+            let idempotency_key = &values[3];
+            let function_name = &values[4];
+            let function_params = &values[5];
 
             let remote_worker_id = WorkerId::from_value(remote_worker_id)?;
             let idempotency_key = IdempotencyKey::from_uuid(Uuid::from_value(idempotency_key)?);
@@ -1234,6 +1378,108 @@ fn get_serializable_invoke_result(
     }
 }
 
+fn get_serializable_schedule_invocation_request(
+    value_and_type: &ValueAndType,
+) -> Result<SerializableScheduleInvocationRequest, String> {
+    match &value_and_type.value {
+        Value::Record(values) => {
+            if values.len() != 7 {
+                return Err("Failed to get SerializableInvokeRequest".to_string());
+            }
+            // values contains fields of EnrichedSerializableInvokeRequest; we ignore the enriched information
+            let remote_worker_id = &values[0];
+            let idempotency_key = &values[3];
+            let function_name = &values[4];
+            let function_params = &values[5];
+            let datetime = &values[6];
+
+            let remote_worker_id = WorkerId::from_value(remote_worker_id)?;
+            let idempotency_key = IdempotencyKey::from_uuid(Uuid::from_value(idempotency_key)?);
+            let function_name = String::from_value(function_name)?;
+
+            let function_param_cases = match &value_and_type.typ {
+                AnalysedType::Record(type_record) => {
+                    let function_param_type = type_record
+                        .fields
+                        .iter()
+                        .find(|x| x.name == "function-params")
+                        .ok_or("Failed to find function-params type".to_string())?;
+
+                    match function_param_type.typ.clone() {
+                        AnalysedType::List(inner) => match *inner.inner {
+                            AnalysedType::Record(inner) => {
+                                let nodes_types =
+                                    inner.fields.iter().find(|x| x.name == "nodes").ok_or(
+                                        "Failed to find nodes field inside function-params",
+                                    )?;
+                                match &nodes_types.typ {
+                                    AnalysedType::List(list_type) => match &*list_type.inner {
+                                        AnalysedType::Variant(cases) => cases.cases.clone(),
+                                        _ => Err("nodes element type was not of type variant"
+                                            .to_string())?,
+                                    },
+                                    _ => Err("nodes field was not of type list".to_string())?,
+                                }
+                            }
+                            _ => Err("function-params type was not a list".to_string())?,
+                        },
+                        _ => Err("Failed to get function param list".to_string())?,
+                    }
+                }
+                _ => Err("Internal Error. Failed to get SerializableInvokeRequest".to_string())?,
+            };
+
+            let mut parsed_function_params = Vec::new();
+            match function_params {
+                Value::List(params) => {
+                    for param in params {
+                        match param {
+                            Value::Record(fields) => {
+                                match fields.as_slice() {
+                                    [Value::List(list_values)] => match list_values.as_slice() {
+                                        [Value::Variant {
+                                            case_idx,
+                                            case_value: Some(case_value),
+                                        }] => {
+                                            let value_and_type = ValueAndType::new(
+                                                *case_value.clone(),
+                                                function_param_cases[*case_idx as usize]
+                                                    .typ
+                                                    .clone()
+                                                    .expect("Variant case should have typ"),
+                                            );
+                                            parsed_function_params.push(value_and_type);
+                                        }
+                                        _ => Err(
+                                            "Function param field did not contain a single variant"
+                                                .to_string(),
+                                        )?,
+                                    },
+                                    _ => Err("Function param did not have a single list field"
+                                        .to_string())?,
+                                }
+                            }
+                            _ => Err("Function was not a record".to_string())?,
+                        }
+                    }
+                }
+                _ => Err("Function params were not a list".to_string())?,
+            }
+
+            let datetime = SerializableDateTime::from_value(datetime)?;
+
+            Ok(SerializableScheduleInvocationRequest {
+                remote_worker_id,
+                idempotency_key,
+                function_name,
+                function_params: parsed_function_params,
+                datetime,
+            })
+        }
+        _ => Err("Failed to get SerializableInvokeRequest".to_string()),
+    }
+}
+
 fn create_uuid_payload(value_and_type: &ValueAndType) -> Result<OplogPayload, String> {
     let uuid: Result<Uuid, SerializableError> = Result::from_value(&value_and_type.value)?;
 
@@ -1262,7 +1508,7 @@ mod tests {
     use golem_wasm_ast::analysis::NameOptionTypePair;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use golem_worker_executor::durable_host::wasm_rpc::serialized::{
-        SerializableInvokeRequest, SerializableInvokeResult,
+        EnrichedSerializableInvokeRequest, SerializableInvokeRequest, SerializableInvokeResult,
     };
     use golem_worker_executor::services::rpc::RpcError;
     use test_r::test;
@@ -1367,15 +1613,25 @@ mod tests {
             ValueAndType::new(Value::String("bar".to_string()), str()),
         ];
 
-        let serializable_invoke_request = SerializableInvokeRequest {
-            remote_worker_id,
-            idempotency_key,
+        let serializable_invoke_request = EnrichedSerializableInvokeRequest {
+            remote_worker_id: remote_worker_id.clone(),
+            remote_agent_type: None,
+            remote_agent_parameters: None,
+            idempotency_key: idempotency_key.clone(),
             function_name: "foo".to_string(),
-            function_params,
+            function_params: function_params.clone(),
         };
 
         let value_and_type = serializable_invoke_request.clone().into_value_and_type();
         let result = get_serializable_invoke_request(&value_and_type).unwrap();
-        assert_eq!(result, serializable_invoke_request);
+        assert_eq!(
+            result,
+            SerializableInvokeRequest {
+                remote_worker_id,
+                idempotency_key,
+                function_name: "foo".to_string(),
+                function_params,
+            }
+        );
     }
 }

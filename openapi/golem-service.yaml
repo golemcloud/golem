@@ -11394,6 +11394,7 @@ components:
       - NotEqual
       - Like
       - NotLike
+      - StartsWith
     SuccessfulUpdate:
       title: SuccessfulUpdate
       type: object

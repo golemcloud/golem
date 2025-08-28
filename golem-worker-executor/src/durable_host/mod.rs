@@ -187,7 +187,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let component_metadata = component_service
             .get_metadata(
-                &owned_worker_id.project_id,
                 &owned_worker_id.component_id(),
                 Some(worker_config.component_version_for_replay),
             )
@@ -807,11 +806,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let new_metadata = self
             .component_service()
-            .get_metadata(
-                &self.owned_worker_id.project_id,
-                &self.owned_worker_id.component_id(),
-                Some(new_version),
-            )
+            .get_metadata(&self.owned_worker_id.component_id(), Some(new_version))
             .await?;
 
         let mut current_files = self.state.files.write().await;

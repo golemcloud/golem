@@ -172,12 +172,16 @@ interface oplog {
 
     record create-resource-parameters {
         timestamp: datetime,
-        resource-id: worker-resource-id
+        resource-id: worker-resource-id,
+        name: string,
+        owner: string
     }
 
     record drop-resource-parameters {
         timestamp: datetime,
-        resource-id: worker-resource-id
+        resource-id: worker-resource-id,
+        name: string,
+        owner: string
     }
 
     enum log-level {

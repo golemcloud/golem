@@ -210,7 +210,7 @@ miette = { version = "7.6.0", features = ["fancy"] }
 mime = "0.3.17"
 mime_guess = "2.0.5"
 minijinja = "2.7.0"
-moonbit-component-generator = { version = "0.0.3", features = ["get-script"] }
+moonbit-component-generator = { version = "0.0.4", features = ["get-script"] }
 nanoid = "0.4.0"
 native-tls = "0.2.13"
 nom = "7.1.3"
@@ -283,7 +283,7 @@ system-interface = "0.27.3"
 tap = "1.0.1"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
-test-r = { version = "2.2.1", default-features = true }
+test-r = { version = "2.2.2", default-features = true }
 testcontainers = { version = "0.23.3" }
 testcontainers-modules = { version = "0.11.6", features = ["postgres", "redis", "minio", "mysql", ] }
 textwrap = "0.16.1"

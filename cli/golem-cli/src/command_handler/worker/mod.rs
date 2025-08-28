@@ -46,7 +46,7 @@ use crate::model::{
 };
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_client::api::WorkerClient;
+use golem_client::api::{AgentTypesClient, ComponentClient, WorkerClient};
 use golem_client::model::{
     ComponentType, InvokeResult, PublicOplogEntry, ScanCursor, UpdateRecord,
 };
@@ -66,6 +66,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
+use tracing::debug;
 use uuid::Uuid;
 
 pub struct WorkerCommandHandler {
@@ -108,6 +109,7 @@ impl WorkerCommandHandler {
             WorkerSubcommand::Delete { worker_name } => self.cmd_delete(worker_name).await,
             WorkerSubcommand::List {
                 component_name,
+                agent_type_name,
                 filter: filters,
                 scan_cursor,
                 max_count,
@@ -115,6 +117,7 @@ impl WorkerCommandHandler {
             } => {
                 self.cmd_list(
                     component_name.component_name,
+                    agent_type_name.agent_type_name,
                     filters,
                     scan_cursor,
                     max_count,
@@ -618,16 +621,52 @@ impl WorkerCommandHandler {
     async fn cmd_list(
         &self,
         component_name: Option<ComponentName>,
-        filters: Vec<String>,
+        agent_type_name: Option<String>,
+        mut filters: Vec<String>,
         scan_cursor: Option<ScanCursor>,
         max_count: Option<u64>,
         precise: bool,
     ) -> anyhow::Result<()> {
-        let selected_components = self
+        let mut selected_components = self
             .ctx
             .component_handler()
             .must_select_components_by_app_dir_or_name(component_name.as_ref())
             .await?;
+
+        if let Some(agent_type_name) = agent_type_name {
+            let clients = self.ctx.golem_clients().await?;
+
+            debug!("Finding agent type {}", agent_type_name);
+            let response = clients
+                .agent_types
+                .get_agent_type(
+                    &agent_type_name,
+                    selected_components
+                        .project
+                        .as_ref()
+                        .map(|p| &p.project_id.0),
+                )
+                .await?;
+
+            debug!(
+                "Fetching component metadata for {}",
+                response.implemented_by.0
+            );
+            let component_metadata = clients
+                .component
+                .get_latest_component_metadata(&response.implemented_by.0)
+                .await?;
+
+            logln(format!(
+                "Agent type {} is implemented by component {}\n",
+                agent_type_name.log_color_highlight(),
+                component_metadata.component_name.log_color_highlight()
+            ));
+            selected_components.component_names =
+                vec![ComponentName(component_metadata.component_name)];
+
+            filters.insert(0, format!("name startswith {agent_type_name}("));
+        }
 
         if scan_cursor.is_some() && selected_components.component_names.len() != 1 {
             log_error(format!(
@@ -1203,7 +1242,7 @@ impl WorkerCommandHandler {
                         "Worker update",
                         "is not pending anymore, but no outcome has been found",
                     );
-                    return Err(anyhow ! (
+                    return Err(anyhow!(
                 "Unexpected worker state: update is not pending anymore, but no outcome has been found"
                 ));
                 }
@@ -1467,13 +1506,13 @@ impl WorkerCommandHandler {
                         if selected_component_names.len() != 1 {
                             logln("");
                             log_error(
-                                    format!("Multiple components were selected based on the current directory: {}",
-                                            selected_component_names.iter().map(|cn| cn.as_str().log_color_highlight()).join(", ")),
-                                );
+                                format!("Multiple components were selected based on the current directory: {}",
+                                        selected_component_names.iter().map(|cn| cn.as_str().log_color_highlight()).join(", ")),
+                            );
                             logln("");
                             logln(
-                                    "Switch to a different directory with only one component or specify the full or partial component name as part of the worker name!",
-                                );
+                                "Switch to a different directory with only one component or specify the full or partial component name as part of the worker name!",
+                            );
                             logln("");
                             log_text_view(&WorkerNameHelp);
                             logln("");
@@ -1630,9 +1669,9 @@ impl WorkerCommandHandler {
                                 } => {
                                     logln("");
                                     log_error(format!(
-                                            "The requested application component name ({}) is ambiguous.",
-                                            component_name.0.log_color_error_highlight()
-                                        ));
+                                        "The requested application component name ({}) is ambiguous.",
+                                        component_name.0.log_color_error_highlight()
+                                    ));
                                     logln("");
                                     logln("Did you mean one of");
                                     for option in highlighted_options {

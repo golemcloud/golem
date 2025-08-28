@@ -5645,6 +5645,7 @@ components:
       - NotEqual
       - Like
       - NotLike
+      - StartsWith
     SuccessfulUpdate:
       type: object
       title: SuccessfulUpdate

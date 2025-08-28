@@ -1458,6 +1458,7 @@ pub enum StringFilterComparator {
     NotEqual,
     Like,
     NotLike,
+    StartsWith,
 }
 
 impl StringFilterComparator {
@@ -1470,6 +1471,9 @@ impl StringFilterComparator {
             }
             StringFilterComparator::NotLike => {
                 !value1.to_string().contains(value2.to_string().as_str())
+            }
+            StringFilterComparator::StartsWith => {
+                value1.to_string().starts_with(value2.to_string().as_str())
             }
         }
     }
@@ -1484,6 +1488,7 @@ impl FromStr for StringFilterComparator {
             "!=" | "notequal" | "ne" => Ok(StringFilterComparator::NotEqual),
             "like" => Ok(StringFilterComparator::Like),
             "notlike" => Ok(StringFilterComparator::NotLike),
+            "startswith" => Ok(StringFilterComparator::StartsWith),
             _ => Err(format!("Unknown String Filter Comparator: {s}")),
         }
     }
@@ -1498,6 +1503,7 @@ impl TryFrom<i32> for StringFilterComparator {
             1 => Ok(StringFilterComparator::NotEqual),
             2 => Ok(StringFilterComparator::Like),
             3 => Ok(StringFilterComparator::NotLike),
+            4 => Ok(StringFilterComparator::StartsWith),
             _ => Err(format!("Unknown String Filter Comparator: {value}")),
         }
     }
@@ -1510,6 +1516,7 @@ impl From<StringFilterComparator> for i32 {
             StringFilterComparator::NotEqual => 1,
             StringFilterComparator::Like => 2,
             StringFilterComparator::NotLike => 3,
+            StringFilterComparator::StartsWith => 4,
         }
     }
 }
@@ -1521,6 +1528,7 @@ impl Display for StringFilterComparator {
             StringFilterComparator::NotEqual => "!=",
             StringFilterComparator::Like => "like",
             StringFilterComparator::NotLike => "notlike",
+            StringFilterComparator::StartsWith => "startswith",
         };
         write!(f, "{s}")
     }
