@@ -86,35 +86,36 @@ for arg in "$@"; do
   esac
 done
 
-#if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
-#  echo "Building the Rust test components"
-#  for subdir in "${rust_test_components[@]}"; do
-#    echo "Building $subdir..."
-#    pushd "$subdir" || exit
-#
-#    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
-#      wit-deps update
-#    fi
-#
-#    if [ "$rebuild" = true ]; then
-#      cargo clean
-#    fi
-#    cargo component build --release
-#
-#    echo "Turning the module into a WebAssembly Component..."
-#    target="../$subdir.wasm"
-#    target_wat="../$subdir.wat"
-#    cp -v $(find target/wasm32-wasip1/release -name '*.wasm' -maxdepth 1) "$target"
-#    wasm-tools print "$target" >"$target_wat"
-#
-#    popd || exit
-#  done
-#fi
+if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
+  echo "Building the Rust test components"
+  for subdir in "${rust_test_components[@]}"; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
+    if [ "$rebuild" = true ]; then
+      cargo clean
+    fi
+    cargo component build --release
+
+    echo "Turning the module into a WebAssembly Component..."
+    target="../$subdir.wasm"
+    target_wat="../$subdir.wat"
+    cp -v $(find target/wasm32-wasip1/release -name '*.wasm' -maxdepth 1) "$target"
+    wasm-tools print "$target" >"$target_wat"
+
+    popd || exit
+  done
+fi
 
 if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
   echo "Building the Rust test apps"
   TEST_COMP_DIR="$(pwd)"
   export GOLEM_RUST_PATH="${TEST_COMP_DIR}/../sdks/rust/golem-rust"
+  export GOLEM_CLI=${TEST_COMP_DIR}/../target/debug/golem-cli
   for subdir in "${rust_test_apps[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
@@ -124,12 +125,12 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
     fi
 
     if [ "$rebuild" = true ]; then
-      ../../target/debug/golem-cli app clean
+      $GOLEM_CLI app clean
       cargo clean
     fi
 
-    ../../target/debug/golem-cli app -b release build
-    ../../target/debug/golem-cli app -b release copy
+    $GOLEM_CLI app -b release build
+    $GOLEM_CLI app -b release copy
 
     popd || exit
   done
