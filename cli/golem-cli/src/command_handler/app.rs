@@ -30,7 +30,7 @@ use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::Component;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
-use crate::model::WorkerUpdateMode;
+use crate::model::worker::WorkerUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_common::model::component::ComponentName;
@@ -64,7 +64,6 @@ impl AppCommandHandler {
                 build: build_args,
             } => self.cmd_build(component_name, build_args).await,
             AppSubcommand::Deploy {
-                component_name,
                 force_build,
                 update_or_redeploy,
             } => {
@@ -289,7 +288,6 @@ impl AppCommandHandler {
 
     async fn cmd_deploy(
         &self,
-        component_name: AppOptionalComponentNames,
         force_build: ForceBuildArg,
         update_or_redeploy: UpdateOrRedeployArgs,
     ) -> anyhow::Result<()> {
@@ -410,12 +408,9 @@ impl AppCommandHandler {
 
     async fn deploy(
         &self,
-        component_name: AppOptionalComponentNames,
         force_build: ForceBuildArg,
         update_or_redeploy: UpdateOrRedeployArgs,
     ) -> anyhow::Result<()> {
-        let is_any_component_explicitly_selected = !component_name.component_name.is_empty();
-
         let project = self
             .ctx
             .cloud_project_handler()

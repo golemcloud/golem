@@ -2,7 +2,7 @@ use crate::config::ProfileName;
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::component::AppComponentType;
-use crate::model::Format;
+use crate::model::format::Format;
 use anyhow::{anyhow, Context};
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use serde::{Deserialize, Serialize};

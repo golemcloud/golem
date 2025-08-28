@@ -19,101 +19,37 @@ pub mod app_raw;
 pub mod component;
 pub mod deploy;
 pub mod deploy_diff;
+pub mod environment;
+pub mod format;
 pub mod invoke_result_view;
 pub mod plugin_manifest;
-pub mod project;
 pub mod template;
 pub mod text;
 pub mod wave;
 pub mod worker;
 
-use crate::command::shared_args::{ComponentTemplateName, StreamArgs};
+use crate::command::shared_args::ComponentTemplateName;
 use crate::config::AuthenticationConfig;
 use crate::config::{NamedProfile, ProfileConfig, ProfileName};
 use crate::log::LogColorize;
 use anyhow::{anyhow, Context};
-use chrono::{DateTime, Utc};
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, Error};
-use clap_verbosity_flag::Verbosity;
-use colored::control::SHOULD_COLORIZE;
-use golem_client::model::{PluginTypeSpecificDefinition, UpdateRecord};
-use golem_common::model::account::AccountId;
-use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::component::ComponentName;
-use golem_common::model::diff::Environment;
-use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-use golem_common::model::trim_date::TrimDateTime;
-use golem_common::model::{
-    AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription, WorkerStatus,
-};
-use golem_common::model::WorkerResourceDescription;
+use golem_client::model::PluginTypeSpecificDefinition;
 use golem_templates::model::{
     GuestLanguage, GuestLanguageTier, PackageName, Template, TemplateName,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
 use url::Url;
-use uuid::Uuid;
-// TODO: move arg thing into command
+use golem_common::model::account::AccountId;
 // TODO: move non generic entities into mods
-
-// NOTE: using aliases for lower-case support in manifest, as global configs are using the
-//       PascalCase versions historically, should be cleared up (migrated), if we touch the global
-//       CLI config
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize, Default)]
-pub enum Format {
-    #[serde(alias = "json")]
-    Json,
-    #[serde(alias = "yaml")]
-    Yaml,
-    #[default]
-    #[serde(alias = "text")]
-    Text,
-}
-
-impl Display for Format {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Json => "json",
-            Self::Yaml => "yaml",
-            Self::Text => "text",
-        };
-        Display::fmt(&s, f)
-    }
-}
-
-impl FromStr for Format {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "json" => Ok(Format::Json),
-            "yaml" => Ok(Format::Yaml),
-            "text" => Ok(Format::Text),
-            _ => {
-                let all = Format::iter()
-                    .map(|x| format!("\"{x}\""))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                Err(format!("Unknown format: {s}. Expected one of {all}"))
-            }
-        }
-    }
-}
-
-pub trait HasFormatConfig {
-    fn format(&self) -> Option<Format>;
-}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum PluginReference {
@@ -183,118 +119,6 @@ impl Display for PluginReference {
                 version,
             } => write!(f, "{account_email}/{name}/{version}"),
         }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct ProjectName(pub String);
-
-impl From<&str> for ProjectName {
-    fn from(name: &str) -> Self {
-        ProjectName(name.to_string())
-    }
-}
-
-impl From<String> for ProjectName {
-    fn from(name: String) -> Self {
-        ProjectName(name)
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum ProjectReference {
-    JustName(ProjectName),
-    WithAccount {
-        account_email: String,
-        project_name: ProjectName,
-    },
-}
-
-impl FromStr for ProjectReference {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut segments = s.split("/").collect::<Vec<_>>();
-        match segments.len() {
-            1 => Ok(Self::JustName(segments.pop().unwrap().into())),
-            2 => {
-                let project_name = segments.pop().unwrap().into();
-                let account_email = segments.pop().unwrap().to_string();
-                Ok(Self::WithAccount { account_email, project_name })
-            }
-            _ => Err(format!("Unknown format for project: {}. Expected either <PROJECT_NAME> or <ACCOUNT_EMAIL>/<PROJECT_NAME>", s.log_color_highlight()))
-        }
-    }
-}
-
-impl Display for ProjectReference {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::JustName(project_name) => write!(f, "{}", project_name.0),
-            Self::WithAccount {
-                account_email,
-                project_name,
-            } => write!(f, "{}/{}", account_email, project_name.0),
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct WorkerName(pub String);
-
-impl From<&str> for WorkerName {
-    fn from(name: &str) -> Self {
-        WorkerName(name.to_string())
-    }
-}
-
-impl From<String> for WorkerName {
-    fn from(name: String) -> Self {
-        WorkerName(name)
-    }
-}
-
-impl Display for WorkerName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-pub enum ComponentVersionSelection<'a> {
-    ByWorkerName(&'a WorkerName),
-    ByExplicitVersion(u64),
-}
-
-impl<'a> From<&'a WorkerName> for ComponentVersionSelection<'a> {
-    fn from(value: &'a WorkerName) -> Self {
-        Self::ByWorkerName(value)
-    }
-}
-
-impl From<u64> for ComponentVersionSelection<'_> {
-    fn from(value: u64) -> Self {
-        Self::ByExplicitVersion(value)
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct IdempotencyKey(pub String);
-
-impl Default for IdempotencyKey {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl IdempotencyKey {
-    pub fn new() -> Self {
-        IdempotencyKey(Uuid::new_v4().to_string())
-    }
-}
-
-impl From<&str> for IdempotencyKey {
-    fn from(value: &str) -> Self {
-        IdempotencyKey(value.to_string())
     }
 }
 
@@ -394,179 +218,6 @@ impl FromStr for PathBufOrStdin {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum WorkerUpdateMode {
-    Automatic,
-    Manual,
-}
-
-impl Display for WorkerUpdateMode {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WorkerUpdateMode::Automatic => {
-                write!(f, "auto")
-            }
-            WorkerUpdateMode::Manual => {
-                write!(f, "manual")
-            }
-        }
-    }
-}
-
-impl FromStr for WorkerUpdateMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "auto" => Ok(WorkerUpdateMode::Automatic),
-            "manual" => Ok(WorkerUpdateMode::Manual),
-            _ => Err(format!(
-                "Unknown worker update mode: {s}. Expected one of \"auto\", \"manual\""
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkerMetadataView {
-    pub component_name: ComponentName,
-    pub worker_name: WorkerName,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub created_by: Option<AccountId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub environment_id: EnvironmentId,
-    pub args: Vec<String>,
-    pub env: HashMap<String, String>,
-    pub status: WorkerStatus,
-    pub component_version: u64,
-    pub retry_count: u64,
-
-    pub pending_invocation_count: u64,
-    pub updates: Vec<UpdateRecord>,
-    pub created_at: DateTime<Utc>,
-    pub last_error: Option<String>,
-    pub component_size: u64,
-    pub total_linear_memory_size: u64,
-    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
-}
-
-impl TrimDateTime for WorkerMetadataView {
-    fn trim_date_time_ms(self) -> Self {
-        Self {
-            created_at: self.created_at.trim_date_time_ms(),
-            ..self
-        }
-    }
-}
-
-impl From<WorkerMetadata> for WorkerMetadataView {
-    fn from(value: WorkerMetadata) -> Self {
-        WorkerMetadataView {
-            component_name: value.component_name,
-            worker_name: value.worker_id.worker_name.into(),
-            created_by: value.created_by,
-            environment_id: Uuid::nil().into(), // TODO: atomic value.project_id,
-            args: value.args,
-            env: value.env,
-            status: value.status,
-            component_version: value.component_version,
-            retry_count: value.retry_count,
-            pending_invocation_count: value.pending_invocation_count,
-            updates: value.updates,
-            created_at: value.created_at,
-            last_error: value.last_error,
-            component_size: value.component_size,
-            total_linear_memory_size: value.total_linear_memory_size,
-            exported_resource_instances: value.exported_resource_instances,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct WorkerMetadata {
-    pub worker_id: golem_client::model::WorkerId,
-    pub component_name: ComponentName,
-    pub environment_id: EnvironmentId,
-    pub created_by: AccountId,
-    pub args: Vec<String>,
-    pub env: HashMap<String, String>,
-    pub status: golem_client::model::WorkerStatus,
-    pub component_version: u64,
-    pub retry_count: u64,
-    pub pending_invocation_count: u64,
-    pub updates: Vec<golem_client::model::UpdateRecord>,
-    pub created_at: DateTime<Utc>,
-    pub last_error: Option<String>,
-    pub component_size: u64,
-    pub total_linear_memory_size: u64,
-    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
-}
-
-impl WorkerMetadata {
-    pub fn from(component_name: ComponentName, value: golem_client::model::WorkerMetadata) -> Self {
-        WorkerMetadata {
-            worker_id: value.worker_id,
-            component_name,
-            created_by: Uuid::nil().into(), // TODO: atomic: value.created_by
-            environment_id: value.project_id.into(),
-            args: value.args,
-            env: value.env,
-            status: value.status,
-            component_version: value.component_version,
-            retry_count: value.retry_count,
-            pending_invocation_count: value.pending_invocation_count,
-            updates: value.updates,
-            created_at: value.created_at,
-            last_error: value.last_error,
-            component_size: value.component_size,
-            total_linear_memory_size: value.total_linear_memory_size,
-            exported_resource_instances: HashMap::from_iter(
-                value.exported_resource_instances.into_iter().map(|desc| {
-                    let key = desc.key.to_string();
-                    (key, desc.description)
-                }),
-            ),
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WorkersMetadataResponseView {
-    pub workers: Vec<WorkerMetadataView>,
-    pub cursors: BTreeMap<String, String>,
-}
-
-impl TrimDateTime for WorkersMetadataResponseView {
-    fn trim_date_time_ms(self) -> Self {
-        Self {
-            workers: self.workers.trim_date_time_ms(),
-            ..self
-        }
-    }
-}
-
-pub trait HasVerbosity {
-    fn verbosity(&self) -> Verbosity;
-}
-
-#[derive(Debug, Clone)]
-pub struct WorkerConnectOptions {
-    pub colors: bool,
-    pub show_timestamp: bool,
-    pub show_level: bool,
-}
-
-impl From<StreamArgs> for WorkerConnectOptions {
-    fn from(args: StreamArgs) -> Self {
-        WorkerConnectOptions {
-            colors: SHOULD_COLORIZE.should_colorize(),
-            show_timestamp: !args.stream_no_timestamp,
-            show_level: !args.stream_no_log_level,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ProfileView {
@@ -607,13 +258,6 @@ impl ProfileView {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ComponentNameMatchKind {
-    AppCurrentDir,
-    App,
-    Unknown,
-}
-
 #[derive(Debug, Clone)]
 pub struct AccountDetails {
     pub account_id: AccountId,
@@ -627,40 +271,6 @@ impl From<golem_client::model::Account> for AccountDetails {
             email: value.email,
         }
     }
-}
-
-pub struct AppIdentity {
-    pub account_id: AccountId,
-    pub account_email: String,
-    pub app_id: ApplicationId,
-    pub app_name: ApplicationName,
-    pub env_id: EnvironmentId,
-    pub env_name: EnvironmentName,
-}
-
-pub struct WorkerNameMatch {
-    pub app: AppIdentity,
-    pub component_name_match_kind: ComponentNameMatchKind,
-    pub component_name: ComponentName,
-    pub worker_name: Option<WorkerName>,
-}
-
-impl WorkerNameMatch {
-    /// Gets the matched worker name, or generates a fresh name if it was `-`
-    pub fn worker_name(&self) -> WorkerName {
-        match &self.worker_name {
-            Some(name) => name.clone(),
-            None => {
-                let name = Uuid::new_v4().to_string();
-                WorkerName(name)
-            }
-        }
-    }
-}
-
-pub struct SelectedComponents {
-    pub app: AppIdentity,
-    pub component_names: Vec<ComponentName>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

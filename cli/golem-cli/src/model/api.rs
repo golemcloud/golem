@@ -194,18 +194,3 @@ impl From<golem_client::model::SecuritySchemeData> for ApiSecurityScheme {
         }
     }
 }
-
-pub fn to_route_method(method: &str) -> anyhow::Result<RouteMethod> {
-    Ok(match method.to_lowercase().as_str() {
-        "get" => RouteMethod::Get,
-        "connect" => RouteMethod::Connect,
-        "post" => RouteMethod::Post,
-        "delete" => RouteMethod::Delete,
-        "put" => RouteMethod::Put,
-        "patch" => RouteMethod::Patch,
-        "options" => RouteMethod::Options,
-        "trace" => RouteMethod::Trace,
-        "head" => RouteMethod::Head,
-        _ => bail!("Invalid method: {}", method),
-    })
-}

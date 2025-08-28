@@ -21,6 +21,8 @@ use super::component::ComponentRevision;
 use super::ComponentId;
 use crate::api::api_definition::GatewayBindingType;
 use crate::{declare_enums, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 
 newtype_uuid!(ApiDefinitionId);
 
@@ -39,6 +41,49 @@ declare_enums! {
         Options,
         Trace,
         Head,
+    }
+}
+
+impl Display for RouteMethod {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RouteMethod::Get => write!(f, "GET"),
+            RouteMethod::Connect => write!(f, "CONNECT"),
+            RouteMethod::Post => write!(f, "POST"),
+            RouteMethod::Delete => write!(f, "DELETE"),
+            RouteMethod::Put => write!(f, "PUT"),
+            RouteMethod::Patch => write!(f, "PATCH"),
+            RouteMethod::Options => write!(f, "OPTIONS"),
+            RouteMethod::Trace => write!(f, "TRACE"),
+            RouteMethod::Head => write!(f, "HEAD"),
+        }
+    }
+}
+
+impl TryFrom<&str> for RouteMethod {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl FromStr for RouteMethod {
+    type Err = String;
+
+    fn from_str(method: &str) -> Result<Self, Self::Err> {
+        match method.to_uppercase().as_str() {
+            "GET" => Ok(RouteMethod::Get),
+            "CONNECT" => Ok(RouteMethod::Connect),
+            "POST" => Ok(RouteMethod::Post),
+            "DELETE" => Ok(RouteMethod::Delete),
+            "PUT" => Ok(RouteMethod::Put),
+            "PATCH" => Ok(RouteMethod::Patch),
+            "OPTIONS" => Ok(RouteMethod::Options),
+            "TRACE" => Ok(RouteMethod::Trace),
+            "HEAD" => Ok(RouteMethod::Head),
+            _ => Err(format!("Illegal route method: {}", method)),
+        }
     }
 }
 

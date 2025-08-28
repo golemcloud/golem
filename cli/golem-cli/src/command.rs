@@ -21,7 +21,6 @@ use crate::command::profile::ProfileSubcommand;
 use crate::command::worker::WorkerSubcommand;
 use crate::config::{BuildProfileName, ProfileName};
 use crate::log::LogColorize;
-use crate::model::{Format, WorkerName};
 use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use chrono::{DateTime, Utc};
@@ -40,6 +39,7 @@ use uuid::Uuid;
 use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::ComponentOptionalComponentName;
 use crate::error::ShowClapHelpTarget;
+use crate::model::worker::WorkerName;
 
 /// Golem Command Line Interface
 #[derive(Debug, Parser)]
@@ -549,8 +549,8 @@ pub enum GolemCliSubcommand {
 
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
+    use crate::model::worker::{WorkerName, WorkerUpdateMode};
     use crate::model::PluginReference;
-    use crate::model::{ProjectName, ProjectReference, WorkerName, WorkerUpdateMode};
     use clap::Args;
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentName;
@@ -696,10 +696,10 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args)]
-    pub struct ProjectArg {
+    pub struct AppIdentityArg {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
         /// Project, accepted formats:
-        ///   - <PROJECT_NAME>
+        ///   - <ACCOUNT_EMAIL>/<APP_NAME>
         ///   - <ACCOUNT_EMAIL>/<PROJECT_NAME>
         #[arg(verbatim_doc_comment)]
         pub project: ProjectReference,

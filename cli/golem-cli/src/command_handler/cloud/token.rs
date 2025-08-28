@@ -18,10 +18,10 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::{log_warn_action, LogColorize};
 use crate::model::text::token::{TokenListView, TokenNewView};
-use crate::model::TokenId;
 use chrono::{DateTime, Utc};
 use golem_client::api::TokenClient;
 use golem_client::model::CreateTokenRequest;
+use golem_common::model::auth::TokenId;
 use std::sync::Arc;
 
 pub struct CloudTokenCommandHandler {
@@ -50,7 +50,9 @@ impl CloudTokenCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&TokenListView(tokens));
+        self.ctx
+            .log_handler()
+            .log_view(&TokenListView(tokens.values));
 
         Ok(())
     }

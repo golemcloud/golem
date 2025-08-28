@@ -16,7 +16,6 @@ use crate::log::logln;
 use crate::model::api::ApiDeployment;
 use crate::model::text::fmt::*;
 use cli_table::Table;
-use golem_client::model::ApiDefinitionInfo;
 
 pub fn format_site(api_deployment: &ApiDeployment) -> String {
     match &api_deployment.site.subdomain {

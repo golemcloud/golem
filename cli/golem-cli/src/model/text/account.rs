@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::log::logln;
 use crate::model::text::fmt::*;
 use golem_client::model::Account;
 use serde::{Deserialize, Serialize};

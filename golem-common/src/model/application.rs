@@ -14,6 +14,7 @@
 
 use crate::model::account::AccountId;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use std::str::FromStr;
 
 newtype_uuid!(ApplicationId);
 
@@ -21,6 +22,23 @@ declare_revision!(ApplicationRevision);
 
 declare_transparent_newtypes! {
     pub struct ApplicationName(pub String);
+}
+
+impl TryFrom<String> for ApplicationName {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        // TODO: Add validations
+        Ok(ApplicationName(value))
+    }
+}
+
+impl FromStr for ApplicationName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s.to_string())
+    }
 }
 
 declare_structs! {

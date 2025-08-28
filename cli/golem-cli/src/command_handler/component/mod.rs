@@ -41,8 +41,8 @@ use crate::model::text::component::{ComponentCreateView, ComponentGetView, Compo
 use crate::model::text::fmt::{log_deploy_diff, log_error, log_text_view, log_warn};
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::{
-    AccountDetails, AppIdentity, ComponentNameMatchKind, ComponentVersionSelection,
-    ProjectReference, SelectedComponents, WorkerUpdateMode,
+    AccountDetails, ComponentNameMatchKind, ComponentVersionSelection, ResolvedEnvironmentIdentity,
+    SelectedComponents, WorkerUpdateMode,
 };
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use golem_common::model::component::ComponentName;
@@ -791,7 +791,7 @@ impl ComponentCommandHandler {
 
     pub async fn component_by_name_with_auto_deploy(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         component_match_kind: ComponentNameMatchKind,
         component_name: &ComponentName,
         component_version_selection: Option<ComponentVersionSelection<'_>>,
@@ -864,7 +864,7 @@ impl ComponentCommandHandler {
     // TODO: merge these 3 args into "component lookup" or "selection" struct
     pub async fn component(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         component_name_or_id: ComponentSelection<'_>,
         component_version_selection: Option<ComponentVersionSelection<'_>>,
     ) -> anyhow::Result<Option<Component>> {
@@ -921,7 +921,7 @@ impl ComponentCommandHandler {
 
     pub async fn component_id_by_name(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         component_name: &ComponentName,
     ) -> anyhow::Result<Option<ComponentId>> {
         Ok(self
@@ -958,7 +958,7 @@ impl ComponentCommandHandler {
 
     pub async fn latest_component_by_name(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         component_name: &ComponentName,
     ) -> anyhow::Result<Option<Component>> {
         let clients = self.ctx.golem_clients().await?;
@@ -986,7 +986,7 @@ impl ComponentCommandHandler {
 
     pub async fn latest_components_by_app(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
     ) -> anyhow::Result<BTreeMap<String, Component>> {
         let component_names = {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -1006,7 +1006,7 @@ impl ComponentCommandHandler {
     //       ComponentName types without cloning
     pub async fn latest_components_by_name(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         component_names: Vec<ComponentName>,
     ) -> anyhow::Result<BTreeMap<String, Component>> {
         let clients = self.ctx.golem_clients().await?;
@@ -1086,7 +1086,7 @@ impl ComponentCommandHandler {
     // NOTE: all of this is naive for now (as in performance, streaming, parallelism)
     async fn server_diffable_component(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         component: &Component,
     ) -> anyhow::Result<DiffableComponent> {
         let component_hash = self
@@ -1142,7 +1142,7 @@ impl ComponentCommandHandler {
 
     async fn server_component_hash(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         component_name: &ComponentName,
         component_id: ComponentId,
         component_version: u64,
@@ -1201,7 +1201,7 @@ impl ComponentCommandHandler {
 
     async fn server_ifs_file_hash(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         component_name: &ComponentName,
         component_id: ComponentId,
         component_version: u64,

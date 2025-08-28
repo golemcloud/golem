@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ComponentName, WorkerName};
+use crate::model::worker::WorkerName;
+use golem_common::model::component::ComponentName;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TryUpdateAllWorkersResult {
     pub triggered: Vec<WorkerUpdateAttempt>,
