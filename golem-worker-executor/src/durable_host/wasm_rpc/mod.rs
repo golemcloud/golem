@@ -34,8 +34,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
 use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ProjectId, ScheduledAction,
-    WorkerId,
+    AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId,
 };
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -138,7 +137,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 function_name: function_name.clone(),
                 function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
-                    &remote_worker_id.project_id,
                     &remote_worker_id.worker_id.component_id,
                     &function_name,
                     &function_params,
@@ -276,7 +274,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 function_name: function_name.clone(),
                 function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
-                    &remote_worker_id.project_id,
                     &remote_worker_id.worker_id.component_id,
                     &function_name,
                     &function_params,
@@ -380,7 +377,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             function_name: function_name.clone(),
             function_params: try_get_typed_parameters(
                 self.state.component_service.clone(),
-                &remote_worker_id.project_id,
                 &remote_worker_id.worker_id.component_id,
                 &function_name,
                 &function_params,
@@ -502,7 +498,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 function_name: function_name.clone(),
                 function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
-                    &remote_worker_id.project_id,
                     &remote_worker_id.worker_id.component_id,
                     &function_name,
                     &function_params,
@@ -860,7 +855,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             function_name: function_name.clone(),
                             function_params: try_get_typed_parameters(
                                 component_service,
-                                &remote_worker_id.project_id,
                                 &remote_worker_id.worker_id.component_id,
                                 function_name,
                                 function_params,
@@ -1159,15 +1153,11 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
 /// This should only be used for generating "debug information" for the stored oplog entries.
 async fn try_get_typed_parameters(
     components: Arc<dyn ComponentService>,
-    project_id: &ProjectId,
     component_id: &ComponentId,
     function_name: &str,
     params: &[WitValue],
 ) -> Vec<ValueAndType> {
-    if let Ok(component) = components
-        .get_metadata(project_id, component_id, None)
-        .await
-    {
+    if let Ok(component) = components.get_metadata(component_id, None).await {
         if let Ok(Some(function)) = component.metadata.find_function(function_name).await {
             if function.analysed_export.parameters.len() == params.len() {
                 return params

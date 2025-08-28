@@ -262,6 +262,7 @@ impl SchedulerServiceDefault {
                                     "scheduler",
                                     worker_id = owned_worker_id.worker_id.to_string()
                                 );
+
                                 self.worker_access
                                     .activate_worker(&account_id, &owned_worker_id)
                                     .instrument(span)

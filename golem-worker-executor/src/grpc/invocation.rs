@@ -448,7 +448,6 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
     let component_metadata = worker
         .component_service()
         .get_metadata(
-            &metadata.project_id,
             &metadata.worker_id.component_id,
             Some(assumed_component_version),
         )
