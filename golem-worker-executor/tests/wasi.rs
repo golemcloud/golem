@@ -39,9 +39,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use test_r::{inherit_test_dep, test};
 use tokio::spawn;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
-use tracing::{info, Instrument};
+use tracing::{debug, info, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -1390,6 +1391,406 @@ async fn sleep(
     let duration = start.elapsed();
 
     check!(duration.as_secs() < 2);
+}
+
+#[test]
+#[tracing::instrument]
+async fn sleep_less_than_suspend_threshold(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let component_id = executor.component("clock-service").store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "clock-service-2")
+        .await;
+
+    let start = Instant::now();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep}",
+            vec![1u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
+        .await
+        .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    drop(executor);
+
+    let duration = start.elapsed();
+    debug!("duration: {:?}", duration);
+
+    check!(duration.as_secs() >= 1);
+    check!(result == vec![Value::Bool(true)]);
+}
+
+#[test]
+#[tracing::instrument]
+async fn sleep_longer_than_suspend_threshold(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let component_id = executor.component("clock-service").store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "clock-service-3")
+        .await;
+
+    let start = Instant::now();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep}",
+            vec![12u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
+        .await
+        .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    drop(executor);
+
+    let duration = start.elapsed();
+    debug!("duration: {:?}", duration);
+
+    check!(duration.as_secs() >= 12);
+    check!(result == vec![Value::Bool(true)]);
+}
+
+async fn simulated_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/simulated-slow-request",
+                get(move || async move {
+                    tokio::time::sleep(delay).await;
+                    "slow response".to_string()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    (host_http_port, http_server)
+}
+
+#[test]
+#[tracing::instrument]
+async fn sleep_less_than_suspend_threshold_while_awaiting_response(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let (port, server) = simulated_slow_request_server(Duration::from_secs(10)).await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let component_id = executor.component("clock-service").store().await;
+    let worker_id = executor
+        .start_worker_with(&component_id, "clock-service-4", vec![], env, vec![])
+        .await;
+
+    let start = Instant::now();
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep-during-request}",
+            vec![2u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    server.abort();
+    drop(executor);
+
+    let duration = start.elapsed();
+    debug!("duration: {:?}", duration);
+
+    check!(duration.as_secs() >= 2);
+    check!(duration.as_secs() < 10);
+    check!(result == vec![Value::String("Timeout".to_string())]);
+}
+
+#[test]
+#[tracing::instrument]
+async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let (port, server) = simulated_slow_request_server(Duration::from_secs(5)).await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let component_id = executor.component("clock-service").store().await;
+    let worker_id = executor
+        .start_worker_with(&component_id, "clock-service-5", vec![], env, vec![])
+        .await;
+
+    let start = Instant::now();
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep-during-request}",
+            vec![30u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    server.abort();
+    drop(executor);
+
+    let duration = start.elapsed();
+    debug!("duration: {:?}", duration);
+
+    check!(duration.as_secs() >= 5);
+    check!(duration.as_secs() < 30);
+    check!(result == vec![Value::String("slow response".to_string())]);
+}
+
+#[test]
+#[tracing::instrument]
+async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let (port, server) = simulated_slow_request_server(Duration::from_secs(30)).await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let component_id = executor.component("clock-service").store().await;
+    let worker_id = executor
+        .start_worker_with(&component_id, "clock-service-6", vec![], env, vec![])
+        .await;
+
+    let start = Instant::now();
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep-during-request}",
+            vec![15u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    server.abort();
+    drop(executor);
+
+    let duration = start.elapsed();
+    debug!("duration: {:?}", duration);
+
+    check!(duration.as_secs() >= 15);
+    check!(duration.as_secs() < 30);
+    check!(result == vec![Value::String("Timeout".to_string())]);
+}
+
+#[test]
+#[tracing::instrument]
+async fn sleep_and_awaiting_parallel_responses(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let (port, server) = simulated_slow_request_server(Duration::from_secs(2)).await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let component_id = executor.component("clock-service").store().await;
+    let worker_id = executor
+        .start_worker_with(&component_id, "clock-service-7", vec![], env, vec![])
+        .await;
+
+    let start = Instant::now();
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep-during-parallel-requests}",
+            vec![20u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    server.abort();
+    drop(executor);
+    let duration = start.elapsed();
+    debug!("duration: {:?}", duration);
+
+    info!("Restarting worker...");
+    let executor = crate::common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
+    info!("Worker restarted");
+
+    let healthcheck_result = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
+        .await
+        .unwrap();
+
+    check!(duration.as_secs() >= 10);
+    check!(duration.as_secs() < 20);
+    check!(result == vec![Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string())]);
+    check!(healthcheck_result == vec![Value::Bool(true)]);
+}
+
+#[test]
+#[tracing::instrument]
+async fn sleep_below_threshold_between_http_responses(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let (port, server) = simulated_slow_request_server(Duration::from_secs(1)).await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let component_id = executor.component("clock-service").store().await;
+    let worker_id = executor
+        .start_worker_with(&component_id, "clock-service-8", vec![], env, vec![])
+        .await;
+
+    let _ = executor.log_output(&worker_id).await;
+
+    let start = Instant::now();
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep-between-requests}",
+            vec![1u64.into_value_and_type(), 5u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    server.abort();
+    drop(executor);
+    let duration = start.elapsed();
+    debug!("duration: {:?}", duration);
+
+    info!("Restarting worker...");
+    let executor = crate::common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
+    info!("Worker restarted");
+
+    let healthcheck_result = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
+        .await
+        .unwrap();
+
+    check!(duration.as_secs() >= 10);
+    check!(result == vec![Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string())]);
+    check!(healthcheck_result == vec![Value::Bool(true)]);
+}
+
+#[test]
+#[tracing::instrument]
+async fn sleep_above_threshold_between_http_responses(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let (port, server) = simulated_slow_request_server(Duration::from_secs(1)).await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let component_id = executor.component("clock-service").store().await;
+    let worker_id = executor
+        .start_worker_with(&component_id, "clock-service-9", vec![], env, vec![])
+        .await;
+
+    let start = Instant::now();
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep-between-requests}",
+            vec![12u64.into_value_and_type(), 2u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    server.abort();
+    drop(executor);
+    let duration = start.elapsed();
+    debug!("duration: {:?}", duration);
+
+    info!("Restarting worker...");
+    let executor = crate::common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
+    info!("Worker restarted");
+
+    let healthcheck_result = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
+        .await
+        .unwrap();
+
+    check!(duration.as_secs() >= 14);
+    check!(
+        result
+            == vec![Value::String(
+                "Ok(\"slow response\")\nOk(\"slow response\")\n".to_string()
+            )]
+    );
+    check!(healthcheck_result == vec![Value::Bool(true)]);
 }
 
 #[test]

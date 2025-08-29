@@ -195,6 +195,7 @@ pub mod golem {
                 NotEqual,
                 Like,
                 NotLike,
+                StartsWith,
             }
             impl ::core::fmt::Debug for StringFilterComparator {
                 fn fmt(
@@ -214,6 +215,9 @@ pub mod golem {
                         StringFilterComparator::NotLike => {
                             f.debug_tuple("StringFilterComparator::NotLike").finish()
                         }
+                        StringFilterComparator::StartsWith => {
+                            f.debug_tuple("StringFilterComparator::StartsWith").finish()
+                        }
                     }
                 }
             }
@@ -228,6 +232,7 @@ pub mod golem {
                         1 => StringFilterComparator::NotEqual,
                         2 => StringFilterComparator::Like,
                         3 => StringFilterComparator::NotLike,
+                        4 => StringFilterComparator::StartsWith,
                         _ => panic!("invalid enum discriminant"),
                     }
                 }
@@ -8719,8 +8724,8 @@ pub(crate) use __export_shopping_cart_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5821] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb9,\x01A\x02\x01A\x13\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5833] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xc5,\x01A\x02\x01A\x13\
 \x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
 method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
 le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
@@ -8787,59 +8792,59 @@ tsy\x09min-delay\x01\x09max-delay\x01\x0amultiplieru\x11max-jitter-factor\x14\x0
 ide-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x17\x01m\x02\x09au\
 tomatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x19\x01m\x06\x05equal\x09no\
 t-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-compar\
-ator\x03\0\x1b\x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\0\x18strin\
-g-filter-comparator\x03\0\x1d\x01m\x07\x07running\x04idle\x09suspended\x0binterr\
-upted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1f\x01r\x02\x0a\
-comparator\x1e\x05values\x04\0\x12worker-name-filter\x03\0!\x01r\x02\x0acomparat\
-or\x1c\x05value\x20\x04\0\x14worker-status-filter\x03\0#\x01r\x02\x0acomparator\x1c\
-\x05valuew\x04\0\x15worker-version-filter\x03\0%\x01r\x02\x0acomparator\x1c\x05v\
-aluew\x04\0\x18worker-created-at-filter\x03\0'\x01r\x03\x04names\x0acomparator\x1e\
-\x05values\x04\0\x11worker-env-filter\x03\0)\x01r\x03\x04names\x0acomparator\x1e\
-\x05values\x04\0\x1eworker-wasi-config-vars-filter\x03\0+\x01q\x06\x04name\x01\"\
-\0\x06status\x01$\0\x07version\x01&\0\x0acreated-at\x01(\0\x03env\x01*\0\x10wasi\
--config-vars\x01,\0\x04\0\x16worker-property-filter\x03\0-\x01p.\x01r\x01\x07fil\
-ters/\x04\0\x11worker-all-filter\x03\00\x01p1\x01r\x01\x07filters2\x04\0\x11work\
-er-any-filter\x03\03\x01ps\x01o\x02ss\x01p6\x01r\x07\x09worker-id\x09\x04args5\x03\
-env7\x10wasi-config-vars7\x06status\x20\x11component-versionw\x0bretry-countw\x04\
-\0\x0fworker-metadata\x03\08\x04\0\x0bget-workers\x03\x01\x01q\x02\x15revert-to-\
-oplog-index\x01\x0b\0\x17revert-last-invocations\x01w\0\x04\0\x14revert-worker-t\
-arget\x03\0;\x01m\x02\x08original\x06forked\x04\0\x0bfork-result\x03\0=\x01k4\x01\
-i:\x01@\x03\x0ccomponent-id\x03\x06filter?\x07precise\x7f\0\xc0\0\x04\0\x18[cons\
-tructor]get-workers\x01A\x01h:\x01p9\x01k\xc3\0\x01@\x01\x04self\xc2\0\0\xc4\0\x04\
-\0\x1c[method]get-workers.get-next\x01E\x01@\0\0\x0d\x04\0\x0ecreate-promise\x01\
-F\x01p}\x01@\x01\x0apromise-id\x0d\0\xc7\0\x04\0\x0dawait-promise\x01H\x01k\xc7\0\
-\x01@\x01\x0apromise-id\x0d\0\xc9\0\x04\0\x0cpoll-promise\x01J\x01@\x02\x0apromi\
-se-id\x0d\x04data\xc7\0\0\x7f\x04\0\x10complete-promise\x01K\x01@\x01\x0apromise\
--id\x0d\x01\0\x04\0\x0edelete-promise\x01L\x01@\0\0\x0b\x04\0\x0fget-oplog-index\
-\x01M\x01@\x01\x09oplog-idx\x0b\x01\0\x04\0\x0fset-oplog-index\x01N\x01@\x01\x08\
-replicas}\x01\0\x04\0\x0coplog-commit\x01O\x04\0\x14mark-begin-operation\x01M\x01\
-@\x01\x05begin\x0b\x01\0\x04\0\x12mark-end-operation\x01P\x01@\0\0\x16\x04\0\x10\
-get-retry-policy\x01Q\x01@\x01\x10new-retry-policy\x16\x01\0\x04\0\x10set-retry-\
-policy\x01R\x01@\0\0\x18\x04\0\x1bget-oplog-persistence-level\x01S\x01@\x01\x15n\
-ew-persistence-level\x18\x01\0\x04\0\x1bset-oplog-persistence-level\x01T\x01@\0\0\
-\x7f\x04\0\x14get-idempotence-mode\x01U\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14\
-set-idempotence-mode\x01V\x01@\0\0\x05\x04\0\x18generate-idempotency-key\x01W\x01\
-@\x03\x09worker-id\x09\x0etarget-version\x0f\x04mode\x1a\x01\0\x04\0\x0dupdate-w\
-orker\x01X\x01@\0\09\x04\0\x11get-self-metadata\x01Y\x01k9\x01@\x01\x09worker-id\
-\x09\0\xda\0\x04\0\x13get-worker-metadata\x01[\x01@\x03\x10source-worker-id\x09\x10\
-target-worker-id\x09\x11oplog-idx-cut-off\x0b\x01\0\x04\0\x0bfork-worker\x01\\\x01\
-@\x02\x09worker-id\x09\x0drevert-target<\x01\0\x04\0\x0drevert-worker\x01]\x01k\x03\
-\x01@\x01\x13component-references\0\xde\0\x04\0\x14resolve-component-id\x01_\x01\
-k\x09\x01@\x02\x13component-references\x0bworker-names\0\xe0\0\x04\0\x11resolve-\
-worker-id\x01a\x04\0\x18resolve-worker-id-strict\x01a\x01@\x01\x08new-names\0>\x04\
-\0\x04fork\x01b\x03\0\x14golem:api/host@1.1.7\x05\x0b\x01B\x17\x01r\x04\x0aprodu\
-ct-ids\x04names\x05pricev\x08quantityy\x04\0\x0cproduct-item\x03\0\0\x01p\x01\x01\
-r\x04\x08order-ids\x05items\x02\x05totalv\x09timestampw\x04\0\x05order\x03\0\x03\
-\x01r\x01\x08order-ids\x04\0\x12order-confirmation\x03\0\x05\x01q\x02\x05error\x01\
-s\0\x07success\x01\x06\0\x04\0\x0fcheckout-result\x03\0\x07\x01@\x01\x07user-ids\
-\x01\0\x04\0\x0finitialize-cart\x01\x09\x01@\x01\x04item\x01\x01\0\x04\0\x08add-\
-item\x01\x0a\x01@\x01\x0aproduct-ids\x01\0\x04\0\x0bremove-item\x01\x0b\x01@\x02\
-\x0aproduct-ids\x08quantityy\x01\0\x04\0\x14update-item-quantity\x01\x0c\x01@\0\0\
-\x08\x04\0\x08checkout\x01\x0d\x01@\0\0\x02\x04\0\x11get-cart-contents\x01\x0e\x01\
-@\x01\x05count}\x01\0\x04\0\x0cforce-commit\x01\x0f\x04\0\x0cgolem:it/api\x05\x0c\
-\x04\0\x16golem:it/shopping-cart\x04\0\x0b\x13\x01\0\x0dshopping-cart\x03\0\0\0G\
-\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen\
--rust\x060.41.0";
+ator\x03\0\x1b\x01m\x05\x05equal\x09not-equal\x04like\x08not-like\x0bstarts-with\
+\x04\0\x18string-filter-comparator\x03\0\x1d\x01m\x07\x07running\x04idle\x09susp\
+ended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\
+\x1f\x01r\x02\x0acomparator\x1e\x05values\x04\0\x12worker-name-filter\x03\0!\x01\
+r\x02\x0acomparator\x1c\x05value\x20\x04\0\x14worker-status-filter\x03\0#\x01r\x02\
+\x0acomparator\x1c\x05valuew\x04\0\x15worker-version-filter\x03\0%\x01r\x02\x0ac\
+omparator\x1c\x05valuew\x04\0\x18worker-created-at-filter\x03\0'\x01r\x03\x04nam\
+es\x0acomparator\x1e\x05values\x04\0\x11worker-env-filter\x03\0)\x01r\x03\x04nam\
+es\x0acomparator\x1e\x05values\x04\0\x1eworker-wasi-config-vars-filter\x03\0+\x01\
+q\x06\x04name\x01\"\0\x06status\x01$\0\x07version\x01&\0\x0acreated-at\x01(\0\x03\
+env\x01*\0\x10wasi-config-vars\x01,\0\x04\0\x16worker-property-filter\x03\0-\x01\
+p.\x01r\x01\x07filters/\x04\0\x11worker-all-filter\x03\00\x01p1\x01r\x01\x07filt\
+ers2\x04\0\x11worker-any-filter\x03\03\x01ps\x01o\x02ss\x01p6\x01r\x07\x09worker\
+-id\x09\x04args5\x03env7\x10wasi-config-vars7\x06status\x20\x11component-version\
+w\x0bretry-countw\x04\0\x0fworker-metadata\x03\08\x04\0\x0bget-workers\x03\x01\x01\
+q\x02\x15revert-to-oplog-index\x01\x0b\0\x17revert-last-invocations\x01w\0\x04\0\
+\x14revert-worker-target\x03\0;\x01m\x02\x08original\x06forked\x04\0\x0bfork-res\
+ult\x03\0=\x01k4\x01i:\x01@\x03\x0ccomponent-id\x03\x06filter?\x07precise\x7f\0\xc0\
+\0\x04\0\x18[constructor]get-workers\x01A\x01h:\x01p9\x01k\xc3\0\x01@\x01\x04sel\
+f\xc2\0\0\xc4\0\x04\0\x1c[method]get-workers.get-next\x01E\x01@\0\0\x0d\x04\0\x0e\
+create-promise\x01F\x01p}\x01@\x01\x0apromise-id\x0d\0\xc7\0\x04\0\x0dawait-prom\
+ise\x01H\x01k\xc7\0\x01@\x01\x0apromise-id\x0d\0\xc9\0\x04\0\x0cpoll-promise\x01\
+J\x01@\x02\x0apromise-id\x0d\x04data\xc7\0\0\x7f\x04\0\x10complete-promise\x01K\x01\
+@\x01\x0apromise-id\x0d\x01\0\x04\0\x0edelete-promise\x01L\x01@\0\0\x0b\x04\0\x0f\
+get-oplog-index\x01M\x01@\x01\x09oplog-idx\x0b\x01\0\x04\0\x0fset-oplog-index\x01\
+N\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01O\x04\0\x14mark-begin-ope\
+ration\x01M\x01@\x01\x05begin\x0b\x01\0\x04\0\x12mark-end-operation\x01P\x01@\0\0\
+\x16\x04\0\x10get-retry-policy\x01Q\x01@\x01\x10new-retry-policy\x16\x01\0\x04\0\
+\x10set-retry-policy\x01R\x01@\0\0\x18\x04\0\x1bget-oplog-persistence-level\x01S\
+\x01@\x01\x15new-persistence-level\x18\x01\0\x04\0\x1bset-oplog-persistence-leve\
+l\x01T\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01U\x01@\x01\x0aidempotent\x7f\
+\x01\0\x04\0\x14set-idempotence-mode\x01V\x01@\0\0\x05\x04\0\x18generate-idempot\
+ency-key\x01W\x01@\x03\x09worker-id\x09\x0etarget-version\x0f\x04mode\x1a\x01\0\x04\
+\0\x0dupdate-worker\x01X\x01@\0\09\x04\0\x11get-self-metadata\x01Y\x01k9\x01@\x01\
+\x09worker-id\x09\0\xda\0\x04\0\x13get-worker-metadata\x01[\x01@\x03\x10source-w\
+orker-id\x09\x10target-worker-id\x09\x11oplog-idx-cut-off\x0b\x01\0\x04\0\x0bfor\
+k-worker\x01\\\x01@\x02\x09worker-id\x09\x0drevert-target<\x01\0\x04\0\x0drevert\
+-worker\x01]\x01k\x03\x01@\x01\x13component-references\0\xde\0\x04\0\x14resolve-\
+component-id\x01_\x01k\x09\x01@\x02\x13component-references\x0bworker-names\0\xe0\
+\0\x04\0\x11resolve-worker-id\x01a\x04\0\x18resolve-worker-id-strict\x01a\x01@\x01\
+\x08new-names\0>\x04\0\x04fork\x01b\x03\0\x14golem:api/host@1.1.7\x05\x0b\x01B\x17\
+\x01r\x04\x0aproduct-ids\x04names\x05pricev\x08quantityy\x04\0\x0cproduct-item\x03\
+\0\0\x01p\x01\x01r\x04\x08order-ids\x05items\x02\x05totalv\x09timestampw\x04\0\x05\
+order\x03\0\x03\x01r\x01\x08order-ids\x04\0\x12order-confirmation\x03\0\x05\x01q\
+\x02\x05error\x01s\0\x07success\x01\x06\0\x04\0\x0fcheckout-result\x03\0\x07\x01\
+@\x01\x07user-ids\x01\0\x04\0\x0finitialize-cart\x01\x09\x01@\x01\x04item\x01\x01\
+\0\x04\0\x08add-item\x01\x0a\x01@\x01\x0aproduct-ids\x01\0\x04\0\x0bremove-item\x01\
+\x0b\x01@\x02\x0aproduct-ids\x08quantityy\x01\0\x04\0\x14update-item-quantity\x01\
+\x0c\x01@\0\0\x08\x04\0\x08checkout\x01\x0d\x01@\0\0\x02\x04\0\x11get-cart-conte\
+nts\x01\x0e\x01@\x01\x05count}\x01\0\x04\0\x0cforce-commit\x01\x0f\x04\0\x0cgole\
+m:it/api\x05\x0c\x04\0\x16golem:it/shopping-cart\x04\0\x0b\x13\x01\0\x0dshopping\
+-cart\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.\
+1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

@@ -8045,9 +8045,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "2.2.1"
+version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a250edb45c30e3911a5d8c9117fd494b980daa7bf3d12df0a15466c4b1146e90"
+checksum = "8bbab8358cff750ac33349836f8f98a361373d482f259ece27afd733a30ab54f"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -8057,9 +8057,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "4.0.0"
+version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "230a4bbf5aabc86a040da6d02c8395a485bf8d106ed2eb2a16c3cf07cd4ba3a5"
+checksum = "47bed75c007800e882fc5f0749ff11399dc7ed69a7df4bab017e0fe1262e8740"
 dependencies = [
  "anstream",
  "anstyle",
@@ -8080,9 +8080,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "1.3.1"
+version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "631a1357747913d4e66cf97d3f2af25c6fad928339f5139d9d60e5e9b725f679"
+checksum = "5c931eeaf755e36b90143fbdcd54439825dda310bc877e6d76edcd65a6fa42fd"
 dependencies = [
  "darling 0.21.2",
  "humantime",

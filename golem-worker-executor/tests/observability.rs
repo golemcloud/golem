@@ -208,7 +208,7 @@ async fn search_oplog_1(
     drop(executor);
 
     assert_eq!(result1.len(), 5); // two invocations and two log messages and the get-cart-contents result
-    assert_eq!(result2.len(), 2); // get_preopened_directories, get_random_bytes
+    assert_eq!(result2.len(), 1); // get_random_bytes
     assert_eq!(result3.len(), 3); // two invocations and the get-cart-contents result
 }
 
