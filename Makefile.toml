@@ -180,7 +180,6 @@ array_push ${components} wasi-config
 array_push ${components} wasi-http-incoming-request-handler
 array_push ${components} wasi-http-incoming-request-handler-echo
 array_push ${components} wasi-http-incoming-request-handler-state
-array_push ${components} low-level-agent
 
 for component in ${components}
     echo "Updating wit directory for test component ${component}"
