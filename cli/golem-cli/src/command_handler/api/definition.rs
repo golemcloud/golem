@@ -29,6 +29,7 @@ use crate::model::app::{
 use crate::model::app_raw::HttpApiDefinition;
 use crate::model::component::Component;
 use crate::model::deploy_diff::api_definition::DiffableHttpApiDefinition;
+use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::api_definition::{
     ApiDefinitionExportView, ApiDefinitionGetView, ApiDefinitionNewView, ApiDefinitionUpdateView,
 };
@@ -438,7 +439,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn api_definition(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         name: &str,
         version: &str,
     ) -> anyhow::Result<Option<HttpApiDefinitionResponseData>> {
@@ -462,7 +463,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn update_api_definition(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         manifest_api_definition: &HttpApiDefinitionRequest,
     ) -> anyhow::Result<HttpApiDefinitionResponseData> {
         let clients = self.ctx.golem_clients().await?;
@@ -487,7 +488,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn new_api_definition(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         api_definition: &HttpApiDefinitionRequest,
     ) -> anyhow::Result<HttpApiDefinitionResponseData> {
         let clients = self.ctx.golem_clients().await?;

@@ -62,7 +62,7 @@ struct TokenTableView {
 impl From<&Token> for TokenTableView {
     fn from(value: &Token) -> Self {
         TokenTableView {
-            id: value.id,
+            id: value.id.0,
             created_at: value.created_at,
             expires_at: value.expires_at,
             account_id: value.account_id.to_string(),

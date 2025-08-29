@@ -14,7 +14,7 @@
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
-use golem_client::model::Provider;
+use golem_client::model::{HttpApiDefinitionResponseView, Provider};
 use golem_common::model::api_definition::RouteMethod;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -149,7 +149,7 @@ impl From<String> for ApiDefinitionVersion {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApiDeployment {
     #[serde(rename = "apiDefinitions")]
-    pub api_definitions: Vec<ApiDefinitionInfo>,
+    pub api_definitions: Vec<HttpApiDefinitionResponseView>,
     #[serde(rename = "projectId")]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]

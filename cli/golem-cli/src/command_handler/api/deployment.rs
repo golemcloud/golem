@@ -31,6 +31,7 @@ use crate::model::text::fmt::{log_deploy_diff, log_error, log_warn};
 use anyhow::bail;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use crate::model::environment::ResolvedEnvironmentIdentity;
 
 pub struct ApiDeploymentCommandHandler {
     ctx: Arc<Context>,
@@ -113,7 +114,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn api_deployment(
         &self,
-        app_id: Option<&AppIdentity>,
+        env: Option<&ResolvedEnvironmentIdentity>,
         site: &str,
     ) -> anyhow::Result<Option<ApiDeployment>> {
         let clients = self.ctx.golem_clients().await?;
@@ -138,8 +139,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn create_or_update_api_deployment(
         &self,
-        app_id: Option<&AppIdentity>,
-        site: &HttpApiDeploymentSite,
+        env: Option<&ResolvedEnvironmentIdentity>,        site: &HttpApiDeploymentSite,
         api_deployment: &DiffableHttpApiDeployment,
     ) -> anyhow::Result<ApiDeployment> {
         let clients = self.ctx.golem_clients().await?;
@@ -174,8 +174,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn undeploy_api_definition(
         &self,
-        app_id: Option<&AppIdentity>,
-        site: &HttpApiDeploymentSite,
+        env: Option<&ResolvedEnvironmentIdentity>,        site: &HttpApiDeploymentSite,
         id: &str,
         version: &str,
     ) -> anyhow::Result<()> {
@@ -201,8 +200,7 @@ impl ApiDeploymentCommandHandler {
 
     pub async fn undeploy_api_from_all_sites_for_redeploy(
         &self,
-        app_id: Option<&AppIdentity>,
-        api_definition_name: &HttpApiDefinitionName,
+        env: Option<&ResolvedEnvironmentIdentity>,        api_definition_name: &HttpApiDefinitionName,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
