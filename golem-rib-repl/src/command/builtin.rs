@@ -167,7 +167,7 @@ impl Command for Exports {
         repl_context: &mut ReplContext,
     ) -> Result<Self::Output, Self::ExecutionError> {
         let dependencies = repl_context.get_rib_compiler().get_component_dependencies();
-        
+
         Ok(ExportOutput {
             component_dependencies: dependencies,
             printer_config: input,

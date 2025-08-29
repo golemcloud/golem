@@ -3,13 +3,6 @@
 templates:
   ts:
     build:
-    - command: npx --no @rttist/typegen generate -p components-ts/{{ component_name | to_kebab_case }}
-      sources:
-        - src
-        - ../../common-ts
-      targets:
-        - .metadata
-      dir: ../..
     - command: npx --no rollup -- -c
       sources:
       - src
