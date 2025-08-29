@@ -3,6 +3,13 @@
 templates:
   ts:
     build:
+    - command: npx --no golem-typegen components-ts/{{ component_name | to_kebab_case }}/tsconfig.json --files components-ts/{{ component_name | to_kebab_case }}/src/**/*.ts coomon-ts/src/**/*.ts
+      sources:
+        - src
+        - ../../common-ts
+      targets:
+        - .metadata
+      dir: ../..
     - command: npx --no rollup -- -c
       sources:
       - src

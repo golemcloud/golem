@@ -1,13 +1,7 @@
-import { Project } from "ts-morph";
-//import { TypeMetadata } from "@golemcloud/golem-ts-sdk";
+import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import { Metadata } from '../../../.metadata/generated-types';
 
-const project = new Project({
-    tsConfigFilePath: "./tsconfig.json",
-});
-//
-// const sourceFiles = project.getSourceFiles("src/**/*.ts");
-//
-// TypeMetadata.updateFromSourceFiles(sourceFiles)
+TypeMetadata.loadFromJson(Metadata);
 
 // Import the user module after metadata is ready
 // This needs to be done this way otherwise rollup ends up generating the module,
