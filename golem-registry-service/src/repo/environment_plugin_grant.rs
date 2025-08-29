@@ -236,5 +236,4 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
 
         Ok(result)
     }
-
 }

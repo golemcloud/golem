@@ -15,9 +15,9 @@
 use super::Tracing;
 use assert2::assert;
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceCreateEnvironmentPluginGrantError, RegistryServiceDeleteEnvironmentPluginGrantError,
-    RegistryServiceGetComponentError, RegistryServiceGetEnvironmentPluginGrantError,
-    RegistryServiceGetPluginByIdError,
+    RegistryServiceClient, RegistryServiceCreateEnvironmentPluginGrantError,
+    RegistryServiceDeleteEnvironmentPluginGrantError, RegistryServiceGetComponentError,
+    RegistryServiceGetEnvironmentPluginGrantError, RegistryServiceGetPluginByIdError,
 };
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
