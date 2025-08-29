@@ -51,7 +51,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                         NamedElementSchema {
                             name: "person".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: person.clone(),
+                                element_type: person.clone(),
                             }),
                         },
                         NamedElementSchema {
@@ -78,7 +78,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                     elements: vec![NamedElementSchema {
                         name: "return".to_string(),
                         schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            type_info: location.clone(),
+                            element_type: location.clone(),
                         }),
                     }],
                 }),
@@ -96,7 +96,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                     elements: vec![NamedElementSchema {
                         name: "person-group".to_string(),
                         schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            type_info: list(person),
+                            element_type: list(person),
                         }),
                     }],
                 }),
@@ -111,13 +111,13 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                         NamedElementSchema {
                             name: "place".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: location,
+                                element_type: location,
                             }),
                         },
                         NamedElementSchema {
                             name: "color".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: color,
+                                element_type: color,
                             }),
                         },
                     ],
@@ -144,4 +144,66 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
     ];
 
     agent_types
+}
+
+pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
+    vec![AgentType {
+        type_name: "agent1".to_string(),
+        description: "An example agent using WIT keywords as names".to_string(),
+        constructor: AgentConstructor {
+            name: None,
+            description: "Creates an example agent instance".into(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![
+                    NamedElementSchema {
+                        name: "export".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: u32(),
+                        }),
+                    },
+                    NamedElementSchema {
+                        name: "func".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: option(str()),
+                        }),
+                    },
+                ],
+            }),
+        },
+        methods: vec![
+            AgentMethod {
+                name: "import".to_string(),
+                description: "returns a random string".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                output_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "interface".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    }],
+                }),
+            },
+            AgentMethod {
+                name: "package".to_string(),
+                description: "adds two numbers".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: crate::model::agent::wit::WIT_KEYWORDS
+                        .iter()
+                        .map(|keyword| NamedElementSchema {
+                            name: keyword.to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
+                        })
+                        .collect(),
+                }),
+                output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            },
+        ],
+        dependencies: vec![],
+    }]
 }

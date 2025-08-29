@@ -1,7 +1,5 @@
-use std::io::Result;
-
 #[cfg(feature = "protobuf")]
-fn main() -> Result<()> {
+fn main() -> miette::Result<()> {
     use std::env;
 
     let wasm_ast_root =
@@ -14,14 +12,19 @@ fn main() -> Result<()> {
         ".",
         "#[cfg_attr(feature=\"bincode\", derive(bincode::Encode, bincode::Decode))]",
     );
-    config.compile_protos(
-        &[
+
+    let file_descriptors = protox::compile(
+        [
             "proto/wasm/rpc/val.proto",
             "proto/wasm/rpc/witvalue.proto",
             "proto/wasm/rpc/value_and_type.proto",
         ],
-        &[&format!("{wasm_ast_root}/proto"), &"proto".to_string()],
+        [&format!("{wasm_ast_root}/proto"), &"proto".to_string()],
     )?;
+
+    config
+        .compile_fds(file_descriptors)
+        .map_err(|err| miette::miette!(err))?;
     Ok(())
 }
 
@@ -42,6 +45,6 @@ fn find_package_root(name: &str) -> String {
 }
 
 #[cfg(not(feature = "protobuf"))]
-fn main() -> Result<()> {
+fn main() -> std::io::Result<()> {
     Ok(())
 }

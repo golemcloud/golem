@@ -523,96 +523,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_and_await_function
-  /v1/components/{component_id}/invoke-and-await:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function and await its resolution on a new worker with a random generated name
-      description: |-
-        Ideal for invoking ephemeral components, but works with durable ones as well.
-        Supply the parameters in the request body as JSON.
-      parameters:
-      - name: component_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: Idempotency-Key
-        schema:
-          type: string
-        in: header
-        required: false
-        deprecated: false
-        explode: true
-      - name: function
-        schema:
-          type: string
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResult'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: invoke_and_await_function_without_name
   /v1/components/{component_id}/workers/{worker_name}/invoke:
     post:
       tags:
@@ -709,97 +619,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_function
-  /v1/components/{component_id}/invoke:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function on a new worker with a random generated name
-      description: |-
-        Ideal for invoking ephemeral components, but works with durable ones as well.
-        A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
-      parameters:
-      - name: component_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: Idempotency-Key
-        schema:
-          type: string
-        in: header
-        required: false
-        deprecated: false
-        explode: true
-      - name: function
-        schema:
-          type: string
-        in: query
-        description: name of the exported function to be invoked
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: invoke_function_without_name
   /v1/components/{component_id}/workers/{worker_name}/complete:
     post:
       tags:
@@ -3430,40 +3249,6 @@ components:
     ActivatePluginResponse:
       type: object
       title: ActivatePluginResponse
-    AgentInstanceDescription:
-      type: object
-      title: AgentInstanceDescription
-      required:
-      - createdAt
-      - agentParameters
-      properties:
-        createdAt:
-          type: string
-          format: date-time
-        agentParameters:
-          $ref: '#/components/schemas/DataValue'
-    AgentInstanceKey:
-      type: object
-      title: AgentInstanceKey
-      required:
-      - agentType
-      - agentId
-      properties:
-        agentType:
-          type: string
-        agentId:
-          type: string
-    AgentInstanceMetadata:
-      type: object
-      title: AgentInstanceMetadata
-      required:
-      - key
-      - description
-      properties:
-        key:
-          $ref: '#/components/schemas/AgentInstanceKey'
-        description:
-          $ref: '#/components/schemas/AgentInstanceDescription'
     AnalysedResourceMode:
       type: string
       enum:
@@ -3861,62 +3646,6 @@ components:
           type: string
         subdomain:
           type: string
-    BinaryReference:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/BinaryReference_Url'
-      - $ref: '#/components/schemas/BinaryReference_BinarySource'
-      discriminator:
-        propertyName: type
-        mapping:
-          Url: '#/components/schemas/BinaryReference_Url'
-          Inline: '#/components/schemas/BinaryReference_BinarySource'
-    BinaryReference_BinarySource:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Inline
-            example: Inline
-      - $ref: '#/components/schemas/BinarySource'
-    BinaryReference_Url:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Url
-            example: Url
-      - $ref: '#/components/schemas/Url'
-    BinarySource:
-      type: object
-      title: BinarySource
-      required:
-      - data
-      - binaryType
-      properties:
-        data:
-          type: array
-          items:
-            type: integer
-            format: uint8
-        binaryType:
-          $ref: '#/components/schemas/BinaryType'
-    BinaryType:
-      type: object
-      title: BinaryType
-      required:
-      - mimeType
-      properties:
-        mimeType:
-          type: string
     CancelInvocationParameters:
       type: object
       title: CancelInvocationParameters
@@ -4018,21 +3747,6 @@ components:
       enum:
       - read-only
       - read-write
-    CreateAgentInstanceParameters:
-      type: object
-      title: CreateAgentInstanceParameters
-      required:
-      - timestamp
-      - key
-      - parameters
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        key:
-          $ref: '#/components/schemas/AgentInstanceKey'
-        parameters:
-          $ref: '#/components/schemas/DataValue'
     CreateParameters:
       type: object
       title: CreateParameters
@@ -4086,40 +3800,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-    DataValue:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/DataValue_ElementValues'
-      - $ref: '#/components/schemas/DataValue_NamedElementValues'
-      discriminator:
-        propertyName: type
-        mapping:
-          Tuple: '#/components/schemas/DataValue_ElementValues'
-          Multimodal: '#/components/schemas/DataValue_NamedElementValues'
-    DataValue_ElementValues:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Tuple
-            example: Tuple
-      - $ref: '#/components/schemas/ElementValues'
-    DataValue_NamedElementValues:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Multimodal
-            example: Multimodal
-      - $ref: '#/components/schemas/NamedElementValues'
     DeactivatePluginParameters:
       type: object
       title: DeactivatePluginParameters
@@ -4138,30 +3818,6 @@ components:
     DeleteWorkerResponse:
       type: object
       title: DeleteWorkerResponse
-    DescribeResourceParameters:
-      type: object
-      title: DescribeResourceParameters
-      required:
-      - timestamp
-      - id
-      - resourceOwner
-      - resourceName
-      - resourceParams
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        id:
-          type: integer
-          format: uint64
-        resourceOwner:
-          type: string
-        resourceName:
-          type: string
-        resourceParams:
-          type: array
-          items:
-            $ref: '#/components/schemas/ValueAndType'
     DomainRequest:
       type: object
       title: DomainRequest
@@ -4174,76 +3830,6 @@ components:
           format: uuid
         domainName:
           type: string
-    DropAgentInstanceParameters:
-      type: object
-      title: DropAgentInstanceParameters
-      required:
-      - timestamp
-      - key
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        key:
-          $ref: '#/components/schemas/AgentInstanceKey'
-    ElementValue:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/ElementValue_ValueAndType'
-      - $ref: '#/components/schemas/ElementValue_TextReference'
-      - $ref: '#/components/schemas/ElementValue_BinaryReference'
-      discriminator:
-        propertyName: type
-        mapping:
-          ComponentModel: '#/components/schemas/ElementValue_ValueAndType'
-          UnstructuredText: '#/components/schemas/ElementValue_TextReference'
-          UnstructuredBinary: '#/components/schemas/ElementValue_BinaryReference'
-    ElementValue_BinaryReference:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - UnstructuredBinary
-            example: UnstructuredBinary
-      - $ref: '#/components/schemas/BinaryReference'
-    ElementValue_TextReference:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - UnstructuredText
-            example: UnstructuredText
-      - $ref: '#/components/schemas/TextReference'
-    ElementValue_ValueAndType:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ComponentModel
-            example: ComponentModel
-      - $ref: '#/components/schemas/ValueAndType'
-    ElementValues:
-      type: object
-      title: ElementValues
-      required:
-      - elements
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/ElementValue'
     Empty:
       type: object
       title: Empty
@@ -4380,34 +3966,6 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
-    ExportedResourceInstanceDescription:
-      type: object
-      title: ExportedResourceInstanceDescription
-      required:
-      - createdAt
-      - resourceOwner
-      - resourceName
-      properties:
-        createdAt:
-          type: string
-          format: date-time
-        resourceOwner:
-          type: string
-        resourceName:
-          type: string
-        resourceParams:
-          type: array
-          items:
-            type: string
-    ExportedResourceInstanceKey:
-      type: object
-      title: ExportedResourceInstanceKey
-      required:
-      - resourceId
-      properties:
-        resourceId:
-          type: integer
-          format: uint64
     ExportedResourceMetadata:
       type: object
       title: ExportedResourceMetadata
@@ -4416,9 +3974,10 @@ components:
       - description
       properties:
         key:
-          $ref: '#/components/schemas/ExportedResourceInstanceKey'
+          type: integer
+          format: uint64
         description:
-          $ref: '#/components/schemas/ExportedResourceInstanceDescription'
+          $ref: '#/components/schemas/WorkerResourceDescription'
     FailedUpdate:
       type: object
       title: FailedUpdate
@@ -4799,27 +4358,6 @@ components:
           type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
-    NamedElementValue:
-      type: object
-      title: NamedElementValue
-      required:
-      - name
-      - value
-      properties:
-        name:
-          type: string
-        value:
-          $ref: '#/components/schemas/ElementValue'
-    NamedElementValues:
-      type: object
-      title: NamedElementValues
-      required:
-      - elements
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/NamedElementValue'
     OpenApiHttpApiDefinitionResponse:
       type: object
       title: OpenApiHttpApiDefinitionResponse
@@ -5075,7 +4613,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_LogParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
       - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
@@ -5086,8 +4623,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_CreateAgentInstanceParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_DropAgentInstanceParameters'
       discriminator:
         propertyName: type
         mapping:
@@ -5113,7 +4648,6 @@ components:
           GrowMemory: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
           CreateResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
           DropResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-          DescribeResource: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
           Log: '#/components/schemas/PublicOplogEntry_LogParameters'
           Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
@@ -5124,8 +4658,6 @@ components:
           FinishSpan: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
           SetSpanAttribute: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
           ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
-          CreateAgentInstance: '#/components/schemas/PublicOplogEntry_CreateAgentInstanceParameters'
-          DropAgentInstance: '#/components/schemas/PublicOplogEntry_DropAgentInstanceParameters'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
@@ -5222,27 +4754,6 @@ components:
             - ChangeRetryPolicy
             example: ChangeRetryPolicy
       - $ref: '#/components/schemas/ChangeRetryPolicyParameters'
-    PublicOplogEntry_CreateAgentInstanceParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - CreateAgentInstance
-            example: CreateAgentInstance
-      - $ref: '#/components/schemas/CreateAgentInstanceParameters'
     PublicOplogEntry_CreateParameters:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -5285,48 +4796,6 @@ components:
             - DeactivatePlugin
             example: DeactivatePlugin
       - $ref: '#/components/schemas/DeactivatePluginParameters'
-    PublicOplogEntry_DescribeResourceParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - DescribeResource
-            example: DescribeResource
-      - $ref: '#/components/schemas/DescribeResourceParameters'
-    PublicOplogEntry_DropAgentInstanceParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - DropAgentInstance
-            example: DropAgentInstance
-      - $ref: '#/components/schemas/DropAgentInstanceParameters'
     PublicOplogEntry_EndRegionParameters:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -6085,6 +5554,7 @@ components:
       - NotEqual
       - Like
       - NotLike
+      - StartsWith
     SuccessfulUpdate:
       type: object
       title: SuccessfulUpdate
@@ -6120,58 +5590,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-    TextReference:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/TextReference_Url'
-      - $ref: '#/components/schemas/TextReference_TextSource'
-      discriminator:
-        propertyName: type
-        mapping:
-          Url: '#/components/schemas/TextReference_Url'
-          Inline: '#/components/schemas/TextReference_TextSource'
-    TextReference_TextSource:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Inline
-            example: Inline
-      - $ref: '#/components/schemas/TextSource'
-    TextReference_Url:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Url
-            example: Url
-      - $ref: '#/components/schemas/Url'
-    TextSource:
-      type: object
-      title: TextSource
-      required:
-      - data
-      properties:
-        data:
-          type: string
-        textType:
-          $ref: '#/components/schemas/TextType'
-    TextType:
-      type: object
-      title: TextType
-      required:
-      - languageCode
-      properties:
-        languageCode:
-          type: string
     TimestampParameter:
       type: object
       title: TimestampParameter
@@ -6405,14 +5823,6 @@ components:
     UpdateWorkerResponse:
       type: object
       title: UpdateWorkerResponse
-    Url:
-      type: object
-      title: Url
-      required:
-      - value
-      properties:
-        value:
-          type: string
     ValueAndOptionalType:
       type: object
       required:
@@ -6697,7 +6107,6 @@ components:
       - componentSize
       - totalLinearMemorySize
       - exportedResourceInstances
-      - agentInstances
       - activePlugins
       - skippedRegions
       - deletedRegions
@@ -6751,10 +6160,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ExportedResourceMetadata'
-        agentInstances:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentInstanceMetadata'
         activePlugins:
           type: array
           items:
@@ -6802,6 +6207,21 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/WorkerFilter'
+    WorkerResourceDescription:
+      type: object
+      title: WorkerResourceDescription
+      required:
+      - createdAt
+      - resourceOwner
+      - resourceName
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        resourceOwner:
+          type: string
+        resourceName:
+          type: string
     WorkerStatus:
       type: string
       description: |-

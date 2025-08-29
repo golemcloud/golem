@@ -45,6 +45,7 @@ pub struct AgentWrapperGeneratorContext {
     pub multimodal_variants: HashMap<String, String>,
     pub wrapper_package_wit_source: String,
     pub single_file_wrapper_wit_source: String,
+    pub has_types: bool,
 }
 
 pub struct AgentWrapperGeneratorContextState {
@@ -54,6 +55,7 @@ pub struct AgentWrapperGeneratorContextState {
     multimodal_variants: HashMap<String, String>,
     wrapper_package_wit_source: Option<String>,
     single_file_wrapper_wit_source: Option<String>,
+    has_types: bool,
 }
 
 impl AgentWrapperGeneratorContextState {
@@ -65,6 +67,7 @@ impl AgentWrapperGeneratorContextState {
             wrapper_package_wit_source: None,
             single_file_wrapper_wit_source: None,
             agent_types,
+            has_types: false,
         }
     }
 
@@ -105,6 +108,7 @@ impl AgentWrapperGeneratorContextState {
         types.sort_by_key(|(_, name)| name.clone());
 
         let has_types = !types.is_empty();
+        self.has_types = has_types;
         if has_types {
             writeln!(result, "  interface types {{")?;
             writeln!(
@@ -163,6 +167,7 @@ impl AgentWrapperGeneratorContextState {
                 .single_file_wrapper_wit_source
                 .ok_or_else(|| anyhow!("Must call generate_wit_source first"))?,
             agent_types: self.agent_types,
+            has_types: self.has_types,
         })
     }
 
@@ -171,7 +176,7 @@ impl AgentWrapperGeneratorContextState {
         result: &mut String,
         agent: &AgentType,
     ) -> anyhow::Result<String> {
-        let interface_name = agent.type_name.to_kebab_case();
+        let interface_name = escape_wit_keyword(&agent.type_name.to_kebab_case());
         let previous_used_names = self.used_names.clone();
         self.used_names.clear();
 
@@ -193,7 +198,7 @@ impl AgentWrapperGeneratorContextState {
         writeln!(result)?;
 
         for method in &agent.methods {
-            let name = method.name.to_kebab_case();
+            let name = escape_wit_keyword(&method.name.to_kebab_case());
             writeln!(result, "  /// {}", method.description)?;
             write!(result, "  {name}: func(")?;
             self.write_parameter_list(result, &method.input_schema, &name)?;
@@ -291,7 +296,11 @@ impl AgentWrapperGeneratorContextState {
             AnalysedType::Variant(variant) => {
                 writeln!(result, "    variant {name} {{")?;
                 for case in &variant.cases {
-                    write!(result, "      {}", case.name.to_kebab_case())?;
+                    write!(
+                        result,
+                        "      {}",
+                        escape_wit_keyword(&case.name.to_kebab_case())
+                    )?;
                     if let Some(typ) = &case.typ {
                         write!(result, "({})", self.wit_type_reference(typ)?)?;
                     }
@@ -302,7 +311,7 @@ impl AgentWrapperGeneratorContextState {
             AnalysedType::Enum(enum_) => {
                 writeln!(result, "    enum {name} {{")?;
                 for case in &enum_.cases {
-                    let case = case.to_kebab_case();
+                    let case = escape_wit_keyword(&case.to_kebab_case());
                     writeln!(result, "      {case},")?;
                 }
                 writeln!(result, "    }}")?;
@@ -310,7 +319,7 @@ impl AgentWrapperGeneratorContextState {
             AnalysedType::Flags(flags) => {
                 writeln!(result, "    flags {name} {{")?;
                 for case in &flags.names {
-                    let case = case.to_kebab_case();
+                    let case = escape_wit_keyword(&case.to_kebab_case());
                     writeln!(result, "      {case},")?;
                 }
                 writeln!(result, "    }}")?;
@@ -321,7 +330,7 @@ impl AgentWrapperGeneratorContextState {
                     writeln!(
                         result,
                         "      {}: {},",
-                        field.name.to_kebab_case(),
+                        escape_wit_keyword(&field.name.to_kebab_case()),
                         self.wit_type_reference(&field.typ)?
                     )?;
                 }
@@ -351,7 +360,7 @@ impl AgentWrapperGeneratorContextState {
                         write!(result, ", ")?;
                     }
 
-                    let param_name = &element.name.to_kebab_case();
+                    let param_name = &escape_wit_keyword(&element.name.to_kebab_case());
                     write!(result, "{param_name}: ")?;
                     self.write_element_schema_type_ref(result, &element.schema)?;
                 }
@@ -408,7 +417,7 @@ impl AgentWrapperGeneratorContextState {
     ) -> anyhow::Result<()> {
         match element {
             ElementSchema::ComponentModel(schema) => {
-                write!(result, "{}", self.wit_type_reference(&schema.type_info)?)?;
+                write!(result, "{}", self.wit_type_reference(&schema.element_type)?)?;
             }
             ElementSchema::UnstructuredText(_text_descriptor) => {
                 write!(result, "text-reference")?;
@@ -524,15 +533,57 @@ impl AgentWrapperGeneratorContextState {
     fn multimodal_variant(cases: &[NamedElementSchema]) -> AnalysedType {
         let mut variant_cases = Vec::new();
         for named_element_schema in cases {
-            let case_name = named_element_schema.name.to_kebab_case();
+            let case_name = escape_wit_keyword(&named_element_schema.name.to_kebab_case());
             let case_type = match &named_element_schema.schema {
-                ElementSchema::ComponentModel(schema) => schema.type_info.clone(),
+                ElementSchema::ComponentModel(schema) => schema.element_type.clone(),
                 ElementSchema::UnstructuredText(_) => variant(vec![]).named("text-reference"),
                 ElementSchema::UnstructuredBinary(_) => variant(vec![]).named("binary-reference"),
             };
             variant_cases.push(case(&case_name, case_type));
         }
         variant(variant_cases)
+    }
+}
+
+pub(crate) const WIT_KEYWORDS: &[&str] = &[
+    "bool",
+    "char",
+    "enum",
+    "export",
+    "f32",
+    "f64",
+    "flags",
+    "func",
+    "import",
+    "interface",
+    "list",
+    "option",
+    "package",
+    "record",
+    "resource",
+    "result",
+    "s16",
+    "s32",
+    "s64",
+    "s8",
+    "static",
+    "string",
+    "tuple",
+    "type",
+    "u16",
+    "u32",
+    "u64",
+    "u8",
+    "use",
+    "variant",
+    "world",
+];
+
+fn escape_wit_keyword(name: &str) -> String {
+    if WIT_KEYWORDS.contains(&name) {
+        format!("%{}", name)
+    } else {
+        name.to_string()
     }
 }
 
@@ -690,6 +741,8 @@ fn add_golem_agent(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
 #[cfg(test)]
 mod tests {
     use crate::model::agent::test;
+    use crate::model::agent::test::agent_type_with_wit_keywords;
+
     use golem_common::model::agent::{
         AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
         DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
@@ -739,13 +792,13 @@ mod tests {
                         NamedElementSchema {
                             name: "a".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: u32(),
+                                element_type: u32(),
                             }),
                         },
                         NamedElementSchema {
                             name: "b".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: option(str()),
+                                element_type: option(str()),
                             }),
                         },
                     ],
@@ -761,7 +814,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "a".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: str(),
+                                element_type: str(),
                             }),
                         }],
                     }),
@@ -775,13 +828,17 @@ mod tests {
                             NamedElementSchema {
                                 name: "x".to_string(),
                                 schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema { type_info: u32() },
+                                    ComponentModelElementSchema {
+                                        element_type: u32(),
+                                    },
                                 ),
                             },
                             NamedElementSchema {
                                 name: "y".to_string(),
                                 schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema { type_info: u32() },
+                                    ComponentModelElementSchema {
+                                        element_type: u32(),
+                                    },
                                 ),
                             },
                         ],
@@ -790,7 +847,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: u32(),
+                                element_type: u32(),
                             }),
                         }],
                     }),
@@ -868,7 +925,7 @@ mod tests {
                         NamedElementSchema {
                             name: "person".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: person,
+                                element_type: person,
                             }),
                         },
                         NamedElementSchema {
@@ -896,7 +953,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: location.clone(),
+                                element_type: location.clone(),
                             }),
                         }],
                     }),
@@ -909,7 +966,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "location".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: location,
+                                element_type: location,
                             }),
                         }],
                     }),
@@ -917,7 +974,7 @@ mod tests {
                         elements: vec![NamedElementSchema {
                             name: "return".to_string(),
                             schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                type_info: color,
+                                element_type: color,
                             }),
                         }],
                     }),
@@ -1071,6 +1128,47 @@ mod tests {
               export types;
               export agent1;
               export agent2;
+            }
+            "#
+        )));
+    }
+
+    #[test]
+    fn single_agent_wrapper_1_using_wit_keywords() {
+        let component_name = "example:single1".into();
+        let agent_types = agent_type_with_wit_keywords();
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        println!("{wit}");
+        assert!(wit.contains(indoc!(
+            r#"package example:single1;
+
+            /// An example agent using WIT keywords as names
+            interface agent1 {
+              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+
+              /// Creates an example agent instance
+              initialize: func(%export: u32, %func: option<string>) -> result<_, agent-error>;
+
+              get-definition: func() -> agent-type;
+
+              /// returns a random string
+              %import: func() -> result<string, agent-error>;
+
+              /// adds two numbers
+              %package: func(%bool: u32, %char: u32, %enum: u32, %export: u32, %f32: u32, %f64: u32, %flags: u32, %func: u32, %import: u32, %interface: u32, %list: u32, %option: u32, %package: u32, %record: u32, %resource: u32, %result: u32, %s16: u32, %s32: u32, %s64: u32, %s8: u32, %static: u32, %string: u32, %tuple: u32, %type: u32, %u16: u32, %u32: u32, %u64: u32, %u8: u32, %use: u32, %variant: u32, %world: u32) -> result<_, agent-error>;
+            }
+
+            world agent-wrapper {
+              import wasi:clocks/wall-clock@0.2.3;
+              import wasi:io/poll@0.2.3;
+              import golem:rpc/types@0.2.2;
+              import golem:agent/common;
+              import golem:agent/guest;
+
+              export golem:agent/guest;
+              export agent1;
             }
             "#
         )));

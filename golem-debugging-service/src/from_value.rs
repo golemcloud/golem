@@ -16,6 +16,7 @@ use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::oplog::{OplogIndex, WorkerError};
 use golem_common::model::{ComponentId, ComponentVersion, PromiseId, WorkerId};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_wasm_rpc::Value;
 use golem_worker_executor::durable_host::http::serialized::{
     SerializableDnsErrorPayload, SerializableErrorCode, SerializableFieldSizePayload,
@@ -26,6 +27,7 @@ use golem_worker_executor::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress,
     SerializableIpAddresses, SerializableStreamError,
 };
+use golem_worker_executor::durable_host::wasm_rpc::serialized::SerializableScheduleId;
 use golem_worker_executor::services::blob_store::ObjectMetadata;
 use golem_worker_executor::services::rpc::RpcError;
 use golem_worker_executor::services::worker_proxy::WorkerProxyError;
@@ -1444,8 +1446,9 @@ impl FromValue for UpdateWorkerInfo {
                     Err("Failed to get UpdateWorkerInfo from Value".to_string())
                 } else {
                     let worker_id = WorkerId::from_value(&values[0])?;
-                    let component_version = u64::from_value(&values[1])?;
-                    let update_mode_str = String::from_value(&values[2])?;
+                    // skipping agent_type and agent_parameters
+                    let component_version = u64::from_value(&values[3])?;
+                    let update_mode_str = String::from_value(&values[4])?;
                     let update_mode = match update_mode_str.as_str() {
                         "Automatic" => UpdateMode::Automatic,
                         "Manual" => UpdateMode::Manual,
@@ -1461,6 +1464,134 @@ impl FromValue for UpdateWorkerInfo {
             }
 
             _ => Err("Failed to get UpdateWorkerInfo from Value".to_string()),
+        }
+    }
+}
+
+pub struct ForkWorkerInfo {
+    pub source_worker_id: WorkerId,
+    pub target_worker_id: WorkerId,
+    pub oplog_idx_cut_off: OplogIndex,
+}
+
+impl FromValue for ForkWorkerInfo {
+    fn from_value(value: &Value) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match value {
+            Value::Record(values) => {
+                if values.len() != 3 {
+                    Err("Failed to get ForkWorkerInfo from Value".to_string())
+                } else {
+                    let source_worker_id = WorkerId::from_value(&values[0])?;
+                    // skipping source_agent_type and source_agent_parameters
+                    let target_worker_id = WorkerId::from_value(&values[3])?;
+                    // skipping target_agent_type and target_agent_parameters
+                    let oplog_idx_cut_off = u64::from_value(&values[6])?;
+
+                    Ok(ForkWorkerInfo {
+                        source_worker_id,
+                        target_worker_id,
+                        oplog_idx_cut_off: OplogIndex::from_u64(oplog_idx_cut_off),
+                    })
+                }
+            }
+
+            _ => Err("Failed to get UpdateWorkerInfo from Value".to_string()),
+        }
+    }
+}
+
+pub struct RevertWorkerInfo {
+    pub worker_id: WorkerId,
+    pub target: RevertWorkerTarget,
+}
+
+impl FromValue for RevertWorkerInfo {
+    fn from_value(value: &Value) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match value {
+            Value::Record(values) => {
+                if values.len() != 3 {
+                    Err("Failed to get RevertWorkerInfo from Value".to_string())
+                } else {
+                    let worker_id = WorkerId::from_value(&values[0])?;
+                    // skipping agent_type and agent_parameters
+                    let target = RevertWorkerTarget::from_value(&values[3])?;
+
+                    Ok(RevertWorkerInfo { worker_id, target })
+                }
+            }
+
+            _ => Err("Failed to get UpdateWorkerInfo from Value".to_string()),
+        }
+    }
+}
+
+impl FromValue for RevertWorkerTarget {
+    fn from_value(value: &Value) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match value {
+            Value::Variant {
+                case_idx,
+                case_value,
+            } => match (case_idx, case_value) {
+                (0, Some(value)) => Ok(RevertWorkerTarget::RevertToOplogIndex(
+                    RevertToOplogIndex::from_value(value)?,
+                )),
+                (1, Some(value)) => Ok(RevertWorkerTarget::RevertLastInvocations(
+                    RevertLastInvocations::from_value(value)?,
+                )),
+                _ => Err("Failed to get RevertWorkerTarget from Value".to_string()),
+            },
+            _ => Err("Failed to get RevertWorkerTarget from Value".to_string()),
+        }
+    }
+}
+
+impl FromValue for RevertToOplogIndex {
+    fn from_value(value: &Value) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match value {
+            Value::Record(values) => {
+                if values.len() != 1 {
+                    Err("Failed to get RevertToOplogIndex from Value".to_string())
+                } else {
+                    let oplog_idx = u64::from_value(&values[0])?;
+                    Ok(Self {
+                        last_oplog_index: OplogIndex::from_u64(oplog_idx),
+                    })
+                }
+            }
+            _ => Err("Failed to get RevertToOplogIndex from Value".to_string()),
+        }
+    }
+}
+
+impl FromValue for RevertLastInvocations {
+    fn from_value(value: &Value) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match value {
+            Value::Record(values) => {
+                if values.len() != 1 {
+                    Err("Failed to get RevertLastInvocations from Value".to_string())
+                } else {
+                    let number_of_invocations = u64::from_value(&values[0])?;
+                    Ok(Self {
+                        number_of_invocations,
+                    })
+                }
+            }
+            _ => Err("Failed to get RevertLastInvocations from Value".to_string()),
         }
     }
 }
@@ -1684,6 +1815,25 @@ impl FromValue for BucketAndKeys {
             }
 
             _ => Err("Failed to get BucketAndKeys from Value".to_string()),
+        }
+    }
+}
+
+impl FromValue for SerializableScheduleId {
+    fn from_value(value: &Value) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match value {
+            Value::Record(values) => {
+                if values.len() != 1 {
+                    Err("Failed to get SerializableScheduleId from Value".to_string())
+                } else {
+                    let data = Vec::<u8>::from_value(&values[0])?;
+                    Ok(Self { data })
+                }
+            }
+            _ => Err("Failed to get SerializableScheduleId from Value".to_string()),
         }
     }
 }

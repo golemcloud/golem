@@ -18,7 +18,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::{DynamicLinkedWasmRpc, InvokableFunction};
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, WorkerId};
 use golem_wasm_ast::analysis::analysed_type::str;
 use golem_wasm_ast::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
@@ -38,7 +38,12 @@ use wasmtime::component::{LinkerInstance, Resource, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Engine, StoreContextMut};
 use wasmtime_wasi::IoView;
 
-pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
+pub fn dynamic_wasm_rpc_link<
+    Ctx: WorkerCtx
+        + HostWasmRpc
+        + HostFutureInvokeResult
+        + wasmtime_wasi::p2::bindings::cli::environment::Host,
+>(
     name: &str,
     rpc_metadata: &DynamicLinkedWasmRpc,
     engine: &Engine,
@@ -182,24 +187,12 @@ pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResu
     Ok(())
 }
 
-fn register_wasm_rpc_entry<Ctx: WorkerCtx>(
-    store: &mut StoreContextMut<'_, Ctx>,
-    remote_worker_id: OwnedWorkerId,
-    demand: Box<dyn RpcDemand>,
-    span_id: SpanId,
-) -> anyhow::Result<Resource<WasmRpcEntry>> {
-    let mut wasi = store.data_mut().as_wasi_view();
-    let table = wasi.table();
-    Ok(table.push(WasmRpcEntry {
-        payload: Box::new(WasmRpcEntryPayload::Interface {
-            demand,
-            remote_worker_id,
-            span_id,
-        }),
-    })?)
-}
-
-async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
+async fn dynamic_function_call<
+    Ctx: WorkerCtx
+        + HostWasmRpc
+        + HostFutureInvokeResult
+        + wasmtime_wasi::p2::bindings::cli::environment::Host,
+>(
     mut store: impl AsContextMut<Data = Ctx> + Send,
     function_name: &ParsedFunctionName,
     params: &[Val],
@@ -210,61 +203,24 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
 ) -> anyhow::Result<()> {
     let mut store = store.as_context_mut();
     match call_type {
-        DynamicRpcCall::GlobalStubConstructor {
-            component_name,
-            component_type,
-        } => {
+        DynamicRpcCall::GlobalStubConstructor { component_name, .. } => {
             // Simple stub interface constructor
+            let target_worker_name = params[0].clone();
+            let target_worker_id =
+                resolve_default_worker_id(&mut store, component_name, target_worker_name).await?;
+            let handle =
+                HostWasmRpc::new(store.data_mut(), target_worker_id.worker_id().into()).await?;
 
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let target_worker_name = params[0].clone();
-                    create_default_durable_rpc_target(
-                        &mut store,
-                        component_name,
-                        target_worker_name,
-                    )
-                    .await?
-                }
-                ComponentType::Ephemeral => {
-                    create_default_ephemeral_rpc_target(&mut store, component_name).await?
-                }
-            };
-
-            let span =
-                create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
-
-            let handle = register_wasm_rpc_entry(
-                &mut store,
-                remote_worker_id,
-                demand,
-                span.span_id().clone(),
-            )?;
             results[0] = Val::Resource(handle.try_into_resource_any(store)?);
         }
-        DynamicRpcCall::GlobalCustomConstructor { component_type } => {
+        DynamicRpcCall::GlobalCustomConstructor { .. } => {
             // Simple stub interface constructor that takes a worker-id or component-id as a parameter
 
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let worker_id = params[0].clone();
-                    create_durable_rpc_target(&mut store, worker_id).await?
-                }
-                ComponentType::Ephemeral => {
-                    let component_id = params[0].clone();
-                    create_ephemeral_rpc_target(&mut store, component_id).await?
-                }
-            };
+            let worker_id = params[0].clone();
+            let remote_worker_id = resolve_worker_id(&mut store, worker_id)?;
+            let handle =
+                HostWasmRpc::new(store.data_mut(), remote_worker_id.worker_id().into()).await?;
 
-            let span =
-                create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
-
-            let handle = register_wasm_rpc_entry(
-                &mut store,
-                remote_worker_id,
-                demand,
-                span.span_id().clone(),
-            )?;
             results[0] = Val::Resource(handle.try_into_resource_any(store)?);
         }
         DynamicRpcCall::ResourceStubConstructor {
@@ -274,48 +230,25 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
         } => {
             // Resource stub constructor
 
-            // First parameter is the target uri
+            // The first parameter is the target uri
             // Rest of the parameters must be sent to the remote constructor
-
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let target_worker_name = params[0].clone();
-                    create_default_durable_rpc_target(
-                        &mut store,
-                        component_name,
-                        target_worker_name,
-                    )
-                    .await?
-                }
-                ComponentType::Ephemeral => {
-                    create_default_ephemeral_rpc_target(&mut store, component_name).await?
-                }
-            };
+            let target_worker_name = params[0].clone();
+            let remote_worker_id =
+                resolve_default_worker_id(&mut store, component_name, target_worker_name).await?;
+            let handle =
+                HostWasmRpc::new(store.data_mut(), remote_worker_id.worker_id().into()).await?;
 
             let remote_component_metadata = store
                 .data()
                 .component_service()
-                .get_metadata(
-                    &remote_worker_id.project_id,
-                    &remote_worker_id.worker_id.component_id,
-                    None,
-                )
+                .get_metadata(&remote_worker_id.worker_id.component_id, None)
                 .await?
                 .metadata;
             let constructor = remote_component_metadata.find_parsed_function(target_constructor_name).await
                 .map_err(|e| anyhow!("Failed to get target constructor metadata: {e}"))?
                 .ok_or_else(|| anyhow!("Target constructor {target_constructor_name} not found in component metadata"))?;
 
-            let span =
-                create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
-
             // First creating a resource for invoking the constructor (to avoid having to make a special case)
-            let handle = register_wasm_rpc_entry(
-                &mut store,
-                remote_worker_id,
-                demand,
-                span.span_id().clone(),
-            )?;
             let temp_handle = handle.rep();
 
             let mut analysed_param_types = constructor
@@ -349,23 +282,10 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             let (resource_uri, resource_id) = unwrap_constructor_result(constructor_result)
                 .context(format!("Unwrapping constructor result of {function_name}"))?;
 
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let target_worker_name = params[0].clone();
-                    create_default_durable_rpc_target(
-                        &mut store,
-                        component_name,
-                        target_worker_name,
-                    )
-                    .await?
-                }
-                ComponentType::Ephemeral => {
-                    create_default_ephemeral_rpc_target(&mut store, component_name).await?
-                }
-            };
-
             let span =
                 create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
+
+            let demand = create_demand(&mut store, &remote_worker_id, span.span_id()).await?;
 
             let handle = {
                 let mut wasi = store.data_mut().as_wasi_view();
@@ -384,6 +304,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                     }),
                 })?
             };
+
             results[0] = Val::Resource(handle.try_into_resource_any(store)?);
         }
         DynamicRpcCall::ResourceCustomConstructor {
@@ -395,41 +316,22 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             // First parameter is the worker-id or component-id (for ephemeral)
             // Rest of the parameters must be sent to the remote constructor
 
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let worker_id = params[0].clone();
-                    create_durable_rpc_target(&mut store, worker_id).await?
-                }
-                ComponentType::Ephemeral => {
-                    let component_id = params[0].clone();
-                    create_ephemeral_rpc_target(&mut store, component_id).await?
-                }
-            };
+            let worker_id = params[0].clone();
+            let remote_worker_id = resolve_worker_id(&mut store, worker_id)?;
+            let handle =
+                HostWasmRpc::new(store.data_mut(), remote_worker_id.worker_id().into()).await?;
 
             let remote_component_metadata = store
                 .data()
                 .component_service()
-                .get_metadata(
-                    &remote_worker_id.project_id,
-                    &remote_worker_id.worker_id.component_id,
-                    None,
-                )
+                .get_metadata(&remote_worker_id.worker_id.component_id, None)
                 .await?
                 .metadata;
             let constructor = remote_component_metadata.find_parsed_function(target_constructor_name).await
                 .map_err(|e| anyhow!("Failed to get target constructor metadata: {e}"))?
                 .ok_or_else(|| anyhow!("Target constructor {target_constructor_name} not found in component metadata"))?;
 
-            let span =
-                create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
-
             // First creating a resource for invoking the constructor (to avoid having to make a special case)
-            let handle = register_wasm_rpc_entry(
-                &mut store,
-                remote_worker_id,
-                demand,
-                span.span_id().clone(),
-            )?;
             let temp_handle = handle.rep();
 
             let mut analysed_param_types = constructor
@@ -463,19 +365,9 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
             let (resource_uri, resource_id) = unwrap_constructor_result(constructor_result)
                 .context(format!("Unwrapping constructor result of {function_name}"))?;
 
-            let (remote_worker_id, demand) = match component_type {
-                ComponentType::Durable => {
-                    let worker_id = params[0].clone();
-                    create_durable_rpc_target(&mut store, worker_id).await?
-                }
-                ComponentType::Ephemeral => {
-                    let component_id = params[0].clone();
-                    create_ephemeral_rpc_target(&mut store, component_id).await?
-                }
-            };
-
             let span =
                 create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
+            let demand = create_demand(&mut store, &remote_worker_id, span.span_id()).await?;
 
             let handle = {
                 let mut wasi = store.data_mut().as_wasi_view();
@@ -494,6 +386,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                     }),
                 })?
             };
+
             results[0] = Val::Resource(handle.try_into_resource_any(store)?);
         }
         DynamicRpcCall::BlockingFunctionCall {
@@ -517,11 +410,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 store
                     .data()
                     .component_service()
-                    .get_metadata(
-                        &remote_worker_id.project_id,
-                        &remote_worker_id.worker_id.component_id,
-                        None,
-                    )
+                    .get_metadata(&remote_worker_id.worker_id.component_id, None)
                     .await?
                     .metadata
             };
@@ -572,11 +461,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 store
                     .data()
                     .component_service()
-                    .get_metadata(
-                        &remote_worker_id.project_id,
-                        &remote_worker_id.worker_id.component_id,
-                        None,
-                    )
+                    .get_metadata(&remote_worker_id.worker_id.component_id, None)
                     .await?
                     .metadata
             };
@@ -624,11 +509,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 store
                     .data()
                     .component_service()
-                    .get_metadata(
-                        &remote_worker_id.project_id,
-                        &remote_worker_id.worker_id.component_id,
-                        None,
-                    )
+                    .get_metadata(&remote_worker_id.worker_id.component_id, None)
                     .await?
                     .metadata
             };
@@ -687,11 +568,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeRe
                 store
                     .data()
                     .component_service()
-                    .get_metadata(
-                        &remote_worker_id.project_id,
-                        &remote_worker_id.worker_id.component_id,
-                        None,
-                    )
+                    .get_metadata(&remote_worker_id.worker_id.component_id, None)
                     .await?
                     .metadata
             };
@@ -1050,21 +927,21 @@ fn val_to_datetime(val: Val) -> anyhow::Result<golem_wasm_rpc::wasi::clocks::wal
     })
 }
 
-async fn create_default_durable_rpc_target<Ctx: WorkerCtx>(
+async fn resolve_default_worker_id<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
-    component_name: &String,
-    target_worker_name: Val,
-) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
-    let worker_name = match target_worker_name {
+    component_name: &str,
+    worker_name: Val,
+) -> anyhow::Result<OwnedWorkerId> {
+    let worker_name = match worker_name {
         Val::String(name) => name,
-        _ => return Err(anyhow!("Missing or invalid worker name parameter. Expected to get a string worker name as constructor parameter, got {target_worker_name:?}")),
+        _ => return Err(anyhow!("Missing or invalid worker name parameter. Expected to get a string worker name as constructor parameter, got {worker_name:?}")),
     };
 
     let result = store
         .data()
         .component_service()
         .resolve_component(
-            component_name.clone(),
+            component_name.to_string(),
             store.data().component_metadata().owner.clone(),
         )
         .await?;
@@ -1078,8 +955,7 @@ async fn create_default_durable_rpc_target<Ctx: WorkerCtx>(
             &store.data().owned_worker_id().project_id,
             &remote_worker_id,
         );
-        let demand = store.data().rpc().create_demand(&remote_worker_id).await;
-        Ok((remote_worker_id, demand))
+        Ok(remote_worker_id)
     } else {
         Err(anyhow!("Failed to resolve component {component_name}"))
     }
@@ -1120,81 +996,54 @@ fn decode_worker_id(worker_id: Val) -> Option<WorkerId> {
     }
 }
 
-async fn create_durable_rpc_target<Ctx: WorkerCtx>(
+fn resolve_worker_id<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     worker_id: Val,
-) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
+) -> anyhow::Result<OwnedWorkerId> {
     let remote_worker_id = decode_worker_id(worker_id.clone()).ok_or_else(|| anyhow!("Missing or invalid worker id parameter. Expected to get a worker-id value as a custom constructor parameter, got {worker_id:?}"))?;
 
     let remote_worker_id = OwnedWorkerId::new(
         &store.data().owned_worker_id().project_id,
         &remote_worker_id,
     );
-    let demand = store.data().rpc().create_demand(&remote_worker_id).await;
-    Ok((remote_worker_id, demand))
+    Ok(remote_worker_id)
 }
 
-async fn create_default_ephemeral_rpc_target<Ctx: WorkerCtx>(
+async fn create_demand<Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::environment::Host>(
     store: &mut StoreContextMut<'_, Ctx>,
-    component_name: &String,
-) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
-    let result = store
+    remote_worker_id: &OwnedWorkerId,
+    span_id: &SpanId,
+) -> anyhow::Result<Box<dyn RpcDemand>> {
+    let self_created_by = store.data().created_by().clone();
+    let self_worker_id = store.data().owned_worker_id().worker_id();
+
+    let args = store.data_mut().get_arguments().await?;
+    let env = store.data_mut().get_environment().await?;
+    let config = store.data().wasi_config_vars();
+    let stack = store.data().clone_as_inherited_stack(span_id);
+    let demand = store
         .data()
-        .component_service()
-        .resolve_component(
-            component_name.clone(),
-            store.data().component_metadata().owner.clone(),
+        .rpc()
+        .create_demand(
+            remote_worker_id,
+            &self_created_by,
+            &self_worker_id,
+            &args,
+            &env,
+            config,
+            stack,
         )
         .await?;
 
-    if let Some(component_id) = result {
-        let remote_worker_id = store
-            .data_mut()
-            .generate_unique_local_worker_id(TargetWorkerId {
-                component_id,
-                worker_name: None,
-            })
-            .await?;
-        let remote_worker_id = OwnedWorkerId::new(
-            &store.data().owned_worker_id().project_id,
-            &remote_worker_id,
-        );
-        let demand = store.data().rpc().create_demand(&remote_worker_id).await;
-        Ok((remote_worker_id, demand))
-    } else {
-        Err(anyhow!("Failed to resolve component {component_name}"))
-    }
-}
-
-async fn create_ephemeral_rpc_target<Ctx: WorkerCtx>(
-    store: &mut StoreContextMut<'_, Ctx>,
-    component_id: Val,
-) -> anyhow::Result<(OwnedWorkerId, Box<dyn RpcDemand>)> {
-    let component_id = decode_component_id(component_id.clone()).ok_or_else(|| anyhow!("Missing or invalid component id parameter. Expected to get a component-id value as a custom constructor parameter, got {component_id:?}"))?;
-    let remote_worker_id = store
-        .data_mut()
-        .generate_unique_local_worker_id(TargetWorkerId {
-            component_id,
-            worker_name: None,
-        })
-        .await?;
-    let remote_worker_id = OwnedWorkerId::new(
-        &store.data().owned_worker_id().project_id,
-        &remote_worker_id,
-    );
-    let demand = store.data().rpc().create_demand(&remote_worker_id).await;
-    Ok((remote_worker_id, demand))
+    Ok(demand)
 }
 
 #[derive(Debug, Clone)]
 enum DynamicRpcCall {
     GlobalStubConstructor {
         component_name: String,
-        component_type: ComponentType,
     },
-    GlobalCustomConstructor {
-        component_type: ComponentType,
-    },
+    GlobalCustomConstructor {},
     ResourceStubConstructor {
         component_name: String,
         component_type: ComponentType,
@@ -1253,7 +1102,6 @@ impl DynamicRpcCall {
 
                     Ok(Some(DynamicRpcCall::GlobalStubConstructor {
                         component_name: target.component_name,
-                        component_type: target.component_type,
                     }))
                 }
                 Some(DynamicRpcResource::ResourceStub) => {
@@ -1298,14 +1146,7 @@ impl DynamicRpcCall {
                     if stub_name.is_static_method().is_some() && method_name == "custom" {
                         match stub {
                             DynamicRpcResource::Stub => {
-                                let target = rpc_metadata
-                                    .target(resource_name)
-                                    .map_err(|err| anyhow!(err))
-                                    .context(context(rpc_metadata))?;
-
-                                Ok(Some(DynamicRpcCall::GlobalCustomConstructor {
-                                    component_type: target.component_type,
-                                }))
+                                Ok(Some(DynamicRpcCall::GlobalCustomConstructor {}))
                             }
                             DynamicRpcResource::ResourceStub => {
                                 let target = rpc_metadata

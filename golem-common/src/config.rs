@@ -17,7 +17,6 @@ use crate::SafeDisplay;
 use figment::providers::{Env, Format, Serialized, Toml};
 use figment::value::Value;
 use figment::Figment;
-use poem_openapi::types::Type;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -376,10 +375,10 @@ impl SafeDisplay for RedisConfig {
         if !self.key_prefix.is_empty() {
             let _ = writeln!(&mut result, "key prefix: {}", self.key_prefix);
         }
-        if !self.username.is_empty() {
+        if self.username.is_some() {
             let _ = writeln!(&mut result, "username: ****");
         }
-        if !self.password.is_empty() {
+        if self.password.is_some() {
             let _ = writeln!(&mut result, "password: ****");
         }
         result

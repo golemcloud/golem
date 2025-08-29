@@ -585,7 +585,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let durability = Durability::<(), SerializableError>::new(
             self,
             "golem::api",
-            "fork_worker",
+            "fork-worker",
             DurableFunctionType::WriteRemote,
         )
         .await?;
@@ -623,7 +623,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let durability = Durability::<(), SerializableError>::new(
             self,
             "golem::api",
-            "revert_worker",
+            "revert-worker",
             DurableFunctionType::WriteRemote,
         )
         .await?;
@@ -1116,6 +1116,9 @@ impl From<golem_api_1_x::host::StringFilterComparator>
             }
             golem_api_1_x::host::StringFilterComparator::NotLike => {
                 golem_common::model::StringFilterComparator::NotLike
+            }
+            golem_api_1_x::host::StringFilterComparator::StartsWith => {
+                golem_common::model::StringFilterComparator::StartsWith
             }
         }
     }

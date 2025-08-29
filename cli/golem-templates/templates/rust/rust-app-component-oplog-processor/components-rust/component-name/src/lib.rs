@@ -3,7 +3,9 @@
 mod bindings;
 
 use golem_rust::oplog_processor;
-use golem_rust::oplog_processor::exports::golem::api::oplog_processor::{AccountInfo, ComponentId, OplogEntry, OplogIndex, WorkerId, WorkerMetadata};
+use golem_rust::oplog_processor::exports::golem::api::oplog_processor::{
+    AccountInfo, ComponentId, OplogEntry, OplogIndex, WorkerId, WorkerMetadata,
+};
 use std::collections::HashMap;
 
 // Import for using common lib (also see Cargo.toml for adding the dependency):
@@ -11,28 +13,18 @@ use std::collections::HashMap;
 
 struct Component;
 
-struct OplogProcessor {
-    account_info: AccountInfo,
-    component_id: ComponentId,
-    config: HashMap<String, String>
-}
-
-impl oplog_processor::exports::golem::api::oplog_processor::GuestProcessor for OplogProcessor {
-    fn new(account_info: AccountInfo, component_id: ComponentId, config: Vec<(String, String)>) -> Self {
-        Self {
-            account_info,
-            component_id,
-            config: config.into_iter().collect(),
-        }
-    }
-
-    fn process(&self, worker_id: WorkerId, metadata: WorkerMetadata, first_entry_index: OplogIndex, entries: Vec<OplogEntry>) -> Result<(), String> {
+impl oplog_processor::exports::golem::api::oplog_processor::Guest for Component {
+    fn process(
+        account_info: AccountInfo,
+        config: Vec<(String, String)>,
+        component_id: ComponentId,
+        worker_id: WorkerId,
+        metadata: WorkerMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<OplogEntry>,
+    ) -> Result<(), String> {
         Ok(())
     }
-}
-
-impl oplog_processor::exports::golem::api::oplog_processor::Guest for Component {
-    type Processor = OplogProcessor;
 }
 
 oplog_processor::export_oplog_processor!(Component with_types_in oplog_processor);
