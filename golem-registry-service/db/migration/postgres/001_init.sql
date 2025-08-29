@@ -549,8 +549,8 @@ CREATE TABLE plugins
 
     created_at            TIMESTAMP NOT NULL,
     created_by            UUID      NOT NULL,
-    deleted_at             TIMESTAMP,
-    deleted_by             UUID,
+    deleted_at            TIMESTAMP,
+    deleted_by            UUID,
 
     description           TEXT      NOT NULL,
     icon                  BYTEA     NOT NULL,
