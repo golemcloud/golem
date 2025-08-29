@@ -16,12 +16,16 @@ use super::ApiResult;
 use crate::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
 use crate::services::environment::EnvironmentService;
+use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
 use golem_common::api::Page;
 use golem_common::api::environment::DeployEnvironmentRequest;
 use golem_common::model::account::AccountId;
 use golem_common::model::deployment::Deployment;
 use golem_common::model::environment::*;
+use golem_common::model::environment_plugin_grant::{
+    EnvironmentPluginGrant, NewEnvironmentPluginGrantData,
+};
 use golem_common::model::environment_share::{EnvironmentShare, NewEnvironmentShareData};
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
@@ -37,6 +41,7 @@ use uuid::Uuid;
 pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
     environment_share_service: Arc<EnvironmentShareService>,
+    environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
     auth_service: Arc<AuthService>,
 }
 
@@ -49,11 +54,13 @@ impl EnvironmentsApi {
     pub fn new(
         environment_service: Arc<EnvironmentService>,
         environment_share_service: Arc<EnvironmentShareService>,
+        environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
         auth_service: Arc<AuthService>,
     ) -> Self {
         Self {
             environment_service,
             environment_share_service,
+            environment_plugin_grant_service,
             auth_service,
         }
     }
@@ -426,5 +433,86 @@ impl EnvironmentsApi {
             .await?;
 
         Ok(Json(Page { values: result }))
+    }
+
+    /// Create a new environment plugin grant
+    #[oai(
+        path = "/:environment_id/plugins",
+        method = "post",
+        operation_id = "create_environment_plugin_grant",
+        tag = ApiTags::EnvironmentPluginGrants
+    )]
+    pub async fn create_environment_plugin_grant(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        data: Json<NewEnvironmentPluginGrantData>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<EnvironmentPluginGrant>> {
+        let record = recorded_http_api_request!(
+            "create_environment_plugin_grant",
+            environment_id = environment_id.0.to_string()
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .create_environment_plugin_grant_internal(environment_id.0, data.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn create_environment_plugin_grant_internal(
+        &self,
+        environment_id: EnvironmentId,
+        data: NewEnvironmentPluginGrantData,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<EnvironmentPluginGrant>> {
+        let grant = self
+            .environment_plugin_grant_service
+            .create(environment_id, data, &auth)
+            .await?;
+        Ok(Json(grant))
+    }
+
+    /// List all environment plugin grants in the environment
+    #[oai(
+        path = "/:environment_id/plugins",
+        method = "get",
+        operation_id = "list_environment_plugin_grants",
+        tag = ApiTags::EnvironmentPluginGrants
+    )]
+    pub async fn list_environment_plugin_grants(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<EnvironmentPluginGrant>>> {
+        let record = recorded_http_api_request!(
+            "list_environment_plugin_grants_internal",
+            environment_id = environment_id.0.to_string()
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .list_environment_plugin_grants_internal(environment_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn list_environment_plugin_grants_internal(
+        &self,
+        environment_id: EnvironmentId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<EnvironmentPluginGrant>>> {
+        let grants = self
+            .environment_plugin_grant_service
+            .list_in_environment(&environment_id, &auth)
+            .await?;
+
+        Ok(Json(Page { values: grants }))
     }
 }

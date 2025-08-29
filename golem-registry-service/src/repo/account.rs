@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::account::{AccountExtRevisionRecord, AccountRevisionRecord};
+use super::model::account::{
+    AccountBySecretRecord, AccountExtRevisionRecord, AccountRevisionRecord,
+};
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::account::AccountRepoError;
@@ -55,6 +57,11 @@ pub trait AccountRepo: Send + Sync {
         &self,
         email: &str,
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError>;
+
+    async fn get_by_secret(
+        &self,
+        secret: &Uuid,
+    ) -> Result<Option<AccountBySecretRecord>, AccountRepoError>;
 }
 
 pub struct LoggedAccountRepo<Repo: AccountRepo> {
@@ -127,6 +134,13 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     ) -> Result<Option<AccountExtRevisionRecord>, AccountRepoError> {
         let span = Self::span_email(email);
         self.repo.get_by_email(email).instrument(span).await
+    }
+
+    async fn get_by_secret(
+        &self,
+        secret: &Uuid,
+    ) -> Result<Option<AccountBySecretRecord>, AccountRepoError> {
+        self.repo.get_by_secret(secret).await
     }
 }
 
@@ -330,6 +344,34 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                         AND a.deleted_at IS NULL
                 "#})
                     .bind(email)
+            )
+            .await?;
+
+        Ok(result)
+    }
+
+    async fn get_by_secret(
+        &self,
+        secret: &Uuid,
+    ) -> Result<Option<AccountBySecretRecord>, AccountRepoError> {
+        let result: Option<AccountBySecretRecord> = self.with_ro("get_account_by_secret")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        t.token_id,
+                        t.expires_at as token_expires_at,
+                        a.created_at AS entity_created_at,
+                        ar.account_id, ar.revision_id, ar.name, ar.email,
+                        ar.plan_id, ar.roles, ar.created_at, ar.created_by, ar.deleted
+                    FROM accounts a
+                    JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
+                    JOIN tokens t
+                        ON t.account_id = a.account_id
+                    WHERE
+                        t.secret = $1
+                        AND a.deleted_at IS NULL
+                "#})
+                .bind(secret),
             )
             .await?;
 

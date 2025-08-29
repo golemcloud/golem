@@ -198,6 +198,20 @@ impl AuthCtx {
             EnvironmentAction::DeleteEnvironment => {
                 has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
             }
+            EnvironmentAction::CreateEnvironmentPluginGrant => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::ViewEnvironmentPluginGrant => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::DeleteEnvironmentPluginGrant => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
         };
 
         if !is_allowed {

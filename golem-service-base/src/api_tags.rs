@@ -31,6 +31,7 @@ pub enum ApiTags {
     Deployment,
     Environment,
     EnvironmentShares,
+    EnvironmentPluginGrants,
     Debugging,
     Grant,
     HealthCheck,

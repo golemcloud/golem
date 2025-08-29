@@ -338,6 +338,7 @@ command = "cargo"
 args = [
     "clippy",
     "--fix",
+    "--all-targets",
     "--allow-dirty",
     "--allow-staged",
     "--",

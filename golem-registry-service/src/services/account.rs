@@ -205,6 +205,18 @@ impl AccountService {
         Ok(account)
     }
 
+    pub async fn get_optional(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<Option<Account>, AccountError> {
+        match self.get(account_id, auth).await {
+            Ok(account) => Ok(Some(account)),
+            Err(AccountError::AccountNotFound(_)) => Ok(None),
+            Err(other) => Err(other),
+        }
+    }
+
     async fn create_internal(
         &self,
         id: AccountId,
@@ -236,18 +248,6 @@ impl AccountService {
                 Err(AccountError::EmailAlreadyInUse)?
             }
             Err(other) => Err(other)?,
-        }
-    }
-
-    pub async fn get_optional(
-        &self,
-        account_id: &AccountId,
-        auth: &AuthCtx,
-    ) -> Result<Option<Account>, AccountError> {
-        match self.get(account_id, auth).await {
-            Ok(account) => Ok(Some(account)),
-            Err(AccountError::AccountNotFound(_)) => Ok(None),
-            Err(other) => Err(other),
         }
     }
 
