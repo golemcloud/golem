@@ -21,6 +21,7 @@ use crate::services::environment::EnvironmentError;
 use crate::services::environment_share::EnvironmentShareError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
+use crate::services::plugin_registration::PluginRegistrationError;
 use crate::services::reports::ReportsError;
 use crate::services::token::TokenError;
 use golem_common::SafeDisplay;
@@ -274,14 +275,13 @@ impl From<TokenError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             TokenError::Unauthorized(inner) => inner.into(),
-            TokenError::TokenNotFound(_) | TokenError::ParentAccountNotFound(_) => {
+            TokenError::TokenNotFound(_)
+            | TokenError::TokenBySecretNotFound
+            | TokenError::ParentAccountNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
-            TokenError::TokenBySecretNotFound => {
-                Self::InternalError(Json(ErrorBody { error, cause: None }))
-            }
             TokenError::TokenSecretAlreadyExists => {
-                Self::InternalError(Json(ErrorBody { error, cause: None }))
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
             TokenError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
@@ -339,6 +339,36 @@ impl From<ReportsError> for ApiError {
             ReportsError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("ReportsError")),
+            })),
+        }
+    }
+}
+
+impl From<PluginRegistrationError> for ApiError {
+    fn from(value: PluginRegistrationError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            PluginRegistrationError::ParentAccountNotFound(_)
+            | PluginRegistrationError::PluginNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            PluginRegistrationError::RequiredWasmFileMissing
+            | PluginRegistrationError::OplogProcessorComponentDoesNotExist => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    cause: None,
+                }))
+            }
+
+            PluginRegistrationError::PluginNameAndVersionAlreadyExists => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            PluginRegistrationError::Unauthorized(inner) => inner.into(),
+            PluginRegistrationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("PluginRegistrationError")),
             })),
         }
     }

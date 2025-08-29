@@ -131,6 +131,9 @@ pub enum AccountAction {
     UpdateApplication,
     DeleteApplication,
     ListAllApplicationEnvironments,
+    RegisterPlugin,
+    ViewPlugin,
+    DeletePlugin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]

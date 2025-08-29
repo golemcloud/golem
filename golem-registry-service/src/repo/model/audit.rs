@@ -15,6 +15,34 @@
 use crate::repo::model::datetime::SqlDateTime;
 use uuid::Uuid;
 
+/// Audit fields for resources that can only be created and deleted, not updated.
+#[derive(Debug, Clone, sqlx::FromRow, PartialEq)]
+pub struct ImmutableAuditFields {
+    pub created_at: SqlDateTime,
+    pub created_by: Uuid,
+    pub deleted_at: Option<SqlDateTime>,
+    pub deleted_by: Option<Uuid>,
+}
+
+impl ImmutableAuditFields {
+    pub fn new(created_by: Uuid) -> Self {
+        Self {
+            created_at: SqlDateTime::now(),
+            created_by,
+            deleted_at: None,
+            deleted_by: None,
+        }
+    }
+
+    pub fn into_deletion(self, deleted_by: Uuid) -> Self {
+        Self {
+            deleted_at: Some(SqlDateTime::now()),
+            deleted_by: Some(deleted_by),
+            ..self
+        }
+    }
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, PartialEq)]
 pub struct AuditFields {
     pub created_at: SqlDateTime,

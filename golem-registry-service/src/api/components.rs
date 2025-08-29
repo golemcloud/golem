@@ -18,10 +18,10 @@ use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use futures::TryStreamExt;
 use golem_common::api::Page;
-use golem_common::api::component::UpdateComponentRequestMetadata;
 use golem_common::model::ComponentId;
 use golem_common::model::component::Component;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::UpdatedComponentData;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -279,7 +279,7 @@ impl ComponentsApi {
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 struct UpdateComponentRequest {
-    metadata: JsonField<UpdateComponentRequestMetadata>,
+    metadata: JsonField<UpdatedComponentData>,
     new_component_wasm: Option<Upload>,
     new_files: Option<TempFileUpload>,
 }

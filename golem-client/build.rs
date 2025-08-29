@@ -41,20 +41,24 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::component::ComponentFileOptions",
             ),
             (
-                "CreateComponentRequestMetadata",
-                "golem_common::api::component::CreateComponentRequestMetadata",
+                "NewComponentData",
+                "golem_common::model::component::NewComponentData",
             ),
             (
-                "UpdateComponentRequestMetadata",
-                "golem_common::api::component::UpdateComponentRequestMetadata",
+                "UpdatedComponentData",
+                "golem_common::model::component::UpdatedComponentData",
             ),
             (
-                "CreateAppPluginRequestMetadata",
-                "golem_common::api::component::CreateAppPluginRequestMetadata",
+                "NewPluginRegistrationData",
+                "golem_common::model::plugin_registration::NewPluginRegistrationData",
             ),
             (
-                "CreateLibraryPluginRequestMetadata",
-                "golem_common::api::component::CreateLibraryPluginRequestMetadata",
+                "PluginRegistrationDto",
+                "golem_common::model::plugin_registration::PluginRegistrationDto",
+            ),
+            (
+                "ComponentTransformerPluginSpec",
+                "golem_common::model::plugin_registration::ComponentTransformerPluginSpec",
             ),
             ("PluginScope", "golem_common::model::plugin::PluginScope"),
             ("Account", "golem_common::model::account::Account"),

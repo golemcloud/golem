@@ -18,6 +18,7 @@ mod auth;
 mod component;
 mod environment;
 mod environment_share;
+mod plugin_registration;
 mod reports;
 
 use super::Tracing;

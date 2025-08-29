@@ -13,12 +13,16 @@
 // limitations under the License.
 
 use bytes::Bytes;
-use futures::Stream;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
+use futures::{Stream, TryStreamExt};
 use std::convert::Infallible;
 use std::fmt::{Debug, Display};
 use std::future::Future;
+use std::sync::Arc;
+use tempfile::NamedTempFile;
+use tokio::task::spawn_blocking;
+use tokio_util::io::ReaderStream;
 
 pub trait ReplayableStream: Send + Sync {
     type Item: 'static;
@@ -160,6 +164,27 @@ impl ReplayableStream for Vec<u8> {
 
     async fn length(&self) -> Result<u64, Self::Error> {
         Ok(self.len() as u64)
+    }
+}
+
+impl ReplayableStream for Arc<NamedTempFile> {
+    type Error = anyhow::Error;
+    type Item = Result<Bytes, Self::Error>;
+
+    async fn make_stream(
+        &self,
+    ) -> Result<impl Stream<Item = Self::Item> + Send + 'static, Self::Error> {
+        let temp_file = self.clone();
+        let file = spawn_blocking(move || temp_file.reopen()).await??;
+        Ok(ReaderStream::new(tokio::fs::File::from_std(file)).map_err(|e| e.into()))
+    }
+
+    async fn length(&self) -> Result<u64, Self::Error> {
+        let temp_file = self.clone();
+        let result =
+            spawn_blocking(move || Ok::<_, anyhow::Error>(temp_file.as_file().metadata()?.len()))
+                .await??;
+        Ok(result)
     }
 }
 

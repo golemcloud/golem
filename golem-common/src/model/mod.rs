@@ -36,6 +36,7 @@ pub mod login;
 pub mod lucene;
 pub mod oplog;
 pub mod plugin;
+pub mod plugin_registration;
 #[cfg(feature = "poem")]
 pub mod poem;
 pub mod project;
