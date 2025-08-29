@@ -646,8 +646,8 @@ CREATE INDEX environment_plugin_installation_revisions_plugin_idx
 
 CREATE TABLE environment_shares
 (
-    environment_id       UUID      NOT NULL,
     environment_share_id UUID      NOT NULL,
+    environment_id       UUID      NOT NULL,
     grantee_account_id   UUID      NOT NULL,
 
     created_at           TIMESTAMP NOT NULL,
@@ -692,3 +692,29 @@ CREATE TABLE environment_share_revisions
     CONSTRAINT environment_share_revisions_environment_shares_fk
         FOREIGN KEY (environment_share_id) REFERENCES environment_shares
 );
+
+CREATE TABLE environment_plugin_grants
+(
+    environment_plugin_grant_id UUID NOT NULL,
+    environment_id              UUID      NOT NULL,
+    plugin_id                   UUID      NOT NULL,
+
+    created_at            TIMESTAMP NOT NULL,
+    created_by            UUID      NOT NULL,
+    deleted_at            TIMESTAMP,
+    deleted_by            UUID,
+
+    CONSTRAINT environment_plugin_grants_pk
+        PRIMARY KEY (environment_plugin_grant_id),
+    CONSTRAINT environment_plugin_grants_environments_fk
+        FOREIGN KEY (environment_id) REFERENCES environments,
+    CONSTRAINT environment_plugin_grants_plugins_fk
+        FOREIGN KEY (plugin_id) REFERENCES plugins
+);
+
+CREATE UNIQUE INDEX environment_plugin_grants_environment_plugin_uk
+    ON environment_plugin_grants (environment_id, plugin_id)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX environment_plugin_grants_environment_id_idx ON environment_plugin_grants (environment_id);
+CREATE INDEX environment_plugin_grants_plugin_id_idx ON environment_plugin_grants (plugin_id);

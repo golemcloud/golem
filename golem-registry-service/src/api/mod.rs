@@ -26,6 +26,7 @@ pub mod environment_api_deployments;
 pub mod environment_api_domains;
 pub mod environment_certificates;
 pub mod environment_components;
+pub mod environment_plugin_grants;
 pub mod environment_security_schemes;
 pub mod environment_shares;
 pub mod environments;
@@ -50,6 +51,7 @@ use self::environment_api_deployments::EnvironmentApiDeploymentsApi;
 use self::environment_api_domains::EnvironmentApiDomainsApi;
 use self::environment_certificates::EnvironmentCertificatesApi;
 use self::environment_components::EnvironmentComponentsApi;
+use self::environment_plugin_grants::EnvironmentPluginGrantsApi;
 use self::environment_security_schemes::EnvironmentSecuritySchemesApi;
 use self::environment_shares::EnvironmentSharesApi;
 use self::environments::EnvironmentsApi;
@@ -80,8 +82,9 @@ pub type Apis = (
         EnvironmentComponentsApi,
         EnvironmentsApi,
         EnvironmentSecuritySchemesApi,
-        EnvironmentSharesApi,
     ),
+    EnvironmentPluginGrantsApi,
+    EnvironmentSharesApi,
     LoginApi,
     PluginRegistrationsApi,
     ReportsApi,
@@ -134,13 +137,18 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 EnvironmentsApi::new(
                     services.environment_service.clone(),
                     services.environment_share_service.clone(),
+                    services.environment_plugin_grant_service.clone(),
                     services.auth_service.clone(),
                 ),
                 EnvironmentSecuritySchemesApi::new(services.auth_service.clone()),
-                EnvironmentSharesApi::new(
-                    services.environment_share_service.clone(),
-                    services.auth_service.clone(),
-                ),
+            ),
+            EnvironmentPluginGrantsApi::new(
+                services.environment_plugin_grant_service.clone(),
+                services.auth_service.clone(),
+            ),
+            EnvironmentSharesApi::new(
+                services.environment_share_service.clone(),
+                services.auth_service.clone(),
             ),
             LoginApi::new(
                 services.login_system.clone(),

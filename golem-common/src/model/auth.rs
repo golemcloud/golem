@@ -116,38 +116,41 @@ pub enum PlanAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
 pub enum AccountAction {
-    CreateEnvironment,
-    ViewApplications,
-    UpdateAccount,
-    SetRoles,
     CreateApplication,
-    CreateToken,
+    CreateEnvironment,
     CreateKnownSecret,
-    DeleteToken,
-    ViewToken,
-    ViewAccount,
-    UpdateUsage,
+    CreateToken,
     DeleteAccount,
-    UpdateApplication,
     DeleteApplication,
+    DeletePlugin,
+    DeleteToken,
     ListAllApplicationEnvironments,
     RegisterPlugin,
+    SetRoles,
+    UpdateAccount,
+    UpdateApplication,
+    UpdateUsage,
+    ViewAccount,
+    ViewApplications,
     ViewPlugin,
-    DeletePlugin,
+    ViewToken,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
 pub enum EnvironmentAction {
     CreateComponent,
-    UpdateComponent,
-    ViewComponent,
-    ViewShares,
-    UpdateShare,
+    CreateEnvironmentPluginGrant,
     CreateShare,
-    DeleteShare,
-    ViewEnvironment,
     DeleteEnvironment,
+    DeleteEnvironmentPluginGrant,
+    DeleteShare,
+    UpdateComponent,
     UpdateEnvironment,
+    UpdateShare,
+    ViewComponent,
+    ViewEnvironment,
+    ViewEnvironmentPluginGrant,
+    ViewShares,
 }
 
 // #[cfg(feature = "protobuf")]
