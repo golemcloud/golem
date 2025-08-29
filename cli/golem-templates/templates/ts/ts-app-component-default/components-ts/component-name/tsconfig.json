@@ -4,5 +4,6 @@
   "include": [
     "src/**/*.ts",
     ".agent/**/*",
+    "../../../.metadata/**/*"
   ]
 }
