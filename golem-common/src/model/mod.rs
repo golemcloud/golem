@@ -12,30 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod account;
 pub mod agent;
+pub mod api_definition;
+pub mod api_deployment;
+pub mod api_domain;
+pub mod application;
 pub mod auth;
 pub mod base64;
+pub mod certificate;
 pub mod component;
 pub mod component_constraint;
 #[cfg(feature = "tokio")]
 pub mod component_metadata;
+pub mod deployment;
+pub mod diff;
+pub mod environment;
+pub mod environment_plugin_grant;
+pub mod environment_share;
 pub mod error;
 pub mod exports;
 pub mod invocation_context;
+pub mod login;
 pub mod lucene;
 pub mod oplog;
 pub mod plugin;
+pub mod plugin_registration;
 #[cfg(feature = "poem")]
-mod poem;
+pub mod poem;
 pub mod project;
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
 pub mod public_oplog;
 pub mod regions;
+pub mod reports;
 pub mod trim_date;
 pub mod worker;
 
 pub use crate::base_model::*;
+
+use self::component::{ComponentFilePermissions, ComponentRevision};
+use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
@@ -50,14 +67,13 @@ use golem_wasm_rpc::{IntoValue, Value};
 use golem_wasm_rpc_derive::IntoValue;
 use http::Uri;
 use rand::prelude::IteratorRandom;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Add;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
-use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
 #[cfg(feature = "poem")]
@@ -616,7 +632,7 @@ pub struct WorkerStatusRecord {
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
     pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
     pub current_idempotency_key: Option<IdempotencyKey>,
-    pub component_version: ComponentVersion,
+    pub component_version: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
@@ -625,7 +641,7 @@ pub struct WorkerStatusRecord {
     pub deleted_regions: DeletedRegions,
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
-    pub component_version_for_replay: ComponentVersion,
+    pub component_version_for_replay: ComponentRevision,
 }
 
 impl<Context> bincode::Decode<Context> for WorkerStatusRecord {
@@ -689,14 +705,14 @@ impl Default for WorkerStatusRecord {
             successful_updates: Vec::new(),
             invocation_results: HashMap::new(),
             current_idempotency_key: None,
-            component_version: 0,
+            component_version: ComponentRevision(0),
             component_size: 0,
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
-            component_version_for_replay: 0,
+            component_version_for_replay: ComponentRevision(0),
         }
     }
 }
@@ -704,14 +720,14 @@ impl Default for WorkerStatusRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct FailedUpdateRecord {
     pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
+    pub target_version: ComponentRevision,
     pub details: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
+    pub target_version: ComponentRevision,
 }
 
 /// Represents last known status of a worker
@@ -823,7 +839,7 @@ enum SerializedWorkerInvocation {
         function_input: Vec<Value>,
     },
     ManualUpdate {
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
     },
     ExportedFunction {
         idempotency_key: IdempotencyKey,
@@ -888,7 +904,7 @@ impl From<SerializedWorkerInvocation> for WorkerInvocation {
 #[derive(Clone, Debug, PartialEq)]
 pub enum WorkerInvocation {
     ManualUpdate {
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
     },
     ExportedFunction {
         idempotency_key: IdempotencyKey,
@@ -956,48 +972,6 @@ pub struct TimestampedWorkerInvocation {
     pub invocation: WorkerInvocation,
 }
 
-#[derive(
-    Clone,
-    Debug,
-    PartialOrd,
-    Ord,
-    derive_more::FromStr,
-    Eq,
-    Hash,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Encode,
-    Decode,
-    IntoValue,
-)]
-#[serde(transparent)]
-pub struct AccountId {
-    pub value: String,
-}
-
-impl AccountId {
-    pub fn generate() -> Self {
-        Self {
-            value: Uuid::new_v4().to_string(),
-        }
-    }
-}
-
-impl From<&str> for AccountId {
-    fn from(value: &str) -> Self {
-        Self {
-            value: value.to_string(),
-        }
-    }
-}
-
-impl Display for AccountId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.value)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
@@ -1046,11 +1020,11 @@ impl Display for WorkerStatusFilter {
 #[serde(rename_all = "camelCase")]
 pub struct WorkerVersionFilter {
     pub comparator: FilterComparator,
-    pub value: ComponentVersion,
+    pub value: ComponentRevision,
 }
 
 impl WorkerVersionFilter {
-    pub fn new(comparator: FilterComparator, value: ComponentVersion) -> Self {
+    pub fn new(comparator: FilterComparator, value: ComponentRevision) -> Self {
         Self { comparator, value }
     }
 }
@@ -1261,7 +1235,7 @@ impl WorkerFilter {
                 comparator.matches(&metadata.worker_id.worker_name, &value)
             }
             WorkerFilter::Version(WorkerVersionFilter { comparator, value }) => {
-                let version: ComponentVersion = metadata.last_known_status.component_version;
+                let version: ComponentRevision = metadata.last_known_status.component_version;
                 comparator.matches(&version, &value)
             }
             WorkerFilter::Env(WorkerEnvFilter {
@@ -1351,7 +1325,7 @@ impl WorkerFilter {
         WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter::new(name, comparator, value))
     }
 
-    pub fn new_version(comparator: FilterComparator, value: ComponentVersion) -> Self {
+    pub fn new_version(comparator: FilterComparator, value: ComponentRevision) -> Self {
         WorkerFilter::Version(WorkerVersionFilter::new(comparator, value))
     }
 
@@ -1758,216 +1732,11 @@ impl Display for WorkerEvent {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
-#[repr(i32)]
-pub enum ComponentType {
-    Durable = 0,
-    Ephemeral = 1,
-}
-
-impl TryFrom<i32> for ComponentType {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(ComponentType::Durable),
-            1 => Ok(ComponentType::Ephemeral),
-            _ => Err(format!("Unknown Component Type: {value}")),
-        }
-    }
-}
-
-impl Display for ComponentType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            ComponentType::Durable => "Durable",
-            ComponentType::Ephemeral => "Ephemeral",
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl FromStr for ComponentType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Durable" => Ok(ComponentType::Durable),
-            "Ephemeral" => Ok(ComponentType::Ephemeral),
-            _ => Err(format!("Unknown Component Type: {s}")),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct Empty {}
-
-/// Key that can be used to identify a component file.
-/// All files with the same content will have the same key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-pub struct InitialComponentFileKey(pub String);
-
-impl Display for InitialComponentFileKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-/// Path inside a component filesystem. Must be
-/// - absolute (start with '/')
-/// - not contain ".." components
-/// - not contain "." components
-/// - use '/' as a separator
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ComponentFilePath(Utf8UnixPathBuf);
-
-impl ComponentFilePath {
-    pub fn from_abs_str(s: &str) -> Result<Self, String> {
-        let buf: Utf8UnixPathBuf = s.into();
-        if !buf.is_absolute() {
-            return Err("Path must be absolute".to_string());
-        }
-
-        Ok(ComponentFilePath(buf.normalize()))
-    }
-
-    pub fn from_rel_str(s: &str) -> Result<Self, String> {
-        Self::from_abs_str(&format!("/{s}"))
-    }
-
-    pub fn from_either_str(s: &str) -> Result<Self, String> {
-        if s.starts_with('/') {
-            Self::from_abs_str(s)
-        } else {
-            Self::from_rel_str(s)
-        }
-    }
-
-    pub fn as_path(&self) -> &Utf8UnixPathBuf {
-        &self.0
-    }
-
-    pub fn to_rel_string(&self) -> String {
-        self.0.strip_prefix("/").unwrap().to_string()
-    }
-
-    pub fn extend(&mut self, path: &str) -> Result<(), String> {
-        self.0.push_checked(path).map_err(|e| e.to_string())
-    }
-}
-
-impl Display for ComponentFilePath {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl Serialize for ComponentFilePath {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        String::serialize(&self.to_string(), serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ComponentFilePath {
-    fn deserialize<D>(deserializer: D) -> Result<ComponentFilePath, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let str = String::deserialize(deserializer)?;
-        Self::from_abs_str(&str).map_err(de::Error::custom)
-    }
-}
-
-impl TryFrom<&str> for ComponentFilePath {
-    type Error = String;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::from_either_str(value)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
-#[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "poem", oai(rename_all = "kebab-case"))]
-pub enum ComponentFilePermissions {
-    ReadOnly,
-    ReadWrite,
-}
-
-impl ComponentFilePermissions {
-    pub fn as_compact_str(&self) -> &'static str {
-        match self {
-            ComponentFilePermissions::ReadOnly => "ro",
-            ComponentFilePermissions::ReadWrite => "rw",
-        }
-    }
-    pub fn from_compact_str(s: &str) -> Result<Self, String> {
-        match s {
-            "ro" => Ok(ComponentFilePermissions::ReadOnly),
-            "rw" => Ok(ComponentFilePermissions::ReadWrite),
-            _ => Err(format!("Unknown permissions: {s}")),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct InitialComponentFile {
-    pub key: InitialComponentFileKey,
-    pub path: ComponentFilePath,
-    pub permissions: ComponentFilePermissions,
-}
-
-impl InitialComponentFile {
-    pub fn is_read_only(&self) -> bool {
-        self.permissions == ComponentFilePermissions::ReadOnly
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentFilePathWithPermissions {
-    pub path: ComponentFilePath,
-    pub permissions: ComponentFilePermissions,
-}
-
-impl ComponentFilePathWithPermissions {
-    pub fn extend_path(&mut self, path: &str) -> Result<(), String> {
-        self.path.extend(path)
-    }
-}
-
-impl Display for ComponentFilePathWithPermissions {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", serde_json::to_string(self).unwrap())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentFilePathWithPermissionsList {
-    pub values: Vec<ComponentFilePathWithPermissions>,
-}
-
-impl Display for ComponentFilePathWithPermissionsList {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", serde_json::to_string(self).unwrap())
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum GetFileSystemNodeResult {
@@ -2060,21 +1829,19 @@ impl From<ComponentId> for golem_wasm_rpc::ComponentId {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::str::FromStr;
-    use std::vec;
-    use test_r::test;
-
+    use crate::model::component::{ComponentFilePath, ComponentRevision};
     use crate::model::oplog::OplogIndex;
-
     use crate::model::{
-        AccountId, ComponentFilePath, ComponentId, FilterComparator, IdempotencyKey, ProjectId,
+        AccountId, ComponentId, FilterComparator, IdempotencyKey, ProjectId,
         StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
         WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
-
     use serde::{Deserialize, Serialize};
+    use std::collections::BTreeMap;
+    use std::str::FromStr;
+    use std::vec;
+    use test_r::test;
 
     #[test]
     fn timestamp_conversion() {
@@ -2093,30 +1860,6 @@ mod tests {
     }
 
     #[test]
-    fn account_id_from_json_apigateway_version() {
-        let json = "{ \"account_id\": \"account-1\" }";
-        let example: ExampleWithAccountId = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            example.account_id,
-            AccountId {
-                value: "account-1".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn account_id_json_serialization() {
-        // We want to use this variant for serialization because it is used on the public API gateway API
-        let example: ExampleWithAccountId = ExampleWithAccountId {
-            account_id: AccountId {
-                value: "account-1".to_string(),
-            },
-        };
-        let json = serde_json::to_string(&example).unwrap();
-        assert_eq!(json, "{\"account_id\":\"account-1\"}");
-    }
-
-    #[test]
     fn worker_filter_parse() {
         assert_eq!(
             WorkerFilter::from_str(" name =  worker-1").unwrap(),
@@ -2130,7 +1873,7 @@ mod tests {
 
         assert_eq!(
             WorkerFilter::from_str("version >= 10").unwrap(),
-            WorkerFilter::new_version(FilterComparator::GreaterEqual, 10)
+            WorkerFilter::new_version(FilterComparator::GreaterEqual, ComponentRevision(10))
         );
 
         assert_eq!(
@@ -2169,11 +1912,14 @@ mod tests {
                     FilterComparator::Equal,
                     WorkerStatus::Running,
                 ))
-                .and(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+                .and(WorkerFilter::new_version(
+                    FilterComparator::Equal,
+                    ComponentRevision(1)
+                )),
             WorkerFilter::new_and(vec![
                 WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
                 WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
-                WorkerFilter::new_version(FilterComparator::Equal, 1),
+                WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision(1)),
             ])
         );
 
@@ -2193,11 +1939,14 @@ mod tests {
                     FilterComparator::NotEqual,
                     WorkerStatus::Running,
                 ))
-                .or(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+                .or(WorkerFilter::new_version(
+                    FilterComparator::Equal,
+                    ComponentRevision(1)
+                )),
             WorkerFilter::new_or(vec![
                 WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
                 WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
-                WorkerFilter::new_version(FilterComparator::Equal, 1),
+                WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision(1)),
             ])
         );
 
@@ -2207,13 +1956,16 @@ mod tests {
                     FilterComparator::NotEqual,
                     WorkerStatus::Running,
                 ))
-                .or(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+                .or(WorkerFilter::new_version(
+                    FilterComparator::Equal,
+                    ComponentRevision(1)
+                )),
             WorkerFilter::new_or(vec![
                 WorkerFilter::new_and(vec![
                     WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
                     WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
                 ]),
-                WorkerFilter::new_version(FilterComparator::Equal, 1),
+                WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision(1)),
             ])
         );
 
@@ -2223,13 +1975,16 @@ mod tests {
                     FilterComparator::NotEqual,
                     WorkerStatus::Running,
                 ))
-                .and(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+                .and(WorkerFilter::new_version(
+                    FilterComparator::Equal,
+                    ComponentRevision(1)
+                )),
             WorkerFilter::new_and(vec![
                 WorkerFilter::new_or(vec![
                     WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
                     WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
                 ]),
-                WorkerFilter::new_version(FilterComparator::Equal, 1),
+                WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision(1)),
             ])
         );
     }
@@ -2248,14 +2003,12 @@ mod tests {
                 ("env2".to_string(), "value2".to_string()),
             ],
             project_id: ProjectId::new_v4(),
-            created_by: AccountId {
-                value: "account-1".to_string(),
-            },
+            created_by: AccountId::new_v4(),
             wasi_config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord {
-                component_version: 1,
+                component_version: ComponentRevision(1),
                 ..WorkerStatusRecord::default()
             },
         };
@@ -2295,23 +2048,34 @@ mod tests {
 
         assert!(
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-                .and(WorkerFilter::new_version(FilterComparator::Equal, 1))
+                .and(WorkerFilter::new_version(
+                    FilterComparator::Equal,
+                    ComponentRevision(1)
+                ))
                 .matches(&worker_metadata)
         );
 
         assert!(
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-2".to_string())
-                .or(WorkerFilter::new_version(FilterComparator::Equal, 1))
+                .or(WorkerFilter::new_version(
+                    FilterComparator::Equal,
+                    ComponentRevision(1)
+                ))
                 .matches(&worker_metadata)
         );
 
-        assert!(WorkerFilter::new_version(FilterComparator::GreaterEqual, 1)
-            .and(WorkerFilter::new_version(FilterComparator::Less, 2))
-            .or(WorkerFilter::new_name(
-                StringFilterComparator::Equal,
-                "worker-2".to_string(),
-            ))
-            .matches(&worker_metadata));
+        assert!(
+            WorkerFilter::new_version(FilterComparator::GreaterEqual, ComponentRevision(1))
+                .and(WorkerFilter::new_version(
+                    FilterComparator::Less,
+                    ComponentRevision(2)
+                ))
+                .or(WorkerFilter::new_name(
+                    StringFilterComparator::Equal,
+                    "worker-2".to_string(),
+                ))
+                .matches(&worker_metadata)
+        );
 
         assert!(WorkerFilter::new_wasi_config_vars(
             "var1".to_string(),

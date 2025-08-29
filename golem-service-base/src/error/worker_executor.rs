@@ -14,10 +14,10 @@
 
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem;
-use golem_common::metrics::api::TraceErrorKind;
+use golem_common::SafeDisplay;
+use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
-use golem_common::SafeDisplay;
 use golem_wasm_rpc::wasmtime::EncodingError;
 use golem_wasm_rpc_derive::IntoValue;
 use serde::{Deserialize, Serialize};
@@ -343,7 +343,7 @@ impl Error for WorkerExecutorError {
     }
 }
 
-impl TraceErrorKind for WorkerExecutorError {
+impl ApiErrorDetails for WorkerExecutorError {
     fn trace_error_kind(&self) -> &'static str {
         match self {
             Self::InvalidRequest { .. } => "InvalidRequest",
@@ -404,6 +404,10 @@ impl TraceErrorKind for WorkerExecutorError {
             | Self::ShardingNotReady
             | Self::FileSystemError { .. } => false,
         }
+    }
+
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
+        todo!()
     }
 }
 

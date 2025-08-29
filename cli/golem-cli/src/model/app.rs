@@ -2546,7 +2546,7 @@ mod app_builder {
                                                 check_not_allowed(validation, "component_name", &route.binding.component_name);
                                                 check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
                                                 check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
-                                                check_not_allowed(validation, "response", &route.binding.response); 
+                                                check_not_allowed(validation, "response", &route.binding.response);
                                         }
                                     }
                                 },

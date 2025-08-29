@@ -12,46 +12,235 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ProjectId;
-use crate::base_model::{ComponentId, ComponentVersion};
-use crate::model::AccountId;
+use super::agent::AgentType;
+use super::component_metadata::DynamicLinkedInstance;
+use super::environment::EnvironmentId;
+use super::plugin::PluginInstallationAction;
+use super::PluginInstallationId;
+use crate::base_model::ComponentId;
+use crate::model::account::AccountId;
+use crate::model::component_metadata::ComponentMetadata;
+use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
 use bincode::{Decode, Encode};
 use core::fmt;
-use serde::{Deserialize, Serialize};
+use derive_more::Display;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
+use typed_path::Utf8UnixPathBuf;
 
+declare_revision!(ComponentRevision);
+
+declare_transparent_newtypes! {
+    // TODO: Add validations (non-empty, no "/", no " ", ...)
+    #[derive(Display)]
+    pub struct ComponentName(pub String);
+}
+
+declare_structs! {
+    pub struct NewComponentData {
+        pub component_name: ComponentName,
+        pub component_type: Option<ComponentType>,
+        pub file_options: Option<BTreeMap<ComponentFilePath, ComponentFileOptions>>,
+        pub dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+        pub env: Option<BTreeMap<String, String>>,
+        pub agent_types: Option<Vec<AgentType>>
+    }
+
+    pub struct UpdatedComponentData {
+        pub previous_version: ComponentRevision,
+        pub component_type: Option<ComponentType>,
+        pub removed_files: Option<Vec<ComponentFilePath>>,
+        pub new_file_options: Option<BTreeMap<ComponentFilePath, ComponentFileOptions>>,
+        pub dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+        pub env: Option<BTreeMap<String, String>>,
+        pub agent_types: Option<Vec<AgentType>>,
+        pub plugin_installation_actions: Option<Vec<PluginInstallationAction>>,
+    }
+
+    pub struct Component {
+        pub environment_id: EnvironmentId,
+        pub versioned_component_id: VersionedComponentId,
+        pub component_name: ComponentName,
+        pub component_size: u64,
+        pub metadata: ComponentMetadata,
+        pub created_at: chrono::DateTime<chrono::Utc>,
+        pub component_type: ComponentType,
+        pub files: Vec<InitialComponentFile>,
+        pub installed_plugins: Vec<PluginInstallation>,
+        pub env: BTreeMap<String, String>,
+        pub wasm_hash: crate::model::diff::Hash,
+    }
+
+    #[derive(Default)]
+    pub struct ComponentFileOptions {
+        /// Path of the file in the uploaded archive
+        pub permissions: ComponentFilePermissions,
+    }
+
+    pub struct PluginInstallation {
+        pub id: PluginInstallationId,
+        pub name: String,
+        pub version: String,
+        /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
+        pub registered: bool,
+        pub priority: i32,
+        pub parameters: HashMap<String, String>,
+    }
+}
+
+/// Key that can be used to identify a component file.
+/// All files with the same content will have the same key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, derive_more::Display)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
+pub struct InitialComponentFileKey(pub String);
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+#[repr(i32)]
+pub enum ComponentType {
+    Durable = 0,
+    Ephemeral = 1,
+}
+
+impl TryFrom<i32> for ComponentType {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(ComponentType::Durable),
+            1 => Ok(ComponentType::Ephemeral),
+            _ => Err(format!("Unknown Component Type: {value}")),
+        }
+    }
+}
+
+impl Display for ComponentType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ComponentType::Durable => "Durable",
+            ComponentType::Ephemeral => "Ephemeral",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl FromStr for ComponentType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Durable" => Ok(ComponentType::Durable),
+            "Ephemeral" => Ok(ComponentType::Ephemeral),
+            _ => Err(format!("Unknown Component Type: {s}")),
+        }
+    }
+}
+
+/// Path inside a component filesystem. Must be
+/// - absolute (start with '/')
+/// - not contain ".." components
+/// - not contain "." components
+/// - use '/' as a separator
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, derive_more::Display)]
+pub struct ComponentFilePath(Utf8UnixPathBuf);
+
+impl ComponentFilePath {
+    pub fn from_abs_str(s: &str) -> Result<Self, String> {
+        let buf: Utf8UnixPathBuf = s.into();
+        if !buf.is_absolute() {
+            return Err("Path must be absolute".to_string());
+        }
+
+        Ok(ComponentFilePath(buf.normalize()))
+    }
+
+    pub fn from_rel_str(s: &str) -> Result<Self, String> {
+        Self::from_abs_str(&format!("/{s}"))
+    }
+
+    pub fn from_either_str(s: &str) -> Result<Self, String> {
+        if s.starts_with('/') {
+            Self::from_abs_str(s)
+        } else {
+            Self::from_rel_str(s)
+        }
+    }
+
+    pub fn as_path(&self) -> &Utf8UnixPathBuf {
+        &self.0
+    }
+
+    pub fn to_abs_string(&self) -> String {
+        self.0.to_string()
+    }
+
+    pub fn to_rel_string(&self) -> String {
+        self.0.strip_prefix("/").unwrap().to_string()
+    }
+
+    pub fn extend(&mut self, path: &str) -> Result<(), String> {
+        self.0.push_checked(path).map_err(|e| e.to_string())
+    }
+}
+
+impl Serialize for ComponentFilePath {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        String::serialize(&self.to_string(), serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ComponentFilePath {
+    fn deserialize<D>(deserializer: D) -> Result<ComponentFilePath, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let str = String::deserialize(deserializer)?;
+        Self::from_abs_str(&str).map_err(serde::de::Error::custom)
+    }
+}
+
+impl FromStr for ComponentFilePath {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_either_str(s)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct InitialComponentFile {
+    pub key: InitialComponentFileKey,
+    pub path: ComponentFilePath,
+    pub permissions: ComponentFilePermissions,
+}
+
+impl InitialComponentFile {
+    pub fn is_read_only(&self) -> bool {
+        self.permissions == ComponentFilePermissions::ReadOnly
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 pub struct ComponentOwner {
-    pub project_id: ProjectId,
     pub account_id: AccountId,
+    pub environment_id: EnvironmentId,
 }
 
 impl Display for ComponentOwner {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.account_id, self.project_id)
+        write!(f, "{}:{}", self.account_id, self.environment_id)
     }
 }
-
-impl FromStr for ComponentOwner {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 2 {
-            return Err(format!("Invalid namespace: {s}"));
-        }
-
-        Ok(Self {
-            project_id: ProjectId::try_from(parts[1])?,
-            account_id: AccountId::from(parts[0]),
-        })
-    }
-}
-
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
 )]
@@ -61,7 +250,7 @@ impl FromStr for ComponentOwner {
 
 pub struct VersionedComponentId {
     pub component_id: ComponentId,
-    pub version: ComponentVersion,
+    pub version: ComponentRevision,
 }
 
 impl Display for VersionedComponentId {
@@ -70,8 +259,40 @@ impl Display for VersionedComponentId {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "poem", oai(rename_all = "kebab-case"))]
+pub enum ComponentFilePermissions {
+    ReadOnly,
+    ReadWrite,
+}
+
+impl ComponentFilePermissions {
+    pub fn as_compact_str(&self) -> &'static str {
+        match self {
+            ComponentFilePermissions::ReadOnly => "ro",
+            ComponentFilePermissions::ReadWrite => "rw",
+        }
+    }
+    pub fn from_compact_str(s: &str) -> Result<Self, String> {
+        match s {
+            "ro" => Ok(ComponentFilePermissions::ReadOnly),
+            "rw" => Ok(ComponentFilePermissions::ReadWrite),
+            _ => Err(format!("Unknown permissions: {s}")),
+        }
+    }
+}
+
+impl Default for ComponentFilePermissions {
+    fn default() -> Self {
+        Self::ReadOnly
+    }
+}
+
 #[cfg(feature = "protobuf")]
 mod protobuf {
+    use super::ComponentRevision;
     use crate::model::component::VersionedComponentId;
 
     impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId>
@@ -87,7 +308,7 @@ mod protobuf {
                     .component_id
                     .ok_or("Missing component_id")?
                     .try_into()?,
-                version: value.version,
+                version: ComponentRevision(value.version),
             })
         }
     }
@@ -96,7 +317,7 @@ mod protobuf {
         fn from(value: VersionedComponentId) -> Self {
             Self {
                 component_id: Some(value.component_id.into()),
-                version: value.version,
+                version: value.version.0,
             }
         }
     }

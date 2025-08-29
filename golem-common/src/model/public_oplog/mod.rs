@@ -18,18 +18,15 @@ mod protobuf;
 #[cfg(test)]
 mod tests;
 
-use super::plugin::PluginDefinition;
 use super::worker::WasiConfigVars;
+use crate::model::component::ComponentRevision;
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{
     DurableFunctionType, LogLevel, OplogIndex, PersistenceLevel, WorkerResourceId,
 };
-use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
-use crate::model::{
-    AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
-};
+use crate::model::{AccountId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId};
 use crate::model::{ProjectId, RetryConfig};
 use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
@@ -187,7 +184,7 @@ impl IntoValue for ExportedFunctionParameters {
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
 pub struct ManualUpdateParameters {
-    pub target_version: ComponentVersion,
+    pub target_version: ComponentRevision,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
@@ -211,21 +208,6 @@ pub struct PluginInstallationDescription {
     pub parameters: BTreeMap<String, String>,
 }
 
-impl PluginInstallationDescription {
-    pub fn from_definition_and_installation(
-        definition: PluginDefinition,
-        installation: PluginInstallation,
-    ) -> Self {
-        Self {
-            installation_id: installation.id,
-            plugin_name: definition.name,
-            plugin_version: definition.version,
-            parameters: installation.parameters.into_iter().collect(),
-            registered: !definition.deleted,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
@@ -233,7 +215,7 @@ impl PluginInstallationDescription {
 pub struct CreateParameters {
     pub timestamp: Timestamp,
     pub worker_id: WorkerId,
-    pub component_version: ComponentVersion,
+    pub component_version: ComponentRevision,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub project_id: ProjectId,
@@ -433,7 +415,7 @@ pub struct PendingWorkerInvocationParameters {
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct PendingUpdateParameters {
     pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
+    pub target_version: ComponentRevision,
     pub description: PublicUpdateDescription,
 }
 
@@ -441,7 +423,7 @@ pub struct PendingUpdateParameters {
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct SuccessfulUpdateParameters {
     pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
+    pub target_version: ComponentRevision,
     pub new_component_size: u64,
     pub new_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
@@ -452,7 +434,7 @@ pub struct SuccessfulUpdateParameters {
 #[serde(rename_all = "camelCase")]
 pub struct FailedUpdateParameters {
     pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
+    pub target_version: ComponentRevision,
     pub details: Option<String>,
 }
 

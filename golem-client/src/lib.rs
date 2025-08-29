@@ -12,7 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::MultipartField;
+use golem_common::model::component::{NewComponentData, UpdatedComponentData};
+use golem_common::model::plugin_registration::NewPluginRegistrationData;
+
 include!(concat!(env!("OUT_DIR"), "/src/lib.rs"));
 
 #[cfg(test)]
 test_r::enable!();
+
+impl MultipartField for NewComponentData {
+    fn to_multipart_field(&self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
+
+    fn mime_type(&self) -> &'static str {
+        "application/json"
+    }
+}
+
+impl MultipartField for UpdatedComponentData {
+    fn to_multipart_field(&self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
+
+    fn mime_type(&self) -> &'static str {
+        "application/json"
+    }
+}
+
+impl MultipartField for NewPluginRegistrationData {
+    fn to_multipart_field(&self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
+
+    fn mime_type(&self) -> &'static str {
+        "application/json"
+    }
+}

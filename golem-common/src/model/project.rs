@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::auth::Namespace;
 use super::{AccountId, ProjectId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -21,12 +20,6 @@ pub struct ProjectView {
     pub owner_account_id: AccountId,
     pub name: String,
     pub description: String,
-}
-
-impl From<ProjectView> for Namespace {
-    fn from(value: ProjectView) -> Self {
-        Namespace::new(value.id, value.owner_account_id)
-    }
 }
 
 #[cfg(feature = "protobuf")]
@@ -47,7 +40,9 @@ mod protobuf {
             } = value.data.ok_or("Missing data")?;
             Ok(Self {
                 id: value.id.ok_or("Missing id")?.try_into()?,
-                owner_account_id: owner_account_id.ok_or("Missing owner_account_id")?.into(),
+                owner_account_id: owner_account_id
+                    .ok_or("Missing owner_account_id")?
+                    .try_into()?,
                 name,
                 description,
             })
