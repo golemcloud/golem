@@ -17,10 +17,10 @@ use crate::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use golem_common::api::Page;
-use golem_common::api::component::CreateComponentRequestMetadata;
 use golem_common::model::component::Component;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::ComponentType;
+use golem_common::model::component::NewComponentData;
 use golem_common::model::deployment::DeploymentRevisionId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
@@ -305,7 +305,7 @@ impl EnvironmentComponentsApi {
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 struct CreateComponentRequest {
-    metadata: JsonField<CreateComponentRequestMetadata>,
+    metadata: JsonField<NewComponentData>,
     component_wasm: Upload,
     files: Option<TempFileUpload>,
 }

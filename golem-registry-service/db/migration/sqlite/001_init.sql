@@ -549,7 +549,8 @@ CREATE TABLE plugins
 
     created_at            TIMESTAMP NOT NULL,
     created_by            UUID      NOT NULL,
-    deleted               BOOLEAN   NOT NULL,
+     deleted_at            TIMESTAMP,
+    deleted_by            UUID,
 
     description           TEXT      NOT NULL,
     icon                  BYTEA     NOT NULL,
@@ -573,7 +574,7 @@ CREATE TABLE plugins
 );
 
 CREATE UNIQUE INDEX plugins_name_version_uk ON plugins (account_id, name, version)
-    WHERE deleted IS FALSE;
+    WHERE deleted_at IS NULL;
 
 CREATE INDEX plugins_component_idx ON plugins (component_id, component_revision_id);
 

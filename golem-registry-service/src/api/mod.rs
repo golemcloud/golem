@@ -31,7 +31,7 @@ pub mod environment_shares;
 pub mod environments;
 pub mod error;
 pub mod login;
-pub mod plugin_registration;
+pub mod plugin_registrations;
 pub mod reports;
 pub mod security_schemes;
 pub mod tokens;
@@ -55,7 +55,7 @@ use self::environment_shares::EnvironmentSharesApi;
 use self::environments::EnvironmentsApi;
 use self::error::ApiError;
 use self::login::LoginApi;
-use self::plugin_registration::PluginRegistrationApi;
+use self::plugin_registrations::PluginRegistrationsApi;
 use self::reports::ReportsApi;
 use self::security_schemes::SecuritySchemesApi;
 use self::tokens::TokensApi;
@@ -83,7 +83,7 @@ pub type Apis = (
         EnvironmentSharesApi,
     ),
     LoginApi,
-    PluginRegistrationApi,
+    PluginRegistrationsApi,
     ReportsApi,
     SecuritySchemesApi,
     TokensApi,
@@ -106,6 +106,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.account_service.clone(),
                     services.plan_service.clone(),
                     services.auth_service.clone(),
+                    services.plugin_registration_service.clone(),
                 ),
             ),
             ApiDefinitionsApi::new(services.auth_service.clone()),
@@ -145,7 +146,10 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.login_system.clone(),
                 services.token_service.clone(),
             ),
-            PluginRegistrationApi {},
+            PluginRegistrationsApi::new(
+                services.plugin_registration_service.clone(),
+                services.auth_service.clone(),
+            ),
             ReportsApi::new(
                 services.reports_service.clone(),
                 services.auth_service.clone(),

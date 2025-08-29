@@ -27,6 +27,7 @@ use async_mutex::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
+use golem_common::model::agent::AgentId;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     invocation_context::{AttributeValue, InvocationContextStack},
@@ -186,6 +187,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             Level::INFO,
             "invocation",
             worker_id = %self.owned_worker_id.worker_id,
+            agent_type = self.parent
+                .agent_id
+                .as_ref()
+                .map(|id| id.agent_type.clone())
+                .unwrap_or_else(|| "-".to_string()),
         );
         let prepare_result =
             Ctx::prepare_instance(&self.owned_worker_id.worker_id, instance, &mut *store)
@@ -439,6 +445,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Level::INFO,
             "invocation",
             worker_id = %self.owned_worker_id.worker_id,
+            agent_type = self.parent
+                .agent_id
+                .as_ref()
+                .map(|id| id.agent_type.clone())
+                .unwrap_or_else(|| "-".to_string()),
             %idempotency_key,
             function = full_function_name
         );
@@ -510,6 +521,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &idempotency_key,
             full_function_name,
             &self.owned_worker_id.worker_id(),
+            &self.parent.agent_id,
         );
 
         let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
@@ -697,7 +709,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Level::INFO,
             "manual_update",
             worker_id = %self.owned_worker_id.worker_id,
-            target_version = %target_version
+            target_version = %target_version,
+            agent_type = self.parent
+                .agent_id
+                .as_ref()
+                .map(|id| id.agent_type.clone())
+                .unwrap_or_else(|| "-".to_string()),
         );
 
         self.manual_update_inner(target_version)
@@ -903,6 +920,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: &IdempotencyKey,
         full_function_name: &str,
         worker_id: &WorkerId,
+        agent_id: &Option<AgentId>,
     ) {
         let invocation_span = invocation_context.spans.first().start_span(None);
         invocation_span.set_attribute(
@@ -921,6 +939,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             "worker_id".to_string(),
             AttributeValue::String(worker_id.to_string()),
         );
+        if let Some(agent_id) = agent_id {
+            invocation_span.set_attribute(
+                "agent_type".to_string(),
+                AttributeValue::String(agent_id.agent_type.clone()),
+            );
+            invocation_span.set_attribute(
+                "agent_parameters".to_string(),
+                AttributeValue::String(agent_id.parameters.to_string()),
+            )
+        }
         invocation_context.push(invocation_span);
     }
 }

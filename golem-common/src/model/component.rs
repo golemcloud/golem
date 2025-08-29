@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent::AgentType;
+use super::component_metadata::DynamicLinkedInstance;
 use super::environment::EnvironmentId;
+use super::plugin::PluginInstallationAction;
 use super::PluginInstallationId;
 use crate::base_model::ComponentId;
 use crate::model::account::AccountId;
@@ -53,6 +56,26 @@ impl FromStr for ComponentName {
 }
 
 declare_structs! {
+    pub struct NewComponentData {
+        pub component_name: ComponentName,
+        pub component_type: Option<ComponentType>,
+        pub file_options: Option<BTreeMap<ComponentFilePath, ComponentFileOptions>>,
+        pub dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+        pub env: Option<BTreeMap<String, String>>,
+        pub agent_types: Option<Vec<AgentType>>
+    }
+
+    pub struct UpdatedComponentData {
+        pub previous_version: ComponentRevision,
+        pub component_type: Option<ComponentType>,
+        pub removed_files: Option<Vec<ComponentFilePath>>,
+        pub new_file_options: Option<BTreeMap<ComponentFilePath, ComponentFileOptions>>,
+        pub dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+        pub env: Option<BTreeMap<String, String>>,
+        pub agent_types: Option<Vec<AgentType>>,
+        pub plugin_installation_actions: Option<Vec<PluginInstallationAction>>,
+    }
+
     pub struct Component {
         pub environment_id: EnvironmentId,
         pub versioned_component_id: VersionedComponentId,

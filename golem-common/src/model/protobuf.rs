@@ -351,6 +351,9 @@ impl From<StringFilterComparator> for golem_api_grpc::proto::golem::common::Stri
             StringFilterComparator::NotLike => {
                 golem_api_grpc::proto::golem::common::StringFilterComparator::StringNotLike
             }
+            StringFilterComparator::StartsWith => {
+                golem_api_grpc::proto::golem::common::StringFilterComparator::StartsWith
+            }
         }
     }
 }

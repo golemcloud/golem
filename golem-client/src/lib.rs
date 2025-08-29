@@ -12,18 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use self::model::{
-    CreateAppPluginRequestMetadata, CreateComponentRequestMetadata,
-    CreateLibraryPluginRequestMetadata, UpdateComponentRequestMetadata,
-};
 use crate::model::MultipartField;
+use golem_common::model::component::{NewComponentData, UpdatedComponentData};
+use golem_common::model::plugin_registration::NewPluginRegistrationData;
 
 include!(concat!(env!("OUT_DIR"), "/src/lib.rs"));
 
 #[cfg(test)]
 test_r::enable!();
 
-impl MultipartField for CreateComponentRequestMetadata {
+impl MultipartField for NewComponentData {
     fn to_multipart_field(&self) -> String {
         serde_json::to_string(&self).unwrap()
     }
@@ -33,7 +31,7 @@ impl MultipartField for CreateComponentRequestMetadata {
     }
 }
 
-impl MultipartField for UpdateComponentRequestMetadata {
+impl MultipartField for UpdatedComponentData {
     fn to_multipart_field(&self) -> String {
         serde_json::to_string(&self).unwrap()
     }
@@ -43,17 +41,7 @@ impl MultipartField for UpdateComponentRequestMetadata {
     }
 }
 
-impl MultipartField for CreateAppPluginRequestMetadata {
-    fn to_multipart_field(&self) -> String {
-        serde_json::to_string(&self).unwrap()
-    }
-
-    fn mime_type(&self) -> &'static str {
-        "application/json"
-    }
-}
-
-impl MultipartField for CreateLibraryPluginRequestMetadata {
+impl MultipartField for NewPluginRegistrationData {
     fn to_multipart_field(&self) -> String {
         serde_json::to_string(&self).unwrap()
     }

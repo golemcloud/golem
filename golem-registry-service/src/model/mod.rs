@@ -15,6 +15,7 @@
 pub mod auth;
 pub mod component;
 pub mod login;
+pub mod plugin_registration;
 
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::EnvironmentRole;

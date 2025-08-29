@@ -27,7 +27,7 @@ use golem_registry_service::repo::model::application::{
     ApplicationRepoError, ApplicationRevisionRecord,
 };
 use golem_registry_service::repo::model::audit::{
-    DeletableRevisionAuditFields, RevisionAuditFields,
+    DeletableRevisionAuditFields, ImmutableAuditFields, RevisionAuditFields,
 };
 use golem_registry_service::repo::model::component::{
     ComponentFileRecord, ComponentPluginInstallationRecord, ComponentRepoError,
@@ -543,7 +543,7 @@ pub async fn test_component_stage(deps: &Deps) {
             account_id: app.account_id,
             name: "a".to_string(),
             version: "1.0.0".to_string(),
-            audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+            audit: ImmutableAuditFields::new(user.revision.account_id),
             description: "".to_string(),
             icon: vec![],
             homepage: "".to_string(),
@@ -567,7 +567,7 @@ pub async fn test_component_stage(deps: &Deps) {
             account_id: app.account_id,
             name: "b".to_string(),
             version: "1.0.0".to_string(),
-            audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+            audit: ImmutableAuditFields::new(user.revision.account_id),
             description: "".to_string(),
             icon: vec![],
             homepage: "".to_string(),

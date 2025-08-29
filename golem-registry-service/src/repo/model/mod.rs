@@ -31,6 +31,7 @@ pub mod plugin;
 pub mod reports;
 pub mod token;
 
+use self::audit::ImmutableAuditFields;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::datetime::SqlDateTime;
 use chrono::NaiveDateTime;
@@ -47,6 +48,7 @@ pub fn new_repo_uuid() -> Uuid {
 
 /// BindFields is used to extract binding of common field sets, e.g., audit fields
 pub trait BindFields {
+    fn bind_immutable_audit(self, entity_audit_fields: ImmutableAuditFields) -> Self;
     fn bind_audit(self, entity_audit_fields: AuditFields) -> Self;
     fn bind_revision_audit(self, field: RevisionAuditFields) -> Self;
     fn bind_deletable_revision_audit(
@@ -61,7 +63,15 @@ where
     Uuid: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     bool: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     Option<SqlDateTime>: sqlx::Encode<'q, DB>,
+    Option<Uuid>: sqlx::Encode<'q, DB>,
 {
+    fn bind_immutable_audit(self, entity_audit_fields: ImmutableAuditFields) -> Self {
+        self.bind(entity_audit_fields.created_at)
+            .bind(entity_audit_fields.created_by)
+            .bind(entity_audit_fields.deleted_at)
+            .bind(entity_audit_fields.deleted_by)
+    }
+
     fn bind_audit(self, entity_audit_fields: AuditFields) -> Self {
         self.bind(entity_audit_fields.created_at)
             .bind(entity_audit_fields.updated_at)
@@ -89,7 +99,15 @@ where
     Uuid: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     bool: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     Option<SqlDateTime>: sqlx::Encode<'q, DB>,
+    Option<Uuid>: sqlx::Encode<'q, DB>,
 {
+    fn bind_immutable_audit(self, entity_audit_fields: ImmutableAuditFields) -> Self {
+        self.bind(entity_audit_fields.created_at)
+            .bind(entity_audit_fields.created_by)
+            .bind(entity_audit_fields.deleted_at)
+            .bind(entity_audit_fields.deleted_by)
+    }
+
     fn bind_audit(self, fields: AuditFields) -> Self {
         self.bind(fields.created_at)
             .bind(fields.updated_at)

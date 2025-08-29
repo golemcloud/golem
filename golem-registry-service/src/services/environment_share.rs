@@ -122,14 +122,7 @@ impl EnvironmentShareService {
         update: UpdatedEnvironmentShareData,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
-        let mut environment_share: EnvironmentShare = self
-            .environment_share_repo
-            .get_by_id(&environment_share_id.0)
-            .await?
-            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(
-                environment_share_id.clone(),
-            ))?
-            .try_into()?;
+        let mut environment_share: EnvironmentShare = self.get(environment_share_id, auth).await?;
 
         self.environment_service
             .get_and_authorize(
@@ -175,14 +168,7 @@ impl EnvironmentShareService {
         environment_share_id: &EnvironmentShareId,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
-        let mut environment_share: EnvironmentShare = self
-            .environment_share_repo
-            .get_by_id(&environment_share_id.0)
-            .await?
-            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(
-                environment_share_id.clone(),
-            ))?
-            .try_into()?;
+        let mut environment_share: EnvironmentShare = self.get(environment_share_id, auth).await?;
 
         self.environment_service
             .get_and_authorize(

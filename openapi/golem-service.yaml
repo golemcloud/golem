@@ -2570,6 +2570,159 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/accounts/{account_id}/plugins:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      - Plugin
+      summary: Get all plugins registered in account
+      operationId: get_account_plugins
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_PluginRegistrationDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    post:
+      tags:
+      - RegistryService
+      - Account
+      - Plugin
+      summary: Register a new plugin
+      operationId: create_plugin
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                metadata:
+                  $ref: '#/components/schemas/NewPluginRegistrationData'
+                pluginWasm:
+                  type: string
+                  format: binary
+              required:
+              - metadata
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PluginRegistrationDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/api-definitions/{api_definition_id}:
     get:
       tags:
@@ -4097,7 +4250,7 @@ paths:
               type: object
               properties:
                 metadata:
-                  $ref: '#/components/schemas/UpdateComponentRequestMetadata'
+                  $ref: '#/components/schemas/UpdatedComponentData'
                 newComponentWasm:
                   type: string
                   format: binary
@@ -5713,7 +5866,7 @@ paths:
               type: object
               properties:
                 metadata:
-                  $ref: '#/components/schemas/CreateComponentRequestMetadata'
+                  $ref: '#/components/schemas/NewComponentData'
                 componentWasm:
                   type: string
                   format: binary
@@ -7679,145 +7832,13 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v1/plugins:
-    get:
-      tags:
-      - RegistryService
-      - Plugin
-      summary: Lists all the registered plugins (including all versions of each).
-      operationId: list_plugins
-      parameters:
-      - in: query
-        name: scope
-        required: true
-        deprecated: false
-        schema:
-          $ref: '#/components/schemas/PluginScope'
-        explode: true
-        style: form
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_PluginDefinition'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-    post:
-      tags:
-      - RegistryService
-      - Plugin
-      summary: Registers a new plugin
-      operationId: create_plugin
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/CreatePluginRequest'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Empty'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
   /v1/plugins/{plugin_id}:
     get:
       tags:
       - RegistryService
       - Plugin
-      summary: Gets a registered plugin by its id
-      operationId: get_plugin
+      summary: Get a plugin by id
+      operationId: get_plugin_by_id
       parameters:
       - in: path
         name: plugin_id
@@ -7834,7 +7855,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/PluginDefinition'
+                $ref: '#/components/schemas/PluginRegistrationDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -7884,7 +7905,7 @@ paths:
       tags:
       - RegistryService
       - Plugin
-      summary: Deletes a registered plugin by its id
+      summary: Delete a plugin
       operationId: delete_plugin
       parameters:
       - in: path
@@ -7902,163 +7923,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Empty'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/library-plugins:
-    post:
-      tags:
-      - RegistryService
-      - Plugin
-      summary: Registers a new library plugin
-      operationId: create_library_plugin
-      requestBody:
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                metadata:
-                  $ref: '#/components/schemas/CreateLibraryPluginRequestMetadata'
-                icon:
-                  type: string
-                  format: binary
-                pluginWasm:
-                  type: string
-                  format: binary
-              required:
-              - metadata
-              - icon
-              - pluginWasm
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Empty'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/app-plugins:
-    post:
-      tags:
-      - RegistryService
-      - Plugin
-      summary: Registers a new app plugin
-      operationId: create_app_plugin
-      requestBody:
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                metadata:
-                  $ref: '#/components/schemas/CreateAppPluginRequestMetadata'
-                icon:
-                  type: string
-                  format: binary
-                pluginWasm:
-                  type: string
-                  format: binary
-              required:
-              - metadata
-              - icon
-              - pluginWasm
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Empty'
+                $ref: '#/components/schemas/PluginRegistrationDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -12202,14 +12067,6 @@ components:
       - domainName
       - nameServers
       - createdAt
-    AppPluginDefinition:
-      title: AppPluginDefinition
-      type: object
-      properties:
-        blobStorageKey:
-          type: string
-      required:
-      - blobStorageKey
     Application:
       title: Application
       type: object
@@ -12366,15 +12223,6 @@ components:
           $ref: '#/components/schemas/AnalysedType'
       required:
       - elementType
-    ComponentPluginScope:
-      title: ComponentPluginScope
-      type: object
-      properties:
-        componentId:
-          type: string
-          format: uuid
-      required:
-      - componentId
     ComponentReference:
       title: ComponentReference
       type: object
@@ -12391,14 +12239,13 @@ components:
       - name
       - revision
       - id
-    ComponentTransformerDefinition:
-      title: ComponentTransformerDefinition
+    ComponentTransformerPluginSpec:
+      title: ComponentTransformerPluginSpec
       type: object
       properties:
         providedWitPackage:
           type: string
-        jsonSchema:
-          type: string
+        jsonSchema: {}
         validateUrl:
           type: string
         transformUrl:
@@ -12451,26 +12298,6 @@ components:
           type: string
       required:
       - domainName
-    CreateAppPluginRequestMetadata:
-      title: CreateAppPluginRequestMetadata
-      type: object
-      properties:
-        name:
-          type: string
-        version:
-          type: string
-        description:
-          type: string
-        homepage:
-          type: string
-        scope:
-          $ref: '#/components/schemas/PluginScope'
-      required:
-      - name
-      - version
-      - description
-      - homepage
-      - scope
     CreateCertificateRequest:
       title: CreateCertificateRequest
       type: object
@@ -12488,32 +12315,6 @@ components:
       - domainName
       - certificateBody
       - certificatePrivateKey
-    CreateComponentRequestMetadata:
-      title: CreateComponentRequestMetadata
-      type: object
-      properties:
-        componentName:
-          type: string
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
-        fileOptions:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/ComponentFileOptions'
-        dynamicLinking:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        agentTypes:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentType'
-      required:
-      - componentName
     CreateHttpApiDefinitionRequest:
       title: CreateHttpApiDefinitionRequest
       type: object
@@ -12524,55 +12325,6 @@ components:
             $ref: '#/components/schemas/RouteRequestView'
       required:
       - routes
-    CreateLibraryPluginRequestMetadata:
-      title: CreateLibraryPluginRequestMetadata
-      type: object
-      properties:
-        name:
-          type: string
-        version:
-          type: string
-        description:
-          type: string
-        homepage:
-          type: string
-        scope:
-          $ref: '#/components/schemas/PluginScope'
-      required:
-      - name
-      - version
-      - description
-      - homepage
-      - scope
-    CreatePluginRequest:
-      title: CreatePluginRequest
-      type: object
-      properties:
-        name:
-          type: string
-        version:
-          type: string
-        description:
-          type: string
-        icon:
-          type: array
-          items:
-            type: integer
-            format: uint8
-        homepage:
-          type: string
-        specs:
-          $ref: '#/components/schemas/PluginTypeSpecificCreation'
-        scope:
-          $ref: '#/components/schemas/PluginScope'
-      required:
-      - name
-      - version
-      - description
-      - icon
-      - homepage
-      - specs
-      - scope
     CreateSecuritySchemeRequest:
       title: CreateSecuritySchemeRequest
       type: object
@@ -12869,14 +12621,6 @@ components:
       - key
       - path
       - permissions
-    LibraryPluginDefinition:
-      title: LibraryPluginDefinition
-      type: object
-      properties:
-        blobStorageKey:
-          type: string
-      required:
-      - blobStorageKey
     LinearMemory:
       title: LinearMemory
       type: object
@@ -12931,6 +12675,32 @@ components:
           type: string
       required:
       - name
+    NewComponentData:
+      title: NewComponentData
+      type: object
+      properties:
+        componentName:
+          type: string
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+        fileOptions:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ComponentFileOptions'
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        agentTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
+      required:
+      - componentName
     NewEnvironmentData:
       title: NewEnvironmentData
       type: object
@@ -12962,6 +12732,30 @@ components:
       required:
       - granteeAccountId
       - roles
+    NewPluginRegistrationData:
+      title: NewPluginRegistrationData
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: string
+          format: bytes
+        homepage:
+          type: string
+        spec:
+          $ref: '#/components/schemas/PluginSpecDto'
+      required:
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - spec
     OAuth2DeviceFlowStartRequest:
       title: OAuth2DeviceFlowStartRequest
       type: object
@@ -13004,19 +12798,19 @@ components:
       required:
       - url
       - state
-    OplogProcessorDefinition:
-      title: OplogProcessorDefinition
+    OplogProcessorPluginSpec:
+      title: OplogProcessorPluginSpec
       type: object
       properties:
         componentId:
           type: string
           format: uuid
-        componentVersion:
+        componentRevision:
           type: integer
           format: uint64
       required:
       - componentId
-      - componentVersion
+      - componentRevision
     Page_AccountSummary:
       title: Page_AccountSummary
       type: object
@@ -13117,14 +12911,14 @@ components:
             $ref: '#/components/schemas/HttpApiDefinitionResponseView'
       required:
       - values
-    Page_PluginDefinition:
-      title: Page_PluginDefinition
+    Page_PluginRegistrationDto:
+      title: Page_PluginRegistrationDto
       type: object
       properties:
         values:
           type: array
           items:
-            $ref: '#/components/schemas/PluginDefinition'
+            $ref: '#/components/schemas/PluginRegistrationDto'
       required:
       - values
     Page_SecuritySchemeResponseView:
@@ -13187,46 +12981,6 @@ components:
       - storageLimit
       - monthlyGasLimit
       - monthlyUploadLimit
-    PluginDefinition:
-      title: PluginDefinition
-      type: object
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        version:
-          type: string
-        description:
-          type: string
-        icon:
-          type: array
-          items:
-            type: integer
-            format: uint8
-        homepage:
-          type: string
-        specs:
-          $ref: '#/components/schemas/PluginTypeSpecificDefinition'
-        scope:
-          $ref: '#/components/schemas/PluginScope'
-        accountId:
-          type: string
-          format: uuid
-        deleted:
-          type: boolean
-      required:
-      - id
-      - name
-      - version
-      - description
-      - icon
-      - homepage
-      - specs
-      - scope
-      - accountId
-      - deleted
     PluginInstallation:
       title: PluginInstallation
       type: object
@@ -13342,65 +13096,53 @@ components:
       - installationId
       - priority
       - parameters
-    PluginScope:
+    PluginRegistrationDto:
+      title: PluginRegistrationDto
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: string
+          format: bytes
+        homepage:
+          type: string
+        spec:
+          $ref: '#/components/schemas/PluginSpecDto'
+      required:
+      - id
+      - accountId
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - spec
+    PluginSpecDto:
       discriminator:
         propertyName: type
         mapping:
-          Global: '#/components/schemas/PluginScope_Empty'
-          Component: '#/components/schemas/PluginScope_ComponentPluginScope'
-          Project: '#/components/schemas/PluginScope_ProjectPluginScope'
+          ComponentTransformer: '#/components/schemas/PluginSpecDto_ComponentTransformerPluginSpec'
+          OplogProcessor: '#/components/schemas/PluginSpecDto_OplogProcessorPluginSpec'
+          App: '#/components/schemas/PluginSpecDto_Empty'
+          Library: '#/components/schemas/PluginSpecDto_Empty'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/PluginScope_Empty'
-      - $ref: '#/components/schemas/PluginScope_ComponentPluginScope'
-      - $ref: '#/components/schemas/PluginScope_ProjectPluginScope'
-    PluginScope_ComponentPluginScope:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Component
-            type: string
-            enum:
-            - Component
-        required:
-        - type
-      - $ref: '#/components/schemas/ComponentPluginScope'
-    PluginScope_Empty:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Global
-            type: string
-            enum:
-            - Global
-        required:
-        - type
-      - $ref: '#/components/schemas/Empty'
-    PluginScope_ProjectPluginScope:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Project
-            type: string
-            enum:
-            - Project
-        required:
-        - type
-      - $ref: '#/components/schemas/ProjectPluginScope'
-    PluginTypeSpecificCreation:
-      discriminator:
-        propertyName: type
-        mapping:
-          ComponentTransformer: '#/components/schemas/PluginTypeSpecificCreation_ComponentTransformerDefinition'
-          OplogProcessor: '#/components/schemas/PluginTypeSpecificCreation_OplogProcessorDefinition'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PluginTypeSpecificCreation_ComponentTransformerDefinition'
-      - $ref: '#/components/schemas/PluginTypeSpecificCreation_OplogProcessorDefinition'
-    PluginTypeSpecificCreation_ComponentTransformerDefinition:
+      - $ref: '#/components/schemas/PluginSpecDto_ComponentTransformerPluginSpec'
+      - $ref: '#/components/schemas/PluginSpecDto_OplogProcessorPluginSpec'
+      - $ref: '#/components/schemas/PluginSpecDto_Empty'
+      - $ref: '#/components/schemas/PluginSpecDto_Empty'
+    PluginSpecDto_ComponentTransformerPluginSpec:
       allOf:
       - type: object
         properties:
@@ -13411,58 +13153,8 @@ components:
             - ComponentTransformer
         required:
         - type
-      - $ref: '#/components/schemas/ComponentTransformerDefinition'
-    PluginTypeSpecificCreation_OplogProcessorDefinition:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: OplogProcessor
-            type: string
-            enum:
-            - OplogProcessor
-        required:
-        - type
-      - $ref: '#/components/schemas/OplogProcessorDefinition'
-    PluginTypeSpecificDefinition:
-      discriminator:
-        propertyName: type
-        mapping:
-          ComponentTransformer: '#/components/schemas/PluginTypeSpecificDefinition_ComponentTransformerDefinition'
-          OplogProcessor: '#/components/schemas/PluginTypeSpecificDefinition_OplogProcessorDefinition'
-          Library: '#/components/schemas/PluginTypeSpecificDefinition_LibraryPluginDefinition'
-          App: '#/components/schemas/PluginTypeSpecificDefinition_AppPluginDefinition'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_ComponentTransformerDefinition'
-      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_OplogProcessorDefinition'
-      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_LibraryPluginDefinition'
-      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_AppPluginDefinition'
-    PluginTypeSpecificDefinition_AppPluginDefinition:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: App
-            type: string
-            enum:
-            - App
-        required:
-        - type
-      - $ref: '#/components/schemas/AppPluginDefinition'
-    PluginTypeSpecificDefinition_ComponentTransformerDefinition:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ComponentTransformer
-            type: string
-            enum:
-            - ComponentTransformer
-        required:
-        - type
-      - $ref: '#/components/schemas/ComponentTransformerDefinition'
-    PluginTypeSpecificDefinition_LibraryPluginDefinition:
+      - $ref: '#/components/schemas/ComponentTransformerPluginSpec'
+    PluginSpecDto_Empty:
       allOf:
       - type: object
         properties:
@@ -13473,8 +13165,8 @@ components:
             - Library
         required:
         - type
-      - $ref: '#/components/schemas/LibraryPluginDefinition'
-    PluginTypeSpecificDefinition_OplogProcessorDefinition:
+      - $ref: '#/components/schemas/Empty'
+    PluginSpecDto_OplogProcessorPluginSpec:
       allOf:
       - type: object
         properties:
@@ -13485,7 +13177,7 @@ components:
             - OplogProcessor
         required:
         - type
-      - $ref: '#/components/schemas/OplogProcessorDefinition'
+      - $ref: '#/components/schemas/OplogProcessorPluginSpec'
     PluginUninstallation:
       title: PluginUninstallation
       type: object
@@ -13518,15 +13210,6 @@ components:
             $ref: '#/components/schemas/ProducerField'
       required:
       - fields
-    ProjectPluginScope:
-      title: ProjectPluginScope
-      type: object
-      properties:
-        projectId:
-          type: string
-          format: uuid
-      required:
-      - projectId
     RouteMethod:
       type: string
       enum:
@@ -13679,8 +13362,35 @@ components:
       required:
       - certificateBody
       - certificatePrivateKey
-    UpdateComponentRequestMetadata:
-      title: UpdateComponentRequestMetadata
+    UpdateHttpApiDefinitionRequest:
+      title: UpdateHttpApiDefinitionRequest
+      type: object
+      properties:
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteRequestView'
+      required:
+      - routes
+    UpdatedAccountData:
+      title: UpdatedAccountData
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+      required:
+      - name
+      - email
+    UpdatedApplicationData:
+      title: UpdatedApplicationData
+      type: object
+      properties:
+        newName:
+          type: string
+    UpdatedComponentData:
+      title: UpdatedComponentData
       type: object
       properties:
         previousVersion:
@@ -13715,33 +13425,6 @@ components:
             $ref: '#/components/schemas/PluginInstallationAction'
       required:
       - previousVersion
-    UpdateHttpApiDefinitionRequest:
-      title: UpdateHttpApiDefinitionRequest
-      type: object
-      properties:
-        routes:
-          type: array
-          items:
-            $ref: '#/components/schemas/RouteRequestView'
-      required:
-      - routes
-    UpdatedAccountData:
-      title: UpdatedAccountData
-      type: object
-      properties:
-        name:
-          type: string
-        email:
-          type: string
-      required:
-      - name
-      - email
-    UpdatedApplicationData:
-      title: UpdatedApplicationData
-      type: object
-      properties:
-        newName:
-          type: string
     UpdatedEnvironmentData:
       title: UpdatedEnvironmentData
       type: object

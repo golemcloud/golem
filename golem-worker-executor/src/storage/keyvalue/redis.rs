@@ -18,7 +18,6 @@ use fred::types::SetOptions;
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
 use golem_common::redis::RedisPool;
 use std::collections::HashMap;
-use tracing::debug;
 
 use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 
@@ -122,7 +121,6 @@ impl KeyValueStorage for RedisKeyValueStorage {
                     .await
                     .map_err(|redis_err| redis_err.to_string())?;
 
-                debug!("set_if_not_exists hsetnx result: {:?}", result);
                 Ok(result)
             }
             None => {
@@ -133,7 +131,6 @@ impl KeyValueStorage for RedisKeyValueStorage {
                     .await
                     .map_err(|redis_err| redis_err.to_string())?;
 
-                debug!("set_if_not_exists result: {:?}", result);
                 Ok(result == Some("OK".to_string()))
             }
         }

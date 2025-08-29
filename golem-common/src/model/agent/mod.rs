@@ -636,6 +636,15 @@ impl AgentId {
             Err("Unexpected agent-id format - must be agent-type(...)".to_string())
         }
     }
+
+    pub fn parse_agent_type(s: impl AsRef<str>) -> Result<String, String> {
+        let s = s.as_ref();
+        if let Some((agent_type, _)) = s.split_once('(') {
+            Ok(agent_type.to_string())
+        } else {
+            Err("Unexpected agent-id format - must be agent-type(...)".to_string())
+        }
+    }
 }
 
 impl Display for AgentId {
