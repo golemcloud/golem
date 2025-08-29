@@ -145,7 +145,42 @@ glob_cp wit/deps/**/* cli/template-golem-agent-ts/wit/deps
 private = true
 script_runner = "@duckscript"
 script = """
-components = array blob-store-service component-resolve component-transformer-example1/adapter custom-durability file-service high-volume-logging http-client ifs-update ifs-update-inside-exported-function invocation-context js-1 js-4 key-value-service networking oplog-processor promise python-http-client rdbms-service rpc runtime-service scheduled-invocation shopping-cart tinygo-wasi tinygo-wasi-http ts-rpc update-test-env-var update-test-v2-11 update-test-v3-11 update-test-v3-sdk update-test-v4 wasi-config wasi-http-incoming-request-handler wasi-http-incoming-request-handler-echo wasi-http-incoming-request-handler-state low-level-agent
+components = array
+array_push ${components} blob-store-service
+array_push ${components} component-resolve
+array_push ${components} component-transformer-example1/adapter
+array_push ${components} custom-durability
+array_push ${components} file-service
+array_push ${components} high-volume-logging
+array_push ${components} http-client
+array_push ${components} ifs-update
+array_push ${components} ifs-update-inside-exported-function
+array_push ${components} invocation-context
+array_push ${components} js-1
+array_push ${components} js-4
+array_push ${components} key-value-service
+array_push ${components} networking
+array_push ${components} oplog-processor
+array_push ${components} promise
+array_push ${components} python-http-client
+array_push ${components} rdbms-service
+array_push ${components} rpc
+array_push ${components} runtime-service
+array_push ${components} scheduled-invocation
+array_push ${components} shopping-cart
+array_push ${components} tinygo-wasi
+array_push ${components} tinygo-wasi-http
+array_push ${components} ts-rpc
+array_push ${components} update-test-env-var
+array_push ${components} update-test-v2-11
+array_push ${components} update-test-v3-11
+array_push ${components} update-test-v3-sdk
+array_push ${components} update-test-v4
+array_push ${components} wasi-config
+array_push ${components} wasi-http-incoming-request-handler
+array_push ${components} wasi-http-incoming-request-handler-echo
+array_push ${components} wasi-http-incoming-request-handler-state
+array_push ${components} low-level-agent
 
 for component in ${components}
     echo "Updating wit directory for test component ${component}"
