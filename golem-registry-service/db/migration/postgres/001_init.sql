@@ -695,14 +695,14 @@ CREATE TABLE environment_share_revisions
 
 CREATE TABLE environment_plugin_grants
 (
-    environment_plugin_grant_id UUID NOT NULL,
+    environment_plugin_grant_id UUID      NOT NULL,
     environment_id              UUID      NOT NULL,
     plugin_id                   UUID      NOT NULL,
 
-    created_at            TIMESTAMP NOT NULL,
-    created_by            UUID      NOT NULL,
-    deleted_at            TIMESTAMP,
-    deleted_by            UUID,
+    created_at                  TIMESTAMP NOT NULL,
+    created_by                  UUID      NOT NULL,
+    deleted_at                  TIMESTAMP,
+    deleted_by                  UUID,
 
     CONSTRAINT environment_plugin_grants_pk
         PRIMARY KEY (environment_plugin_grant_id),
