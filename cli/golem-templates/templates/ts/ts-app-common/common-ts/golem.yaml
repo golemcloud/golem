@@ -3,7 +3,7 @@
 templates:
   ts:
     build:
-    - command: npx --no golem-typegen components-ts/{{ component_name | to_kebab_case }}/tsconfig.json --files components-ts/{{ component_name | to_kebab_case }}/src/**/*.ts coomon-ts/src/**/*.ts
+    - command: npx --no golem-typegen components-ts/{{ component_name | to_kebab_case }}/tsconfig.json --files components-ts/{{ component_name | to_kebab_case }}/**/src/**/*.ts
       sources:
         - src
         - ../../common-ts

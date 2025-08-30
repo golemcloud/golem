@@ -1,4 +1,3 @@
-use clap::error::ErrorKind;
 use clap::{Error, Parser};
 
 /// Helper for implementing `parse` function in `golem_rib_repl::Command` trait to obtain `Input`,
