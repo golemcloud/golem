@@ -1,7 +1,7 @@
-import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import { TypescriptTypeRegistry } from '@golemcloud/golem-ts-sdk';
 import { Metadata } from '../../../.metadata/generated-types';
 
-TypeMetadata.loadFromJson(Metadata);
+TypescriptTypeRegistry.register(Metadata);
 
 // Import the user module after metadata is ready
 // This needs to be done this way otherwise rollup ends up generating the module,

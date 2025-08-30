@@ -5,6 +5,11 @@ import {
     description,
 } from '@golemcloud/golem-ts-sdk';
 
+interface CustomData {
+    data: string;
+    value: number;
+}
+
 @agent()
 class AssistantAgent extends BaseAgent {
     @prompt("Ask your question")
@@ -41,7 +46,3 @@ class WeatherAgent extends BaseAgent {
     }
 }
 
-interface CustomData {
-    data: String;
-    value: number;
-}
