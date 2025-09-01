@@ -61,6 +61,7 @@ mod type_unification;
 mod variable_binding;
 mod variant_inference;
 mod worker_function_invocation;
+mod custom_instance_spec;
 
 #[cfg(test)]
 mod tests {
