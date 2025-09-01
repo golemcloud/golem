@@ -86,7 +86,7 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
     let component_dependency =
         ComponentDependency::new(component_dependency_key, metadata.exports().to_vec());
 
-    let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
+    let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![], vec![]);
 
     let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
 
@@ -174,7 +174,7 @@ async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<
     let component_dependency =
         ComponentDependency::new(component_dependency_key, metadata.exports().to_vec());
 
-    let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
+    let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![], vec![]);
 
     let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
 
@@ -281,7 +281,7 @@ async fn test_rib_with_resource_methods(
     let component_dependency =
         ComponentDependency::new(component_dependency_key, metadata.exports().to_vec());
 
-    let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
+    let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![], vec![]);
 
     let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
 
