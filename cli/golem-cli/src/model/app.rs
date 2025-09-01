@@ -1288,10 +1288,10 @@ mod app_builder {
         HttpApiDeploymentSite, ResolvedComponentProperties, TemplateName, WithSource,
     };
     use crate::model::app_raw;
-    use crate::model::deploy_diff::api_definition::normalize_http_api_binding_path;
     use crate::model::text::fmt::format_rib_source_for_error;
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use colored::Colorize;
+    use golem_common::model::api_definition::RouteMethod;
     use heck::{
         ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase,
         ToSnakeCase, ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -1303,7 +1303,6 @@ mod app_builder {
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
     use url::Url;
-    use golem_common::model::api_definition::RouteMethod;
 
     // Load full manifest EXCEPT profiles
     pub fn build_application(
@@ -1643,7 +1642,9 @@ mod app_builder {
                                         UniqueSourceCheckedEntityKey::HttpApiDefinitionRoute {
                                             api: api_definition_name.clone(),
                                             method: method.to_string(),
-                                            path: normalize_http_api_binding_path(&route.path),
+                                            // TODO: atomic
+                                            // path: normalize_http_api_binding_path(&route.path),
+                                            path: route.path.clone(),
                                         },
                                         &app.source,
                                     );

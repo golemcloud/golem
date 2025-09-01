@@ -20,6 +20,8 @@ use crate::context::Context;
 use std::sync::Arc;
 
 pub struct ApiCloudCommandHandler {
+    // TODO: atomic
+    #[allow(unused)]
     ctx: Arc<Context>,
 }
 

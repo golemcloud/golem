@@ -34,9 +34,9 @@ pub struct Authentication(pub TokenWithSecret);
 impl Authentication {
     pub fn from_token_and_secret(token: Token, secret: TokenSecret) -> Self {
         Self(TokenWithSecret {
-            id: token.id.into(),
+            id: token.id,
             secret,
-            account_id: token.account_id.into(),
+            account_id: token.account_id,
             created_at: token.created_at,
             expires_at: token.expires_at,
         })

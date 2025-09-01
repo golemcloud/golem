@@ -12,35 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::api::definition::ApiDefinitionSubcommand;
-use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
-use crate::log::{
-    log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
-};
-use crate::model::api::{ApiDefinitionId, ApiDefinitionVersion, HttpApiDeployMode};
-use crate::model::app::{
-    ApplicationComponentSelectMode, DynamicHelpSections, HttpApiDefinitionName, WithSource,
-};
-use crate::model::app_raw::HttpApiDefinition;
-use crate::model::component::Component;
-use crate::model::deploy_diff::api_definition::DiffableHttpApiDefinition;
+use crate::log::{log_warn_action, LogColorize};
+use crate::model::api::{ApiDefinitionId, ApiDefinitionVersion};
 use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::text::api_definition::{
-    ApiDefinitionExportView, ApiDefinitionGetView, ApiDefinitionNewView, ApiDefinitionUpdateView,
-};
-use crate::model::text::fmt::{log_deploy_diff, log_error, log_warn};
+use crate::model::text::fmt::log_error;
 use crate::model::OpenApiDefinitionOutputFormat;
 use anyhow::{bail, Context as AnyhowContext};
-use golem_client::api::{ApiDefinitionClient, ApiDeploymentClient};
-use golem_common::model::component::ComponentName;
 use itertools::Itertools;
 use serde::de::DeserializeOwned;
-use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use warp;
 use webbrowser;
@@ -56,34 +40,22 @@ impl ApiDefinitionCommandHandler {
 
     pub async fn handle_command(&self, command: ApiDefinitionSubcommand) -> anyhow::Result<()> {
         match command {
-            ApiDefinitionSubcommand::Get {
-                project,
-                id,
-                version,
-            } => self.cmd_get(project, id, version).await,
-            ApiDefinitionSubcommand::List { project, id } => self.cmd_list(project, id).await,
+            ApiDefinitionSubcommand::Get { id, version } => self.cmd_get(id, version).await,
+            ApiDefinitionSubcommand::List { id } => self.cmd_list(id).await,
             ApiDefinitionSubcommand::Export {
-                project,
                 id,
                 version,
                 format,
                 output_name,
-            } => {
-                self.cmd_export(project, id, version, format, output_name)
-                    .await
+            } => self.cmd_export(id, version, format, output_name).await,
+            ApiDefinitionSubcommand::Swagger { id, version, port } => {
+                self.cmd_swagger(id, version, port).await
             }
-            ApiDefinitionSubcommand::Swagger {
-                project,
-                id,
-                version,
-                port,
-            } => self.cmd_swagger(project, id, version, port).await,
         }
     }
 
     async fn cmd_get(
         &self,
-        project: ProjectOptionalFlagArg,
         api_def_id: ApiDefinitionId,
         version: ApiDefinitionVersion,
     ) -> anyhow::Result<()> {
@@ -110,11 +82,7 @@ impl ApiDefinitionCommandHandler {
         }
     }
 
-    async fn cmd_list(
-        &self,
-        project: ProjectOptionalFlagArg,
-        api_definition_id: Option<ApiDefinitionId>,
-    ) -> anyhow::Result<()> {
+    async fn cmd_list(&self, api_definition_id: Option<ApiDefinitionId>) -> anyhow::Result<()> {
         let project = self
             .ctx
             .cloud_project_handler()
@@ -142,50 +110,8 @@ impl ApiDefinitionCommandHandler {
         Ok(())
     }
 
-    async fn cmd_delete(
-        &self,
-        project: ProjectOptionalFlagArg,
-        api_def_id: ApiDefinitionId,
-        version: ApiDefinitionVersion,
-    ) -> anyhow::Result<()> {
-        let project = self
-            .ctx
-            .cloud_project_handler()
-            .opt_select_project(project.project.as_ref())
-            .await?;
-
-        let clients = self.ctx.golem_clients().await?;
-
-        clients
-            .api_definition
-            .delete_definition(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project.as_ref())
-                    .await?
-                    .0,
-                &api_def_id.0,
-                &version.0,
-            )
-            .await
-            .map_service_error()?;
-
-        log_warn_action(
-            "Deleted",
-            format!(
-                "API definition: {}/{}",
-                api_def_id.0.log_color_highlight(),
-                version.0.log_color_highlight()
-            ),
-        );
-
-        Ok(())
-    }
-
     async fn cmd_export(
         &self,
-        project: ProjectOptionalFlagArg,
         id: ApiDefinitionId,
         version: ApiDefinitionVersion,
         format: OpenApiDefinitionOutputFormat,
@@ -439,7 +365,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn api_definition(
         &self,
-        env: Option<&ResolvedEnvironmentIdentity>,
+        environment: Option<&ResolvedEnvironmentIdentity>,
         name: &str,
         version: &str,
     ) -> anyhow::Result<Option<HttpApiDefinitionResponseData>> {
@@ -463,7 +389,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn update_api_definition(
         &self,
-        env: Option<&ResolvedEnvironmentIdentity>,
+        environment: Option<&ResolvedEnvironmentIdentity>,
         manifest_api_definition: &HttpApiDefinitionRequest,
     ) -> anyhow::Result<HttpApiDefinitionResponseData> {
         let clients = self.ctx.golem_clients().await?;
@@ -488,7 +414,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn new_api_definition(
         &self,
-        env: Option<&ResolvedEnvironmentIdentity>,
+        environment: Option<&ResolvedEnvironmentIdentity>,
         api_definition: &HttpApiDefinitionRequest,
     ) -> anyhow::Result<HttpApiDefinitionResponseData> {
         let clients = self.ctx.golem_clients().await?;

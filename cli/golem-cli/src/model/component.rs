@@ -88,7 +88,7 @@ pub enum ComponentNameMatchKind {
 }
 
 pub struct SelectedComponents {
-    pub environment: ResolvedEnvironmentIdentity,
+    pub environment: Option<ResolvedEnvironmentIdentity>,
     pub component_names: Vec<ComponentName>,
 }
 
@@ -109,7 +109,7 @@ impl From<golem_client::model::Component> for Component {
     fn from(value: golem_client::model::Component) -> Self {
         Component {
             versioned_component_id: value.versioned_component_id,
-            component_name: value.component_name.into(),
+            component_name: value.component_name,
             component_size: value.component_size,
             metadata: value.metadata,
             environment_id: Some(value.environment_id),

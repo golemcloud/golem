@@ -34,20 +34,23 @@ declare_enums! {
 declare_structs! {
     pub struct CreateHttpApiDefinitionRequest {
         pub routes: Vec<RouteRequestView>,
+        pub version: String,
     }
 
     pub struct UpdateHttpApiDefinitionRequest {
         pub routes: Vec<RouteRequestView>,
+        pub version: String,
     }
 
     pub struct HttpApiDefinitionResponseView {
         pub id: ApiDefinitionId,
         pub routes: Vec<RouteResponseView>,
-        pub created_at: chrono::DateTime<chrono::Utc>,
+        pub version: String,
+        pub created_at: DateTime<Utc>,
     }
 
     pub struct GatewayBindingRequestView {
-        pub binding_type: Option<GatewayBindingType>, // descriminator to keep backward compatibility
+        pub binding_type: Option<GatewayBindingType>, // discriminator to keep backward compatibility
         // For binding type - worker/default and file-server
         // Optional only to keep backward compatibility
         pub component: Option<ComponentReference>,

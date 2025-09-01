@@ -25,30 +25,17 @@ use crate::model::app::{AppBuildStep, ApplicationSourceMode};
 use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileName};
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
-use crate::model::text::fmt::log_error;
 use crate::model::{app_raw, AccountDetails, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use futures_util::future::BoxFuture;
-use golem_client::api::AgentTypesClientLive as AgentTypesClientCloud;
-use golem_client::api::ApiCertificateClientLive as ApiCertificateClientCloud;
-use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientCloud;
-use golem_client::api::ApiDeploymentClientLive as ApiDeploymentClientCloud;
-use golem_client::api::ApiDomainClientLive as ApiDomainClientCloud;
-use golem_client::api::ApiSecurityClientLive as ApiSecurityClientCloud;
-use golem_client::api::ComponentClientLive as ComponentClientCloud;
-use golem_client::api::GrantClientLive as GrantClientCloud;
-use golem_client::api::HealthCheckClientLive;
-use golem_client::api::LimitsClientLive as LimitsClientCloud;
-use golem_client::api::LoginClientLive as LoginClientCloud;
-use golem_client::api::PluginClientLive as PluginClientCloud;
-use golem_client::api::ProjectClientLive as ProjectClientCloud;
-use golem_client::api::ProjectGrantClientLive as ProjectGrantClientCloud;
-use golem_client::api::ProjectPolicyClientLive as ProjectPolicyClientCloud;
-use golem_client::api::TokenClientLive as TokenClientCloud;
-use golem_client::api::WorkerClientLive as WorkerClientCloud;
-use golem_client::api::{AccountClient, AccountSummaryClientLive as AccountSummaryClientCloud};
-use golem_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
+use golem_client::api::{
+    AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiCertificateClientLive,
+    ApiDefinitionClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
+    ApplicationClientLive, ComponentClientLive, EnvironmentClientLive, GrantClientLive,
+    HealthCheckClientLive, LimitsClientLive, LoginClientLive, PluginClientLive, TokenClientLive,
+    WorkerClientLive,
+};
 use golem_client::{Context as ContextCloud, Security};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
@@ -166,7 +153,7 @@ impl Context {
 
         let environment: Option<EnvironmentReference> =
             match manifest_profile.as_ref().and_then(|m| m.project.as_ref()) {
-                Some(project) => {
+                Some(_project) => {
                     // TODO: atomic deployment
                     /*Some(
                     ProjectReference::from_str(project.as_str())
@@ -204,7 +191,7 @@ impl Context {
                         ", environment: {}",
                         environment.to_string().log_color_highlight()
                     ))
-                    .unwrap_or_else(|| "".to_string())
+                    .unwrap_or_default()
             ),
         );
 
@@ -462,8 +449,10 @@ impl Context {
 
     pub async fn select_account_by_email_or_error(
         &self,
-        email: &str,
+        _email: &str,
     ) -> anyhow::Result<AccountDetails> {
+        // TODO: atomic
+        /*
         let mut result = self
             .golem_clients()
             .await?
@@ -477,7 +466,8 @@ impl Context {
         } else {
             log_error("referenced account could not be found");
             bail!(NonSuccessfulExit)
-        }
+        }*/
+        todo!()
     }
 
     pub async fn resolve_plugin_reference(
@@ -509,26 +499,25 @@ impl Context {
 pub struct GolemClients {
     authentication: Authentication,
 
-    pub account: AccountClientCloud,
-    pub account_summary: AccountSummaryClientCloud,
-    pub agent_types: AgentTypesClientCloud,
-    pub api_certificate: ApiCertificateClientCloud,
-    pub api_definition: ApiDefinitionClientCloud,
-    pub api_deployment: ApiDeploymentClientCloud,
-    pub api_domain: ApiDomainClientCloud,
-    pub api_security: ApiSecurityClientCloud,
-    pub component: ComponentClientCloud,
+    pub account: AccountClientLive,
+    pub account_summary: AccountSummaryClientLive,
+    pub agent_types: AgentTypesClientLive,
+    pub api_certificate: ApiCertificateClientLive,
+    pub api_definition: ApiDefinitionClientLive,
+    pub api_deployment: ApiDeploymentClientLive,
+    pub api_domain: ApiDomainClientLive,
+    pub api_security: ApiSecurityClientLive,
+    pub application: ApplicationClientLive,
+    pub component: ComponentClientLive,
     pub component_healthcheck: HealthCheckClientLive,
-    pub grant: GrantClientCloud,
-    pub limits: LimitsClientCloud,
-    pub login: LoginClientCloud,
-    pub plugin: PluginClientCloud,
-    pub project: ProjectClientCloud,
-    pub project_grant: ProjectGrantClientCloud,
-    pub project_policy: ProjectPolicyClientCloud,
-    pub token: TokenClientCloud,
-    pub worker: WorkerClientCloud,
-    pub worker_invoke: WorkerClientCloud,
+    pub environment: EnvironmentClientLive,
+    pub grant: GrantClientLive,
+    pub limits: LimitsClientLive,
+    pub login: LoginClientLive,
+    pub plugin: PluginClientLive,
+    pub token: TokenClientLive,
+    pub worker: WorkerClientLive,
+    pub worker_invoke: WorkerClientLive,
 }
 
 impl GolemClients {
@@ -547,7 +536,7 @@ impl GolemClients {
         let auth = Auth::new(LoginClientLive {
             context: ContextCloud {
                 client: service_http_client.clone(),
-                base_url: config.cloud_url.clone(),
+                base_url: config.registry_url.clone(),
                 security_token: Security::Empty,
             },
         });
@@ -558,15 +547,15 @@ impl GolemClients {
 
         let security_token = Security::Bearer(authentication.0.secret.0.to_string());
 
-        let component_context = || ContextCloud {
+        let registry_context = || ContextCloud {
             client: service_http_client.clone(),
-            base_url: config.component_url.clone(),
+            base_url: config.registry_url.clone(),
             security_token: security_token.clone(),
         };
 
-        let component_healthcheck_context = || ContextCloud {
+        let registry_healthcheck_context = || ContextCloud {
             client: healthcheck_http_client,
-            base_url: config.component_url.clone(),
+            base_url: config.registry_url.clone(),
             security_token: Security::Empty,
         };
 
@@ -582,78 +571,69 @@ impl GolemClients {
             security_token: security_token.clone(),
         };
 
-        let cloud_context = || ContextCloud {
-            client: service_http_client.clone(),
-            base_url: config.cloud_url.clone(),
-            security_token: security_token.clone(),
-        };
-
         let login_context = || ContextCloud {
             client: service_http_client.clone(),
-            base_url: config.cloud_url.clone(),
+            base_url: config.registry_url.clone(),
             security_token: security_token.clone(),
         };
 
         Ok(GolemClients {
             authentication,
-            account: AccountClientCloud {
-                context: cloud_context(),
+            account: AccountClientLive {
+                context: registry_context(),
             },
-            account_summary: AccountSummaryClientCloud {
-                context: worker_context(),
+            account_summary: AccountSummaryClientLive {
+                context: registry_context(),
             },
-            agent_types: AgentTypesClientCloud {
-                context: component_context(),
+            agent_types: AgentTypesClientLive {
+                context: registry_context(),
             },
-            api_certificate: ApiCertificateClientCloud {
-                context: worker_context(),
+            api_certificate: ApiCertificateClientLive {
+                context: registry_context(),
             },
-            api_definition: ApiDefinitionClientCloud {
-                context: worker_context(),
+            api_definition: ApiDefinitionClientLive {
+                context: registry_context(),
             },
-            api_deployment: ApiDeploymentClientCloud {
-                context: worker_context(),
+            api_deployment: ApiDeploymentClientLive {
+                context: registry_context(),
             },
-            api_domain: ApiDomainClientCloud {
-                context: worker_context(),
+            api_domain: ApiDomainClientLive {
+                context: registry_context(),
             },
-            api_security: ApiSecurityClientCloud {
-                context: worker_context(),
+            api_security: ApiSecurityClientLive {
+                context: registry_context(),
             },
-            component: ComponentClientCloud {
-                context: component_context(),
+            application: ApplicationClientLive {
+                context: registry_context(),
+            },
+            component: ComponentClientLive {
+                context: registry_context(),
             },
             component_healthcheck: HealthCheckClientLive {
-                context: component_healthcheck_context(),
+                context: registry_healthcheck_context(),
             },
-            grant: GrantClientCloud {
-                context: cloud_context(),
+            environment: EnvironmentClientLive {
+                context: registry_context(),
             },
-            limits: LimitsClientCloud {
+            grant: GrantClientLive {
+                context: registry_context(),
+            },
+            limits: LimitsClientLive {
                 context: worker_context(),
             },
-            login: LoginClientCloud {
+            login: LoginClientLive {
                 context: login_context(),
             },
-            plugin: PluginClientCloud {
-                context: component_context(),
+            plugin: PluginClientLive {
+                context: registry_context(),
             },
-            project: ProjectClientCloud {
-                context: cloud_context(),
+            token: TokenClientLive {
+                context: registry_context(),
             },
-            project_grant: ProjectGrantClientCloud {
-                context: cloud_context(),
-            },
-            project_policy: ProjectPolicyClientCloud {
-                context: cloud_context(),
-            },
-            token: TokenClientCloud {
-                context: cloud_context(),
-            },
-            worker: WorkerClientCloud {
+            worker: WorkerClientLive {
                 context: worker_context(),
             },
-            worker_invoke: WorkerClientCloud {
+            worker_invoke: WorkerClientLive {
                 context: worker_invoke_context(),
             },
         })

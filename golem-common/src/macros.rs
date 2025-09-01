@@ -25,13 +25,13 @@ macro_rules! newtype_uuid {
                 Self(uuid::Uuid::new_v4())
             }
         }
-        
+
         impl From<$name> for uuid::Uuid {
             fn from(value: $name) -> Self {
                 value.0
             }
         }
-        
+
         impl From<uuid::Uuid> for $name {
             fn from(value: uuid::Uuid) -> Self {
                 Self(value)

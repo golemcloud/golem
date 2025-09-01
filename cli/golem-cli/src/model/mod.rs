@@ -22,7 +22,7 @@ pub mod deploy_diff;
 pub mod environment;
 pub mod format;
 pub mod invoke_result_view;
-pub mod plugin_manifest;
+// TODO: atomic: pub mod plugin_manifest;
 pub mod template;
 pub mod text;
 pub mod wave;
@@ -36,7 +36,7 @@ use anyhow::{anyhow, Context};
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, Error};
-use golem_client::model::PluginTypeSpecificDefinition;
+use golem_common::model::account::AccountId;
 use golem_templates::model::{
     GuestLanguage, GuestLanguageTier, PackageName, Template, TemplateName,
 };
@@ -48,7 +48,6 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
 use url::Url;
-use golem_common::model::account::AccountId;
 // TODO: move non generic entities into mods
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -218,7 +217,6 @@ impl FromStr for PathBufOrStdin {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ProfileView {
     pub is_active: bool,
@@ -267,7 +265,7 @@ pub struct AccountDetails {
 impl From<golem_client::model::Account> for AccountDetails {
     fn from(value: golem_client::model::Account) -> Self {
         Self {
-            account_id: value.id.into(),
+            account_id: value.id,
             email: value.email,
         }
     }
@@ -293,6 +291,8 @@ pub struct PluginDefinition {
     pub oplog_processor_component_version: Option<u64>,
 }
 
+// TODO: atomic
+/*
 impl From<golem_client::model::PluginDefinition> for PluginDefinition {
     fn from(value: golem_client::model::PluginDefinition) -> Self {
         let mut plugin_definition = Self {
@@ -329,6 +329,7 @@ impl From<golem_client::model::PluginDefinition> for PluginDefinition {
         plugin_definition
     }
 }
+*/
 
 pub struct NewInteractiveApp {
     pub app_name: String,

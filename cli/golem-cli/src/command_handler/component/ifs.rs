@@ -28,18 +28,24 @@ use tokio_stream::wrappers::ReadDirStream;
 use tokio_stream::StreamExt;
 use url::Url;
 
+// TODO: atomic
+#[allow(unused)]
 #[derive(Debug, Clone)]
 struct LoadedFile {
     content: Vec<u8>,
     target: ComponentFilePathWithPermissions,
 }
 
+// TODO: atomic
+#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct HashedFile {
     pub hash_hex: String,
     pub target: ComponentFilePathWithPermissions,
 }
 
+// TODO: atomic
+#[allow(unused)]
 #[derive(Debug)]
 pub struct ComponentFilesArchive {
     pub archive_path: PathBuf,
@@ -47,10 +53,14 @@ pub struct ComponentFilesArchive {
     _temp_dir: TempDir, // archive_path is only valid as long as this is alive
 }
 
+// TODO: atomic
+#[allow(unused)]
 pub struct IfsFileManager {
     client: reqwest::Client,
 }
 
+// TODO: atomic
+#[allow(unused)]
 impl IfsFileManager {
     pub fn new(client: reqwest::Client) -> Self {
         Self { client }
@@ -238,6 +248,8 @@ impl IfsFileManager {
     }
 }
 
+// TODO: atomic
+#[allow(unused)]
 #[async_trait]
 trait FileProcessor<R> {
     async fn process_local_file(
@@ -253,6 +265,8 @@ trait FileProcessor<R> {
     ) -> anyhow::Result<R>;
 }
 
+// TODO: atomic
+#[allow(unused)]
 struct FileLoader {
     client: reqwest::Client,
 }
@@ -313,6 +327,8 @@ impl FileProcessor<LoadedFile> for FileLoader {
     }
 }
 
+// TODO: atomic
+#[allow(unused)]
 struct FileHasher {
     client: reqwest::Client,
 }
@@ -383,6 +399,8 @@ impl FileProcessor<HashedFile> for FileHasher {
 }
 
 // TODO: add this to manifest validation (too or instead of doing it here)?
+// TODO: atomic
+#[allow(unused)]
 fn validate_unique_targets(component_files: &[InitialComponentFile]) -> anyhow::Result<()> {
     let non_unique_target_paths = component_files
         .iter()

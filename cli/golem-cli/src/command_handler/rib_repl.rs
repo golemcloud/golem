@@ -72,7 +72,7 @@ impl RibReplHandler {
             .ctx
             .component_handler()
             .component_by_name_with_auto_deploy(
-                selected_components.app,
+                selected_components.environment.as_ref(),
                 ComponentNameMatchKind::App,
                 &component_name,
                 component_version.map(|v| v.into()),

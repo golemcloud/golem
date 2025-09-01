@@ -26,7 +26,7 @@ use crate::model::worker::WorkerName;
 use crate::model::NewInteractiveApp;
 use anyhow::bail;
 use colored::Colorize;
-use golem_client::model::Account;
+use golem_client::model::{Account, CreateHttpApiDefinitionRequest};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, PackageName};
 use inquire::error::InquireResult;
@@ -508,7 +508,7 @@ impl InteractiveHandler {
 
     pub fn select_new_api_definition_version(
         &self,
-        api_definition: &HttpApiDefinitionRequest,
+        api_definition: &CreateHttpApiDefinitionRequest,
     ) -> anyhow::Result<Option<String>> {
         Text::new("Please specify a new API definition version:")
             .with_initial_value(&api_definition.version)

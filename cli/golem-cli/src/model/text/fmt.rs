@@ -511,7 +511,7 @@ impl Drop for NestedTextViewIndent {
 pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
     format!(
         "{}{}/{}",
-        match &worker_name_match.environment_reference {
+        match &worker_name_match.environment_reference() {
             Some(environment_reference) => {
                 match environment_reference {
                     EnvironmentReference::Environment { environment_name } => {

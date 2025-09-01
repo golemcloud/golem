@@ -307,9 +307,8 @@ impl Config {
 
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
-    pub component_url: Url,
+    pub registry_url: Url,
     pub worker_url: Url,
-    pub cloud_url: Url,
     pub service_http_client_config: HttpClientConfig,
     pub invoke_http_client_config: HttpClientConfig,
     pub health_check_http_client_config: HttpClientConfig,
@@ -319,23 +318,17 @@ pub struct ClientConfig {
 impl From<&Profile> for ClientConfig {
     fn from(profile: &Profile) -> Self {
         let default_cloud_url = Url::parse(CLOUD_URL).unwrap();
-        let component_url = profile.custom_url.clone().unwrap_or(default_cloud_url);
-        let cloud_url = profile
-            .custom_cloud_url
-            .clone()
-            .unwrap_or_else(|| component_url.clone());
-
+        let registry_url = profile.custom_url.clone().unwrap_or(default_cloud_url);
         let worker_url = profile
             .custom_worker_url
             .clone()
-            .unwrap_or_else(|| component_url.clone());
+            .unwrap_or_else(|| registry_url.clone());
 
         let allow_insecure = profile.allow_insecure;
 
         ClientConfig {
-            component_url,
+            registry_url,
             worker_url,
-            cloud_url,
             service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
             invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
             health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),

@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
+use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use indoc::formatdoc;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use golem_common::model::account::AccountId;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum EnvironmentReference {
@@ -88,6 +88,8 @@ impl Display for EnvironmentReference {
 }
 
 pub struct ResolvedEnvironmentIdentity {
+    pub resolved_from: Option<EnvironmentReference>,
+
     pub account_id: AccountId,
     pub account_email: String,
     pub app_id: ApplicationId,

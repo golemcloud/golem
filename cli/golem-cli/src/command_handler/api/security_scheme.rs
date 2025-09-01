@@ -13,15 +13,12 @@
 // limitations under the License.
 
 use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
-use crate::command::shared_args::ProjectOptionalFlagArg;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::api::{ApiSecurityScheme, IdentityProviderType};
-use golem_client::api::ApiSecurityClient;
-use golem_client::model::{
-    Provider as ProviderCloud, SecuritySchemeData as SecuritySchemeDataCloud,
-};
+use golem_client::model::Provider;
+use golem_common::model::api_definition::security_scheme::SecurityScheme;
 use std::sync::Arc;
 
 pub struct ApiSecuritySchemeCommandHandler {
@@ -36,7 +33,6 @@ impl ApiSecuritySchemeCommandHandler {
     pub async fn handle_command(&self, command: ApiSecuritySchemeSubcommand) -> anyhow::Result<()> {
         match command {
             ApiSecuritySchemeSubcommand::Create {
-                project,
                 security_scheme_id,
                 provider_type,
                 client_id,
@@ -45,7 +41,6 @@ impl ApiSecuritySchemeCommandHandler {
                 redirect_url,
             } => {
                 self.cmd_create(
-                    project,
                     security_scheme_id,
                     provider_type,
                     client_id,
@@ -64,7 +59,6 @@ impl ApiSecuritySchemeCommandHandler {
 
     async fn cmd_create(
         &self,
-        project: ProjectOptionalFlagArg,
         scheme_identifier: String,
         provider_type: IdentityProviderType,
         client_id: String,
@@ -89,12 +83,12 @@ impl ApiSecuritySchemeCommandHandler {
                     .selected_project_id_or_default(project.as_ref())
                     .await?
                     .0,
-                &SecuritySchemeDataCloud {
+                &SecurityScheme {
                     provider_type: match provider_type {
-                        IdentityProviderType::Google => ProviderCloud::Google,
-                        IdentityProviderType::Facebook => ProviderCloud::Facebook,
-                        IdentityProviderType::Gitlab => ProviderCloud::Gitlab,
-                        IdentityProviderType::Microsoft => ProviderCloud::Microsoft,
+                        IdentityProviderType::Google => Provider::Google,
+                        IdentityProviderType::Facebook => Provider::Facebook,
+                        IdentityProviderType::Gitlab => Provider::Gitlab,
+                        IdentityProviderType::Microsoft => Provider::Microsoft,
                     },
                     scheme_identifier,
                     client_id,
@@ -112,11 +106,7 @@ impl ApiSecuritySchemeCommandHandler {
         Ok(())
     }
 
-    async fn cmd_get(
-        &self,
-        project: ProjectOptionalFlagArg,
-        security_scheme_id: String,
-    ) -> anyhow::Result<()> {
+    async fn cmd_get(&self, security_scheme_id: String) -> anyhow::Result<()> {
         let project = self
             .ctx
             .cloud_project_handler()

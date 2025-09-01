@@ -38,10 +38,7 @@ impl From<&ComponentView> for ComponentTableView {
         Self {
             component_name: value.component_name.clone(),
             component_revision: value.component_revision,
-            component_version: value
-                .component_version
-                .clone()
-                .unwrap_or_else(|| "".to_string()),
+            component_version: value.component_version.clone().unwrap_or_default(),
             component_size: value.component_size,
             n_exports: value.exports.len(),
         }

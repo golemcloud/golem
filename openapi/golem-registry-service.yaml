@@ -7437,11 +7437,14 @@ components:
       title: CreateHttpApiDefinitionRequest
       required:
       - routes
+      - version
       properties:
         routes:
           type: array
           items:
             $ref: '#/components/schemas/RouteRequestView'
+        version:
+          type: string
     CreateSecuritySchemeRequest:
       type: object
       title: CreateSecuritySchemeRequest
@@ -7740,6 +7743,7 @@ components:
       required:
       - id
       - routes
+      - version
       - createdAt
       properties:
         id:
@@ -7749,6 +7753,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RouteResponseView'
+        version:
+          type: string
         createdAt:
           type: string
           format: date-time
@@ -8731,11 +8737,14 @@ components:
       title: UpdateHttpApiDefinitionRequest
       required:
       - routes
+      - version
       properties:
         routes:
           type: array
           items:
             $ref: '#/components/schemas/RouteRequestView'
+        version:
+          type: string
     UpdatedAccountData:
       type: object
       title: UpdatedAccountData

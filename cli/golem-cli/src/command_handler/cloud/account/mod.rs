@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod grant;
+// TODO: atomic: pub mod grant;
 
 use crate::command::cloud::account::AccountSubcommand;
 use crate::command_handler::Handlers;
@@ -55,11 +55,13 @@ impl CloudAccountCommandHandler {
             AccountSubcommand::Delete { account_id } => {
                 self.cmd_delete(account_id.account_id).await
             }
-            AccountSubcommand::Grant { subcommand } => {
-                self.ctx
-                    .cloud_account_grant_handler()
-                    .handle_command(subcommand)
-                    .await
+            AccountSubcommand::Grant { subcommand: _ } => {
+                // TODO: atomic:
+                // self.ctx
+                //     .cloud_account_grant_handler()
+                //     .handle_command(subcommand)
+                //     .await
+                todo!()
             }
         }
     }

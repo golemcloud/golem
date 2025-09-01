@@ -16,6 +16,9 @@ use crate::log::{logln, LogColorize};
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
+use crate::model::worker::{
+    WorkerMetadata, WorkerMetadataView, WorkerName, WorkersMetadataResponseView,
+};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -33,7 +36,6 @@ use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use crate::model::worker::{WorkerMetadata, WorkerMetadataView, WorkerName, WorkersMetadataResponseView};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerCreateView {

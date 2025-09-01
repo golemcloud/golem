@@ -226,15 +226,14 @@ impl From<StreamArgs> for WorkerConnectOptions {
 }
 
 pub struct WorkerNameMatch {
-    pub environment_reference: Option<EnvironmentReference>,
-    pub resolved_environment: ResolvedEnvironmentIdentity,
+    pub environment: Option<ResolvedEnvironmentIdentity>,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
     pub worker_name: Option<WorkerName>,
 }
 
 impl WorkerNameMatch {
-    /// Gets the matched worker name, or generates a fresh name if it was `-`
+    /// Gets the matched worker-name, or generates a fresh name if it was `-`
     pub fn worker_name(&self) -> WorkerName {
         match &self.worker_name {
             Some(name) => name.clone(),
@@ -243,6 +242,12 @@ impl WorkerNameMatch {
                 WorkerName(name)
             }
         }
+    }
+
+    pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
+        self.environment
+            .as_ref()
+            .and_then(|env| env.resolved_from.as_ref())
     }
 }
 

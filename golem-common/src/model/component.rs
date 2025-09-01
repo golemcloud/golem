@@ -38,12 +38,20 @@ declare_transparent_newtypes! {
     pub struct ComponentName(pub String);
 }
 
+impl TryFrom<&str> for ComponentName {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.to_string().try_into()
+    }
+}
+
 impl TryFrom<String> for ComponentName {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         // TODO: Add validations (non-empty, no "/", no " ", ...)
-        Ok(ComponentName(value))
+        Ok(ComponentName(value.to_string()))
     }
 }
 
@@ -51,7 +59,7 @@ impl FromStr for ComponentName {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_from(s.to_string())
+        Self::try_from(s)
     }
 }
 

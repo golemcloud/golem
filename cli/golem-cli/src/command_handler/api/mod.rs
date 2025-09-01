@@ -13,22 +13,17 @@
 // limitations under the License.
 
 use crate::command::api::ApiSubcommand;
-use crate::command::shared_args::UpdateOrRedeployArgs;
-use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::model::api::HttpApiDeployMode;
-use crate::model::app::ApplicationComponentSelectMode;
-use crate::model::component::Component;
-use crate::model::environment::ResolvedEnvironmentIdentity;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub mod cloud;
-pub mod definition;
-pub mod deployment;
-pub mod security_scheme;
+// TODO: atomic: pub mod definition;
+// TODO: atomic: pub mod deployment;
+// TODO: atomic: pub mod security_scheme;
 
 pub struct ApiCommandHandler {
+    // TODO: atomic
+    #[allow(unused)]
     ctx: Arc<Context>,
 }
 
@@ -39,29 +34,37 @@ impl ApiCommandHandler {
 
     pub async fn handle_command(&self, command: ApiSubcommand) -> anyhow::Result<()> {
         match command {
-            ApiSubcommand::Definition { subcommand } => {
-                self.ctx
-                    .api_definition_handler()
-                    .handle_command(subcommand)
-                    .await
+            ApiSubcommand::Definition { subcommand: _ } => {
+                // TODO: atomic
+                // self.ctx
+                //     .api_definition_handler()
+                //     .handle_command(subcommand)
+                //     .await
+                todo!()
             }
-            ApiSubcommand::Deployment { subcommand } => {
-                self.ctx
-                    .api_deployment_handler()
-                    .handle_command(subcommand)
-                    .await
+            ApiSubcommand::Deployment { subcommand: _ } => {
+                // TODO: atomic
+                // self.ctx
+                //     .api_deployment_handler()
+                //     .handle_command(subcommand)
+                //     .await
+                todo!()
             }
-            ApiSubcommand::SecurityScheme { subcommand } => {
-                self.ctx
-                    .api_security_scheme_handler()
-                    .handle_command(subcommand)
-                    .await
+            ApiSubcommand::SecurityScheme { subcommand: _ } => {
+                // TODO: atomic
+                // self.ctx
+                //     .api_security_scheme_handler()
+                //     .handle_command(subcommand)
+                //     .await
+                todo!()
             }
-            ApiSubcommand::Cloud { subcommand } => {
-                self.ctx
-                    .api_cloud_handler()
-                    .handle_command(subcommand)
-                    .await
+            ApiSubcommand::Cloud { subcommand: _ } => {
+                // TODO: atomic
+                // self.ctx
+                //     .api_cloud_handler()
+                //     .handle_command(subcommand)
+                //     .await
+                todo!()
             }
         }
     }

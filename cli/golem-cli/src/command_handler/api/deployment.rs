@@ -13,25 +13,19 @@
 // limitations under the License.
 
 use crate::command::api::deployment::ApiDeploymentSubcommand;
-use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
-use crate::log::{
-    log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
-};
-use crate::model::api::{ApiDefinitionId, ApiDeployment, HttpApiDeployMode};
-use crate::model::app::{
-    DynamicHelpSections, HttpApiDefinitionName, HttpApiDeploymentSite, WithSource,
-};
+use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
+use crate::model::api::{ApiDefinitionId, ApiDeployment};
+use crate::model::app::{HttpApiDefinitionName, HttpApiDeploymentSite, WithSource};
 use crate::model::app_raw::HttpApiDeployment;
-use crate::model::deploy_diff::api_deployment::DiffableHttpApiDeployment;
-use crate::model::text::fmt::{log_deploy_diff, log_error, log_warn};
-use anyhow::bail;
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 use crate::model::environment::ResolvedEnvironmentIdentity;
+use crate::model::text::fmt::{log_error, log_warn};
+use anyhow::bail;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub struct ApiDeploymentCommandHandler {
     ctx: Arc<Context>,
@@ -114,7 +108,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn api_deployment(
         &self,
-        env: Option<&ResolvedEnvironmentIdentity>,
+        environment: Option<&ResolvedEnvironmentIdentity>,
         site: &str,
     ) -> anyhow::Result<Option<ApiDeployment>> {
         let clients = self.ctx.golem_clients().await?;
@@ -139,7 +133,8 @@ impl ApiDeploymentCommandHandler {
 
     async fn create_or_update_api_deployment(
         &self,
-        env: Option<&ResolvedEnvironmentIdentity>,        site: &HttpApiDeploymentSite,
+        environment: Option<&ResolvedEnvironmentIdentity>,
+        site: &HttpApiDeploymentSite,
         api_deployment: &DiffableHttpApiDeployment,
     ) -> anyhow::Result<ApiDeployment> {
         let clients = self.ctx.golem_clients().await?;
@@ -174,7 +169,8 @@ impl ApiDeploymentCommandHandler {
 
     async fn undeploy_api_definition(
         &self,
-        env: Option<&ResolvedEnvironmentIdentity>,        site: &HttpApiDeploymentSite,
+        environment: Option<&ResolvedEnvironmentIdentity>,
+        site: &HttpApiDeploymentSite,
         id: &str,
         version: &str,
     ) -> anyhow::Result<()> {
@@ -200,7 +196,8 @@ impl ApiDeploymentCommandHandler {
 
     pub async fn undeploy_api_from_all_sites_for_redeploy(
         &self,
-        env: Option<&ResolvedEnvironmentIdentity>,        api_definition_name: &HttpApiDefinitionName,
+        environment: Option<&ResolvedEnvironmentIdentity>,
+        api_definition_name: &HttpApiDefinitionName,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
