@@ -131,10 +131,20 @@ impl RibRepl {
             RibCompiler::new(RibCompilerConfig::new(
                 component_dependencies.component_dependencies,
                 vec![],
-                component_dependencies.custom_instance_spec,
+                component_dependencies.custom_instance_spec.clone(),
             )),
             history_file_path.clone(),
         );
+
+        let new_functions: Vec<String> = component_dependencies
+            .custom_instance_spec
+            .iter()
+            .map(|x| x.instance_name.clone())
+            .collect();
+
+        rl.helper_mut()
+            .unwrap()
+            .update_std_function_names(new_functions);
 
         Ok(RibRepl {
             printer: config

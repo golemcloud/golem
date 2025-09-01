@@ -111,7 +111,7 @@ pub fn identify_instance_creation_with_worker(
                 })
                 .transpose()?;
 
-            let instance_creation_type = get_instance_creation_details(
+            let (instance_creation_type, new_type_parameter) = get_instance_creation_details(
                 call_type,
                 type_parameter.clone(),
                 args,
@@ -130,14 +130,17 @@ pub fn identify_instance_creation_with_worker(
 
                 *call_type = CallType::InstanceCreation(instance_creation_type);
 
-                let new_instance_type =
-                    InstanceType::from(component_dependency, worker_name.as_ref(), type_parameter)
-                        .map_err(|err| {
-                            RibTypeErrorInternal::from(CustomError::new(
-                                source_span.clone(),
-                                format!("failed to create instance: {err}"),
-                            ))
-                        })?;
+                let new_instance_type = InstanceType::from(
+                    component_dependency,
+                    worker_name.as_ref(),
+                    new_type_parameter,
+                )
+                .map_err(|err| {
+                    RibTypeErrorInternal::from(CustomError::new(
+                        source_span.clone(),
+                        format!("failed to create instance: {err}"),
+                    ))
+                })?;
 
                 *inferred_type = InferredType::new(
                     TypeInternal::Instance {
@@ -152,13 +155,14 @@ pub fn identify_instance_creation_with_worker(
     Ok(())
 }
 
+// Returns a new type parameter in certain cases
 fn get_instance_creation_details(
     call_type: &CallType,
     type_parameter: Option<TypeParameter>,
     args: &[Expr],
     component_dependency: &ComponentDependencies,
     custom_instance_spec: &[CustomInstanceSpec],
-) -> Result<Option<InstanceCreationType>, String> {
+) -> Result<(Option<InstanceCreationType>, Option<TypeParameter>), String> {
     match call_type {
         CallType::Function { function_name, .. } => {
             let function_name = function_name.to_parsed_function_name().function;
@@ -167,11 +171,11 @@ fn get_instance_creation_details(
                     let optional_worker_name_expression = args.first();
 
                     let instance_creation = component_dependency.get_worker_instance_type(
-                        type_parameter,
+                        type_parameter.clone(),
                         optional_worker_name_expression.cloned(),
                     )?;
 
-                    Ok(Some(instance_creation))
+                    Ok((Some(instance_creation), type_parameter))
                 }
 
                 ParsedFunctionReference::Function { function } => {
@@ -179,7 +183,7 @@ fn get_instance_creation_details(
                         resolve_custom_instance_spec(custom_instance_spec, &function)?;
 
                     match custom_instance_spec {
-                        None => Ok(None),
+                        None => Ok((None, None)),
                         Some(custom_instance_spec) => {
                             let optional_worker_name_expression = if args.is_empty() {
                                 None
@@ -218,23 +222,23 @@ fn get_instance_creation_details(
                                 .map(TypeParameter::Interface);
 
                             let instance_creation = component_dependency.get_worker_instance_type(
-                                type_parameter,
+                                type_parameter.clone(),
                                 optional_worker_name_expression,
                             )?;
 
-                            Ok(Some(instance_creation))
+                            Ok((Some(instance_creation), type_parameter))
                         }
                     }
                 }
 
-                _ => Ok(None),
+                _ => Ok((None, None)),
             }
         }
         CallType::InstanceCreation(instance_creation_type) => {
-            Ok(Some(instance_creation_type.clone()))
+            Ok((Some(instance_creation_type.clone()), type_parameter))
         }
-        CallType::VariantConstructor(_) => Ok(None),
-        CallType::EnumConstructor(_) => Ok(None),
+        CallType::VariantConstructor(_) => Ok((None, None)),
+        CallType::EnumConstructor(_) => Ok((None, None)),
     }
 }
 
